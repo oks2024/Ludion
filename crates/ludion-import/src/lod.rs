@@ -99,6 +99,9 @@ pub fn simplify_level(base: &MeshDocument, ratio: f64) -> MeshDocument {
             bone_indices: gather(&skin.bone_indices, &corners, 4),
         }),
         lods: Vec::new(),
+        // The caller derives a level's tags with `level_surfaces`; a carried base run would not
+        // match the level's triangles.
+        surfaces: None,
         indices: (0..corners.len() as u32).collect(),
         ..base.clone()
     }
@@ -198,12 +201,9 @@ pub(crate) fn generate_levels(
                     mesh: file,
                     screen_size: spec.screen_size,
                 });
-                let surfaces = level_surfaces(base.surfaces.as_ref().map(|s| &s.names[..]), &doc);
-                levels.push(MeshArtifact {
-                    rel_path,
-                    doc,
-                    surfaces,
-                });
+                doc.surfaces =
+                    level_surfaces(base.doc.surfaces.as_ref().map(|s| &s.names[..]), &doc);
+                levels.push(MeshArtifact { rel_path, doc });
             }
         }
         out.push(base);
@@ -519,8 +519,8 @@ pub(crate) fn attach_authored_levels(
                 base.doc.lods.clone_from(&refs);
                 let mut found = check_lod_level(&base.doc, &level.doc, index);
                 found.extend(surfaces_mismatch(
-                    base.surfaces.as_ref(),
-                    level.surfaces.as_ref(),
+                    base.doc.surfaces.as_ref(),
+                    level.doc.surfaces.as_ref(),
                     &refs[index].mesh,
                     index,
                 ));
@@ -701,7 +701,6 @@ mod tests {
         let artifact = |path: &str, doc: MeshDocument| MeshArtifact {
             rel_path: path.into(),
             doc,
-            surfaces: None,
         };
         let specs = [LodSpec {
             screen_size: 0.25,

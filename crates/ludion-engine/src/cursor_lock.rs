@@ -1,7 +1,7 @@
 //! The [`CursorLock`] resource: the pointer-lock switch a game system asks the window host for, the
-//! [`RenderSettings`](crate::RenderSettings) mold.
+//! [`Shutdown`](crate::Shutdown) mold.
 //!
-//! Host state: never hashed, snapshotted, recorded or on the wire. Write-only, like `RenderSettings`.
+//! Host state: never hashed, snapshotted, recorded or on the wire. Write-only, like `Settings`.
 //! The boundary drain stores the request on the [`Engine`](crate::Engine) and forwards each change to
 //! an armed host channel; headless, the request is a silent no-op.
 

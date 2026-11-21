@@ -92,8 +92,9 @@
     returning warnings at `/actions/<name>`: `L4273` unknown, `L4272` locked, `L4274` does not compile
     (including against another override); that action keeps its defaults.
 21. **`save()`** raises a one-shot flag read by `take_save_request()`; the sim layer writes nothing.
-22. **`UiNav::from_actions`** reads the reserved `ui_prev`, `ui_next`, `ui_activate` actions; a field whose
-    action is undefined keeps `from_input`'s default. `ui_back` is read through `actions.pressed`.
+22. **`UiNav::from_actions`** reads the reserved `ui_prev`, `ui_next`, `ui_activate`, `ui_back` actions (`back` is the
+    fourth edge flag; `from_input` binds it to `Escape`/`East`); a field whose action is undefined keeps
+    `from_input`'s default.
 23. **The overrides file (W2b).** `<save_root>/save/input-bindings.yaml`, `format: 1`, `kind: input-bindings`,
     body an `InputBindingsDoc`, canonical via `emit_doc`. It is read leniently: a missing file is no overrides;
     a bad envelope (`L1636`), bad YAML, a value of the wrong shape or a newer `format` is renamed to
@@ -186,6 +187,8 @@ and without the playing system; the mixer is unit-tested. The pad thread polls e
 pad is connected and every 100 ms otherwise. No `WorldHash`, trace, replay, golden or schema moved.
 **Owed:** rumble felt on a real pad on the Windows box, and the silence confirmed on the M4.
 
+**R13:** `UiNav.back` ships (`Escape`/`East`, `ui_back`); no pinned artifact moved.
+
 ## Owner rulings (2026-11-19)
 
 - Accepted, scheduled (behind a cargo feature). **A macOS rumble backend** (GameController / CHHaptics). It is platform-shaped code in `crates/`, which
@@ -193,8 +196,8 @@ pad is connected and every 100 ms otherwise. No `WorldHash`, trace, replay, gold
 - Accepted. **The 8 ms pad poll.** A rumble command waits at most one poll, so the thread wakes every 8 ms while a
   primary pad is connected and every 100 ms without one. A pad event channel would remove the polling.
 
-- Accepted, scheduled (R13 API break round). **`UiNav.back` (breaking).** `UiNav` is built by struct literal in games and docs, so a new field breaks
-  every one. W2a ships `from_actions` with no `back` field; games read `ui_back` through `actions.pressed`.
+- Shipped (R13). **`UiNav.back` (breaking).** `UiNav` is built by struct literal in games and docs, so a new field breaks
+  every one. `from_actions` reads `ui_back` into it.
 - Accepted, scheduled (R14 re-record round). **Overrides in snapshot keyframes.** Mid-session overrides need a `SnapshotDoc` field, which moves
   `snapshot_schema()` and rides W3's one corpus re-record, like `ActionState`.
 

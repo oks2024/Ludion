@@ -713,6 +713,55 @@ fn a_marked_entity_reference_in_a_list_map_or_tuple_is_refused_at_registration()
     assert_eq!(registry.get("Fine").unwrap().entity_refs().len(), 1);
 }
 
+#[test]
+fn a_sanctioned_collection_registers_with_a_pattern_field_and_an_unsanctioned_one_names_the_proxy()
+{
+    use ludion_ecs::{EntityRefCollection, EntityRefSchema};
+
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct Event {
+        #[schemars(with = "Option<EntityRefSchema>")]
+        from: Option<EntityId>,
+    }
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct Inbox {
+        #[schemars(with = "EntityRefCollection<Vec<Event>>")]
+        inbox: Vec<Event>,
+    }
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct Bare {
+        inbox: Vec<Event>,
+    }
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct Plain {
+        #[schemars(with = "Vec<EntityRefSchema>")]
+        members: Vec<EntityId>,
+    }
+
+    let mut registry = Registry::new();
+    registry.register::<Inbox>("Inbox").unwrap();
+    let fields = registry.get("Inbox").unwrap().entity_refs();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].suffix, "/inbox/*/from");
+    assert!(fields[0].collection && fields[0].nullable);
+
+    // `Bare` holds the same Event list without the proxy: its schema carries a plain `$ref`
+    // list, so the nested marker is found inside a collection.
+    let error = registry.register::<Bare>("Bare").expect_err("unsanctioned");
+    assert_eq!(error.code, code::ENTITY_REF_IN_COLLECTION);
+    let error = registry
+        .register::<Plain>("Plain")
+        .expect_err("unsanctioned");
+    assert_eq!(error.code, code::ENTITY_REF_IN_COLLECTION);
+    assert!(
+        error
+            .help
+            .as_deref()
+            .is_some_and(|h| h.contains("EntityRefCollection")),
+        "{error:?}"
+    );
+}
+
 // --- Restore validation ----------------------------------------------------------------------
 
 fn allocator_state(generations: &[u32], free: &[u32]) -> ludion_ecs::AllocatorState {

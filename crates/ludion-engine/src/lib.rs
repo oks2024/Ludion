@@ -32,11 +32,13 @@
 //! ```
 
 mod ai;
+mod anim_graph;
 mod animation_events;
 mod assembly_ik;
 mod assembly_mesh;
 mod asset_cache;
 pub mod audio;
+mod audio_occlusion;
 pub mod bisect;
 mod blend_clock;
 mod blend_space;
@@ -84,6 +86,7 @@ mod mesh_check;
 pub mod model_sheet;
 mod motor;
 mod nav;
+mod paired;
 mod paired_doc;
 mod parent_joint;
 pub mod particles;
@@ -114,7 +117,7 @@ mod rain;
 mod recording;
 mod render;
 pub mod render_extent;
-mod render_settings;
+mod render_layers;
 mod render_size;
 mod render_view;
 mod replay;
@@ -149,6 +152,7 @@ mod voxel_mesh;
 mod voxel_sheet;
 mod voxelizer;
 
+pub use anim_graph::{AnimEdge, AnimGate, AnimGraph, AnimState};
 pub use animation_events::{AnimationEvents, ClipEvent, animation_events};
 pub use assembly_mesh::{
     AssemblyData, AssemblyGroundData, AssemblyIkData, AssemblyIkKind, AssemblyPartData,
@@ -157,8 +161,10 @@ pub use assembly_mesh::{
 };
 pub use audio::{
     AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
-    Bus, CategoryGains, DUCK_FLOOR_DB, DuckRule, LoopId, MixLayer, VoiceId, play_sound,
+    Bus, CategoryGains, DUCK_FLOOR_DB, DuckRule, LoopId, MixLayer, VoiceFilter, VoiceId,
+    VoiceSpatial, play_sound,
 };
+pub use audio_occlusion::AudioOcclusion;
 pub use bisect::{
     BisectReport, ComponentDiff, DriveDone, EntityDiff, KeyframeDivergence, KeyframeDriftReport,
     RunConfig, WorldCapture, WorldDiff, bisect_divergence, first_divergent_frame,
@@ -188,6 +194,7 @@ pub use components::{
     UiTweenRepeat, UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility,
     builtin_registry, crossfade,
 };
+pub use components::{AnimGraphState, PoseSnapshot, SnapshotPart};
 pub use components::{
     AnimationLayer, AnimationLayers, BlendClock, LayerMode, LayerPhase, fade_layer, layer_weight,
     play_layer, set_layer_params,
@@ -198,7 +205,7 @@ pub use components::{
     PerceptionState, Sense, SightSampleRecord, StimulusRecord, SweepShape, ZoneSweep,
 };
 pub use components::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_target_weight_at};
-pub use components::{PoseSnapshot, SnapshotPart};
+pub use components::{UiLineCap, UiShape, UiShapeType, UiStroke};
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
@@ -241,6 +248,7 @@ pub use ludion_camera::{
 };
 pub use ludion_components::MeshBlend;
 pub use ludion_components::Rain;
+pub use ludion_components::RenderLayers;
 pub use ludion_components::RenderView;
 pub use ludion_components::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
 pub use ludion_nav::PathStatus;
@@ -261,14 +269,15 @@ pub use model_sheet::{
 };
 pub use motor::{
     MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING, MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE,
-    MOTOR_STUCK, MOTOR_WALL, character_fit, fits_character, move_character, move_character_with,
-    move_characters, probe_character_ground, resize_character, resume_character,
-    set_character_posture, suspend_character, teleport_character, turn_character,
+    MOTOR_STUCK, MOTOR_WALL, character_fit, character_fit_ignoring, fits_character, move_character,
+    move_character_with, move_characters, probe_character_ground, resize_character,
+    resume_character, set_character_posture, suspend_character, teleport_character, turn_character,
 };
 pub use nav::{
-    Nav, NavConfig, NavPath, PathRequest, nav_distance, nav_link_done, nav_path, nav_project,
-    nav_reachable, nav_steer, nav_update,
+    Nav, NavClass, NavConfig, NavPath, PathRequest, nav_distance, nav_link_done, nav_path,
+    nav_project, nav_random_point, nav_raycast, nav_reachable, nav_steer, nav_update,
 };
+pub use paired::{PairedFit, PairedRoleFit, Warp, paired_fit};
 pub use paired_doc::{PairedContactReport, PairedReport, PairedRoleReport, check_paired_files};
 pub use parent_joint::{posed_joint_world, scene_parent_joint_diagnostics};
 pub use path_follow::{
@@ -330,7 +339,6 @@ pub use render::{
     render_scene, render_scene_with_builder, render_scene_with_registry,
 };
 pub use render_extent::RenderExtent;
-pub use render_settings::{RenderSettings, resolve_anti_aliasing};
 pub use render_size::{
     MAX_HEIGHT as MAX_RENDER_HEIGHT, MAX_WIDTH as MAX_RENDER_WIDTH, RENDER_SIZE_ENV,
     resolve_startup_render_size,
@@ -360,7 +368,10 @@ pub use scene_check::{
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use secondary_view::scene_render_view_diagnostics;
 pub use sequences::{SequenceEvents, sequence_update};
-pub use settings::{QualityPreset, Settings, SettingsView, WindowMode, settings_window_mode_at};
+pub use settings::{
+    QualityPreset, Settings, SettingsView, WindowMode, resolve_anti_aliasing,
+    settings_window_mode_at,
+};
 pub use shutdown::Shutdown;
 pub use skin_bone::scene_skin_bone_diagnostics;
 pub use skin_ragdoll::switch_skin_to_ragdoll;

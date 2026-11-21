@@ -1,4 +1,28 @@
 {
+  "AnimGraphState": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "AnimGraphState",
+    "description": "The state of an entity's `AnimGraph`, by the stable name the graph's table gives it.\n\n`AnimGraph::step` reads it and rewrites it only on a transition, so it stays quiet in the hash between\ntransitions. There is no implicit entry: a game spawns it beside an [`Animation`](crate::Animation)\nalready playing that state's clip. A name the graph does not declare is a runtime `step` error\n(`L4290`), not a load error, because the graph is Rust and invisible at load.\n\n```yaml\ncomponents:\n  AnimGraphState:\n    state: run\n    entered: 60\n    previous: idle\n```",
+    "type": "object",
+    "properties": {
+      "state": {
+        "description": "The current state's name (default empty: no state yet).",
+        "type": "string",
+        "default": ""
+      },
+      "entered": {
+        "description": "The gameplay frame the state was entered (default frame `0`).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0,
+        "default": 0
+      },
+      "previous": {
+        "description": "The state the entity left to enter this one; omitted when empty (default none).",
+        "type": "string"
+      }
+    }
+  },
   "Animation": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Animation",
@@ -463,6 +487,16 @@
         "format": "uint32",
         "minimum": 0,
         "maximum": 3
+      },
+      "layers": {
+        "description": "The layers the main camera draws (default none, meaning every layer). Absent is omitted from the\ndocument and the hash. See `ludion docs render-views`.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
       }
     },
     "$defs": {
@@ -4108,6 +4142,39 @@
       }
     }
   },
+  "IgnoreCollisions": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "IgnoreCollisions",
+    "description": "Makes a motor's own queries ignore `with`'s collider: its sweeps, ground probes, posture and\nresize tests and [`character_fit`](crate::character_fit). A paired action needs it, because two\ncapsules standing at a 0.5 m choke overlap.\n\nIt is read at query time and is not part of the physics blob. It does not stop the solver from\npushing a dynamic body that `with` names; it only changes what the motor sees. Without the\ncomponent every motor result is unchanged.\n\n```\nuse ludion_core::ids::EntityId;\nuse ludion_physics::IgnoreCollisions;\n\nlet partner = EntityId::new(7, 0);\nlet ignore = IgnoreCollisions { with: partner };\nassert_eq!(ignore.clone(), ignore);\n```",
+    "type": "object",
+    "properties": {
+      "with": {
+        "description": "The entity whose collider the motor looks through.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "with"
+    ]
+  },
   "IkTargets": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "IkTargets",
@@ -4272,6 +4339,19 @@
         "description": "Whether `a` and `b` still collide with each other (rapier's `contacts_enabled`; default\n`false` — a joint's two bodies do not collide).",
         "type": "boolean",
         "default": false
+      },
+      "zero": {
+        "description": "The rotation of `b` relative to `a` that counts as the joint's zero, `q_a⁻¹·q_b` as\n`[x, y, z, w]` (default unset: captured from the two bodies' relative pose at build, so the\nzero is wherever the bodies happened to be). Set, the joint's limits, [`JointMotor`]\n`target` and [`JointPoses`] are measured from it, and it survives a body rebuild, a ragdoll\nretire and re-admission, a snapshot restore and a scene save and reload. The anchors keep\ncoinciding at build; only the rotation comes from the zero. A body that starts outside the\nlimits measured from the zero is pulled back by the solver within the first step.\n\n[`JointMotor`]: crate::JointMotor\n[`JointPoses`]: crate::JointPoses",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4
       }
     },
     "required": [
@@ -4523,30 +4603,6 @@
       "damping",
       "poses"
     ]
-  },
-  "JointZero": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "JointZero",
-    "description": "A stored zero for a [`Joint`](crate::Joint), carried by the joint's carrier entity beside it.\nWithout one, `ludion-physics` captures the joint's zero from the two bodies' relative pose at\nbuild, so the zero is wherever the bodies happened to be. With one, the joint's limits,\n[`JointMotor`](crate::JointMotor) `target` and [`JointPoses`](crate::JointPoses) are measured from\n`rotation` instead, and the stored value survives a body rebuild, a ragdoll retire and\nre-admission, a snapshot restore and a scene save and reload.\n\n`rotation` is the quaternion `[x, y, z, w]` of the joint's body `b` in body `a`'s frame that\ncounts as zero, `q_a⁻¹·q_b`. The default is the identity. The anchors keep coinciding at build;\nonly the rotation comes from the zero. A body that starts outside the limits measured from the\nzero is pulled back by the solver within the first step.\n\n```yaml\ncomponents:\n  JointZero:\n    rotation: [0.0, 0.0, 0.0, 1.0]\n```",
-    "type": "object",
-    "properties": {
-      "rotation": {
-        "description": "The rotation of `b` relative to `a` that is the joint's zero, as `[x, y, z, w]`.",
-        "type": "array",
-        "items": {
-          "type": "number",
-          "format": "float"
-        },
-        "minItems": 4,
-        "maxItems": 4,
-        "default": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      }
-    }
   },
   "LaneConstraint": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5397,7 +5453,7 @@
   "NavAgent": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "NavAgent",
-    "description": "A navigating agent. A game writes `target` each tick; `nav_steer` (in `ludion-engine`) writes the\ndesired velocity into [`NavSteering`]. A walking agent follows the shared flow field toward its\ntarget; a flying one seeks it in 3D. Both add separation from their `spatial3d` neighbours. The\ngame's own mover applies the velocity. Every field defaults and is omitted from text at its\ndefault; `NavAgent: {}` is the default agent.\n\n`speed`, `arrive_radius`, `separation_radius` and `separation_strength` are finite and not\nnegative; `separation_neighbors` is at most 16. A field out of range is `L1340`. `neighbor_layers`\nis the `Index3d` layer mask the neighbours are read from; `0` turns separation off.\n\n```yaml\ncomponents:\n  NavAgent:\n    speed: 3.5\n    neighbor_layers: 2\n```",
+    "description": "A navigating agent. A game writes `target` each tick; `nav_steer` (in `ludion-engine`) writes the\ndesired velocity into [`NavSteering`]. A walking agent follows the shared flow field toward its\ntarget; a flying one seeks it in 3D. Both add separation from their `spatial3d` neighbours. The\ngame's own mover applies the velocity. Every field defaults and is omitted from text at its\ndefault; `NavAgent: {}` is the default agent.\n\n`speed`, `arrive_radius`, `separation_radius` and `separation_strength` are finite and not\nnegative; `separation_neighbors` is at most 16. A field out of range is `L1340`. `neighbor_layers`\nis the `Index3d` layer mask the neighbours are read from; `0` turns separation off. `class` names\nthe `NavConfig.classes` entry whose grid the agent walks (empty is the first class).\n\n```yaml\ncomponents:\n  NavAgent:\n    speed: 3.5\n    neighbor_layers: 2\n    class: forklift\n```",
     "type": "object",
     "properties": {
       "target": {
@@ -5445,6 +5501,10 @@
         "type": "integer",
         "format": "uint32",
         "minimum": 0
+      },
+      "class": {
+        "description": "The `NavConfig.classes` entry this agent walks; empty is the first class (default empty).",
+        "type": "string"
       }
     }
   },
@@ -5490,7 +5550,7 @@
   "NavLink": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "NavLink",
-    "description": "An off-mesh link: `nav_path` and routed agents (`NavGoal` → `NavRoute`) plan across it as an edge from\n`from` to `to` (both ways when `bidirectional`). A walker that reaches the start stops with\n`NavRoute.status = at_link`; the game plays the traversal, moves the body, and calls `nav_link_done`.\nThe engine never moves the body. `nav_update` rebuilds the link table every call: a disabled or\nremoved link drops out and the routes using it plan again.\n\n`from` and `to` are in the entity's frame: posed by its `Transform` when it has one, world coordinates\notherwise. Each snaps to the nearest walkable node within `snap_radius` (an end that finds none warns\n`L4145` and the link is left out). `cost` is metres **added** to the 3D distance between the two\nsnapped nodes, so a slow climb can be made to lose to a short walk. `kind` is free text for the game\n(`\"ladder\"`, `\"vault\"`) and is not read by the engine.\n\nNon-finite endpoints, a negative or non-finite `cost` and a non-positive or non-finite `snap_radius`\nare rejected (`L1526`).\n\n```yaml\ncomponents:\n  NavLink:\n    from: [4.5, 0.0, 2.5]\n    to: [4.5, 3.0, 2.5]\n    kind: ladder\n    cost: 2.0\n```\n\n```\nuse ludion_components::NavLink;\n\nlet link: NavLink = serde_json::from_value(serde_json::json!({ \"kind\": \"ladder\" })).unwrap();\nassert!(link.bidirectional && link.enabled);\nassert_eq!(link.snap_radius, 0.75);\n```",
+    "description": "An off-mesh link: `nav_path` and routed agents (`NavGoal` → `NavRoute`) plan across it as an edge from\n`from` to `to` (both ways when `bidirectional`). A walker that reaches the start stops with\n`NavRoute.status = at_link`; the game plays the traversal, moves the body, and calls `nav_link_done`.\nThe engine never moves the body. `nav_update` rebuilds the link table every call: a disabled or\nremoved link drops out and the routes using it plan again.\n\n`from` and `to` are in the entity's frame: posed by its `Transform` when it has one, world coordinates\notherwise. Each snaps to the nearest walkable node within `snap_radius` (an end that finds none warns\n`L4145` and the link is left out). `cost` is metres **added** to the 3D distance between the two\nsnapped nodes, so a slow climb can be made to lose to a short walk. `kind` is free text for the game\n(`\"ladder\"`, `\"vault\"`) and is not read by the engine.\n\n`classes` lists the `NavConfig.classes` names that may cross the link; empty is every class. A link is\nin a class's table only when both ends snap on that class's grid. A name no class has is `L4147`.\n\nNon-finite endpoints, a negative or non-finite `cost`, a non-positive or non-finite `snap_radius` and\nan empty `classes` entry are rejected (`L1526`).\n\n```yaml\ncomponents:\n  NavLink:\n    from: [4.5, 0.0, 2.5]\n    to: [4.5, 3.0, 2.5]\n    kind: ladder\n    cost: 2.0\n    classes: [walker]\n```\n\n```\nuse ludion_components::NavLink;\n\nlet link: NavLink = serde_json::from_value(serde_json::json!({ \"kind\": \"ladder\" })).unwrap();\nassert!(link.bidirectional && link.enabled);\nassert_eq!(link.snap_radius, 0.75);\n```",
     "type": "object",
     "properties": {
       "from": {
@@ -5534,6 +5594,13 @@
         "description": "Metres an end may be from a walkable node and still snap to it (default `0.75`).",
         "type": "number",
         "format": "float"
+      },
+      "classes": {
+        "description": "The agent classes that may cross the link; empty is every class (default empty).",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       }
     }
   },
@@ -7716,6 +7783,24 @@
       }
     }
   },
+  "RenderLayers": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "RenderLayers",
+    "description": "Puts this entity, and every `Parent` descendant without its own `RenderLayers`, in the named\nlayers. An entity without one is in `default`. A `Camera.layers` or `RenderView.layers` list picks\nwhich layers an image draws: meshes, sprites, ground markers, drop shadows, decals, particles and\nworld text, and their shadows.\n\n```\nuse ludion_components::RenderLayers;\n\nlet layers: RenderLayers =\n    serde_json::from_value(serde_json::json!({ \"layers\": [\"radar\"] })).unwrap();\nassert_eq!(layers.layers, [\"radar\"]);\n```",
+    "type": "object",
+    "properties": {
+      "layers": {
+        "description": "The layer names, at least one, each non-empty and listed once.",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "layers"
+    ]
+  },
   "RenderView": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "RenderView",
@@ -7749,6 +7834,16 @@
         "description": "Draw order among views, lowest first; ties go by entity (default 0).",
         "type": "integer",
         "format": "int32"
+      },
+      "layers": {
+        "description": "The layers the view draws (default none, meaning `[default]`). Absent is omitted from the document.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
       }
     },
     "required": [
@@ -9926,6 +10021,387 @@
             "type": "string",
             "const": "hidden"
           }
+        ]
+      }
+    }
+  },
+  "UiShape": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "UiShape",
+    "description": "An analytic screen-space shape: one SDF-drawn primitive with a fill and a stroke. Screen space, like\n[`UiRect`](crate::UiRect): the 1080-unit canvas, `anchor` + `offset`, `group`, `UiTween` and\n`UiWorldAnchor`.\n\nThe shape's local `(0, 0)` sits at the anchor point plus `offset`; scale and `rotation` pivot there,\nnot on a bounds centre. `line` and `arc` draw only their `stroke`; the other kinds draw `fill`,\n`stroke` or both. A shape with neither draws nothing.\n\n```\nuse ludion_components::{UiShape, UiShapeType};\n\nlet shape: UiShape = serde_json::from_value(serde_json::json!({\n    \"shape\": { \"type\": \"ring\", \"radius\": 40, \"thickness\": 6, \"sweep_deg\": 270 },\n    \"fill\": [1, 1, 1, 1]\n})).unwrap();\nassert!(matches!(shape.shape, UiShapeType::Ring { sweep_deg, .. } if sweep_deg == 270.0));\n```",
+    "type": "object",
+    "properties": {
+      "anchor": {
+        "description": "Which canvas point the shape's origin is placed at (default [`Anchor::TopLeft`]).",
+        "$ref": "#/$defs/Anchor",
+        "default": "top_left"
+      },
+      "offset": {
+        "description": "Offset from the anchor point, in canvas units, **+Y down** (default `[0, 0]`).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "default": [
+          0.0,
+          0.0
+        ]
+      },
+      "group": {
+        "description": "The [`UiGroup`](crate::UiGroup) the shape anchors inside, instead of the canvas (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "shape": {
+        "description": "The geometry (required; the default is a circle of radius 16).",
+        "$ref": "#/$defs/UiShapeType",
+        "default": {
+          "type": "circle",
+          "radius": 16.0
+        }
+      },
+      "fill": {
+        "description": "Linear RGBA of the interior (default none). Not allowed on `line` or `arc`.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4
+      },
+      "stroke": {
+        "description": "The edge outline (default none). Required on `line` and `arc`.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/UiStroke"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "rotation": {
+        "description": "Degrees clockwise on screen about the origin (default `0`; non-finite is `L1620`).",
+        "type": "number",
+        "format": "float"
+      },
+      "order": {
+        "description": "Draw order: higher draws later (default `0`).",
+        "type": "integer",
+        "format": "int32",
+        "default": 0
+      },
+      "visible": {
+        "description": "Whether the shape draws at all (default `true`).",
+        "type": "boolean",
+        "default": true
+      }
+    },
+    "$defs": {
+      "Anchor": {
+        "description": "Which of the nine canvas points a screen-space UI element ([`UiRect`], [`UiText`]) pins to — and,\nequally, which point of the element's own extent sits on it (its own pivot). For example,\n[`Anchor::BottomRight`] pins the element's bottom-right corner to the canvas's bottom-right\ncorner (a corner HUD needs no size arithmetic); [`Anchor::Center`] centers the element on the\ncanvas center with zero offset. There is no separate `pivot` field — one anchor names both ends.\n\n**Every variant carries a doc comment.** This is load-bearing, not style: `schemars` only emits\nthe `oneOf`-of-`const` schema shape (which the editor inspector needs to render a dropdown) when\nevery variant of a unit-only enum is doc-commented — an undocumented variant collapses the whole\nschema to a bare `{\"enum\": [...]}`, which falls to the raw-JSON textarea instead.",
+        "oneOf": [
+          {
+            "description": "The canvas's top-left corner; the element's own top-left corner sits there.",
+            "type": "string",
+            "const": "top_left"
+          },
+          {
+            "description": "The canvas's top edge, horizontally centered; the element's own top-center point sits there.",
+            "type": "string",
+            "const": "top_center"
+          },
+          {
+            "description": "The canvas's top-right corner; the element's own top-right corner sits there.",
+            "type": "string",
+            "const": "top_right"
+          },
+          {
+            "description": "The canvas's left edge, vertically centered; the element's own center-left point sits there.",
+            "type": "string",
+            "const": "center_left"
+          },
+          {
+            "description": "The canvas's center; the element's own center sits there.",
+            "type": "string",
+            "const": "center"
+          },
+          {
+            "description": "The canvas's right edge, vertically centered; the element's own center-right point sits there.",
+            "type": "string",
+            "const": "center_right"
+          },
+          {
+            "description": "The canvas's bottom-left corner; the element's own bottom-left corner sits there.",
+            "type": "string",
+            "const": "bottom_left"
+          },
+          {
+            "description": "The canvas's bottom edge, horizontally centered; the element's own bottom-center point sits\nthere.",
+            "type": "string",
+            "const": "bottom_center"
+          },
+          {
+            "description": "The canvas's bottom-right corner; the element's own bottom-right corner sits there.",
+            "type": "string",
+            "const": "bottom_right"
+          }
+        ]
+      },
+      "UiShapeType": {
+        "description": "The geometry of a [`UiShape`]. Every length is in canvas units; angles are clock degrees (0 is\n12 o'clock, positive is clockwise). Everything is positioned on the shape's origin.",
+        "oneOf": [
+          {
+            "description": "A segment from `from` to `to`, drawn as its stroke only.",
+            "type": "object",
+            "properties": {
+              "from": {
+                "description": "The first end point, relative to the origin, +Y down.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "to": {
+                "description": "The second end point, relative to the origin, +Y down.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "cap": {
+                "description": "How the ends are drawn (default butt).",
+                "$ref": "#/$defs/UiLineCap"
+              },
+              "type": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "type",
+              "from",
+              "to"
+            ]
+          },
+          {
+            "description": "A disc centred on the origin.",
+            "type": "object",
+            "properties": {
+              "radius": {
+                "description": "The radius, above 0.",
+                "type": "number",
+                "format": "float"
+              },
+              "type": {
+                "type": "string",
+                "const": "circle"
+              }
+            },
+            "required": [
+              "type",
+              "radius"
+            ]
+          },
+          {
+            "description": "The band `[radius - thickness, radius]` over a sweep.",
+            "type": "object",
+            "properties": {
+              "radius": {
+                "description": "The outer radius, above 0.",
+                "type": "number",
+                "format": "float"
+              },
+              "thickness": {
+                "description": "The band width, in `(0, radius]`.",
+                "type": "number",
+                "format": "float"
+              },
+              "start_deg": {
+                "description": "Clock degrees of the sweep's start (default `0`).",
+                "type": "number",
+                "format": "float"
+              },
+              "sweep_deg": {
+                "description": "Degrees the sweep covers, in `[0, 360]` (default `360`).",
+                "type": "number",
+                "format": "float"
+              },
+              "type": {
+                "type": "string",
+                "const": "ring"
+              }
+            },
+            "required": [
+              "type",
+              "radius",
+              "thickness"
+            ]
+          },
+          {
+            "description": "An arc of a circle drawn as its stroke only: the band `radius ± width / 2`.",
+            "type": "object",
+            "properties": {
+              "radius": {
+                "description": "The radius of the arc's centre line, above 0.",
+                "type": "number",
+                "format": "float"
+              },
+              "start_deg": {
+                "description": "Clock degrees of the sweep's start (default `0`).",
+                "type": "number",
+                "format": "float"
+              },
+              "sweep_deg": {
+                "description": "Degrees the sweep covers, in `[0, 360]` (default `360`).",
+                "type": "number",
+                "format": "float"
+              },
+              "type": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "type",
+              "radius"
+            ]
+          },
+          {
+            "description": "A pie slice, or a band slice with an `inner_radius`.",
+            "type": "object",
+            "properties": {
+              "radius": {
+                "description": "The outer radius, above 0.",
+                "type": "number",
+                "format": "float"
+              },
+              "inner_radius": {
+                "description": "The hole radius, in `[0, radius)` (default `0`: a slice to the centre).",
+                "type": "number",
+                "format": "float"
+              },
+              "start_deg": {
+                "description": "Clock degrees of the sweep's start (default `0`).",
+                "type": "number",
+                "format": "float"
+              },
+              "sweep_deg": {
+                "description": "Degrees the sweep covers, in `[0, 360]` (default `360`).",
+                "type": "number",
+                "format": "float"
+              },
+              "type": {
+                "type": "string",
+                "const": "wedge"
+              }
+            },
+            "required": [
+              "type",
+              "radius"
+            ]
+          },
+          {
+            "description": "A rectangle with rounded corners, centred on the origin.",
+            "type": "object",
+            "properties": {
+              "size": {
+                "description": "Width and height, non-negative.",
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "corner_radius": {
+                "description": "The corner radius, non-negative (default `0`; clamped to half the shorter side when drawn).",
+                "type": "number",
+                "format": "float"
+              },
+              "type": {
+                "type": "string",
+                "const": "rounded_rect"
+              }
+            },
+            "required": [
+              "type",
+              "size"
+            ]
+          }
+        ]
+      },
+      "UiLineCap": {
+        "description": "How a [`UiShapeType::Line`] ends.",
+        "oneOf": [
+          {
+            "description": "Flush with the end points (the default).",
+            "type": "string",
+            "const": "butt"
+          },
+          {
+            "description": "A half disc past each end point, as wide as the stroke.",
+            "type": "string",
+            "const": "round"
+          }
+        ]
+      },
+      "UiStroke": {
+        "description": "An outline centred on a [`UiShape`]'s edge.",
+        "type": "object",
+        "properties": {
+          "width": {
+            "description": "The width in canvas units, above 0.",
+            "type": "number",
+            "format": "float"
+          },
+          "color": {
+            "description": "Linear RGBA.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "width",
+          "color"
         ]
       }
     }

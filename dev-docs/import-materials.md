@@ -20,7 +20,7 @@ written as an ordinary hash-named texture (the untinted source is not written fo
 a zero base and a non-zero factor, or a tint on a primitive without `TEXCOORD_0`, is an `L1202`
 naming the material; the emissive is dropped (not the whole material) under `--allow-lossy`.
 A material's `extras.ludion_wrap` / `extras.ludion_scatter_color` map straight onto `Mesh.wrap` / `Mesh.scatter_color` (`material_wrap`; absent, non-object or other keys leave the defaults, a wrong type or range is malformed, naming the material; written only when non-default).
-A material's `extras.ludion_surface` (a non-empty string; anything else is malformed naming the material, `material_surface`) becomes `MeshArtifact.surfaces`: one name, one run over the document's triangles, none for a zero-triangle document, never derived from a material name. Every LOD level carries its base's tag: generated levels copy it, an authored level that differs is `L1396`.
+A material's `extras.ludion_surface` (a non-empty string; anything else is malformed naming the material, `material_surface`) becomes the document's `surfaces` (`MeshArtifact.doc.surfaces`): one name, one run over the document's triangles, none for a zero-triangle document, never derived from a material name. Every LOD level carries its base's tag: generated levels copy it, an authored level that differs is `L1396`.
 `KHR_materials_emissive_strength` multiplies `emissiveFactor` first, so the product is what is
 classified and what lands in `Mesh.emissive`. Its five metallic-roughness maps map through `material_textures`: each referenced
 image re-encodes through `ludion_assets::decode_png`/`encode_png` and is written as

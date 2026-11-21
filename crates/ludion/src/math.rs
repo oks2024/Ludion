@@ -59,6 +59,9 @@
 //! [`ray_ground_plane`] above, so their output is as safe to fold into hashed sim state as any other
 //! deterministic helper here.
 //!
+//! A [`UiShape`](crate::prelude::UiShape) is hit-tested with [`ui_shape_hit`]: its fill, or its stroke band,
+//! with the shape's own `rotation` turned back about its origin; grouped, tweened or clipped, ask [`ui_hit`].
+//!
 //! A [`UiRadial`](crate::prelude::UiRadial) wheel has its own pair: [`radial_layout`] places the centre,
 //! radii and each item's label point, and [`radial_hit`] returns the item under a cursor (the gap and the
 //! hole are `None`, a disabled item is returned). Both are ungrouped and use `libm` trig through
@@ -118,8 +121,8 @@ pub use ludion_engine::ui::{
     FontFace, NineSlice, RadialItemLayout, RadialLayout, WorldAnchorPlacement, canvas_anchor_px,
     group_delta, list_hit, measure_ui_list, measure_ui_text, nine_slice, place_world_anchor,
     radial_hit, radial_layout, resolve_ui_list, resolve_ui_rect, resolve_ui_rect_of,
-    resolve_ui_text, sub_uv, ui_hit, ui_list_window, ui_point_in, ui_rect_corners, ui_tween_sample,
-    wrap_ui_text,
+    resolve_ui_text, sub_uv, ui_hit, ui_list_window, ui_point_in, ui_rect_corners, ui_shape_hit,
+    ui_tween_sample, wrap_ui_text,
 };
 pub use ludion_engine::{ModelCamera, ModelView, fit_distance_for_aspect, model_camera};
 
@@ -986,7 +989,7 @@ mod tests {
             let world = engine.world();
             (
                 *world.get::<Transform>(camera).unwrap().unwrap(),
-                *world.get::<Camera>(camera).unwrap().unwrap(),
+                world.get::<Camera>(camera).unwrap().unwrap().clone(),
             )
         };
 

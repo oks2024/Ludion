@@ -61,6 +61,13 @@
     plain `Engine::builder()`), so a scene bearing `GuardMind` fails there and a new scene owes pinned
     goldens. It lives at `crates/ludion-engine/tests/fixtures/ai-squad.yaml` beside its committed
     `ai-squad.trace.txt` (per-tick `WorldHash`) and `ai-squad.ai.jsonl` (the `ai` channel).
+16. **Ref collections ride `EntityRefCollection<C>`.** One proxy marks a list (`Vec<T>`) or a string-keyed
+    map (`BTreeMap<String, V>`) whose elements may hold marked entity refs at any depth. The walker reports
+    them as pattern fields whose suffix holds a `/*` step, and every consumer iterates the concrete sites of
+    the value in hand (`ComponentInfo::entity_ref_sites`). Per-site rules match the single field: a nullable
+    dangling site becomes `null`, a non-nullable one refuses the save (`L1018`) or drops the component on carry
+    (`L3043`). Nullable element refs (`Option<EntityRefSchema>`) are the drift-safe form. Any other list, map or
+    tuple holding a marked ref stays `L1392`; tuples are never sanctioned.
 
 ## Waves
 
@@ -71,8 +78,8 @@
   (`crates/ludion-ai/src/trace.rs`, `crates/ludion-engine/src/trace.rs`), the `engine.describe` `ai`
   section (`crates/ludion-engine/src/ai.rs`), the squad fixture and its committed traces, and the
   fault messages naming the entity once.
-- **W3 — not started.** A `MemberLeft` event and ref-carrying events, after the entity-ref-collection
-  subtask below.
+- **W3 — not started.** A `MemberLeft` event and ref-carrying events, after the entity-ref collection
+  (decision 16) shipped.
 
 ## Out of scope
 
@@ -93,7 +100,7 @@
   those documents left open. The ruling confirms that reading.
 - Accepted. **No behaviour trees** (above) is a position, not a measurement.
 - Accepted. **Inbox capacity 16** is a default chosen without a game's numbers.
-- Accepted, scheduled (R13: the sanctioned collection type, then W3 and the 0007 IK entity targets). **An entity-ref collection type.** Sanctioning a list of entity refs touches the ref walker
+- Accepted, built (decision 16). **An entity-ref collection type.** Sanctioning a list of entity refs touches the ref walker
   (`crates/ludion-ecs/src/entity_ref.rs`) and about ten consumer sites in `ludion-scene` (`expand.rs`,
   `validate.rs`, `instantiate.rs`) and `ludion-engine` (`collapse.rs`, `transition.rs`, `prefab_ops.rs`,
   `commands/entity.rs`): a cross-cutting subtask of its own, with request 0001's memory as the natural
@@ -111,6 +118,9 @@
   the exact tick, groups, registration refusals), the engine drain, `docs/ai.md`, an engine test
   (`crates/ludion-engine/tests/ai.rs`: squad on a toy machine, expected states on expected ticks,
   two-run `WorldHash` identity, snapshot/restore mid-timer). No pinned artifact moved.
+- **Entity-ref collection shipped** (decision 16; Neon Shroud request 0003): `EntityRefCollection<C>`, pattern
+  fields with `/*`, `ComponentInfo::entity_ref_sites` in the scene range check, save remap, carry remap, prefab
+  ops and snapshot. No builtin adopts it yet; no pinned artifact moved.
 - **W2 shipped** (Neon Shroud request 0003): `AiTrace`/`AiRoster` in `ludion-ai`, the `ai`/`ai_states`
   channels in `ludion trace` and a game's `--trace`, the `engine.describe` `ai` key, the squad fixture
   (`crates/ludion-engine/tests/fixtures/ai-squad.{yaml,trace.txt,ai.jsonl}`; blessed on the pinned

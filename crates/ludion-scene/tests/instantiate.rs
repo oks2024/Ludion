@@ -230,6 +230,30 @@ fn presentation_entities_spawn_in_their_own_range_with_refs_remapped() {
     );
 }
 
+/// A sanctioned list remaps every element from a document position to the spawned id, in place of
+/// the single field the walk used to find.
+#[test]
+fn a_sanctioned_ref_list_remaps_every_element() {
+    use ludion_ecs::{EntityRefCollection, EntityRefSchema};
+
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct Squad {
+        #[schemars(with = "EntityRefCollection<Vec<EntityRefSchema>>")]
+        members: Vec<ludion_core::ids::EntityId>,
+    }
+
+    let mut registry = registry();
+    registry
+        .register::<Squad>("Squad")
+        .expect("Squad registers");
+    let source = "format: 1\nentities:\n  - components:\n      Health: 1\n  - components:\n      Health: 2\n  - components:\n      Squad:\n        members:\n          - index: 1\n            generation: 0\n          - index: 0\n            generation: 0\n";
+    let scene = check(source, &registry).expect("scene validates");
+    let world = instantiate(&scene, &registry).expect("scene instantiates");
+    let ids = ludion_scene::instantiated_ids(&scene);
+    let squad = world.get::<Squad>(ids[2]).unwrap().expect("has Squad");
+    assert_eq!(squad.members, [ids[1], ids[0]]);
+}
+
 mod into {
     use super::*;
     use ludion_core::ids::EntityId;

@@ -217,7 +217,7 @@ hit tests ignore it, and a group's opacity fades it with the text. A negative or
 
 ## Rotation
 
-`rotation: <degrees>` on `UiRect`, `UiText` and `UiGroup` turns the element **clockwise on screen** (`0`, the default, draws as before; a non-finite value is `L1620`). The pivot is the centre of what the element draws: a rect's box (a nine-slice's nine pieces share one), a text run's glyph bounds, a group's box. A `UiTween` `rotation` track adds to the authored value. `UiList` and `UiRadial` have no field; rotate them through a group.
+`rotation: <degrees>` on `UiRect`, `UiText` and `UiGroup` turns the element **clockwise on screen** (`0`, the default, draws as before; a non-finite value is `L1620`). The pivot is the centre of what the element draws: a rect's box (a nine-slice's nine pieces share one), a text run's glyph bounds, a group's box. A `UiTween` `rotation` track adds to the authored value. `UiList` and `UiRadial` have no field; rotate them through a group. A `UiShape` has its own `rotation`, about its origin (`ludion docs ui-shapes`).
 
 Hit-test a rotated rect with `ludion::math::ui_point_in(&rect, viewport, cursor)`; `ui_rect_corners(&rect, viewport)` gives its drawn corners (top-left, top-right, bottom-right, bottom-left). Both are ungrouped and untweened; `ui_hit` answers for a grouped or animated element. `examples/gallery/ui-rotation.yaml` is the golden.
 

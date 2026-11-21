@@ -78,7 +78,7 @@ fn rects(scene: &RenderScene) -> Vec<([f32; 4], [f32; 4])> {
         .iter()
         .filter_map(|instance| match instance {
             UiInstance::Rect { rect_px, color, .. } => Some((*rect_px, *color)),
-            UiInstance::Text { .. } => None,
+            UiInstance::Text { .. } | UiInstance::Shape { .. } => None,
         })
         .collect()
 }
@@ -488,7 +488,9 @@ fn clips(scene: &RenderScene) -> Vec<UiClip> {
         .ui
         .iter()
         .map(|instance| match instance {
-            UiInstance::Rect { clip, .. } | UiInstance::Text { clip, .. } => *clip,
+            UiInstance::Rect { clip, .. }
+            | UiInstance::Text { clip, .. }
+            | UiInstance::Shape { clip, .. } => *clip,
         })
         .collect()
 }
@@ -818,7 +820,9 @@ fn rotations(scene: &RenderScene) -> Vec<UiRotation> {
         .ui
         .iter()
         .map(|instance| match instance {
-            UiInstance::Rect { rotation, .. } | UiInstance::Text { rotation, .. } => *rotation,
+            UiInstance::Rect { rotation, .. }
+            | UiInstance::Text { rotation, .. }
+            | UiInstance::Shape { rotation, .. } => *rotation,
         })
         .collect()
 }

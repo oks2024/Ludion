@@ -281,7 +281,7 @@ pub(crate) fn ref_targets(registry: &Registry, name: &str, value: &Value) -> Vec
     let Some(info) = registry.get(name) else {
         return Vec::new();
     };
-    info.entity_refs()
+    info.entity_ref_sites(value)
         .iter()
         .filter_map(|field| {
             let reference = if field.suffix.is_empty() {
@@ -305,7 +305,8 @@ pub(crate) fn remap_positions(
     let Some(info) = registry.get(name) else {
         return;
     };
-    for field in info.entity_refs() {
+    let sites = info.entity_ref_sites(value);
+    for field in &sites {
         let reference = if field.suffix.is_empty() {
             Some(&mut *value)
         } else {
@@ -854,7 +855,11 @@ fn apply_overrides(
             remap_positions(registry, name, &mut over, start_of);
             if let Some(info) = registry.get(name) {
                 let own = offset + r.compact[position];
-                for field in info.entity_refs().iter().filter(|f| !f.allow_self) {
+                for field in info
+                    .entity_ref_sites(&over)
+                    .iter()
+                    .filter(|f| !f.allow_self)
+                {
                     let reference = if field.suffix.is_empty() {
                         Some(&over)
                     } else {

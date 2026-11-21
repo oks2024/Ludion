@@ -10,6 +10,7 @@ use ludion_engine::{
     nav_update,
 };
 use ludion_nav::{NEIGHBORS, NavGrid, NodeId};
+use ludion_physics::LayerSet;
 use ludion_protocol::command::EngineRestoreParams;
 use ludion_protocol::{Command, ResponseBody};
 use ludion_spatial::{Body, Collider, Shape, spatial3d};
@@ -363,7 +364,7 @@ fn a_restored_world_rebuilds_the_same_grid() {
 #[test]
 fn an_unknown_ignore_layer_is_reported_once_and_keeps_the_grid_empty() {
     let config = NavConfig {
-        ignore_layers: vec!["nope".to_string()],
+        ignore_layers: LayerSet::from(vec!["nope".to_string()]),
         ..config()
     };
     let mut engine = engine(config, &[ground()]);
@@ -449,7 +450,7 @@ fn a_bad_config_names_its_field() {
         (
             "/ignore_layers/1",
             NavConfig {
-                ignore_layers: vec!["a".to_string(), String::new()],
+                ignore_layers: LayerSet::from(vec!["a".to_string(), String::new()]),
                 ..config()
             },
         ),

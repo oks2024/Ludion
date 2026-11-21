@@ -19,8 +19,8 @@
 //!
 //! Where a joint's zero sits is the caller's choice ([`LimitsFrom`]). By default the physics layer
 //! captures each joint's zero from the posed bodies, so limits, `JointMotor` targets and
-//! `JointPoses` count from the switch pose. With [`LimitsFrom::Rest`] each joint carrier also gets
-//! a [`JointZero`] at the rig's rest rotation, so they count from rest however the body fell; a
+//! `JointPoses` count from the switch pose. With [`LimitsFrom::Rest`] each joint also sets
+//! `Joint.zero` at the rig's rest rotation, so they count from rest however the body fell; a
 //! switch pose outside a limit measured from rest is pulled back to it by the solver on the first
 //! step, a bounded snap, and is not refused. With [`RagdollSwitch::part_velocity`] each part also
 //! keeps the velocity of the pose it was drawn in, instead of starting limp.
@@ -49,7 +49,7 @@ use ludion_core::time::{GameTime, Q16_PER_TICK};
 use ludion_ecs::{SemanticValidate, World};
 use ludion_physics::{SurfacePart, SurfaceTag};
 use ludion_scene::AssemblyJointKind;
-use ludion_spatial::{Body, Collider, Joint, JointKind, JointZero, RigidBody, Shape, Velocity};
+use ludion_spatial::{Body, Collider, Joint, JointKind, RigidBody, Shape, Velocity};
 
 use crate::assembly_mesh::AssemblyData;
 use crate::components::{Animation, Mesh, MeshSource, Name, PoseSnapshot, Transform};
@@ -65,7 +65,7 @@ pub enum LimitsFrom {
     /// from the pose the figure was drawn in.
     #[default]
     SwitchPose,
-    /// The rig's rest pose: each joint carrier gets a [`JointZero`] at the identity, so they count
+    /// The rig's rest pose: each joint sets `Joint.zero` to the identity, so they count
     /// from rest however the body fell.
     Rest,
 }
@@ -114,7 +114,7 @@ pub fn switch_to_ragdoll(
 }
 
 /// [`switch_to_ragdoll`] with [`RagdollSwitch`] options: with [`LimitsFrom::Rest`] every joint
-/// carrier also gets a [`JointZero`] at the rig's rest rotation (the identity: an assembly's parts
+/// sets `Joint.zero` to the rig's rest rotation (the identity: an assembly's parts
 /// have no rest rotation), so the limits, motor targets and joint poses are measured from rest.
 ///
 /// # Errors
@@ -443,6 +443,7 @@ pub fn switch_to_ragdoll_with(
             anchor,
             break_impulse,
             collide: false,
+            zero: (opts.limits_from == LimitsFrom::Rest).then_some([0.0, 0.0, 0.0, 1.0]),
         };
         debug_assert!(
             Joint::validate_semantics(
@@ -455,11 +456,6 @@ pub fn switch_to_ragdoll_with(
         world
             .insert(spawned[index], part_joint)
             .expect("just spawned");
-        if opts.limits_from == LimitsFrom::Rest {
-            world
-                .insert(spawned[index], JointZero::default())
-                .expect("just spawned");
-        }
     }
 
     world.remove::<Mesh>(entity).expect("checked alive above");

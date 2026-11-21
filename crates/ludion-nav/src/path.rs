@@ -7,6 +7,7 @@ use std::collections::BinaryHeap;
 
 use ludion_core::math::sqrt;
 
+use crate::field::FlowField;
 use crate::grid::{NEIGHBORS, NO_LINK, NavGrid, NodeId};
 use crate::links::NavLinks;
 
@@ -310,18 +311,34 @@ pub fn find_path_linked(
     }
 }
 
+/// How far a cell walk got: the last node reached, the segment parameter where the walk stopped (where
+/// the failing step starts, or the end of the segment when it completed), and whether it reached `to`'s cell.
+struct WalkTrace {
+    node: NodeId,
+    t: f32,
+    complete: bool,
+}
+
 /// Walks the xz segment from `start` toward `to` cell by cell (Amanatides–Woo), following the current
-/// node's link for each step; returns the node reached in `to`'s column.
-fn walk(grid: &NavGrid, start: NodeId, from: [f32; 3], to: [f32; 3]) -> Option<NodeId> {
-    let (ei, ej) = grid.cell_of(to)?;
-    let (mut ci, mut cj) = grid.cell_of(from)?;
+/// node's link for each step. `None` when `from` is off the grid or a point is not finite; a `to` off the
+/// grid is a walk that fails at the grid's edge.
+fn walk_trace(grid: &NavGrid, start: NodeId, from: [f32; 3], to: [f32; 3]) -> Option<WalkTrace> {
+    if !from.iter().chain(to.iter()).all(|c| c.is_finite()) {
+        return None;
+    }
     let p = grid.params();
     let cs = p.cell_size;
     let (ux, uz) = ((from[0] - p.origin[0]) / cs, (from[2] - p.origin[1]) / cs);
     let (dx, dz) = ((to[0] - from[0]) / cs, (to[2] - from[2]) / cs);
-    let step = |d: f32| if d > 0.0 { 1i32 } else { -1 };
+    let (ei, ej) = (
+        ((to[0] - p.origin[0]) / cs).floor() as i64,
+        ((to[2] - p.origin[1]) / cs).floor() as i64,
+    );
+    let (ci, cj) = grid.cell_of(from)?;
+    let (mut ci, mut cj) = (i64::from(ci), i64::from(cj));
+    let step = |d: f32| if d > 0.0 { 1i64 } else { -1 };
     let (sx, sz) = (step(dx), step(dz));
-    let t_max = |u: f32, c: u32, s: i32, d: f32| {
+    let t_max = |u: f32, c: i64, s: i64, d: f32| {
         if d == 0.0 {
             f32::INFINITY
         } else {
@@ -346,8 +363,13 @@ fn walk(grid: &NavGrid, start: NodeId, from: [f32; 3], to: [f32; 3]) -> Option<N
     let limit = ci.abs_diff(ei) + cj.abs_diff(ej) + 1;
     for _ in 0..limit {
         if (ci, cj) == (ei, ej) {
-            return Some(node);
+            return Some(WalkTrace {
+                node,
+                t: 1.0,
+                complete: true,
+            });
         }
+        let t = tx.min(tz);
         let (mx, mz) = if tx == tz {
             (true, true)
         } else {
@@ -360,12 +382,70 @@ fn walk(grid: &NavGrid, start: NodeId, from: [f32; 3], to: [f32; 3]) -> Option<N
         if mz {
             tz += ddz;
         }
-        let dir = NEIGHBORS.iter().position(|(o, _)| *o == (di, dj))?;
-        node = grid.link(node, dir)?;
-        ci = (ci as i32 + di) as u32;
-        cj = (cj as i32 + dj) as u32;
+        let next = NEIGHBORS
+            .iter()
+            .position(|(o, _)| *o == (di as i32, dj as i32))
+            .and_then(|dir| grid.link(node, dir));
+        let Some(next) = next else {
+            return Some(WalkTrace {
+                node,
+                t: t.clamp(0.0, 1.0),
+                complete: false,
+            });
+        };
+        node = next;
+        ci += di;
+        cj += dj;
     }
-    ((ci, cj) == (ei, ej)).then_some(node)
+    Some(WalkTrace {
+        node,
+        t: 1.0,
+        complete: (ci, cj) == (ei, ej),
+    })
+}
+
+/// Walks the xz segment from `start` toward `to`; returns the node reached in `to`'s column.
+fn walk(grid: &NavGrid, start: NodeId, from: [f32; 3], to: [f32; 3]) -> Option<NodeId> {
+    walk_trace(grid, start, from, to)
+        .filter(|w| w.complete)
+        .map(|w| w.node)
+}
+
+/// Where a straight walk from `from` toward `to` leaves the grid's walkable links: the point on the segment
+/// where the first step that has no link begins, at the y of the last node reached. `Some(from)` when
+/// `from` has no node; `None` when the whole line is walkable (exactly when [`walkable_line`] holds).
+pub fn line_exit(grid: &NavGrid, from: [f32; 3], to: [f32; 3]) -> Option<[f32; 3]> {
+    let Some(start) = grid.node_at(from) else {
+        return Some(from);
+    };
+    let Some(trace) = walk_trace(grid, start, from, to) else {
+        return Some(from);
+    };
+    if trace.complete {
+        return None;
+    }
+    let y = grid.node_pos(trace.node)[1];
+    Some([
+        from[0] + trace.t * (to[0] - from[0]),
+        y,
+        from[2] + trace.t * (to[2] - from[2]),
+    ])
+}
+
+/// The nodes within `radius` metres of path distance of `start` along the grid links (off-mesh links are not
+/// followed), `start` included, ascending by node id. Distances count the links an agent walks to reach the
+/// node from `start`.
+pub fn reachable_within(grid: &NavGrid, start: NodeId, radius: f32) -> Vec<NodeId> {
+    let mut field = FlowField::default();
+    field.compute(grid, start, radius);
+    let mut nodes: Vec<u32> = field
+        .reached()
+        .iter()
+        .copied()
+        .filter(|&n| field.distance(NodeId(n)) <= radius)
+        .collect();
+    nodes.sort_unstable();
+    nodes.into_iter().map(NodeId).collect()
 }
 
 /// Whether an agent can walk the straight xz line from `from` to `to` along the grid's links: every

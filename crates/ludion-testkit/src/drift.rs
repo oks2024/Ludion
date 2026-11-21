@@ -72,6 +72,8 @@ fn probe_seed(name: &str) -> Value {
         "UiWorldAnchor" => json!({ "target": { "index": 0, "generation": 0 } }),
         "SightTarget" => json!({ "class": "c" }),
         "RenderView" => json!({ "name": "v" }),
+        "RenderLayers" => json!({ "layers": ["l"] }),
+        "IgnoreCollisions" => json!({ "with": { "index": 0, "generation": 0 } }),
         "StimulusRecord" => json!({
             "perceiver": { "index": 0, "generation": 0 },
             "sense": "sight",
@@ -338,6 +340,30 @@ mod tests {
     fn marked_fields_pass() {
         let mut registry = Registry::new();
         registry.register::<Marked>("Marked").unwrap();
+        assert_entity_refs_marked(&registry);
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Slot {
+        #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+        who: Option<ludion_core::ids::EntityId>,
+    }
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct Roster {
+        #[schemars(with = "ludion_ecs::EntityRefCollection<Vec<Slot>>")]
+        slots: Vec<Slot>,
+    }
+
+    /// The shape walk records `/*` under a list, which the pattern suffix of a sanctioned
+    /// collection matches, so a marked collection is not reported as unmarked.
+    #[test]
+    fn a_sanctioned_collection_pattern_matches_the_shape_suffix() {
+        let mut registry = Registry::new();
+        registry.register::<Roster>("Roster").unwrap();
+        assert_eq!(
+            ludion_ecs::entity_ref_shapes(registry.get("Roster").unwrap().schema()),
+            ["/slots/*/who"]
+        );
         assert_entity_refs_marked(&registry);
     }
 }

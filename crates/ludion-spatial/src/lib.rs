@@ -37,7 +37,6 @@
 mod collider;
 mod joint;
 mod joint_motor;
-mod joint_zero;
 mod parent_pose;
 mod plane;
 mod pose_blend;
@@ -50,7 +49,6 @@ pub use collider::{
 };
 pub use joint::{Joint, JointKind};
 pub use joint_motor::{JointMotor, expected_targets};
-pub use joint_zero::JointZero;
 pub use parent_pose::{NoParent, ParentPose};
 pub use plane::Plane;
 pub use pose_blend::{JointPoses, PoseBlend};

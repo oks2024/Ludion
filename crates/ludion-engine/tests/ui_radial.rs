@@ -286,7 +286,7 @@ fn extract_draws_a_wheel_in_a_scaled_group_at_the_composed_label_points() {
             UiInstance::Text {
                 text, color, quads, ..
             } => Some((text.as_str(), *color, quads)),
-            UiInstance::Rect { .. } => None,
+            UiInstance::Rect { .. } | UiInstance::Shape { .. } => None,
         })
         .collect();
     assert_eq!(labels.len(), 4);

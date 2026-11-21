@@ -157,6 +157,17 @@ impl ComponentInfo {
         &self.entity_refs
     }
 
+    /// The concrete entity-reference sites of `value` (the component's own JSON value): each field
+    /// of [`entity_refs`](Self::entity_refs), a `/*` pattern expanded per element
+    /// ([`EntityRefField::sites`]), in field order. Every consumer that reads or writes a reference
+    /// through `suffix` iterates this, not `entity_refs`.
+    pub fn entity_ref_sites(&self, value: &Value) -> Vec<EntityRefField> {
+        self.entity_refs
+            .iter()
+            .flat_map(|field| field.sites(value))
+            .collect()
+    }
+
     /// The component's asset-path field patterns — JSON Pointer suffixes (with `*` for every map
     /// value or list element) of fields whose schema carries the
     /// [`ASSET_PATH_KEYWORD`](crate::ASSET_PATH_KEYWORD) marker (see
@@ -371,7 +382,8 @@ impl Registry {
     ///
     /// # Errors
     /// `L0005` if `name` is already taken, or if `T` is already registered (under any name).
-    /// `L1392` if a marked entity reference sits inside a list or map of `T`.
+    /// `L1392` if a marked entity reference sits inside a list or map of `T` not marked
+    /// `EntityRefCollection`.
     pub fn register<T: Component>(&mut self, name: &str) -> Result<(), Diagnostic> {
         self.register_with::<T>(name, false, no_semantic_validation)
     }
@@ -382,7 +394,8 @@ impl Registry {
     ///
     /// # Errors
     /// `L0005` if `name` is already taken, or if `T` is already registered (under any name).
-    /// `L1392` if a marked entity reference sits inside a list or map of `T`.
+    /// `L1392` if a marked entity reference sits inside a list or map of `T` not marked
+    /// `EntityRefCollection`.
     pub fn register_validated<T: Component + SemanticValidate>(
         &mut self,
         name: &str,
@@ -397,7 +410,8 @@ impl Registry {
     ///
     /// # Errors
     /// `L0005` if `name` is already taken, or if `T` is already registered (under any name).
-    /// `L1392` if a marked entity reference sits inside a list or map of `T`.
+    /// `L1392` if a marked entity reference sits inside a list or map of `T` not marked
+    /// `EntityRefCollection`.
     pub fn register_reserved<T: Component>(&mut self, name: &str) -> Result<(), Diagnostic> {
         self.register_with::<T>(name, true, no_semantic_validation)
     }
@@ -634,8 +648,9 @@ fn entity_ref_in_collection(name: &str, suffix: &str) -> Diagnostic {
         format!("component `{name}` marks an entity reference inside a list or map, at `{suffix}`"),
     )
     .with_help(
-        "a list or map of entity references is not supported: hold each reference in its own \
-         field, or derive the collection from a query",
+        "a list or map of entity references needs the proxy: hold each reference in its own \
+         field, or wrap the list or map in `EntityRefCollection` \
+         (`#[schemars(with = \"EntityRefCollection<Vec<T>>\")]`)",
     )
 }
 

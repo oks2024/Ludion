@@ -167,6 +167,7 @@ fn mesh_doc() -> impl Strategy<Value = MeshDocument> {
                         indices,
                         rim: None,
                         lods: Vec::new(),
+                        surfaces: None,
                     };
                     // The two cross-key requirements are satisfied here rather than by conditioning
                     // the texture strategy on the vertex lists: a texture needs UVs to sample at,
@@ -732,6 +733,7 @@ fn vertex_budget_warning_does_not_fail_validation() {
         indices: vec![0, 1, 2],
         rim: None,
         lods: Vec::new(),
+        surfaces: None,
     };
     assert!(validate_mesh(&doc).is_empty());
     let warning = ludion_scene::mesh_budget_warning(&doc).expect("expected a budget warning");
@@ -745,9 +747,7 @@ fn vertex_budget_warning_does_not_fail_validation() {
 // --- Surface tags (`surfaces` / `triangle_surfaces`) ------------------------------------------
 
 mod surface_tags {
-    use ludion_scene::{
-        MeshSurfaces, check_mesh, check_mesh_surfaces, emit_mesh, emit_mesh_with_surfaces,
-    };
+    use ludion_scene::{MeshSurfaces, check_mesh, emit_mesh};
 
     const QUAD: &str = "\
 format: 1
@@ -801,25 +801,25 @@ triangle_surfaces:
     #[test]
     fn tagged_document_round_trips_byte_identically() {
         let source = doc(TAGS);
-        let (mesh, surfaces) = check_mesh_surfaces(&source).expect("valid");
-        let surfaces = surfaces.expect("tagged");
+        let mesh = check_mesh(&source).expect("valid");
+        let surfaces = mesh.surfaces.as_ref().expect("tagged");
         assert_eq!(surfaces.per_triangle(), vec![0, 1]);
-        assert_eq!(emit_mesh_with_surfaces(&mesh, Some(&surfaces)), source);
+        assert_eq!(emit_mesh(&mesh), source);
     }
 
     #[test]
     fn untagged_document_emits_its_old_bytes() {
         let source = doc("");
-        let (mesh, surfaces) = check_mesh_surfaces(&source).expect("valid");
-        assert!(surfaces.is_none());
-        assert_eq!(emit_mesh_with_surfaces(&mesh, None), source);
+        let mesh = check_mesh(&source).expect("valid");
+        assert!(mesh.surfaces.is_none());
         assert_eq!(emit_mesh(&mesh), source);
     }
 
     #[test]
-    fn emit_mesh_omits_the_tags() {
+    fn clearing_the_field_drops_the_tags() {
         let source = doc(TAGS);
-        let mesh = check_mesh(&source).expect("valid");
+        let mut mesh = check_mesh(&source).expect("valid");
+        mesh.surfaces = None;
         assert_eq!(emit_mesh(&mesh), doc(""));
     }
 
@@ -859,7 +859,7 @@ triangle_surfaces:
                 found.contains(&("L1696".to_string(), Some(pointer.to_string()))),
                 "{tags:?}: expected L1696 at {pointer}, got {found:?}"
             );
-            assert!(check_mesh_surfaces(&source).is_err());
+            assert!(check_mesh(&source).is_err());
         }
     }
 

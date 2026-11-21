@@ -80,6 +80,8 @@ masked override or additive clips over its base `Animation`; `ludion docs animat
   continuous for the pose and for events. It moves the incoming side only; a fading-out clip keeps the
   rate it had. Write `speed` directly only together with a new `started`. Under `GameClock::scale` a speed change applies on the floor gameplay frame, so the pose jumps by the
   fraction times the speed difference (`ludion docs game-clock`).
+- To pick clips from a table of states and edges instead of a hand-written system, use an `AnimGraph`:
+  `ludion docs animation-layers` §State graph.
 - A sprite flipbook cannot crossfade: `L1209`.
 
 ## Stepped playback

@@ -64,7 +64,7 @@ use crate::scene::{
     DebugSegment, DecalMaps, DropShadowInstance, FontDraw, GroundMarkerInstance, MapImage,
     MeshData, MeshShape, MeshTexture, MeshTextures, ParticleInstance, PostData, RenderScene,
     SpriteInstance, TextureImage, TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance,
-    UiRotation,
+    UiRotation, UiShapeGeometry, UiShapeStroke,
 };
 use crate::shader_reload::{
     ReloadTarget, build_ibl, build_mipgen, classify, pipeline_incompatible, validate_wgsl,
@@ -242,6 +242,95 @@ struct UiRectInstanceRaw {
     clip_r: [f32; 4],
     clip_t: [f32; 4],
     rot: [f32; 4],
+}
+
+/// One screen-space UI shape instance, matching `ui_shape.wgsl`'s `VsIn`: the bounds quad
+/// `[x, y, w, h]`; `s0 = [origin_x, origin_y, kind, stroke_width]` (kind 0 sector, 1 segment, 2 box);
+/// `s1`/`s2` the kind's parameters (see [`ui_shape_raw`]); the fill and stroke colours (zeros when
+/// none); the packed clip and the rotation, as on [`UiRectInstanceRaw`].
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable, PartialEq, Debug)]
+struct UiShapeInstanceRaw {
+    rect: [f32; 4],
+    s0: [f32; 4],
+    s1: [f32; 4],
+    s2: [f32; 4],
+    fill: [f32; 4],
+    stroke_color: [f32; 4],
+    clip_a: [f32; 4],
+    clip_b: [f32; 4],
+    clip_r: [f32; 4],
+    clip_t: [f32; 4],
+    rot: [f32; 4],
+}
+
+/// Packs a [`UiInstance::Shape`]'s parts. The quad is the geometry's bounds padded by 1 px of
+/// anti-aliasing; a sector's `s2` is `[sin m, cos m, sin h, cos h]` for the mid angle `m` and half
+/// sweep `h`, and `s1[2]` flags a sweep of a whole turn.
+fn ui_shape_raw(
+    origin_px: [f32; 2],
+    geometry: &UiShapeGeometry,
+    fill: Option<[f32; 4]>,
+    stroke: Option<UiShapeStroke>,
+    clip: &UiClip,
+    rotation: &UiRotation,
+) -> UiShapeInstanceRaw {
+    let stroke_w = stroke.map_or(0.0, |s| s.width_px);
+    let [l, t, r, b] = geometry.local_bounds(stroke_w);
+    let (kind, s1, s2) = match *geometry {
+        UiShapeGeometry::Sector {
+            radius_outer,
+            radius_inner,
+            start,
+            sweep,
+        } => {
+            let half = sweep * 0.5;
+            let (sin_m, cos_m) = ludion_core::math::sin_cos(start + half);
+            let (sin_h, cos_h) = ludion_core::math::sin_cos(half);
+            (
+                0.0,
+                [
+                    radius_outer,
+                    radius_inner,
+                    f32::from(sweep >= std::f32::consts::TAU),
+                    0.0,
+                ],
+                [sin_m, cos_m, sin_h, cos_h],
+            )
+        }
+        UiShapeGeometry::Segment {
+            a,
+            b,
+            half_width,
+            round,
+        } => (
+            1.0,
+            [a[0], a[1], b[0], b[1]],
+            [half_width, f32::from(round), 0.0, 0.0],
+        ),
+        UiShapeGeometry::RoundedBox { half_size, radius } => {
+            (2.0, [half_size[0], half_size[1], radius, 0.0], [0.0; 4])
+        }
+    };
+    let [clip_a, clip_b, clip_r, clip_t] = ui_clip_raw(clip);
+    UiShapeInstanceRaw {
+        rect: [
+            origin_px[0] + l - 1.0,
+            origin_px[1] + t - 1.0,
+            r - l + 2.0,
+            b - t + 2.0,
+        ],
+        s0: [origin_px[0], origin_px[1], kind, stroke_w],
+        s1,
+        s2,
+        fill: fill.unwrap_or([0.0; 4]),
+        stroke_color: stroke.map_or([0.0; 4], |s| s.color),
+        clip_a,
+        clip_b,
+        clip_r,
+        clip_t,
+        rot: ui_rotation_raw(rotation),
+    }
 }
 
 /// `(cos, sin)` of a UI rotation. Exactly 0 radians is `(1, 0)` without trig, so an unrotated
@@ -3109,6 +3198,31 @@ impl Renderer {
                         count: raws.len() as u32,
                     });
                 }
+                UiInstance::Shape { .. } => {
+                    let mut raws = Vec::new();
+                    while let Some(UiInstance::Shape {
+                        origin_px,
+                        geometry,
+                        fill,
+                        stroke,
+                        clip,
+                        rotation,
+                    }) = scene.ui.get(i)
+                    {
+                        raws.push(ui_shape_raw(
+                            *origin_px, geometry, *fill, *stroke, clip, rotation,
+                        ));
+                        i += 1;
+                    }
+                    batches.push(UiBatch::Shapes {
+                        instances: init_buffer(
+                            device,
+                            wgpu::BufferUsages::VERTEX,
+                            bytemuck::cast_slice(&raws),
+                        ),
+                        count: raws.len() as u32,
+                    });
+                }
                 UiInstance::Text { font, .. } => {
                     let face = *font;
                     let sdf = face.is_some_and(|f| f.sdf);
@@ -3855,6 +3969,10 @@ enum UiBatch {
     Text {
         tex_bg: wgpu::BindGroup,
         verts: wgpu::Buffer,
+        count: u32,
+    },
+    Shapes {
+        instances: wgpu::Buffer,
         count: u32,
     },
 }
@@ -6092,6 +6210,12 @@ impl FrameRecorder<'_> {
                     rp.set_vertex_buffer(0, instances.slice(..));
                     rp.draw(0..6, 0..*count);
                 }
+                UiBatch::Shapes { instances, count } => {
+                    rp.set_pipeline(self.r.pipeline(ShaderId::UiShape));
+                    rp.set_bind_group(UI_GROUP, &ui_bg, &[]);
+                    rp.set_vertex_buffer(0, instances.slice(..));
+                    rp.draw(0..6, 0..*count);
+                }
                 UiBatch::Text {
                     tex_bg,
                     verts,
@@ -7393,6 +7517,7 @@ pub(crate) enum ShaderId {
     Blit,
     UiRect,
     UiText,
+    UiShape,
     DebugLine,
     Reflections,
     SsrBlend,
@@ -7437,7 +7562,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 44;
+const SHADER_COUNT: usize = 45;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -7721,6 +7846,13 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/ui_text.wgsl"),
         snippets: &[Snippet::Glyph],
         layouts: &[Some(LayoutId::Ui), Some(LayoutId::Atlas)],
+    },
+    ShaderDesc {
+        id: ShaderId::UiShape,
+        file_name: "ui_shape.wgsl",
+        body: include_str!("shaders/ui_shape.wgsl"),
+        snippets: &[],
+        layouts: &[Some(LayoutId::Ui)],
     },
     ShaderDesc {
         id: ShaderId::DebugLine,
@@ -8689,6 +8821,7 @@ fn build_pipeline(
             build_fullscreen_pipeline(device, label, src, &layout, OUTPUT_FORMAT, None)
         }
         ShaderId::UiRect => build_ui_rect_pipeline(device, label, src, &layout),
+        ShaderId::UiShape => build_ui_shape_pipeline(device, label, src, &layout),
         ShaderId::UiText => build_ui_text_pipeline(device, label, src, &layout),
         ShaderId::DebugLine => build_debug_line_pipeline(device, label, src, &layout),
         ShaderId::Reflections => {
@@ -8917,6 +9050,9 @@ const TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
 /// UI-rect per-instance attributes (`UiRectInstanceRaw`: rect/color/uv-sub-rect/clip a, b, r, t/rot),
 /// locations 0-7.
+/// UI-shape per-instance attributes (`UiShapeInstanceRaw`: rect, three kind rows, fill, stroke colour,
+/// clip a, b, r, t, rot), one `Float32x4` each.
+const UI_SHAPE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4];
 const UI_RECT_INSTANCE_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
 /// Debug-line per-vertex attributes (`DebugLineVertexRaw`: position/color), locations 0-1.
 const DEBUG_LINE_VERTEX_ATTRS: [wgpu::VertexAttribute; 2] =
@@ -9498,6 +9634,44 @@ fn build_ui_rect_pipeline(
                 array_stride: std::mem::size_of::<UiRectInstanceRaw>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &UI_RECT_INSTANCE_ATTRS,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: OUTPUT_FORMAT,
+                blend: Some(premultiplied_blend()),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn build_ui_shape_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    src: &str,
+    layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    let shader = module(device, label, src);
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<UiShapeInstanceRaw>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &UI_SHAPE_INSTANCE_ATTRS,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },

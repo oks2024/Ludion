@@ -195,7 +195,7 @@ fn run_arm(n: usize, threads: usize, motors: bool) -> Arm {
         let laps = Laps::default();
         let mut config = config();
         if motors {
-            config.ignore_layers = vec!["agents".to_string()];
+            config.ignore_layers = ludion_physics::LayerSet::from(vec!["agents".to_string()]);
         }
         let builder: EngineBuilder = Engine::builder()
             .system(

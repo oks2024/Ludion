@@ -33,7 +33,7 @@ floats/vertex: `xyz` + handedness `w` ∈ {−1, 1}), optional per-vertex `emiss
 own directory — then optional `alpha_mode` (`opaque`/`mask`), `alpha_cutoff` and `double_sided`, each
 omitted at its default (`opaque`, `0.5`, `false`) — optional `rim` (`{ color, strength, power }`, shared with voxel and sculpt via `ludion-scene`'s `rim` module; `L1111` on a bad value) — optional skin keys `joints` (each `name`, `parent?`, `rest: { t, r, s }`,
 `inverse_bind` — 16 floats, column-major; parent-first order, at most 256), `weights` and
-`bone_indices` (4 per vertex each), all three or none — optional surface tags `surfaces` (local names, block list, at most 256) and `triangle_surfaces` (run-length `[count, local index]` pairs in triangle order; both or neither, counts summing to the triangle count, `L1696`), which travel beside `MeshDocument` as `MeshSurfaces` (`check_mesh_surfaces`/`emit_mesh_with_surfaces`; `emit_mesh` omits them, so a tool that rewrites a mesh document must use the pair) — and a required `indices` triangle list. It mirrors the scene pipeline (`parse` →
+`bone_indices` (4 per vertex each), all three or none — optional surface tags `surfaces` (local names, block list, at most 256) and `triangle_surfaces` (run-length `[count, local index]` pairs in triangle order; both or neither, counts summing to the triangle count, `L1696`), which are the `MeshDocument.surfaces` field (`MeshSurfaces`; `check_mesh`, `parse_mesh` and `emit_mesh` carry them, so a rewrite cannot drop the tags) — and a required `indices` triangle list. It mirrors the scene pipeline (`parse` →
 `validate` → `check` → canonical `emit`) and takes **no** registry, because a mesh document is
 self-describing rather than component-bearing.
 

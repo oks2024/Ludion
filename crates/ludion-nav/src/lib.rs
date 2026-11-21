@@ -57,6 +57,6 @@ pub use field::FlowField;
 pub use grid::{ColumnSource, FloorSample, GridParams, NEIGHBORS, NO_LINK, NavGrid, NodeId};
 pub use links::{LinkEdge, NavLinks, OffMeshLink};
 pub use path::{
-    PathOptions, PathResult, PathStatus, find_path, find_path_linked, nearest_node, string_pull,
-    string_pull_linked, walkable_line,
+    PathOptions, PathResult, PathStatus, find_path, find_path_linked, line_exit, nearest_node,
+    reachable_within, string_pull, string_pull_linked, walkable_line,
 };

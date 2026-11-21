@@ -967,7 +967,7 @@ fn apply_residue(
                         let nullable = registry.get(&component).is_some_and(|info| {
                             info.entity_refs()
                                 .iter()
-                                .any(|f| f.suffix == reference.suffix && f.nullable)
+                                .any(|f| f.matches(&reference.suffix) && f.nullable)
                         });
                         if !nullable {
                             dropped = true;
@@ -1197,7 +1197,8 @@ fn remap_refs<T>(
 ) -> Option<Vec<(String, T)>> {
     let mut pending = Vec::new();
     let mut cleared = Vec::new();
-    for field in info.entity_refs() {
+    let sites = info.entity_ref_sites(value);
+    for field in &sites {
         let Some(target) = crate::engine::ref_target(value, field) else {
             continue;
         };

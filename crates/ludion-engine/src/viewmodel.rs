@@ -171,7 +171,7 @@ pub(crate) fn apply(
     viewport: (u32, u32),
     has_particles: bool,
 ) -> Option<ViewmodelData> {
-    let camera = world.get::<Camera>(cam).ok().flatten().copied()?;
+    let camera = world.get::<Camera>(cam).ok().flatten().cloned()?;
     let (lens, _) = lens(world, cam);
     let cam_model = camera_frame(world, cam);
     let cam_inverse = camera_inverse(cam_model);

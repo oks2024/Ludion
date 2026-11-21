@@ -74,9 +74,9 @@ fn queries_report_l4140_before_a_grid_exists() {
     engine.load_inline_scene(&scene(&[ground()])).unwrap();
     for error in [
         nav_path(engine.world(), &req).unwrap_err(),
-        nav_distance(engine.world(), req.from, req.to).unwrap_err(),
-        nav_reachable(engine.world(), req.from, req.to).unwrap_err(),
-        nav_project(engine.world(), req.from, 1.0).unwrap_err(),
+        nav_distance(engine.world(), req.from, req.to, "").unwrap_err(),
+        nav_reachable(engine.world(), req.from, req.to, "").unwrap_err(),
+        nav_project(engine.world(), req.from, "", 1.0).unwrap_err(),
     ] {
         assert_eq!(error.code, code::NAV_NOT_READY);
     }
@@ -106,9 +106,9 @@ fn a_path_goes_around_a_wall() {
     for p in &path.waypoints {
         assert!(grid.node_at(*p).is_some(), "{p:?} is walkable");
     }
-    let d = nav_distance(engine.world(), from, to).unwrap().unwrap();
+    let d = nav_distance(engine.world(), from, to, "").unwrap().unwrap();
     assert!((d - path.cost).abs() < 1e-4);
-    assert!(nav_reachable(engine.world(), from, to).unwrap());
+    assert!(nav_reachable(engine.world(), from, to, "").unwrap());
 }
 
 #[test]
@@ -122,8 +122,8 @@ fn a_ledge_with_no_ramp_is_not_reachable_and_a_partial_path_gets_close() {
         .unwrap();
     run(&mut engine, 2);
     let (from, top) = ([4.0, 0.0, 12.0], [12.0, 1.0, 12.0]);
-    assert!(!nav_reachable(engine.world(), from, top).unwrap());
-    assert_eq!(nav_distance(engine.world(), from, top).unwrap(), None);
+    assert!(!nav_reachable(engine.world(), from, top, "").unwrap());
+    assert_eq!(nav_distance(engine.world(), from, top, "").unwrap(), None);
     let partial = nav_path(engine.world(), &PathRequest::new(from, top)).unwrap();
     assert_eq!(partial.status, PathStatus::Partial);
     let strict = PathRequest {
@@ -143,12 +143,17 @@ fn project_snaps_a_point_inside_a_wall() {
         .unwrap();
     run(&mut engine, 2);
     let inside = [10.5, 0.0, 12.0];
-    let p = nav_project(engine.world(), inside, 2.0).unwrap().unwrap();
+    let p = nav_project(engine.world(), inside, "", 2.0)
+        .unwrap()
+        .unwrap();
     assert_ne!(p, inside);
     assert!(grid(&engine).node_at(p).is_some());
-    assert_eq!(nav_project(engine.world(), inside, 0.1).unwrap(), None);
+    assert_eq!(nav_project(engine.world(), inside, "", 0.1).unwrap(), None);
     let open = [3.2, 0.0, 5.7];
-    assert_eq!(nav_project(engine.world(), open, 1.0).unwrap(), Some(open));
+    assert_eq!(
+        nav_project(engine.world(), open, "", 1.0).unwrap(),
+        Some(open)
+    );
 }
 
 #[test]
@@ -162,42 +167,42 @@ fn a_bad_request_is_l4141_with_a_pointer() {
             "/from/1",
             PathRequest {
                 from: [0.0, f32::NAN, 0.0],
-                ..base
+                ..base.clone()
             },
         ),
         (
             "/to/0",
             PathRequest {
                 to: [f32::INFINITY, 0.0, 0.0],
-                ..base
+                ..base.clone()
             },
         ),
         (
             "/max_cost",
             PathRequest {
                 max_cost: -1.0,
-                ..base
+                ..base.clone()
             },
         ),
         (
             "/max_cost",
             PathRequest {
                 max_cost: f32::NAN,
-                ..base
+                ..base.clone()
             },
         ),
         (
             "/snap_radius",
             PathRequest {
                 snap_radius: -0.5,
-                ..base
+                ..base.clone()
             },
         ),
         (
             "/max_expanded",
             PathRequest {
                 max_expanded: 0,
-                ..base
+                ..base.clone()
             },
         ),
     ];
@@ -206,7 +211,7 @@ fn a_bad_request_is_l4141_with_a_pointer() {
         assert_eq!(error.code, code::NAV_PATH_REQUEST_INVALID, "{pointer}");
         assert_eq!(error.path.as_deref(), Some(pointer));
     }
-    assert!(nav_project(engine.world(), base.from, -1.0).is_err());
+    assert!(nav_project(engine.world(), base.from, "", -1.0).is_err());
 }
 
 #[test]

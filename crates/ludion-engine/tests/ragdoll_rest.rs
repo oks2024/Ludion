@@ -1,6 +1,6 @@
 //! `switch_to_ragdoll_with` and `LimitsFrom::Rest` (Neon Shroud request 0008 W1): a posed voxel switch
 //! measures joint limits, `JointMotor` targets and `JointPoses` from the rig rest pose when asked,
-//! however the body fell; the zero is a stored `JointZero` that survives a snapshot; the default
+//! however the body fell; the zero is `Joint.zero` that survives a snapshot; the default
 //! options are `switch_to_ragdoll` exactly; and the switch samples a layered assembly's drawn pose.
 
 use std::path::{Path, PathBuf};
@@ -16,7 +16,7 @@ use ludion_engine::{
 };
 use ludion_protocol::command::EngineRestoreParams;
 use ludion_protocol::{Command, ResponseBody};
-use ludion_spatial::{Collider, Joint, JointMotor, JointPoses, JointZero, PoseBlend};
+use ludion_spatial::{Collider, Joint, JointMotor, JointPoses, PoseBlend};
 
 const ASSEMBLY_REL: &str = "models/figure.assembly.yaml";
 
@@ -274,7 +274,7 @@ fn default_options_are_switch_to_ragdoll_exactly() {
             get::<Joint>(plain.engine.world(), a).map(|j| (j.kind, j.anchor)),
             get::<Joint>(with.engine.world(), b).map(|j| (j.kind, j.anchor))
         );
-        assert!(get::<JointZero>(with.engine.world(), b).is_none());
+        assert!(get::<Joint>(with.engine.world(), b).is_none_or(|j| j.zero.is_none()));
     }
     assert_eq!(plain.hashes, with.hashes, "the fall hash sequence differs");
     for r in [plain, with] {
@@ -283,12 +283,12 @@ fn default_options_are_switch_to_ragdoll_exactly() {
 }
 
 #[test]
-fn a_rest_switch_stores_a_zero_on_each_joint_carrier_only() {
+fn a_rest_switch_sets_a_zero_on_each_joint_only() {
     let r = run("zeros", rest(), MID_CLIP, false, 0);
-    assert!(get::<JointZero>(r.engine.world(), r.spawned[0]).is_none());
+    assert!(get::<Joint>(r.engine.world(), r.spawned[0]).is_none());
     assert_eq!(
-        get::<JointZero>(r.engine.world(), r.spawned[1]),
-        Some(JointZero::default())
+        get::<Joint>(r.engine.world(), r.spawned[1]).and_then(|j| j.zero),
+        Some([0.0, 0.0, 0.0, 1.0])
     );
     let _ = std::fs::remove_dir_all(r.root);
 }
@@ -385,8 +385,8 @@ fn a_snapshot_mid_fall_keeps_the_zeros_and_the_hash_sequence() {
     let mut resumed = engine_for(&root, &scene(true, ""));
     restore(&mut resumed, snapshot);
     assert_eq!(
-        get::<JointZero>(resumed.world(), head.spawned[1]),
-        Some(JointZero::default()),
+        get::<Joint>(resumed.world(), head.spawned[1]).and_then(|j| j.zero),
+        Some([0.0, 0.0, 0.0, 1.0]),
         "the restored carrier lost its zero"
     );
     let tail = advance(&mut resumed, 80);

@@ -24,8 +24,11 @@ const DEFAULT_SNAP_RADIUS: f32 = 0.75;
 /// snapped nodes, so a slow climb can be made to lose to a short walk. `kind` is free text for the game
 /// (`"ladder"`, `"vault"`) and is not read by the engine.
 ///
-/// Non-finite endpoints, a negative or non-finite `cost` and a non-positive or non-finite `snap_radius`
-/// are rejected (`L1526`).
+/// `classes` lists the `NavConfig.classes` names that may cross the link; empty is every class. A link is
+/// in a class's table only when both ends snap on that class's grid. A name no class has is `L4147`.
+///
+/// Non-finite endpoints, a negative or non-finite `cost`, a non-positive or non-finite `snap_radius` and
+/// an empty `classes` entry are rejected (`L1526`).
 ///
 /// ```yaml
 /// components:
@@ -34,6 +37,7 @@ const DEFAULT_SNAP_RADIUS: f32 = 0.75;
 ///     to: [4.5, 3.0, 2.5]
 ///     kind: ladder
 ///     cost: 2.0
+///     classes: [walker]
 /// ```
 ///
 /// ```
@@ -69,6 +73,9 @@ pub struct NavLink {
         skip_serializing_if = "is_default_snap_radius"
     )]
     pub snap_radius: f32,
+    /// The agent classes that may cross the link; empty is every class (default empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub classes: Vec<String>,
 }
 
 impl Default for NavLink {
@@ -81,6 +88,7 @@ impl Default for NavLink {
             cost: 0.0,
             enabled: true,
             snap_radius: DEFAULT_SNAP_RADIUS,
+            classes: Vec::new(),
         }
     }
 }
@@ -113,8 +121,8 @@ fn non_finite(value: &Value) -> bool {
 
 impl SemanticValidate for NavLink {
     /// Rejects a non-finite `from` or `to` component, a negative or non-finite `cost` and a non-positive or
-    /// non-finite `snap_radius` (`L1526`, pointers `/from/{i}`, `/to/{i}`, `/cost`, `/snap_radius`). A
-    /// wrong *shape* is the schema's job.
+    /// non-finite `snap_radius` and an empty `classes` entry (`L1526`, pointers `/from/{i}`, `/to/{i}`,
+    /// `/cost`, `/snap_radius`, `/classes/{i}`). A wrong *shape* is the schema's job.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         let mut reject = |pointer: String, what: String, help: &str| {
@@ -160,6 +168,19 @@ impl SemanticValidate for NavLink {
                 "write a positive number of metres",
             );
         }
+        let classes = value.get("classes").and_then(Value::as_array);
+        for (i, _) in classes
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, v)| v.as_str() == Some(""))
+        {
+            reject(
+                format!("/classes/{i}"),
+                "a `NavLink` `classes` name is empty".into(),
+                "name a `NavConfig.classes` entry, or remove the name to allow every class",
+            );
+        }
         out
     }
 }
@@ -182,6 +203,7 @@ mod tests {
             cost: 2.5,
             enabled: false,
             snap_radius: 1.0,
+            classes: vec!["walker".into()],
         };
         let back: NavLink = serde_json::from_value(serde_json::to_value(&link).unwrap()).unwrap();
         assert_eq!(back, link);
@@ -195,9 +217,13 @@ mod tests {
             "to": [1e40, 0.0, 0.0],
             "cost": -1.0,
             "snap_radius": 0.0,
+            "classes": ["walker", ""],
         }));
         let paths: Vec<_> = found.iter().filter_map(|d| d.path.as_deref()).collect();
-        assert_eq!(paths, ["/from/1", "/to/0", "/cost", "/snap_radius"]);
+        assert_eq!(
+            paths,
+            ["/from/1", "/to/0", "/cost", "/snap_radius", "/classes/1"]
+        );
         assert!(found.iter().all(|d| d.code == code::NAV_LINK_INVALID));
     }
 }

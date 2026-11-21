@@ -416,24 +416,27 @@ fn read_docs<'a>(
 fn read_one(root: AssetRoot<'_>, doc: Doc, rel: &str) -> Read {
     let mut read = Read::default();
     let outcome = match doc {
-        Doc::Mesh => {
-            crate::mesh_asset::with_mesh_source(root, rel, ludion_scene::check_mesh_surfaces)
-                .and_then(|((document, tags), _)| {
-                    read.surfaces = tags.map(|tags| tags.names).unwrap_or_default();
-                    let levels = crate::mesh_asset::read_levels(root, rel, &document)?;
-                    read.maps =
-                        crate::mesh_asset::map_paths(rel, &document)
-                            .into_iter()
-                            .chain(levels.iter().flat_map(|level| {
-                                crate::mesh_asset::map_paths(&level.rel, &level.doc)
-                            }))
-                            .map(|(path, _, _)| path)
-                            .collect::<BTreeSet<_>>()
-                            .into_iter()
-                            .collect();
-                    Ok(())
-                })
-        }
+        Doc::Mesh => crate::mesh_asset::with_mesh_source(root, rel, ludion_scene::check_mesh)
+            .and_then(|(document, _)| {
+                read.surfaces = document
+                    .surfaces
+                    .as_ref()
+                    .map(|tags| tags.names.clone())
+                    .unwrap_or_default();
+                let levels = crate::mesh_asset::read_levels(root, rel, &document)?;
+                read.maps = crate::mesh_asset::map_paths(rel, &document)
+                    .into_iter()
+                    .chain(
+                        levels
+                            .iter()
+                            .flat_map(|level| crate::mesh_asset::map_paths(&level.rel, &level.doc)),
+                    )
+                    .map(|(path, _, _)| path)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                Ok(())
+            }),
         Doc::Voxel => crate::voxel_mesh::read_document(root, rel).map(|_| ()),
         Doc::Sculpt => crate::sculpt_mesh::read_document(root, rel).map(|_| ()),
         Doc::Assembly => crate::assembly_mesh::load_documents(root, rel).map(|_| ()),

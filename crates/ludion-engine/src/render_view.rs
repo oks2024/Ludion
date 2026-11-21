@@ -107,7 +107,7 @@ pub(crate) fn camera(
 ) -> RenderCamera {
     let scene_camera = scene
         .and_then(|id| world.get::<Camera>(id).ok().flatten())
-        .copied()
+        .cloned()
         .unwrap_or_default();
     let fov_y_deg = pose.fov_y_deg.unwrap_or(match scene_camera.projection {
         Projection::Perspective { fov_y_deg } => fov_y_deg,

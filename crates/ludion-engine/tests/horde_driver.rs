@@ -165,6 +165,7 @@ fn pin_torso(world: &mut World, torso: EntityId) {
             anchor: [0.0; 3],
             break_impulse: None,
             collide: false,
+            zero: None,
         },
     );
 }

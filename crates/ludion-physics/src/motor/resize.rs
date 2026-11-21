@@ -7,6 +7,7 @@ use ludion_ecs::World;
 use ludion_spatial::Shape;
 
 use super::component::{CharacterMotor, CharacterMotorState, check, in_force, motor_in_force};
+use super::ignore::motor_partner;
 use super::mover::motor_filter;
 use super::report::{MotorError, ResizeReport};
 use super::shape::{InForce, lying_centre, lying_rotation};
@@ -106,6 +107,7 @@ pub(super) fn headroom(
     motor: &CharacterMotor,
     feet: [f32; 3],
     h: f32,
+    partner: Option<EntityId>,
 ) -> Option<EntityId> {
     let shape = Shape::Capsule {
         half_height: motor.half_height_for(h),
@@ -117,7 +119,7 @@ pub(super) fn headroom(
             &shape,
             centre,
             [0.0, 0.0, 0.0, 1.0],
-            &motor_filter(physics, entity, motor),
+            &motor_filter(physics, entity, motor, partner),
         )
         .unwrap_or_default()
         .into_iter()
@@ -126,16 +128,25 @@ pub(super) fn headroom(
 
 /// The lowest-id collider overlapping the motor's capsule in force standing on `feet` facing `yaw`,
 /// `None` when it fits. An upright capsule is [`headroom`] at its own height (`yaw` is unused); a
-/// lying one is its yawed horizontal capsule lifted by the skin, like the upright test.
+/// lying one is its yawed horizontal capsule lifted by the skin, like the upright test. `partner`
+/// is the one entity the test looks through.
 pub(super) fn fit_blocker(
     physics: &PhysicsWorld,
     entity: EntityId,
     force: &InForce,
     feet: [f32; 3],
     yaw: f32,
+    partner: Option<EntityId>,
 ) -> Option<EntityId> {
     let Some(lying) = &force.lying else {
-        return headroom(physics, entity, &force.motor, feet, force.motor.height);
+        return headroom(
+            physics,
+            entity,
+            &force.motor,
+            feet,
+            force.motor.height,
+            partner,
+        );
     };
     let shape = Shape::Capsule {
         half_height: lying.half_segment(),
@@ -148,7 +159,7 @@ pub(super) fn fit_blocker(
             &shape,
             centre,
             lying_rotation(yaw),
-            &motor_filter(physics, entity, &force.motor),
+            &motor_filter(physics, entity, &force.motor, partner),
         )
         .unwrap_or_default()
         .into_iter()
@@ -193,9 +204,10 @@ pub fn resize_character<P: PhysicsPose>(
         current,
     } = checked::<P>(world, entity, height, true)?;
     if height > current {
+        let partner = motor_partner(world, entity);
         let blocker = world
             .resource::<PhysicsWorld>()
-            .and_then(|physics| headroom(physics, entity, &motor, feet, height));
+            .and_then(|physics| headroom(physics, entity, &motor, feet, height, partner));
         if blocker.is_some() {
             return Ok(ResizeReport {
                 height: current,
@@ -250,7 +262,15 @@ pub fn fits_character<P: PhysicsPose>(
     let physics = world
         .resource::<PhysicsWorld>()
         .ok_or(MotorError::NoPhysicsWorld)?;
-    Ok(headroom(physics, entity, &motor, feet, height).is_none())
+    Ok(headroom(
+        physics,
+        entity,
+        &motor,
+        feet,
+        height,
+        motor_partner(world, entity),
+    )
+    .is_none())
 }
 
 /// Places `entity`'s feet at `feet` facing `yaw` (radians about +Y) without driving the capsule: no
@@ -301,9 +321,10 @@ pub fn teleport_character<P: PhysicsPose>(
         || motor_in_force(&motor, state).height < motor.height;
     let restores = reduced
         && check(&motor).is_ok()
-        && world
-            .resource::<PhysicsWorld>()
-            .is_some_and(|physics| headroom(physics, entity, &base, feet, motor.height).is_none());
+        && world.resource::<PhysicsWorld>().is_some_and(|physics| {
+            let partner = motor_partner(world, entity);
+            headroom(physics, entity, &base, feet, motor.height, partner).is_none()
+        });
     place::<P>(world, entity, feet, yaw, restores);
     Ok(())
 }

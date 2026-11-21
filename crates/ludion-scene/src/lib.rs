@@ -799,20 +799,12 @@ pub fn validate_mesh(doc: &MeshDocument) -> Vec<Diagnostic> {
     mesh::validate(doc)
 }
 
-/// Parses and validates a mesh document in one step: the CLI's `check-scene` mesh path.
+/// Parses and validates a mesh document in one step: the CLI's `check-scene` mesh path. The
+/// document's `surfaces`/`triangle_surfaces` tags come back in [`MeshDocument::surfaces`], validated
+/// (`L1696`).
 ///
 /// # Errors
-/// Everything [`parse_mesh`] and [`validate_mesh`] can report.
-pub fn check_mesh(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
-    check_mesh_surfaces(source).map(|(doc, _)| doc)
-}
-
-/// [`check_mesh`] that also returns the document's `surfaces`/`triangle_surfaces` tags, validated
-/// (`L1696`). A tool that reads a mesh document and writes one back must carry the tags with
-/// [`emit_mesh_with_surfaces`]; [`emit_mesh`] omits them.
-///
-/// # Errors
-/// Everything [`check_mesh`] reports, plus `L1696` for a malformed tag list.
+/// Everything [`parse_mesh`] and [`validate_mesh`] can report, plus `L1696` for a malformed tag list.
 ///
 /// # Example
 /// ```
@@ -840,21 +832,16 @@ pub fn check_mesh(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
 ///   - 1
 ///   - 2
 /// ";
-/// let (mesh, surfaces) = ludion_scene::check_mesh_surfaces(source).expect("the mesh is valid");
-/// let surfaces = surfaces.expect("the mesh is tagged");
+/// let mesh = ludion_scene::check_mesh(source).expect("the mesh is valid");
+/// let surfaces = mesh.surfaces.as_ref().expect("the mesh is tagged");
 /// assert_eq!(surfaces.per_triangle(), vec![1]);
-/// assert_eq!(ludion_scene::emit_mesh_with_surfaces(&mesh, Some(&surfaces)), source);
+/// assert_eq!(ludion_scene::emit_mesh(&mesh), source);
 /// ```
-pub fn check_mesh_surfaces(
-    source: &str,
-) -> Result<(MeshDocument, Option<MeshSurfaces>), Vec<Diagnostic>> {
-    let (doc, surfaces) = mesh::parse_with_surfaces(source)?;
-    let mut diagnostics = validate_mesh(&doc);
-    if let Some(surfaces) = &surfaces {
-        diagnostics.extend(mesh::validate_surfaces(&doc, surfaces));
-    }
+pub fn check_mesh(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
+    let doc = parse_mesh(source)?;
+    let diagnostics = validate_mesh(&doc);
     if diagnostics.is_empty() {
-        Ok((doc, surfaces))
+        Ok(doc)
     } else {
         Err(diagnostics)
     }
@@ -899,12 +886,6 @@ pub fn mesh_budget_warning(doc: &MeshDocument) -> Option<Diagnostic> {
 /// ```
 pub fn emit_mesh(doc: &MeshDocument) -> String {
     mesh::emit(doc)
-}
-
-/// [`emit_mesh`] with the `surfaces`/`triangle_surfaces` keys when `surfaces` is `Some`; see
-/// [`check_mesh_surfaces`] for a round-trip example.
-pub fn emit_mesh_with_surfaces(doc: &MeshDocument, surfaces: Option<&MeshSurfaces>) -> String {
-    mesh::emit_with_surfaces(doc, surfaces)
 }
 
 // --- Mesh-edit documents (`meshes/*.mesh-edit.yaml`) --------------------------------------------

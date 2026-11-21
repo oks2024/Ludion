@@ -1002,7 +1002,11 @@ fn offset_engine(tag: &str, offset: bool, peek: bool) -> Engine {
 
 fn camera_of(engine: &Engine) -> Camera {
     let world = engine.world();
-    *world.get::<Camera>(named(world, "cam")).unwrap().unwrap()
+    world
+        .get::<Camera>(named(world, "cam"))
+        .unwrap()
+        .unwrap()
+        .clone()
 }
 
 /// T1: the offset moves nothing the sim owns. Over 120 ticks of a moving rig the world hash, the

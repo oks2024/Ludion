@@ -225,6 +225,7 @@ pub struct QueryFilter {
     pub(crate) include_sensors: bool,
     pub(crate) only_fixed: bool,
     pub(crate) body_layers_only: bool,
+    pub(crate) partner: Option<EntityId>,
 }
 
 impl QueryFilter {
@@ -236,6 +237,21 @@ impl QueryFilter {
     /// Drops `entity`'s hit, replacing any earlier excluded entity.
     pub fn exclude(mut self, entity: EntityId) -> Self {
         self.exclude = Some(entity);
+        self
+    }
+
+    /// Drops `entity`'s hit too; independent of [`exclude`](QueryFilter::exclude).
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::ids::EntityId;
+    /// use ludion_physics::QueryFilter;
+    ///
+    /// let filter = QueryFilter::new().exclude(EntityId::new(0, 0)).ignore_partner(EntityId::new(1, 0));
+    /// assert_ne!(filter, QueryFilter::new());
+    /// ```
+    pub fn ignore_partner(mut self, entity: EntityId) -> Self {
+        self.partner = Some(entity);
         self
     }
 

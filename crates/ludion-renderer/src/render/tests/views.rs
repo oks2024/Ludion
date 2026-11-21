@@ -22,6 +22,7 @@ fn scene() -> RenderScene {
         name: "feed".into(),
         size: (VIEW_PX, VIEW_PX),
         camera: origin_camera(VIEW_PX, VIEW_PX),
+        layers: u32::MAX,
     }];
     scene
 }

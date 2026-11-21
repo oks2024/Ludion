@@ -201,6 +201,7 @@ pub(crate) fn host_windowed(source: Source, options: StartOptions, role: WindowR
         cursor: None,
         grab: PointerGrab::new(cursor == CursorMode::Locked),
         extent: ExtentDebounce::default(),
+        last_reported_mode: None,
     };
     let loop_result = event_loop.run_app(&mut app);
 
@@ -330,6 +331,8 @@ struct App {
     grab: PointerGrab,
     /// Settles drag-resizes before the render extent follows the window.
     extent: ExtentDebounce,
+    /// The window mode last reported to the engine, so a report goes out only on change.
+    last_reported_mode: Option<ludion_engine::WindowMode>,
 }
 
 /// The window title a game shows: the builder's, else the manifest's `name`, else `Ludion`. The
@@ -426,9 +429,26 @@ impl App {
         self.embedded = Some(embedded);
         let focused = window.has_focus();
         self.window = Some(window);
+        self.report_window_mode();
         let action = self.grab.start(focused);
         self.apply_grab(action);
         Ok(())
+    }
+
+    /// Tells the engine the window's actual mode when it differs from the last report.
+    fn report_window_mode(&mut self) {
+        let (Some(window), Some(embedded)) = (&self.window, &self.embedded) else {
+            return;
+        };
+        let mode = if window.fullscreen().is_some() {
+            ludion_engine::WindowMode::BorderlessFullscreen
+        } else {
+            ludion_engine::WindowMode::Windowed
+        };
+        if self.last_reported_mode != Some(mode) {
+            self.last_reported_mode = Some(mode);
+            embedded.report_window_mode(mode);
+        }
     }
 
     /// Locked on macOS and Windows (relative mode / a 1×1 clip at the centre). Recentre first: see
@@ -591,6 +611,7 @@ impl ApplicationHandler<HostEvent> for App {
                         ludion_engine::WindowMode::Windowed => None,
                     });
                 }
+                self.report_window_mode();
             }
         }
     }
@@ -654,6 +675,8 @@ impl ApplicationHandler<HostEvent> for App {
                     self.extent
                         .on_resize((size.width, size.height), Instant::now());
                 }
+                // A resize is how a green-button fullscreen change reaches the host.
+                self.report_window_mode();
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::KeyboardInput {
@@ -678,6 +701,7 @@ impl ApplicationHandler<HostEvent> for App {
                                 };
                                 window.set_fullscreen(next);
                             }
+                            self.report_window_mode();
                             return;
                         }
                         KeyRoute::Swallow => return,

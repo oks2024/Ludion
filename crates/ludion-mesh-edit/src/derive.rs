@@ -23,7 +23,7 @@ use ludion_core::math::f64::sqrt;
 use ludion_core::paths::{normalize, relative_refusal, sibling, slash};
 use ludion_scene::{
     MeshDocument, MeshEditDocument, MeshEditKey, MeshEditMap, MeshEditOp, MeshEditRegion,
-    MeshEditRegionShape, MeshSurfaces, MeshTextures, TextureRef,
+    MeshEditRegionShape, MeshTextures, TextureRef,
 };
 use serde::Serialize;
 
@@ -331,7 +331,7 @@ pub fn derive(edit_path: &Path) -> Result<Derived, Vec<Diagnostic>> {
     let source_path = join(edit_dir, &source_rel);
     // The derive edits texture maps only, so the source's triangles — and their surface tags —
     // carry over unchanged.
-    let (source, surfaces) = read_source(&source_path)?;
+    let source = read_source(&source_path)?;
     let Some(uvs) = source.uvs.clone() else {
         return Err(vec![
             inapplicable(format!(
@@ -392,7 +392,7 @@ pub fn derive(edit_path: &Path) -> Result<Derived, Vec<Diagnostic>> {
         }
     }
 
-    let document = ludion_scene::emit_mesh_with_surfaces(&derived, surfaces.as_ref());
+    let document = ludion_scene::emit_mesh(&derived);
     self_check(&document)?;
 
     Ok(Derived {
@@ -802,8 +802,8 @@ fn coverage_for<'a>(
 /// Re-parses the emitted document and asserts it re-emits byte-for-byte, so a derive never commits
 /// a file the drift gate would then reject forever.
 fn self_check(document: &str) -> Result<(), Vec<Diagnostic>> {
-    let (reparsed, surfaces) = ludion_scene::check_mesh_surfaces(document)?;
-    if ludion_scene::emit_mesh_with_surfaces(&reparsed, surfaces.as_ref()) != document {
+    let reparsed = ludion_scene::check_mesh(document)?;
+    if ludion_scene::emit_mesh(&reparsed) != document {
         return Err(vec![
             Diagnostic::new(
                 code::MESH_EDIT_STRUCTURE,
@@ -915,7 +915,7 @@ fn read_text(path: &Path) -> Result<String, Vec<Diagnostic>> {
 
 /// Reads the source mesh document, re-messaging its own diagnostics with the file that raised them
 /// — a pointer like `/positions` otherwise reads as a pointer into the edit document.
-fn read_source(path: &Path) -> Result<(MeshDocument, Option<MeshSurfaces>), Vec<Diagnostic>> {
+fn read_source(path: &Path) -> Result<MeshDocument, Vec<Diagnostic>> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         vec![
             Diagnostic::new(
@@ -929,7 +929,7 @@ fn read_source(path: &Path) -> Result<(MeshDocument, Option<MeshSurfaces>), Vec<
             .with_help("`source` is resolved relative to the edit document's own directory"),
         ]
     })?;
-    ludion_scene::check_mesh_surfaces(&text).map_err(|diagnostics| {
+    ludion_scene::check_mesh(&text).map_err(|diagnostics| {
         diagnostics
             .into_iter()
             .map(|mut diagnostic| {

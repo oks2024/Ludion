@@ -53,6 +53,18 @@ pub struct Joint {
     /// `false` — a joint's two bodies do not collide).
     #[serde(default)]
     pub collide: bool,
+    /// The rotation of `b` relative to `a` that counts as the joint's zero, `q_a⁻¹·q_b` as
+    /// `[x, y, z, w]` (default unset: captured from the two bodies' relative pose at build, so the
+    /// zero is wherever the bodies happened to be). Set, the joint's limits, [`JointMotor`]
+    /// `target` and [`JointPoses`] are measured from it, and it survives a body rebuild, a ragdoll
+    /// retire and re-admission, a snapshot restore and a scene save and reload. The anchors keep
+    /// coinciding at build; only the rotation comes from the zero. A body that starts outside the
+    /// limits measured from the zero is pulled back by the solver within the first step.
+    ///
+    /// [`JointMotor`]: crate::JointMotor
+    /// [`JointPoses`]: crate::JointPoses
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero: Option<[f32; 4]>,
 }
 
 /// A joint's constraint kind, its axis (where it has one) and optional limits.
@@ -100,9 +112,10 @@ impl SemanticValidate for Joint {
     /// Rejects `a == b` (`/a`), a non-finite `anchor` (`/anchor`), a non-finite or zero-length axis
     /// (`/kind/hinge/axis`, `/kind/slider/axis`), an inverted or non-finite limit
     /// (`/kind/hinge/limits`, `/kind/slider/limits`, `/kind/ball/limits`), and a `break_impulse` that
-    /// is not strictly positive and finite (`/break_impulse`) — all `L1183`. JSON Schema reaches
-    /// none of these: `a`/`b` equality and a limit's ordering are cross-field, and `range(min)` does
-    /// not reach array elements. Defensive: runs on a schema-clean value.
+    /// is not strictly positive and finite (`/break_impulse`) — all `L1183` — and a `zero` with a
+    /// non-finite element or a length under `1e-6` (`/zero`, `L1750`). JSON Schema reaches none of
+    /// these: `a`/`b` equality and a limit's ordering are cross-field, and `range(min)` does not
+    /// reach array elements. Defensive: runs on a schema-clean value.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
 
@@ -145,8 +158,37 @@ impl SemanticValidate for Joint {
             check_break_impulse(break_impulse, &mut out);
         }
 
+        if let Some(zero) = value.get("zero").and_then(Value::as_array) {
+            out.extend(check_zero(zero));
+        }
+
         out
     }
+}
+
+/// `L1750` when a joint `zero` has a non-finite element or a length under `1e-6`.
+fn check_zero(zero: &[Value]) -> Option<Diagnostic> {
+    let mut length_sq = 0.0_f64;
+    for element in zero {
+        let Some(element) = element.as_f64() else {
+            continue;
+        };
+        if !element.is_finite() {
+            return Some(zero_invalid(format!(
+                "joint `zero` holds {element}; every element must be finite"
+            )));
+        }
+        length_sq += element * element;
+    }
+    (length_sq < 1e-12).then(|| {
+        zero_invalid("joint `zero` has length under 1e-6; it must be a quaternion".to_string())
+    })
+}
+
+fn zero_invalid(message: String) -> Diagnostic {
+    Diagnostic::new(code::JOINT_ZERO_INVALID, message)
+        .with_path("/zero".to_string())
+        .with_help("give `zero` four finite numbers `[x, y, z, w]` of a non-zero quaternion")
 }
 
 /// Pushes an `L1183` when `break_impulse` is not greater than zero as the `f32` the joint stores
@@ -297,6 +339,7 @@ mod tests {
             anchor: [0.0, 0.5, 0.0],
             break_impulse: Some(500.0),
             collide: false,
+            zero: None,
         };
         let value = serde_json::to_value(&joint).unwrap();
         assert_eq!(
@@ -322,10 +365,51 @@ mod tests {
             anchor: [0.0, 0.0, 0.0],
             break_impulse: None,
             collide: false,
+            zero: None,
         };
         let value = serde_json::to_value(&joint).unwrap();
         assert_eq!(value["kind"], json!({ "fixed": {} }));
+        assert!(value.get("zero").is_none(), "an absent zero writes no key");
         assert_eq!(serde_json::from_value::<Joint>(value).unwrap(), joint);
+    }
+
+    #[test]
+    fn a_zero_round_trips() {
+        let joint = Joint {
+            a: id(0),
+            b: id(1),
+            kind: JointKind::Fixed {},
+            anchor: [0.0, 0.0, 0.0],
+            break_impulse: None,
+            collide: false,
+            zero: Some([0.0, 0.382_683_43, 0.0, 0.923_879_5]),
+        };
+        let value = serde_json::to_value(&joint).unwrap();
+        assert_eq!(serde_json::from_value::<Joint>(value).unwrap(), joint);
+    }
+
+    #[test]
+    fn an_invalid_zero_is_l1750_at_zero() {
+        let cases = [
+            (json!([0.0, 0.0, 0.0, 1.0]), 0),
+            (json!([0.0, 1.0, 0.0, 1.0]), 0),
+            (json!([0.0, 0.0, 0.0, 0.0]), 1),
+            (json!([0.0, 0.0, 0.0, 1e-7]), 1),
+        ];
+        for (zero, expected) in cases {
+            let value = json!({
+                "a": { "index": 0, "generation": 0 },
+                "b": { "index": 1, "generation": 0 },
+                "kind": { "fixed": {} },
+                "zero": zero,
+            });
+            let out = Joint::validate_semantics(&value);
+            assert_eq!(out.len(), expected, "{value}");
+            for d in out {
+                assert_eq!(d.code.as_str(), "L1750");
+                assert_eq!(d.path.as_deref(), Some("/zero"));
+            }
+        }
     }
 
     #[test]

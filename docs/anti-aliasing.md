@@ -2,7 +2,7 @@
 description: SMAA 1x edge anti-aliasing — the --aa flag, the runtime switch, goldens, and what it won't fix
 ---
 
-# Anti-aliasing: `--aa`, `RenderSettings`
+# Anti-aliasing: `--aa`, `Settings`
 
 **Scope:** the single-frame edge anti-aliasing (SMAA 1x) a host or a game turns on, and how it relates
 to supersampling. The imaging chain it joins is `ludion docs post-processing`; `--scale` and the
@@ -30,13 +30,13 @@ scene pass going 0.125 ms → 0.257 (`--scale 1.5`) → 0.462 (`--scale 2`).
 
 ## Format
 
-Three control surfaces; the first that has an opinion wins, top to bottom:
+Four control surfaces; the first that has an opinion wins, top to bottom:
 
 | Surface | Set by | Reach |
 |---|---|---|
-| Runtime choice | a game system, `RenderSettings::request_anti_aliasing` | the session, across world rebuilds |
+| Runtime choice | a game system, `Settings::request_anti_aliasing` | the session, across world rebuilds; `save()` persists it to the file below |
 | Host | `--aa off\|smaa`, or `Engine::set_anti_aliasing` | the process |
-| Player settings | `Settings::request_anti_aliasing` or `graphics.anti_aliasing` in `save/settings.yaml` (`ludion docs settings`) | saved on `save()`; sits below `--aa`, above the builder default |
+| Settings file | `graphics.anti_aliasing` in `save/settings.yaml` (`ludion docs settings`) | written by `save()`; sits below `--aa`, above the builder default |
 | Builder default | `EngineBuilder::anti_aliasing` | the game's default |
 | (none) | — | `off` |
 
@@ -50,14 +50,15 @@ An options-menu row is one system:
 use ludion::prelude::*;
 
 fn options(world: &mut World, _ctx: &SystemCtx) {
-    if let Some(settings) = world.resource_mut::<RenderSettings>() {
+    if let Some(settings) = world.resource_mut::<Settings>() {
         settings.request_anti_aliasing(AntiAliasing::Smaa);
     }
 }
 ```
 
-The request applies at the next frame boundary. `settings.clear_anti_aliasing()` drops the game's
-choice and returns to the host's `--aa`, else the builder default. The choice lives on the Engine: it
+The request applies at the next frame boundary and beats `--aa` for the session; `settings.save()`
+writes it to the settings file, where it sits below `--aa` at the next boot. There is no clear: the
+last request stands. The choice lives on the Engine: it
 survives world rebuilds but not a `ludion dev` restart, and an `engine.restore` does not roll it back,
 so a game re-requests from its own option state on boot and after a restore (every tick, or on change
 plus on load). `engine.describe` and a profile report's
@@ -70,9 +71,9 @@ A golden suite pins the mode per scene with the `goldens/manifest.json` key `ant
 
 - **Off by default, and off is the old frame.** The graph, every golden and every hash are unchanged
   until something turns it on.
-- **Write-only on purpose.** The effective mode depends on the host flag, which differs per machine, so
-  a sim read would leak machine state into replays. `RenderSettings` has no getter: keep the option in
-  your own state (a profile, say). The choice is never hashed, snapshotted, recorded or on the wire.
+- **The effective mode is never readable.** It depends on the host flag, which differs per machine, so
+  a sim read would leak machine state into replays. `SettingsView::anti_aliasing` reads the player's
+  choice; the effective mode stays host-side. The choice is never hashed, snapshotted, recorded or on the wire.
 - **Goldens pin the builder default, never the flag.** The golden harness reads no `--aa`; a scene
   that wants SMAA in its golden says so in the manifest.
 - **A bad value is clap's refusal** (the possible values are listed), not an `L####`.

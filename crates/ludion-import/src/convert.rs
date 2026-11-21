@@ -150,6 +150,7 @@ pub(crate) fn mesh_document(
         indices,
         rim: None,
         lods: Vec::new(),
+        surfaces: None,
     }
 }
 

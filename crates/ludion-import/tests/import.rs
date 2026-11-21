@@ -1865,11 +1865,11 @@ fn a_surface_extra_tags_the_document_with_one_run() {
         runs: vec![[1, 0]],
     };
     let mesh = &import.meshes[0];
-    assert_eq!(mesh.surfaces.as_ref(), Some(&expected));
-    let text = ludion_scene::emit_mesh_with_surfaces(&mesh.doc, mesh.surfaces.as_ref());
-    let (doc, surfaces) = ludion_scene::check_mesh_surfaces(&text).unwrap();
+    assert_eq!(mesh.doc.surfaces.as_ref(), Some(&expected));
+    let text = ludion_scene::emit_mesh(&mesh.doc);
+    let doc = ludion_scene::check_mesh(&text).unwrap();
     assert_eq!(doc, mesh.doc);
-    assert_eq!(surfaces, Some(expected));
+    assert_eq!(doc.surfaces, Some(expected));
 }
 
 #[test]
@@ -1880,10 +1880,9 @@ fn no_surface_extra_leaves_the_bytes_as_before() {
     ] {
         let import = tagged_import(material);
         let mesh = &import.meshes[0];
-        assert_eq!(mesh.surfaces, None, "{material}");
-        assert_eq!(
-            ludion_scene::emit_mesh_with_surfaces(&mesh.doc, mesh.surfaces.as_ref()),
-            ludion_scene::emit_mesh(&mesh.doc),
+        assert_eq!(mesh.doc.surfaces, None, "{material}");
+        assert!(
+            !ludion_scene::emit_mesh(&mesh.doc).contains("surfaces"),
             "{material}"
         );
     }
@@ -1934,7 +1933,7 @@ fn two_tagged_materials_import_as_two_documents_with_one_tag_each() {
     let names: Vec<&[String]> = import
         .meshes
         .iter()
-        .map(|m| m.surfaces.as_ref().unwrap().names.as_slice())
+        .map(|m| m.doc.surfaces.as_ref().unwrap().names.as_slice())
         .collect();
     assert_eq!(names, [["metal_grate"], ["dirt"]]);
 }
@@ -1978,8 +1977,8 @@ fn import_gltf_writes_the_tag_pair_and_a_second_import_is_identical() {
         ),
         "{first}"
     );
-    let (_, surfaces) = ludion_scene::check_mesh_surfaces(&first).unwrap();
-    assert_eq!(surfaces.unwrap().runs, [[1, 0]]);
+    let doc = ludion_scene::check_mesh(&first).unwrap();
+    assert_eq!(doc.surfaces.unwrap().runs, [[1, 0]]);
     run();
     assert_eq!(std::fs::read_to_string(&meshes[0]).unwrap(), first);
     let _ = std::fs::remove_dir_all(&dir);

@@ -322,7 +322,7 @@ fn a_generated_chain_carries_the_bases_tag_on_every_level() {
     let import = run(&json, &specs).unwrap();
     assert_eq!(import.meshes.len(), 3);
     for mesh in &import.meshes {
-        let surfaces = mesh.surfaces.as_ref().expect("every level is tagged");
+        let surfaces = mesh.doc.surfaces.as_ref().expect("every level is tagged");
         assert_eq!(surfaces.names, ["rock"]);
         assert_eq!(surfaces.runs, [[mesh.doc.triangle_count() as u32, 0]]);
     }
@@ -336,7 +336,7 @@ fn a_generated_chain_carries_the_bases_tag_on_every_level() {
                     "{}
 {}",
                     m.rel_path,
-                    ludion_scene::emit_mesh_with_surfaces(&m.doc, m.surfaces.as_ref())
+                    ludion_scene::emit_mesh(&m.doc)
                 )
             })
             .collect()
@@ -351,7 +351,7 @@ fn authored_levels_must_agree_with_the_base_on_the_surface() {
         &[("rock", 0), ("rock_LOD1", 1)],
     );
     let import = run(&same, &[]).unwrap();
-    assert!(import.meshes.iter().all(|m| m.surfaces.is_some()));
+    assert!(import.meshes.iter().all(|m| m.doc.surfaces.is_some()));
 
     for (grids, shown) in [
         (

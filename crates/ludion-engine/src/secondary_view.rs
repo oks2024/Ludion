@@ -29,6 +29,7 @@ pub(crate) struct ViewTable {
 pub(crate) fn extract_views(
     world: &World,
     ids: &[EntityId],
+    layers: Option<&crate::render_layers::FrameLayers>,
     errors: &mut Vec<Diagnostic>,
     degraded: &mut Vec<(String, Diagnostic)>,
 ) -> ViewTable {
@@ -96,6 +97,7 @@ pub(crate) fn extract_views(
             name: view.name.clone(),
             size,
             camera: crate::extract::build_camera(world, &[], id, size),
+            layers: layers.map_or(u32::MAX, |layers| layers.view_mask(view)),
         });
     }
     table

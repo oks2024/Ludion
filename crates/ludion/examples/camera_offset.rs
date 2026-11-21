@@ -105,7 +105,7 @@ fn print_eye(engine: &Engine, tick: u64) {
         return;
     };
     let rig = *world.get::<Transform>(camera).unwrap().unwrap();
-    let projection = *world.get::<Camera>(camera).unwrap().unwrap();
+    let projection = world.get::<Camera>(camera).unwrap().unwrap().clone();
     let drawn = world
         .presentation_entities()
         .find_map(|id| world.get::<CameraOffset>(id).ok().flatten().copied())

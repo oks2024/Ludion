@@ -33,7 +33,13 @@ Observe: `engine.audio_log()` holds `AudioMessage::BusGain` / `BusPause`, stampe
 | duck layer | engine-owned, never a `MixLayer`: `DuckRule`, `duck_start`/`duck_end` (§Ducking) |
 
 Effective gain of a bus is `authored × user × game × duck × pause`, and every bus but `Master` is also
-multiplied by `Master`. `voice`, `ui` and `Master` have no authored field: they read `1.0`.
+multiplied by `Master`. Every bus has an authored field in `CategoryGains`, set with
+`CategoryGains::default().with(Bus::Ambient, 0.6)` (`master sfx ambient voice ui music`, each `1.0` by default).
+
+## Authored gains
+
+`CategoryGains` is `#[non_exhaustive]`: start from `default()` and `.with(bus, gain)` each bus; `gain(bus)` reads one.
+The sink multiplies in `master` for every bus, `voice` and `ui` included.
 
 ## Rules
 

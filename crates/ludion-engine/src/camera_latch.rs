@@ -30,7 +30,7 @@ struct RigLatch {
 impl CameraLatch for RigLatch {
     fn resolve(&self, extra_look_deg: [f32; 2]) -> Option<CameraBlend> {
         let view = resolved_camera(&self.rig, self.target, extra_look_deg)?.view;
-        let mut camera = self.camera;
+        let mut camera = self.camera.clone();
         if let (Some(fov), Projection::Perspective { fov_y_deg }) =
             (view.fov_y_deg, &mut camera.projection)
         {
@@ -78,7 +78,7 @@ pub(crate) fn collect(world: &World, viewport: (u32, u32)) -> Option<Arc<dyn Cam
     {
         return None;
     }
-    let camera = *world.get::<Camera>(key).ok()??;
+    let camera = world.get::<Camera>(key).ok()??.clone();
     if !matches!(camera.projection, Projection::Perspective { .. }) {
         return None;
     }

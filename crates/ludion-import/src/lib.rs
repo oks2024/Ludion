@@ -206,8 +206,7 @@ impl Import {
             for mesh in &self.meshes {
                 write_file(
                     &out_dir.join(&mesh.rel_path),
-                    ludion_scene::emit_mesh_with_surfaces(&mesh.doc, mesh.surfaces.as_ref())
-                        .as_bytes(),
+                    ludion_scene::emit_mesh(&mesh.doc).as_bytes(),
                 )?;
             }
         }
@@ -281,11 +280,9 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), Diagnostic> {
 pub struct MeshArtifact {
     /// The output-relative path, e.g. `meshes/crystal.mesh.yaml`.
     pub rel_path: String,
-    /// The parsed, validated mesh document.
+    /// The parsed, validated mesh document; its `surfaces` hold the tags from its material's
+    /// `extras.ludion_surface`.
     pub doc: MeshDocument,
-    /// The document's surface tags, from its material's `extras.ludion_surface`; emit the pair with
-    /// [`ludion_scene::emit_mesh_with_surfaces`].
-    pub surfaces: Option<ludion_scene::MeshSurfaces>,
 }
 
 /// One `clips/*.anim.yaml` document plus its output-relative path and the reduction report.
@@ -936,12 +933,12 @@ fn resolve_primitive(
     let surfaces = lod::level_surfaces(surface.as_ref().map(std::slice::from_ref), &doc);
     state.meshes.push(MeshArtifact {
         rel_path: rel_path.clone(),
-        surfaces,
         doc: MeshDocument {
             // Re-name to the deduped, sanitized filename stem so the doc's `name:` and its path agree.
             name: Some(name),
             alpha_mode,
             double_sided: material.double_sided(),
+            surfaces,
             ..doc
         },
     });

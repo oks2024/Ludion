@@ -24,6 +24,7 @@ entities:
         size: [256, 256]       # texels, each axis 16..=2048 (default [256, 256])
         enabled: true          # default true
         order: 0               # lowest first; ties by entity
+        layers: [default, radar]   # what the view draws; absent draws [default] (Render layers below)
   - name: radar-window
     components:
       UiRect:
@@ -43,6 +44,25 @@ shadows, the environment, GI and probes. It drops the UI, other views, the viewm
 screen-space effects SSAO, SSR, depth of field and light shafts, and light scattering. The sun's shadow cascades are
 fitted to the main camera, so a view that looks outside them sees unshadowed ground.
 
+## Render layers
+`RenderLayers: { layers: [radar] }` puts an entity, and every `Parent` descendant without its own `RenderLayers` (the
+nearest ancestor wins), in the named layers. An entity without one is in `default`. `Camera.layers` (the main camera;
+absent draws every layer) and `RenderView.layers` (absent draws `[default]`) choose what each image draws: meshes,
+blended meshes, sprites, ground markers, drop shadows, decals, particles and world text. Shadows follow, because each
+image casts from the meshes it draws.
+
+```yaml
+  - name: marker-for-radar
+    components:
+      GroundMarker: { shape: { type: disc, radius: 1.0 } }
+      RenderLayers: { layers: [radar] }   # drawn by views that list radar, not by the main camera
+```
+Names are interned per frame: `default` is a bit of its own and a scene may use 31 other names (more is `L2375`). A
+list must name at least one layer, none empty and none twice (`L2375`). Debug lines are never filtered; projectiles
+and volley bullets are in `default`; the viewmodel ignores layers; lights are not filtered. The editor's `render.view`
+flight draws every layer, so a designer sees radar overlays. A scene that authors none of these is unchanged, byte for
+byte. Probe captures and the GI bake ignore layers.
+
 ## Budget and cost
 At most **4** enabled views render per frame, in `(order, entity)` order. Each further one is warning `L2374` and is
 not rendered; a `UiRect` naming a disabled or skipped view draws nothing. A view costs about one extra frame at its
@@ -55,8 +75,9 @@ release) prints the summed pass GPU time at 512² and 256².
 - `L2372` (error): `UiRect.view` names no `RenderView`.
 - `L2373` (error): `UiRect.view` beside `texture`, `atlas`, `frame`, `slice` or `uv_rect`.
 - `L2374` (warning): more than 4 enabled views.
+- `L2375` (error): an empty `layers` list, an empty or repeated layer name, or more than 31 names besides `default`.
 
-`ludion check-scene` reports the first four statically, with pointers. `ludion explain L2370` gives the fix.
+`ludion check-scene` reports `L2370`–`L2373` and the list shape of `L2375` statically, with pointers. `ludion explain L2370` gives the fix.
 
 ## Gotchas
 - A view is a presentation read: it sees the world as the last extract left it, never writes sim state, and a game
@@ -65,4 +86,5 @@ release) prints the summed pass GPU time at 512² and 256².
   live; headless renders are exact.
 - A rect whose view is disabled shows nothing, not the clear colour.
 
-The gallery scene is `examples/gallery/render-view-radar.yaml`: the room in perspective, and from above in the corner.
+The gallery scenes are `examples/gallery/render-view-radar.yaml` (the room in perspective, and from above in the
+corner) and `render-view-layers.yaml` (a blue marker only on the radar, a green one only in the main frame).

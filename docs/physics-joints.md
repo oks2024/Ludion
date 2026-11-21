@@ -204,13 +204,13 @@ See `examples/gallery/ragdoll-pose-blend.yaml` (skinned, voxel and pinned ragdol
   bodies' current relative pose when it is built** — not the numbers alone. A runtime-spawned joint forms
   exactly where the bodies already are. Across a save/reload a scene is not a snapshot: reloading
   re-captures every joint's zero at the *saved* pose, so every limit shifts to match.
-- **`JointZero` overrides the capture.** A carrier `JointZero { rotation: [x, y, z, w] }` (default the
-  identity) beside the `Joint` is the rotation of `b` in `a`'s frame that counts as zero: limits,
-  `JointMotor.target` and `JointPoses` are measured from it, while the anchors still coincide at build.
-  It is a component, so it survives a body rebuild, a ragdoll retire and re-admission, a snapshot
-  restore and a scene save and reload; adding, editing or removing one rebuilds the joint. A pose
-  outside a limit measured from the zero is pulled back by the solver on the first step. A non-finite
-  or near-zero `rotation` is `L1750` (and is ignored by the solver, as if absent).
+- **`Joint.zero` overrides the capture.** `zero: [x, y, z, w]` on the `Joint` (absent: captured at
+  build) is the rotation of `b` in `a`'s frame that counts as zero: limits, `JointMotor.target` and
+  `JointPoses` are measured from it, while the anchors still coincide at build. It is part of the
+  `Joint`, so it survives a body rebuild, a ragdoll retire and re-admission, a snapshot restore and a
+  scene save and reload; adding, editing or removing one rebuilds the joint. A pose outside a limit
+  measured from the zero is pulled back by the solver on the first step. A non-finite or near-zero
+  `zero` is `L1750` (and is ignored by the solver, as if absent).
 - A `break_impulse` a step's linear constraint impulse exceeds removes the joint and reports
   `JointBroken { joint, a, b, impulse }` on `PhysicsWorld::joint_events()`; the `Joint` component
   itself is removed the same tick, so a joint exists iff its component does. A slider's own end-stop
@@ -298,8 +298,8 @@ gone goes inert and is reported.
 - **Pinned group:** a part joined to a `Body::Static` collider outside the group. Evict those last.
 - **Re-admission:** re-insert the removed `Collider` and `Joint` (plus a `Velocity` for the hit). Bodies
   rebuild at the retired pose, and **joint zeros are re-captured there, so limits count from the
-  settled pose, not the rig rest** — unless the carrier keeps a `JointZero` (a `LimitsFrom::Rest` switch
-  adds one; `ludion docs voxel-assemblies` §Ragdolls). Keeping the removed values across a restore is the game's job
+  settled pose, not the rig rest** — unless the `Joint` keeps a `zero` (a `LimitsFrom::Rest` switch
+  sets one; `ludion docs voxel-assemblies` §Ragdolls). Keeping the removed values across a restore is the game's job
   (re-read them from the parts prefab in the same order).
 
 The runnable pool is `cargo run -p ludion --example ragdoll_budget`: a simulated-group cap,

@@ -163,6 +163,8 @@ each pose is shown, default `1`, `>= 1`).
   not bind — with no diagnostic: a complaint would fire sixty times a second.
 - **A plain `clip` write is a hard cut.** `crossfade(&mut animation, clip, seconds, ctx.game_frame)`
   blends from the outgoing clip (rotation slerps, translation/scale lerp).
+- A table of states and edges that chooses the clip and layers is an `AnimGraph`
+  (`ludion docs animation-layers` §State graph).
 - `speed: 0.0` freezes on the clip's first instant; a `started` frame in the future reads as that same
   first instant rather than a negative time.
 

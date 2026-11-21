@@ -198,7 +198,8 @@ fn remap_value(
     let Some(info) = registry.get(name) else {
         return Ok(());
     };
-    for field in info.entity_refs() {
+    let sites = info.entity_ref_sites(value);
+    for field in &sites {
         let reference = if field.suffix.is_empty() {
             Some(&mut *value)
         } else {
@@ -368,7 +369,7 @@ pub(crate) fn scope(
             let Ok(Some(value)) = info.serialize(world, id) else {
                 continue;
             };
-            for field in info.entity_refs() {
+            for field in &info.entity_ref_sites(&value) {
                 if let Some(target) = ref_target(&value, field)
                     && !members.contains(&target)
                     && world.is_alive(target)
@@ -1658,7 +1659,7 @@ impl<'a> Collapser<'a> {
                 let Ok(Some(value)) = info.serialize(world, id) else {
                     continue;
                 };
-                for field in info.entity_refs() {
+                for field in &info.entity_ref_sites(&value) {
                     let Some(&at) = ref_target(&value, field).and_then(|t| subset.get(&t)) else {
                         continue;
                     };
@@ -1726,9 +1727,9 @@ impl<'a> Collapser<'a> {
                     let atomic: Vec<String> = registry
                         .get(name)
                         .map(|info| {
-                            info.entity_refs()
-                                .iter()
-                                .map(|f| f.suffix.clone())
+                            info.entity_ref_sites(value)
+                                .into_iter()
+                                .map(|f| f.suffix)
                                 .collect()
                         })
                         .unwrap_or_default();

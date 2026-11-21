@@ -108,6 +108,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "text.wgsl",
     "threshold.wgsl",
     "ui_rect.wgsl",
+    "ui_shape.wgsl",
     "ui_text.wgsl",
     "upscale.wgsl",
 ];

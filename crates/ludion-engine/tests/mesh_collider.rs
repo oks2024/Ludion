@@ -322,17 +322,13 @@ fn tagged_scene_and_floor(name: &str) -> (Engine, PathBuf) {
             5.0, 0.0, 5.0,
         ],
         indices: vec![0, 2, 1, 1, 2, 3],
+        surfaces: Some(ludion_scene::MeshSurfaces {
+            names: vec!["concrete".into(), "metal_grate".into()],
+            runs: vec![[1, 0], [1, 1]],
+        }),
         ..MeshDocument::default()
     };
-    let tags = ludion_scene::MeshSurfaces {
-        names: vec!["concrete".into(), "metal_grate".into()],
-        runs: vec![[1, 0], [1, 1]],
-    };
-    std::fs::write(
-        dir.join(MESH),
-        ludion_scene::emit_mesh_with_surfaces(&doc, Some(&tags)),
-    )
-    .unwrap();
+    std::fs::write(dir.join(MESH), ludion_scene::emit_mesh(&doc)).unwrap();
     let scene = format!(
         "format: 1\nseed: 3\nphysics:\n  space: free\n  surfaces:\n    - concrete\n    - metal_grate\nentities:\n  \
          - name: floor\n    components:\n      Transform: {{}}\n      Collider:\n        shape:\n          mesh:\n            path: {MESH}\n        body: static\n"

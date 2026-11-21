@@ -51,6 +51,7 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
     let mut out = scene.clone();
     out.camera = face_camera(position, face);
     out.cull_camera = None;
+    out.layered = None;
     // The gun belongs to the screen, not the world: a face draws no viewmodel, and its moving pose
     // must not re-key the capture.
     out.meshes.retain(|mesh| !mesh.viewmodel);

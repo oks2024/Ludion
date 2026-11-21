@@ -174,6 +174,7 @@ fn hinged_pair() -> (World, Schedule, EntityId, EntityId) {
                 anchor: [0.0; 3],
                 break_impulse: None,
                 collide: false,
+                zero: None,
             },
         )
         .expect("a joint");

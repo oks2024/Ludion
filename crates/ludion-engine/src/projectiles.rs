@@ -32,10 +32,11 @@ use crate::diagnostics::report_full;
 /// # Example
 /// ```
 /// use ludion_engine::ProjectileConfig;
+/// use ludion_physics::LayerSet;
 ///
 /// let config = ProjectileConfig {
 ///     capacity: 256,
-///     ignore_layers: vec!["pickups".to_string()],
+///     ignore_layers: LayerSet::from(vec!["pickups".to_string()]),
 ///     ..ProjectileConfig::default()
 /// };
 /// assert!(config.validate().is_ok());
@@ -50,7 +51,8 @@ pub struct ProjectileConfig {
     /// Layer mask of the `spatial3d` index the shots can hit.
     pub targets: u32,
     /// Physics layers the sweep ignores (names from the scene's `physics.layers`).
-    pub ignore_layers: Vec<String>,
+    #[schemars(with = "Vec<String>")]
+    pub ignore_layers: LayerSet,
     /// Whether the sweep hits sensor colliders.
     pub include_sensors: bool,
 }
@@ -61,7 +63,7 @@ impl Default for ProjectileConfig {
             capacity: 1024,
             gravity: [0.0, -9.81, 0.0],
             targets: u32::MAX,
-            ignore_layers: Vec::new(),
+            ignore_layers: LayerSet::default(),
             include_sensors: false,
         }
     }
@@ -96,7 +98,7 @@ impl ProjectileConfig {
                 "use three finite numbers in m/s², e.g. [0.0, -9.81, 0.0]",
             ));
         }
-        if let Some(i) = self.ignore_layers.iter().position(String::is_empty) {
+        if let Some(i) = self.ignore_layers.iter().position(str::is_empty) {
             return Err(invalid(
                 &format!("/ignore_layers/{i}"),
                 "a projectile `ignore_layers` name is empty".to_string(),
@@ -141,8 +143,7 @@ impl Projectiles {
         pool: ProjectilePool,
         events: StepEvents,
     ) -> Self {
-        let mut query =
-            QueryFilter::new().ignore_set(&LayerSet::from(config.ignore_layers.clone()));
+        let mut query = QueryFilter::new().ignore_set(&config.ignore_layers);
         if config.include_sensors {
             query = query.include_sensors();
         }

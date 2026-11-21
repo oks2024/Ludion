@@ -6,8 +6,9 @@ description: The kind: paired document and check-scene: roles, align offsets, ev
 
 **Scope:** a two-or-more-role choreography authored as text (`kind: paired`): which assemblies take
 part, where each ends up relative to the reference, the named moments, and the part contacts that must
-meet. A game cannot play one yet; `ludion docs voxel-assemblies` §Ragdolls covers the switches a
-finished action hands the target to. Clips are `ludion docs voxel-animation`.
+meet. A game can ask whether one can start (§Can it start?) but cannot play one yet;
+`ludion docs voxel-assemblies` §Ragdolls covers the switches a finished action hands the target to.
+Clips are `ludion docs voxel-animation`.
 
 ## The loop
 
@@ -72,7 +73,35 @@ document has no place for, and a prefab cannot be a role yet.
   measure is cell-quantized.
 - Every event `t` must be at most each clip role's clip `duration`.
 - The warp report lists each role's aligned offset, yaw and planar distance from the reference; the
-  start pose is runtime state, so it has no path from there yet.
+  path from a start pose is `paired_fit`'s.
+
+## Can it start?
+
+```rust
+let cast = [("instigator", player), ("target", guard)];
+let warp = Warp { distance: 0.6, yaw_deg: 45.0 };
+let fit = paired_fit(world, "voxels/choke.paired.yaml", &cast, warp)?;
+if fit.fits { /* the action can start */ }
+```
+
+`paired_fit(world, path, cast, max_warp)` reads the document at its content-root `path` (loaded on first
+use, kept until the next world build; `asset.reload` does not reach it) and changes nothing. It takes
+exactly two roles and a cast naming each once. Each cast entity must be alive, unparented, have a
+`Transform`, draw the role's assembly (`Mesh` `assembly:`) and have the role's uniform `scale`.
+
+- **The aligned pose.** The reference's offset is applied to the current poses, planar (feet height is
+  kept). A yaw is the heading of the entity's `-Z` axis, radians about `+Y`. `moves: <role>` puts that
+  role onto the other; `split` meets at the midpoint of the two feet, turning each half of the way.
+- **The warp** of a moving role is its planar distance and its absolute yaw change, checked against
+  `Warp { distance, yaw_deg }`: `over_warp` names the first role (by name) that exceeds either.
+- **Fit.** A role with a `CharacterMotor` is tested standing at its target in the role's `posture`
+  (`character_fit_ignoring`, ignoring its partner: two capsules at a 0.5 m offset overlap). `blocked_by`
+  is the first role and the lowest-id collider in the way. A role with no motor is not tested.
+- `PairedFit { fits, blocked_by, over_warp, roles }`: `roles` holds every role's target `feet`, `yaw`,
+  `distance` and `yaw_deg`, sorted by role name. `fits` is true when nothing blocks and the warp is
+  within bounds.
+
+Playing the action arrives with `start_paired`.
 
 ## The check-scene report
 
@@ -95,5 +124,9 @@ contact instigator/lower-arm-r -> target/head @ hold (t 0.5): gap 6.828 cells (0
 | `L1753` | fewer than 2 roles, an unknown `reference`/`moves` role, a missing, extra or reference offset, `ticks: 0`, a non-finite number, `scale` of 0 or less, a role with both or neither of `clip` and `align_only`, an empty name, events out of order or repeated, a bad contact side, both sides on one role, an unknown `at`, a negative `max_gap` |
 | `L1754` | a role's assembly does not load, an unknown clip (nearest suggested), an event past a clip's duration, a contact part the assembly lacks |
 | `L1755` | warning: a contact's gap exceeds its `max_gap` |
+| `L4370` | `paired_fit`: no `kind: paired` document loads at the path (the loader's diagnostics follow); an engine without a project |
+| `L4371` | `paired_fit`: an unknown, repeated or missing cast role, or an entity that is dead, has no `Transform`, is parented, draws another assembly, or whose motor cannot be tested (unknown `posture`) |
+| `L4372` | `paired_fit`: a cast entity's scale is non-uniform or not the role's `scale` |
+| `L4373` | `paired_fit`: more than two roles |
 
 `ludion explain L1752` and the others print the full text.

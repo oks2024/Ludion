@@ -814,6 +814,87 @@ fn ui_rotation_packs_cos_sin_and_pivot() {
     assert_eq!((raw[2], raw[3]), (3.0, 4.0));
 }
 
+/// An unclipped, unrotated shape packs the identity clip and rotation, and the instance struct is the
+/// eleven `vec4`s the shader declares.
+#[test]
+fn ui_shape_raw_packs_identity_clip_and_rotation() {
+    assert_eq!(std::mem::size_of::<UiShapeInstanceRaw>(), 11 * 16);
+    let raw = ui_shape_raw(
+        [100.0, 50.0],
+        &UiShapeGeometry::Sector {
+            radius_outer: 20.0,
+            radius_inner: 0.0,
+            start: 0.0,
+            sweep: std::f32::consts::TAU,
+        },
+        Some([1.0; 4]),
+        None,
+        &UiClip::NONE,
+        &UiRotation::NONE,
+    );
+    assert_eq!(raw.clip_t, [1.0, 0.0, 1.0, 0.0]);
+    assert_eq!(raw.rot, [1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(raw.stroke_color, [0.0; 4]);
+    // The disc's bounds, padded by one pixel of anti-aliasing.
+    assert_eq!(raw.rect, [79.0, 29.0, 42.0, 42.0]);
+    assert_eq!(raw.s0, [100.0, 50.0, 0.0, 0.0]);
+    assert_eq!(raw.s1[2], 1.0, "a whole turn flags the sector as full");
+}
+
+/// A 90-degree ring starting at 12 o'clock has its mid ray at 45 degrees and half sweep 45 degrees.
+#[test]
+fn ui_shape_raw_packs_the_sector_mid_angle() {
+    let raw = ui_shape_raw(
+        [0.0, 0.0],
+        &UiShapeGeometry::Sector {
+            radius_outer: 30.0,
+            radius_inner: 20.0,
+            start: 0.0,
+            sweep: std::f32::consts::FRAC_PI_2,
+        },
+        None,
+        Some(UiShapeStroke {
+            width_px: 4.0,
+            color: [0.0, 1.0, 0.0, 1.0],
+        }),
+        &UiClip::NONE,
+        &UiRotation::NONE,
+    );
+    let [sin_m, cos_m, sin_h, cos_h] = raw.s2;
+    let q = std::f32::consts::FRAC_1_SQRT_2;
+    for (got, want) in [(sin_m, q), (cos_m, q), (sin_h, q), (cos_h, q)] {
+        assert!((got - want).abs() < 1e-5, "{got} vs {want}");
+    }
+    assert_eq!(raw.s1, [30.0, 20.0, 0.0, 0.0]);
+    assert_eq!(raw.s0[3], 4.0);
+    assert_eq!(raw.stroke_color, [0.0, 1.0, 0.0, 1.0]);
+}
+
+/// `local_bounds` for each geometry, padded by half the stroke.
+#[test]
+fn ui_shape_local_bounds_cover_each_geometry() {
+    let sector = UiShapeGeometry::Sector {
+        radius_outer: 10.0,
+        radius_inner: 4.0,
+        start: 1.0,
+        sweep: 0.5,
+    };
+    assert_eq!(sector.local_bounds(0.0), [-10.0, -10.0, 10.0, 10.0]);
+    assert_eq!(sector.local_bounds(4.0), [-12.0, -12.0, 12.0, 12.0]);
+    let segment = UiShapeGeometry::Segment {
+        a: [10.0, -5.0],
+        b: [-4.0, 8.0],
+        half_width: 2.0,
+        round: false,
+    };
+    assert_eq!(segment.local_bounds(0.0), [-6.0, -7.0, 12.0, 10.0]);
+    let boxed = UiShapeGeometry::RoundedBox {
+        half_size: [20.0, 10.0],
+        radius: 3.0,
+    };
+    assert_eq!(boxed.local_bounds(2.0), [-21.0, -11.0, 21.0, 11.0]);
+}
+
 /// One PNG read as a loose texture (premultiplied by the engine) and as an atlas colour map
 /// (stored bytes) has one content hash and two pixel streams: the sprite texture cache must hold
 /// both rather than serve whichever uploaded first. Skips with no GPU.
@@ -13416,6 +13497,10 @@ fn vertex_inputs_match_generated_reflection() {
     assert_eq!(
         locs_formats(&UI_RECT_INSTANCE_ATTRS).as_slice(),
         crate::shader_gen::UI_RECT_VS_MAIN_INPUTS,
+    );
+    assert_eq!(
+        locs_formats(&UI_SHAPE_INSTANCE_ATTRS).as_slice(),
+        crate::shader_gen::UI_SHAPE_VS_MAIN_INPUTS,
     );
     assert_eq!(
         locs_formats(&UI_TEXT_VERTEX_ATTRS).as_slice(),

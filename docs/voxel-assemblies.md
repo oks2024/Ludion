@@ -199,12 +199,12 @@ A root `SurfaceTag` is inherited: each part takes its `parts` entry's surface by
 root's (`ludion docs collision`).
 
 `switch_to_ragdoll_with(world, entity, assembly, game_time, opts)` takes a `RagdollSwitch`; build it
-from `RagdollSwitch::default()` and set `limits_from`. `LimitsFrom::Rest` stores a `JointZero` (the
-identity: parts have no rest rotation) on each joint carrier, so limits, `JointMotor` targets and
+from `RagdollSwitch::default()` and set `limits_from`. `LimitsFrom::Rest` sets `Joint.zero` (the
+identity: parts have no rest rotation) on each joint, so limits, `JointMotor` targets and
 `JointPoses` count from the **rig rest pose** however the body fell, and survive a rebuild, a
 snapshot restore and a save and reload. A switch pose outside a limit measured from rest is clamped
 by the solver on the first step — a bounded snap, not an error. The default, `LimitsFrom::SwitchPose`,
-is `switch_to_ragdoll` exactly. `ludion docs physics-joints` §Rules has `JointZero`.
+is `switch_to_ragdoll` exactly. `ludion docs physics-joints` §Rules has `Joint.zero`.
 
 `part_velocity: true` adds the drawn pose's own motion to each part's `Velocity`, on top of the root's
 rigid velocity: a finite difference of the part's posed transform at the switch tick and one tick

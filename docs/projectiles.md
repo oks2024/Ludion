@@ -40,7 +40,7 @@ The full runnable game is `crates/ludion/examples/projectiles.rs`
 | `capacity` | `1024` | `1..=32768` live shots |
 | `gravity` | `[0, -9.81, 0]` | finite m/s²; scaled per shot by `gravity_scale` |
 | `targets` | all bits | layer mask of the `spatial3d` index a shot can hit |
-| `ignore_layers` | `[]` | `physics.layers` names the sweep skips |
+| `ignore_layers` | `[]` | `physics.layers` names the sweep skips (Rust type `LayerSet`; text is a list) |
 | `include_sensors` | `false` | whether sensor colliders are hit |
 
 `ProjectileDesc::new(position, velocity)` is a ray with no gravity or drag, ten seconds to live,

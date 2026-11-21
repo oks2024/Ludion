@@ -16,6 +16,7 @@ use super::component::{
     CharacterMotor, CharacterMotorState, PlatformPose, check_in_force, in_force,
 };
 use super::gather::Gather;
+use super::ignore::motor_partner;
 use super::report::{GroundHit, GroundProbe, MotorError, MoveReport, PlatformCarry, SurfaceHit};
 use super::shape::{InForce, forward, lying_rotation, yaw_of};
 use super::surface::SurfaceVelocity;
@@ -421,13 +422,16 @@ fn probe_reach(snap: f32, skin: f32, snap_allowed: bool) -> f32 {
 }
 
 /// The query filter a motor's casts and overlaps use: the motor's own capsule excluded and the
-/// layers its `layer` ignores dropped. Sensors are skipped by the query default.
+/// layers its `layer` ignores dropped, plus the `partner` its `IgnoreCollisions` names. Sensors are
+/// skipped by the query default.
 pub(crate) fn motor_filter(
     physics: &PhysicsWorld,
     entity: EntityId,
     motor: &CharacterMotor,
+    partner: Option<EntityId>,
 ) -> QueryFilter {
     let mut filter = QueryFilter::new().exclude(entity).body_layers_only();
+    filter.partner = partner;
     for name in physics.ignored_by(motor.layer.as_deref()) {
         filter = filter.ignore_layer(name);
     }
@@ -579,7 +583,12 @@ impl<'a> Solver<'a> {
         };
         let margin = 2.0 * motor.skin_width + 1e-3;
         let filter = physics
-            .sweep_filter(&motor_filter(physics, entity, motor))
+            .sweep_filter(&motor_filter(
+                physics,
+                entity,
+                motor,
+                motor_partner(world, entity),
+            ))
             .expect("a motor's ignored layers come from the layer table");
         Solver {
             physics,

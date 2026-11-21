@@ -8,11 +8,13 @@
 
 use super::{CacheEviction, Renderer};
 use crate::graph::{AntiAliasing, FrameSize, PostChain, build_frame_graph};
-use crate::scene::{RenderScene, Silhouettes};
+use crate::layers::Keep;
+use crate::scene::{RenderScene, Silhouettes, StaticRange};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_render_graph::{RenderedImage, schedule};
 
-/// The scene `scene.views[index]` renders: `scene` seen through that view's camera, without the UI,
+/// The scene `scene.views[index]` renders: `scene` seen through that view's camera, keeping the items
+/// the view's layers draw (from the full scene when the frame is layered), without the UI,
 /// other views, viewmodel, silhouettes, debug view, SSAO, SSR, depth of field, light shafts or light
 /// scatter. Everything else, lights with their shadows, the sun with the main camera's cascade fit,
 /// the environment, GI and the probes, stays.
@@ -29,20 +31,48 @@ use ludion_render_graph::{RenderedImage, schedule};
 ///     name: "radar".into(),
 ///     size: (256, 256),
 ///     camera: scene.camera,
+///     layers: u32::MAX,
 /// });
 /// let derived = view_scene(&scene, 0);
 /// assert!(derived.views.is_empty() && derived.ui.is_empty());
 /// ```
 pub fn view_scene(scene: &RenderScene, index: usize) -> RenderScene {
-    let mut out = scene.clone();
+    let source = scene.layered.as_deref();
+    let mut out = source.map_or(scene, |s| &s.scene).clone();
+    out.layered = None;
     out.camera = scene.views[index].camera;
     out.cull_camera = None;
-    // The gun belongs to the screen, not the world. A static prefix never holds a viewmodel, so
-    // dropping them leaves `statics` valid.
-    out.meshes.retain(|mesh| !mesh.viewmodel);
-    out.particles.retain(|particle| !particle.viewmodel);
+    // The gun belongs to the screen, not the world.
+    let mut keep = Keep::all(&out);
+    for (kept, mesh) in keep.meshes.iter_mut().zip(&out.meshes) {
+        *kept = !mesh.viewmodel;
+    }
+    for (kept, particle) in keep.particles.iter_mut().zip(&out.particles) {
+        *kept = !particle.viewmodel;
+    }
+    if let Some(source) = source {
+        let by_layer = source.masks.keep(scene.views[index].layers);
+        for (kept, layer) in keep.meshes.iter_mut().zip(&by_layer.meshes) {
+            *kept &= layer;
+        }
+        for (kept, layer) in keep.particles.iter_mut().zip(&by_layer.particles) {
+            *kept &= layer;
+        }
+        keep.blended = by_layer.blended;
+        keep.sprites = by_layer.sprites;
+        keep.ground_markers = by_layer.ground_markers;
+        keep.drop_shadows = by_layer.drop_shadows;
+        keep.decals = by_layer.decals;
+        keep.texts = by_layer.texts;
+    }
+    out.retain(&keep);
+    // A view whose static set differs from the main frame's draws its statics as dynamics, so it never
+    // swaps the renderer's one persistent static slot.
+    if out.statics.key != scene.statics.key {
+        out.statics = StaticRange::default();
+    }
     out.viewmodel = None;
-    // `retain` above shifts the mesh indices the table names, and a view has no mask to draw.
+    // A view has no mask to draw.
     out.silhouettes = Silhouettes::default();
     out.debug_view = None;
     out.ui.clear();
@@ -129,6 +159,7 @@ impl Renderer {
     ///     name: "radar".into(),
     ///     size: (256, 256),
     ///     camera: scene.camera,
+    ///     layers: u32::MAX,
     /// });
     /// let image = renderer.render_view(&scene, 0)?;
     /// assert_eq!((image.width, image.height), (256, 256));

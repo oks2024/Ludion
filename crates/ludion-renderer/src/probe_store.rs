@@ -149,6 +149,8 @@ pub(crate) fn world_key(
         views: _,
         // `face_scene` drops the rain: a probe capture draws the world without weather.
         rain: _,
+        // layers filter the main frame and the views; a capture draws the scene it is given
+        layered: _,
     } = face_scene;
 
     let mut w = KeyWriter(Vec::new());

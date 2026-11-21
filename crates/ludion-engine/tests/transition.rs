@@ -29,6 +29,34 @@ struct Eyes {
     target: Option<EntityId>,
 }
 
+/// One element of a sanctioned reference list, its reference optional.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+struct Mate {
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    who: Option<EntityId>,
+}
+
+/// A sanctioned list of optional references, for the carry remap.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+struct Crew {
+    #[schemars(with = "ludion_ecs::EntityRefCollection<Vec<Mate>>")]
+    slots: Vec<Mate>,
+}
+
+/// One element of a sanctioned reference list, its reference required.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+struct Post {
+    #[schemars(with = "ludion_ecs::EntityRefSchema")]
+    who: EntityId,
+}
+
+/// A sanctioned list of required references, for the carry remap.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+struct Duties {
+    #[schemars(with = "ludion_ecs::EntityRefCollection<Vec<Post>>")]
+    posts: Vec<Post>,
+}
+
 /// The carried player's game state — never mutated after load, so it round-trips byte-equal.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
 struct Player {
@@ -227,6 +255,8 @@ fn base_game(root: &Path) -> EngineBuilder {
             reg.register::<RngProbe>("RngProbe")?;
             reg.register::<Holds>("Holds")?;
             reg.register::<Eyes>("Eyes")?;
+            reg.register::<Crew>("Crew")?;
+            reg.register::<Duties>("Duties")?;
             Ok(())
         })
         .system("draw_rng", draw_rng)
@@ -971,6 +1001,74 @@ fn refs_engine(dir: &Path, system: fn(&mut World, &SystemCtx)) -> Engine {
         engine.advance_live();
     }
     engine
+}
+
+/// [`refs_scene`] with reference lists: `player` crews `[held, mount]` (optional elements, `held`
+/// carried, `mount` left behind) and `rider` has the duty `[mount]` (required, left behind).
+fn collection_engine(dir: &Path, system: fn(&mut World, &SystemCtx)) -> Engine {
+    let element = |index: u32| {
+        format!(
+            "          - who:
+              index: {index}
+              generation: 0
+"
+        )
+    };
+    let scene = refs_scene().replace(
+        "  - name: held",
+        &format!(
+            "      Crew:
+        slots:
+{}{}  - name: held",
+            element(1),
+            element(3)
+        ),
+    ) + &format!(
+        "      Duties:
+        posts:
+{}",
+        element(3)
+    );
+    let mut engine = base_game(dir)
+        .system("switch", system)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(&scene).unwrap();
+    for _ in 0..5 {
+        engine.advance_live();
+    }
+    engine
+}
+
+#[test]
+fn a_carried_list_element_follows_its_carried_target_and_a_left_behind_one_is_cleared() {
+    let dir = fresh_dir("collection-optional");
+    let engine = collection_engine(&dir, switch_player);
+    let held = named_of(&engine, "held");
+    let crew = serialized(&engine, named_of(&engine, "player"), "Crew").unwrap();
+    assert_eq!(
+        crew["slots"][0]["who"],
+        serde_json::to_value(held).unwrap(),
+        "{crew}"
+    );
+    assert!(crew["slots"][1]["who"].is_null(), "{crew}");
+    let warning = engine.last_transition_error().expect("reported");
+    assert_eq!(warning.code.as_str(), "L3043", "{warning}");
+    assert!(
+        warning.to_string().contains("`Crew`/slots/1/who"),
+        "{warning}"
+    );
+}
+
+#[test]
+fn a_carried_required_list_element_left_behind_drops_its_component() {
+    let dir = fresh_dir("collection-required");
+    let engine = collection_engine(&dir, switch_rider);
+    let rider = named_of(&engine, "rider");
+    assert!(serialized(&engine, rider, "Duties").is_none());
+    let warning = engine.last_transition_error().expect("reported");
+    assert_eq!(warning.code.as_str(), "L3043", "{warning}");
+    assert!(warning.to_string().contains("`Duties`"), "{warning}");
 }
 
 #[test]

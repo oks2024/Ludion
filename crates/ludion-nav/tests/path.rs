@@ -4,8 +4,8 @@ mod common;
 
 use common::*;
 use ludion_nav::{
-    ColumnSource, FlowField, NavGrid, NodeId, PathOptions, PathStatus, find_path, nearest_node,
-    string_pull, walkable_line,
+    ColumnSource, FlowField, NavGrid, NodeId, PathOptions, PathStatus, find_path, line_exit,
+    nearest_node, reachable_within, string_pull, walkable_line,
 };
 
 /// 32x32 ground with two walls, an unreachable ledge, and a deck at y=1.5 reached by a ramp.
@@ -224,4 +224,68 @@ fn the_nearest_node_comes_from_inside_a_wall() {
     assert!((p[0] - wall[0]).abs() <= 1.0 + 1e-3 && p[0] != wall[0]);
     assert_eq!(nearest_node(&grid, wall, 0.4), None);
     assert_eq!(nearest_node(&grid, at(10, 5, 0.0), 2.0), Some(n));
+}
+
+#[test]
+fn line_exit_is_none_exactly_when_the_line_is_walkable() {
+    let grid = NavGrid::build(params(32, 32), &world());
+    let mut state = 11u64;
+    let (mut walkable, mut blocked) = (0, 0);
+    for _ in 0..500 {
+        let point = |state: &mut u64| {
+            let (x, z) = (lcg(state) % 3200, lcg(state) % 3200);
+            [x as f32 / 100.0, 0.0, z as f32 / 100.0]
+        };
+        let (from, to) = (point(&mut state), point(&mut state));
+        let exit = line_exit(&grid, from, to);
+        let has_node = grid.node_at(from).is_some();
+        if has_node {
+            assert_eq!(
+                exit.is_none(),
+                walkable_line(&grid, from, to),
+                "{from:?} -> {to:?}"
+            );
+        } else {
+            assert_eq!(exit, Some(from));
+        }
+        if let (true, Some(e)) = (has_node, exit) {
+            blocked += 1;
+            // The exit lies on the segment, no farther from `from` than `to` is.
+            let along = |p: [f32; 3]| ludion_core::math::hypot(p[0] - from[0], p[2] - from[2]);
+            assert!(
+                along(e) <= along(to) + 1e-3,
+                "{from:?} -> {to:?} exits at {e:?}"
+            );
+        } else if has_node {
+            walkable += 1;
+        }
+    }
+    assert!(
+        walkable > 20 && blocked > 20,
+        "{walkable} walkable, {blocked} blocked"
+    );
+}
+
+#[test]
+fn line_exit_stops_before_the_wall() {
+    let grid = NavGrid::build(params(32, 32), &world());
+    // The wall is column 10, rows 0..=23: a walk along row 5 from x=2.5 stops at its west face.
+    let exit = line_exit(&grid, at(2, 5, 0.0), at(20, 5, 0.0)).expect("the wall blocks the line");
+    assert!((9.0..=10.0).contains(&exit[0]), "{exit:?}");
+    assert!((exit[2] - 5.5).abs() < 1e-3, "{exit:?}");
+    assert!(exit[1].abs() < 1e-3);
+}
+
+#[test]
+fn reachable_within_follows_walking_distance_not_euclid() {
+    let grid = NavGrid::build(params(32, 32), &world());
+    let start = grid.node_at(at(8, 5, 0.0)).unwrap();
+    let behind = grid.node_at(at(11, 5, 0.0)).unwrap();
+    // Three metres away through the wall, but the walk around it (past row 23) is far longer.
+    let near = reachable_within(&grid, start, 6.0);
+    assert!(near.contains(&start));
+    assert!(near.windows(2).all(|w| w[0] < w[1]), "ascending");
+    assert!(!near.contains(&behind));
+    assert!(near.contains(&grid.node_at(at(8, 8, 0.0)).unwrap()));
+    assert!(reachable_within(&grid, start, 1000.0).contains(&behind));
 }

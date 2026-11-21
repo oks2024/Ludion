@@ -1,0 +1,414 @@
+# Feature: `UiShape` (Plan/ui-hud.md W3b): analytic line, circle, ring, arc, wedge and rounded_rect with a fill
+# and a stroke, drawn by `ui_shape.wgsl`. Over a dark backdrop, in canvas units:
+# - Row 1: a circle as fill only, stroke only, and fill + stroke; a rounded_rect, a 20-degree rotated one with a
+#   stroke, and a stroke-only one.
+# - Row 2: rings at sweeps 45, 180, 270 and 360; a wedge with an inner_radius, a plain wedge, an arc.
+# - Row 3: a butt and a round line (the round one overhangs its end points by half the stroke), a thin
+#   line, and a 15-degree rotated `circle`-clip group cutting a ring to the inscribed circle.
+format: 1
+name: "ui-shapes - UiShape kinds, fill and stroke, rotation and a clipped group"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - name: backdrop
+    components:
+      UiRect:
+        fill: true
+        color:
+          - 0.06
+          - 0.07
+          - 0.1
+          - 1.0
+        order: 0
+  - name: clip-group
+    components:
+      UiGroup:
+        anchor: top_left
+        offset:
+          - 1430.0
+          - 690.0
+        size:
+          - 300.0
+          - 300.0
+        rotation: 15.0
+        clip: circle
+  - name: clip-group-frame
+    components:
+      UiRect:
+        fill_group: true
+        group:
+          index: 2
+          generation: 0
+        color:
+          - 0.15
+          - 0.2
+          - 0.3
+          - 1.0
+        order: 1
+  - name: clip-group-ring
+    components:
+      UiShape:
+        anchor: center
+        group:
+          index: 2
+          generation: 0
+        shape:
+          type: ring
+          radius: 190.0
+          thickness: 60.0
+        fill:
+          - 0.95
+          - 0.4
+          - 0.8
+          - 1.0
+        order: 2
+  - name: circle-fill
+    components:
+      UiShape:
+        offset:
+          - 140.0
+          - 140.0
+        shape:
+          type: circle
+          radius: 70.0
+        fill:
+          - 1.0
+          - 0.55
+          - 0.15
+          - 1.0
+        order: 3
+  - name: circle-stroke
+    components:
+      UiShape:
+        offset:
+          - 360.0
+          - 140.0
+        shape:
+          type: circle
+          radius: 70.0
+        stroke:
+          width: 10.0
+          color:
+            - 0.2
+            - 0.85
+            - 0.95
+            - 1.0
+        order: 3
+  - name: circle-both
+    components:
+      UiShape:
+        offset:
+          - 580.0
+          - 140.0
+        shape:
+          type: circle
+          radius: 70.0
+        fill:
+          - 0.25
+          - 0.75
+          - 0.35
+          - 1.0
+        stroke:
+          width: 12.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        order: 3
+  - name: box-fill
+    components:
+      UiShape:
+        offset:
+          - 900.0
+          - 140.0
+        shape:
+          type: rounded_rect
+          size:
+            - 220.0
+            - 120.0
+          corner_radius: 30.0
+        fill:
+          - 0.95
+          - 0.85
+          - 0.3
+          - 1.0
+        order: 3
+  - name: box-rotated
+    components:
+      UiShape:
+        offset:
+          - 1200.0
+          - 140.0
+        shape:
+          type: rounded_rect
+          size:
+            - 220.0
+            - 120.0
+          corner_radius: 30.0
+        fill:
+          - 0.2
+          - 0.85
+          - 0.95
+          - 1.0
+        stroke:
+          width: 8.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        rotation: 20.0
+        order: 3
+  - name: box-stroke
+    components:
+      UiShape:
+        offset:
+          - 1500.0
+          - 140.0
+        shape:
+          type: rounded_rect
+          size:
+            - 220.0
+            - 120.0
+          corner_radius: 60.0
+        stroke:
+          width: 6.0
+          color:
+            - 1.0
+            - 0.55
+            - 0.15
+            - 1.0
+        order: 3
+  - name: ring-45
+    components:
+      UiShape:
+        offset:
+          - 140.0
+          - 400.0
+        shape:
+          type: ring
+          radius: 80.0
+          thickness: 20.0
+          sweep_deg: 45.0
+        fill:
+          - 1.0
+          - 0.55
+          - 0.15
+          - 1.0
+        order: 3
+  - name: ring-180
+    components:
+      UiShape:
+        offset:
+          - 360.0
+          - 400.0
+        shape:
+          type: ring
+          radius: 80.0
+          thickness: 20.0
+          sweep_deg: 180.0
+        fill:
+          - 0.2
+          - 0.85
+          - 0.95
+          - 1.0
+        order: 3
+  - name: ring-270
+    components:
+      UiShape:
+        offset:
+          - 580.0
+          - 400.0
+        shape:
+          type: ring
+          radius: 80.0
+          thickness: 20.0
+          start_deg: 90.0
+          sweep_deg: 270.0
+        fill:
+          - 0.25
+          - 0.75
+          - 0.35
+          - 1.0
+        stroke:
+          width: 4.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        order: 3
+  - name: ring-360
+    components:
+      UiShape:
+        offset:
+          - 800.0
+          - 400.0
+        shape:
+          type: ring
+          radius: 80.0
+          thickness: 20.0
+        fill:
+          - 0.95
+          - 0.85
+          - 0.3
+          - 1.0
+        order: 3
+  - name: wedge-inner
+    components:
+      UiShape:
+        offset:
+          - 1060.0
+          - 400.0
+        shape:
+          type: wedge
+          radius: 90.0
+          inner_radius: 40.0
+          start_deg: 30.0
+          sweep_deg: 120.0
+        fill:
+          - 0.9
+          - 0.25
+          - 0.25
+          - 1.0
+        stroke:
+          width: 4.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        order: 3
+  - name: wedge-pie
+    components:
+      UiShape:
+        offset:
+          - 1280.0
+          - 400.0
+        shape:
+          type: wedge
+          radius: 90.0
+          start_deg: 270.0
+          sweep_deg: 200.0
+        fill:
+          - 0.2
+          - 0.85
+          - 0.95
+          - 1.0
+        order: 3
+  - name: arc
+    components:
+      UiShape:
+        offset:
+          - 1520.0
+          - 400.0
+        shape:
+          type: arc
+          radius: 70.0
+          start_deg: 300.0
+          sweep_deg: 220.0
+        stroke:
+          width: 16.0
+          color:
+            - 1.0
+            - 0.55
+            - 0.15
+            - 1.0
+        order: 3
+  - name: line-butt
+    components:
+      UiShape:
+        offset:
+          - 120.0
+          - 640.0
+        shape:
+          type: line
+          from:
+            - 0.0
+            - 0.0
+          to:
+            - 260.0
+            - 80.0
+        stroke:
+          width: 40.0
+          color:
+            - 0.2
+            - 0.85
+            - 0.95
+            - 1.0
+        order: 3
+  - name: line-round
+    components:
+      UiShape:
+        offset:
+          - 120.0
+          - 800.0
+        shape:
+          type: line
+          from:
+            - 0.0
+            - 0.0
+          to:
+            - 260.0
+            - 80.0
+          cap: round
+        stroke:
+          width: 40.0
+          color:
+            - 0.25
+            - 0.75
+            - 0.35
+            - 1.0
+        order: 3
+  - name: line-thin
+    components:
+      UiShape:
+        offset:
+          - 520.0
+          - 640.0
+        shape:
+          type: line
+          from:
+            - 0.0
+            - 0.0
+          to:
+            - 0.0
+            - 240.0
+        stroke:
+          width: 3.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        order: 3
+  - name: line-diagonal
+    components:
+      UiShape:
+        offset:
+          - 600.0
+          - 640.0
+        shape:
+          type: line
+          from:
+            - 0.0
+            - 0.0
+          to:
+            - 240.0
+            - 240.0
+          cap: round
+        stroke:
+          width: 14.0
+          color:
+            - 0.95
+            - 0.85
+            - 0.3
+            - 1.0
+        order: 3

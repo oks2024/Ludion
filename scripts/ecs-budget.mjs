@@ -2,7 +2,7 @@
 // Size budget for `ludion-ecs`, the freeze-listed crate (engine-architecture.md §4): the ECS stays small
 // enough to hold in an agent's context, so it carries a metric and a limit rather than a rough number.
 //
-//   code lines  ≤ 3310    per `crates/ludion-ecs/src/*.rs`, the lines before the first column-0
+//   code lines  ≤ 3405    per `crates/ludion-ecs/src/*.rs`, the lines before the first column-0
 //                         `#[cfg(test)]` (every ECS file keeps its test module last), excluding blank
 //                         lines and lines whose trimmed text starts with `//`
 //
@@ -10,7 +10,10 @@
 // needs it, or take the growth to the user. Raising the limit is a decision for the user, not a fix.
 // Raised for the opt-in write journal (Serious Isaac request 0039), like J1 before it, and again to 3300
 // for the spawn rank (Serious Isaac request 0043), and to 3310 for the scaled gameplay clock on
-// SystemCtx (Neon Shroud request 0011; the arithmetic lives in ludion-core::time, SystemCtx forwards).
+// SystemCtx (Neon Shroud request 0011; the arithmetic lives in ludion-core::time, SystemCtx forwards),
+// and to 3405 for the sanctioned entity-ref collection, EntityRefCollection (Neon Shroud request 0003,
+// L1392; user-approved 2026-11-21).
+// Never trade code quality or architecture to stay under the limit; ask the user to raise it.
 //
 // Usage:  node scripts/ecs-budget.mjs
 //
@@ -21,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const LIMIT = 3310;
+export const LIMIT = 3405;
 
 // Non-blank, non-comment lines of `text` before its first `#[cfg(test)]` that opens a `mod`.
 export function countCodeLines(text) {

@@ -58,6 +58,7 @@ mod gi_inject;
 mod gpu_cull;
 pub mod graph;
 mod ibl;
+mod layers;
 pub mod light_model;
 mod lobe;
 mod local_shadow;
@@ -102,6 +103,7 @@ pub use graph::{
     AntiAliasing, CullShape, FrameSize, PostChain, RenderScale, build_frame_graph,
     dump_frame_graph_json,
 };
+pub use layers::{DEFAULT_LAYER_BIT, Keep, LayerMasks, LayeredSource, Remap, split_layers};
 pub use local_shadow::{
     LocalShadowStats, is_valid_atlas_edge, local_shadow_marks, local_shadow_stats,
 };
@@ -136,8 +138,8 @@ pub use scene::{
     MeshTextures, ParticleInstance, PointLightData, PostData, ProbeWorld, RenderCamera,
     RenderScene, RenderViewData, SilhouetteMesh, SilhouetteStyle, Silhouettes, SkinJoint,
     SpotLightData, SpriteInstance, StaticRange, SunCascadeConfig, SunData, TextRun, TextureImage,
-    TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance, UiRotation, WorldVoxelGrid,
-    aspect_ratio, drop_shadow_fade,
+    TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance, UiRotation, UiShapeGeometry,
+    UiShapeStroke, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
 };
 pub use shader_reload::{check_shader_reload, is_renderer_shader};
 pub use sun_cascade::{

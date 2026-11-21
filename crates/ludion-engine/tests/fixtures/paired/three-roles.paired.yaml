@@ -1,0 +1,36 @@
+format: 1
+kind: paired
+name: three-roles
+roles:
+  a:
+    assembly: humanoid.assembly.yaml
+    align_only: true
+    scale: 0.125
+  b:
+    assembly: humanoid.assembly.yaml
+    align_only: true
+    scale: 0.125
+  c:
+    assembly: humanoid.assembly.yaml
+    align_only: true
+    scale: 0.125
+align:
+  reference: a
+  moves: a
+  ticks: 4
+  offsets:
+    b:
+      translation:
+        - 0.0
+        - 0.0
+        - -0.5
+      yaw_deg: 180.0
+    c:
+      translation:
+        - 0.5
+        - 0.0
+        - 0.0
+      yaw_deg: 90.0
+events:
+  - name: e
+    t: 0.0

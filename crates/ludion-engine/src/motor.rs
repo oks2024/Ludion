@@ -316,6 +316,28 @@ pub fn character_fit(
     ludion_physics::character_fit::<Transform>(world, entity, posture, feet, yaw)
 }
 
+/// [`character_fit`] looking through `ignore` for this test; see
+/// [`ludion_physics::character_fit_ignoring`].
+///
+/// ```no_run
+/// # use ludion_core::ids::EntityId;
+/// # use ludion_engine::character_fit_ignoring;
+/// # use ludion_ecs::{SystemCtx, World};
+/// fn clear(world: &World, _ctx: &SystemCtx, a: EntityId, b: EntityId) -> bool {
+///     matches!(character_fit_ignoring(world, a, None, [0.0; 3], 0.0, Some(b)), Ok(None))
+/// }
+/// ```
+pub fn character_fit_ignoring(
+    world: &World,
+    entity: EntityId,
+    posture: Option<&str>,
+    feet: [f32; 3],
+    yaw: f32,
+    ignore: Option<EntityId>,
+) -> Result<Option<EntityId>, MotorError> {
+    ludion_physics::character_fit_ignoring::<Transform>(world, entity, posture, feet, yaw, ignore)
+}
+
 /// Brings a suspended motor back at `feet` when it fits; see [`ludion_physics::resume_character`].
 /// A `LaneConstraint` on the entity re-acquires its place over the whole path, as after
 /// [`teleport_character`].

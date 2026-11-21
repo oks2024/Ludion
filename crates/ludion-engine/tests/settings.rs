@@ -197,6 +197,100 @@ fn a_window_request_reaches_the_sender_once_per_change() {
     );
 }
 
+/// Tick 1 asks for borderless fullscreen and a save, tick 2 only for a save.
+fn ask_borderless(world: &mut World, ctx: &SystemCtx) {
+    let Some(settings) = world.resource_mut::<Settings>() else {
+        return;
+    };
+    match ctx.frame {
+        FrameIndex(1) => settings.request_window_mode(WindowMode::BorderlessFullscreen),
+        FrameIndex(2) => settings.save(),
+        _ => {}
+    }
+}
+
+fn save_at_one(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame == FrameIndex(1)
+        && let Some(settings) = world.resource_mut::<Settings>()
+    {
+        settings.save();
+    }
+}
+
+#[test]
+fn headless_the_view_has_no_live_window_mode() {
+    let root = scratch("live-headless");
+    let mut engine = game(&root, false).build().unwrap();
+    engine.advance_live();
+    let view = engine.world().resource::<SettingsView>().unwrap();
+    assert_eq!(view.live_window_mode(), None);
+}
+
+#[test]
+fn a_reported_window_mode_reaches_the_view_without_becoming_the_saved_choice() {
+    let root = scratch("live-report");
+    let mut engine = Engine::builder()
+        .save_root(&root)
+        .persist_settings()
+        .system("save", save_at_one)
+        .build()
+        .unwrap();
+    let (report, reports) = crossbeam_channel::unbounded();
+    engine.set_window_mode_reports(reports);
+    report.send(WindowMode::BorderlessFullscreen).unwrap();
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    let view = engine.world().resource::<SettingsView>().unwrap();
+    assert_eq!(
+        view.live_window_mode(),
+        Some(WindowMode::BorderlessFullscreen)
+    );
+    assert_eq!(
+        view.window_mode(),
+        None,
+        "the chord is not the saved choice"
+    );
+    let text = std::fs::read_to_string(file(&root)).unwrap();
+    assert!(!text.contains("window"), "{text}");
+}
+
+#[test]
+fn a_menu_request_for_the_files_own_mode_reaches_the_sender_after_a_chord() {
+    let root = scratch("live-chord");
+    write_settings(
+        &root,
+        "format: 1\nkind: settings\ndisplay:\n  window: borderless_fullscreen\n",
+    );
+    let mut engine = Engine::builder()
+        .save_root(&root)
+        .persist_settings()
+        .system("ask", ask_borderless)
+        .build()
+        .unwrap();
+    assert_eq!(
+        engine
+            .world()
+            .resource::<SettingsView>()
+            .unwrap()
+            .window_mode(),
+        Some(WindowMode::BorderlessFullscreen)
+    );
+    let (tx, rx) = crossbeam_channel::unbounded();
+    engine.set_window_mode_sender(tx);
+    let (report, reports) = crossbeam_channel::unbounded();
+    engine.set_window_mode_reports(reports);
+    // The window was chorded out of fullscreen before the menu asks for the file's own mode.
+    report.send(WindowMode::Windowed).unwrap();
+    for _ in 0..3 {
+        engine.advance_live();
+    }
+    assert_eq!(
+        rx.try_iter().collect::<Vec<_>>(),
+        [WindowMode::BorderlessFullscreen]
+    );
+}
+
 fn trace(builder: EngineBuilder) -> Vec<u64> {
     let mut engine = builder.build().unwrap();
     (0..6)
@@ -666,4 +760,125 @@ fn startup_quality_precedence_holds_for_every_combination() {
             }
         }
     }
+}
+
+// --- Anti-aliasing: the game's runtime request is `Settings::request_anti_aliasing` -------------------
+
+fn aa_twice(world: &mut World, _ctx: &SystemCtx) {
+    if let Some(settings) = world.resource_mut::<Settings>() {
+        settings.request_anti_aliasing(AntiAliasing::Smaa);
+        settings.request_anti_aliasing(AntiAliasing::Off);
+    }
+}
+
+fn aa_toggle(world: &mut World, ctx: &SystemCtx) {
+    let mode = match ctx.frame {
+        FrameIndex(1) => AntiAliasing::Smaa,
+        FrameIndex(2) => AntiAliasing::Off,
+        _ => return,
+    };
+    if let Some(settings) = world.resource_mut::<Settings>() {
+        settings.request_anti_aliasing(mode);
+    }
+}
+
+fn aa_smaa_and_save(world: &mut World, ctx: &SystemCtx) {
+    if ctx.frame == FrameIndex(0)
+        && let Some(settings) = world.resource_mut::<Settings>()
+    {
+        settings.request_anti_aliasing(AntiAliasing::Smaa);
+        settings.save();
+    }
+}
+
+#[test]
+fn the_last_aa_request_in_a_tick_wins() {
+    let mut engine = Engine::builder().system("aa", aa_twice).build().unwrap();
+    engine.set_anti_aliasing(AntiAliasing::Smaa);
+    engine.advance_live();
+    assert_eq!(engine.anti_aliasing(), AntiAliasing::Off);
+}
+
+#[test]
+fn the_game_request_beats_the_host_and_toggles_per_frame() {
+    let mut engine = Engine::builder()
+        .system("toggle", aa_toggle)
+        .build()
+        .unwrap();
+    engine.set_anti_aliasing(AntiAliasing::Off);
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        engine.advance_live();
+        seen.push(engine.anti_aliasing());
+    }
+    assert_eq!(
+        seen,
+        [AntiAliasing::Off, AntiAliasing::Smaa, AntiAliasing::Off]
+    );
+}
+
+#[test]
+fn the_aa_choice_survives_a_world_rebuild() {
+    let mut engine = Engine::builder()
+        .system("toggle", aa_toggle)
+        .build()
+        .unwrap();
+    engine.advance_live();
+    engine.advance_live();
+    assert_eq!(engine.anti_aliasing(), AntiAliasing::Smaa);
+    engine
+        .load_inline_scene("format: 1\nentities: []\n")
+        .expect("scene loads");
+    assert_eq!(engine.anti_aliasing(), AntiAliasing::Smaa);
+}
+
+#[test]
+fn describe_reports_the_anti_aliasing_mode_and_the_builder_default_holds() {
+    let described =
+        |engine: &mut Engine| match engine.execute(Command::EngineDescribe).unwrap().body {
+            ResponseBody::EngineDescription { description } => description["anti_aliasing"].clone(),
+            other => panic!("expected a description, got {other:?}"),
+        };
+    assert_eq!(described(&mut Engine::new()), "off");
+    let mut engine = Engine::builder()
+        .anti_aliasing(AntiAliasing::Smaa)
+        .build()
+        .unwrap();
+    assert_eq!(engine.anti_aliasing(), AntiAliasing::Smaa);
+    assert_eq!(described(&mut engine), "smaa");
+}
+
+#[test]
+fn a_saved_aa_request_beats_the_host_this_session_and_sits_below_it_at_the_next_boot() {
+    let root = scratch("aa-persist");
+    let mut engine = Engine::builder()
+        .save_root(&root)
+        .persist_settings()
+        .system("aa", aa_smaa_and_save)
+        .build()
+        .unwrap();
+    engine.advance_live();
+    engine.set_anti_aliasing(AntiAliasing::Off);
+    assert_eq!(
+        engine.anti_aliasing(),
+        AntiAliasing::Smaa,
+        "this session's request still beats the host"
+    );
+
+    let mut next = Engine::builder()
+        .save_root(&root)
+        .persist_settings()
+        .build()
+        .unwrap();
+    assert_eq!(
+        next.anti_aliasing(),
+        AntiAliasing::Smaa,
+        "the file persists"
+    );
+    next.set_anti_aliasing(AntiAliasing::Off);
+    assert_eq!(
+        next.anti_aliasing(),
+        AntiAliasing::Off,
+        "the file sits below --aa"
+    );
 }

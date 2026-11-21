@@ -35,16 +35,18 @@
 //! ```no_run
 //! use std::path::PathBuf;
 //! use ludion_audio::{AudioSink, CategoryGains, VoiceCaps};
+//! use ludion_core::audio::Bus;
 //!
 //! let (tx, rx) = crossbeam_channel::unbounded();
 //! // engine.set_audio_sender(tx);  // the engine emits AudioMessages on `tx`
-//! let gains = CategoryGains { sfx: 1.0, ambient: 0.6, music: 0.8 }; // the game's authored mixdown
+//! let gains = CategoryGains::default().with(Bus::Ambient, 0.6); // the game's authored mixdown
 //! let seconds_per_tick = 1.0 / 60.0; // `engine.seconds_per_tick()`: times the music fades
 //! let caps = VoiceCaps::default(); // 4 per sound, 64 in all; a game overrides it in `ludion.toml`
 //! let _sink = AudioSink::spawn(rx, PathBuf::from("games/hello-paddle/scenes"), gains, caps, seconds_per_tick);
 //! // Dropping `_sink` detaches it: the session ends by itself once the engine's sender is gone.
 //! ```
 
+mod dsp;
 mod music;
 
 use std::collections::{HashMap, VecDeque};
@@ -56,9 +58,11 @@ use std::time::{Duration, Instant, SystemTime};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
+use dsp::VoiceDsp;
 use ludion_assets::{AudioPcm, load_wav};
 use ludion_core::audio::{
-    AudioCategory, AudioEvent, AudioMessage, Bus, LoopId, MUSIC_STEMS_MAX, MixLayer,
+    AudioCategory, AudioEvent, AudioMessage, Bus, LoopId, MUSIC_STEMS_MAX, MixLayer, VoiceFilter,
+    VoiceSpatial,
 };
 // The mixdown the sink applies. It lives in the shared core because the game authors it on the
 // engine builder and this crate consumes it; re-exported so a host names one type, not two.
@@ -351,6 +355,8 @@ struct Voice {
     category: AudioCategory,
     /// Whether the cursor wraps at the end of the buffer instead of the voice retiring there.
     looping: bool,
+    /// The voice's low-pass and high-pass, run on each raw sample before gain.
+    dsp: VoiceDsp,
 }
 
 impl Voice {
@@ -375,6 +381,10 @@ impl Voice {
         if self.samples.is_empty() {
             return false;
         }
+        let filtering = self.dsp.is_active();
+        if filtering {
+            self.dsp.step_block();
+        }
         for (index, frame) in scratch.chunks_mut(channels.max(1)).enumerate() {
             let level = self.envelope.next();
             if self.envelope.is_finished() {
@@ -392,6 +402,11 @@ impl Voice {
                 let (Some(a), Some(b)) = (self.next_sample(), self.next_sample()) else {
                     return false;
                 };
+                let (a, b) = if filtering {
+                    (self.dsp.process(0, a), self.dsp.process(1, b))
+                } else {
+                    (a, b)
+                };
                 let gains = self.pan.gains_at(pan);
                 let narrow = (pan.abs() / PAN_FULL_MONO).min(1.0);
                 let mid = (a + b) * 0.5;
@@ -399,9 +414,14 @@ impl Voice {
                 *right += (b + (mid - b) * narrow) * gain * gains[1];
                 continue;
             }
-            for slot in frame {
+            for (channel, slot) in frame.iter_mut().enumerate() {
                 let Some(sample) = self.next_sample() else {
                     return false;
+                };
+                let sample = if filtering {
+                    self.dsp.process(channel, sample)
+                } else {
+                    sample
                 };
                 *slot += sample * gain;
             }
@@ -447,8 +467,13 @@ enum VoiceCommand {
     LoopStop(LoopKey),
     /// Start a one-shot under a keyed id so it can be synced and stopped while it plays.
     VoiceStart { id: LoopKey, voice: Voice },
-    /// Slew the keyed voice to a new gain and pan, if it is still playing.
-    VoiceSync { id: LoopKey, gain: f32, pan: f32 },
+    /// Slew the keyed voice to a new gain, pan and filter, if it is still playing.
+    VoiceSync {
+        id: LoopKey,
+        gain: f32,
+        pan: f32,
+        filter: VoiceFilter,
+    },
     /// Fade the keyed voice out over `frames` device frames, then drop it.
     VoiceStop { id: LoopKey, frames: usize },
     /// Fade out every loop and the music.
@@ -941,6 +966,7 @@ struct Declared {
     gain: f32,
     pan: f32,
     category: AudioCategory,
+    spatial: VoiceSpatial,
     /// The order the loop's key was first declared in, which decides who starts first.
     seq: u64,
     /// The callback holds a voice under this key.
@@ -948,13 +974,14 @@ struct Declared {
 }
 
 /// A loop voice on `samples`, ready to play from the top and rising to `gain` over `fade_in`
-/// frames (`0` starts at `gain`), settled at `pan`.
+/// frames (`0` starts at `gain`), settled at `pan` and at `dsp`'s filter.
 fn looping_voice(
     samples: Arc<Vec<f32>>,
     gain: f32,
     pan: f32,
     category: AudioCategory,
     fade_in: usize,
+    dsp: VoiceDsp,
 ) -> Voice {
     Voice {
         samples,
@@ -963,6 +990,7 @@ fn looping_voice(
         pan: Panner::at(pan),
         category,
         looping: true,
+        dsp,
     }
 }
 
@@ -1060,12 +1088,18 @@ impl Router {
             self.out_channels,
             self.recheck,
         )?;
+        let dsp = VoiceDsp::new(
+            declared.spatial.filter,
+            self.out_rate,
+            ramp_frames(self.out_rate),
+        );
         Some(looping_voice(
             samples,
             declared.gain,
             declared.pan,
             declared.category,
             fade_in,
+            dsp,
         ))
     }
 
@@ -1139,6 +1173,11 @@ impl Router {
                     pan: Panner::at(sane_pan(event.pan)),
                     category: event.category,
                     looping: false,
+                    dsp: VoiceDsp::new(
+                        event.spatial.filter,
+                        self.out_rate,
+                        ramp_frames(self.out_rate),
+                    ),
                 })
             }
             AudioMessage::LoopSync {
@@ -1147,6 +1186,7 @@ impl Router {
                 gain,
                 pan,
                 category,
+                spatial,
             } => {
                 let pan = sane_pan(pan);
                 let key = self.key(id);
@@ -1166,6 +1206,7 @@ impl Router {
                         gain,
                         pan,
                         category,
+                        spatial,
                         seq,
                         playing,
                     },
@@ -1188,6 +1229,7 @@ impl Router {
                 gain,
                 pan,
                 category,
+                spatial,
             } => {
                 let samples = resolve(
                     &mut self.cache,
@@ -1207,13 +1249,24 @@ impl Router {
                         pan: Panner::at(sane_pan(pan)),
                         category,
                         looping: false,
+                        dsp: VoiceDsp::new(
+                            spatial.filter,
+                            self.out_rate,
+                            ramp_frames(self.out_rate),
+                        ),
                     },
                 }
             }
-            AudioMessage::VoiceSync { id, gain, pan } => VoiceCommand::VoiceSync {
+            AudioMessage::VoiceSync {
+                id,
+                gain,
+                pan,
+                spatial,
+            } => VoiceCommand::VoiceSync {
                 id: LoopKey::Voice(id.0),
                 gain,
                 pan: sane_pan(pan),
+                filter: spatial.filter,
             },
             AudioMessage::VoiceStop { id, fade_frames } => VoiceCommand::VoiceStop {
                 id: LoopKey::Voice(id.0),
@@ -1687,12 +1740,12 @@ impl Mixer {
         Mixer {
             commands,
             buses: [
-                BusState::new(1.0),
-                BusState::new(gains.sfx),
-                BusState::new(gains.ambient),
-                BusState::new(gains.gain_for(AudioCategory::Voice)),
-                BusState::new(gains.gain_for(AudioCategory::Ui)),
-                BusState::new(gains.music),
+                BusState::new(gains.gain(Bus::Master)),
+                BusState::new(gains.gain(Bus::Sfx)),
+                BusState::new(gains.gain(Bus::Ambient)),
+                BusState::new(gains.gain(Bus::Voice)),
+                BusState::new(gains.gain(Bus::Ui)),
+                BusState::new(gains.gain(Bus::Music)),
             ],
             bus_levels: vec![0.0; BUS_COUNT * MIX_BLOCK_FRAMES],
             voices: Vec::with_capacity(2 * limits.total),
@@ -1732,10 +1785,16 @@ impl Mixer {
                     self.retire(displaced);
                 }
             }
-            VoiceCommand::VoiceSync { id, gain, pan } => {
+            VoiceCommand::VoiceSync {
+                id,
+                gain,
+                pan,
+                filter,
+            } => {
                 if let Some(voice) = self.loops.get_mut(&id) {
                     voice.envelope.slew_to(gain, self.ramp_frames);
                     voice.pan.envelope.slew_to(pan, self.ramp_frames);
+                    voice.dsp.retarget(filter);
                 }
             }
             VoiceCommand::VoiceStop { id, frames } => {
@@ -1842,9 +1901,11 @@ impl Mixer {
                 // The target, not the level: a loop the sink restarted is still rising.
                 let target = voice.envelope.target;
                 let pan_target = voice.pan.envelope.target;
+                let filter = voice.dsp.filter();
                 if running.category == voice.category {
                     running.envelope.slew_to(target, self.ramp_frames);
                     running.pan.envelope.slew_to(pan_target, self.ramp_frames);
+                    running.dsp.retarget(filter);
                     return;
                 }
                 let old_bus = Voice {
@@ -1854,10 +1915,12 @@ impl Mixer {
                     pan: running.pan,
                     category: running.category,
                     looping: true,
+                    dsp: running.dsp,
                 };
                 running.category = voice.category;
                 running.envelope = Envelope::rising(target, self.ramp_frames);
                 running.pan.envelope.slew_to(pan_target, self.ramp_frames);
+                running.dsp.retarget(filter);
                 self.retire(old_bus);
                 return;
             }
@@ -2166,7 +2229,7 @@ fn stream_failed(detail: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ludion_core::audio::AudioEvent;
+    use ludion_core::audio::{AudioEvent, HIGH_PASS_OPEN_HZ, LOW_PASS_OPEN_HZ};
 
     /// Unit bus level for every frame of a block.
     const UNITY: [f32; MIX_BLOCK_FRAMES] = [1.0; MIX_BLOCK_FRAMES];
@@ -2181,14 +2244,7 @@ mod tests {
         channels: usize,
         gains: &CategoryGains,
     ) {
-        let authored = [
-            1.0,
-            gains.sfx,
-            gains.ambient,
-            gains.gain_for(AudioCategory::Voice),
-            gains.gain_for(AudioCategory::Ui),
-            gains.music,
-        ];
+        let authored = Bus::ALL.map(|bus| gains.gain(bus));
         let levels: Vec<f32> = authored
             .iter()
             .flat_map(|&gain| [gain; MIX_BLOCK_FRAMES])
@@ -2219,6 +2275,11 @@ mod tests {
         assert_eq!(stream_failed("test").code.as_str(), "L5002");
     }
 
+    /// A dsp with both filters open.
+    fn open_dsp() -> VoiceDsp {
+        VoiceDsp::new(VoiceFilter::BYPASS, 48_000, 480)
+    }
+
     /// A one-shot voice on `samples` at `gain`, on `category`'s bus, ready to play from the top.
     fn one_shot(samples: &Arc<Vec<f32>>, gain: f32, category: AudioCategory) -> Voice {
         Voice {
@@ -2228,6 +2289,7 @@ mod tests {
             pan: Panner::centred(),
             category,
             looping: false,
+            dsp: open_dsp(),
         }
     }
 
@@ -2790,6 +2852,7 @@ mod tests {
                 gain: 1.0,
                 pan,
                 category: AudioCategory::Ambient,
+                spatial: VoiceSpatial::default(),
             };
             let Some(VoiceCommand::LoopSync { voice, .. }) = rig.router.route(message) else {
                 panic!("a loop sync");
@@ -2822,6 +2885,7 @@ mod tests {
             gain: 1.0,
             pan: 0.5,
             category: AudioCategory::Ambient,
+            spatial: VoiceSpatial::default(),
         };
         let Some(VoiceCommand::LoopSync { id, .. }) = rig.router.route(message) else {
             panic!("a loop sync");
@@ -2888,6 +2952,7 @@ mod tests {
             id: LoopKey::Voice(0),
             gain: 0.5,
             pan: 0.0,
+            filter: VoiceFilter::BYPASS,
         });
         let out = render(&mut mixer, 8);
         assert!(out[0] < 0.5, "the level starts to slew: {out:?}");
@@ -2902,6 +2967,7 @@ mod tests {
             id: LoopKey::Voice(7),
             gain: 0.5,
             pan: 0.0,
+            filter: VoiceFilter::BYPASS,
         });
         assert!(mixer.loops.is_empty());
     }
@@ -2943,6 +3009,7 @@ mod tests {
             gain: 1.0,
             pan: 0.0,
             category: AudioCategory::Voice,
+            spatial: VoiceSpatial::default(),
         };
         assert!(rig.router.route(message).is_none());
     }
@@ -3470,6 +3537,20 @@ mod tests {
                 mixer.apply(loop_command(id, &beds[round % 2], 0.1));
             }
             mixer.apply(VoiceCommand::LoopStop(LoopKey::Sound((round % 7) as u32)));
+            let filter = VoiceFilter::band_pass(100.0 + round as f32, 4000.0);
+            mixer.apply(VoiceCommand::VoiceStart {
+                id: LoopKey::Voice(round as u64 % 3),
+                voice: Voice {
+                    dsp: VoiceDsp::new(filter, 400, 4),
+                    ..one_shot(&beds[round % 2], 0.1, AudioCategory::Voice)
+                },
+            });
+            mixer.apply(VoiceCommand::VoiceSync {
+                id: LoopKey::Voice(round as u64 % 3),
+                gain: 0.1,
+                pan: 0.0,
+                filter: VoiceFilter::BYPASS,
+            });
             mixer.apply(VoiceCommand::BusGain {
                 bus: round % BUS_COUNT,
                 layer: MixLayer::User,
@@ -3553,11 +3634,7 @@ mod tests {
     #[test]
     fn each_voice_is_summed_through_its_own_category_master() {
         let buffer = Arc::new(vec![0.5, 0.5, 0.5, 0.5]);
-        let gains = CategoryGains {
-            sfx: 1.0,
-            ambient: 0.5,
-            ..CategoryGains::default()
-        };
+        let gains = CategoryGains::default().with(Bus::Ambient, 0.5);
         let mut voices = vec![one_shot(&buffer, 0.5, AudioCategory::Sfx)];
         let mut loops = HashMap::new();
         loops.insert(
@@ -3599,11 +3676,7 @@ mod tests {
     #[test]
     fn a_loop_moved_to_another_bus_crossfades_without_moving_the_cursor() {
         let buffer = constant(0.5, 4);
-        let gains = CategoryGains {
-            sfx: 1.0,
-            ambient: 0.5,
-            ..CategoryGains::default()
-        };
+        let gains = CategoryGains::default().with(Bus::Ambient, 0.5);
         let mut mixer = test_mixer(1, gains, default_limits());
         mixer.apply(VoiceCommand::LoopSync {
             id: bed(),
@@ -3764,6 +3837,7 @@ mod tests {
             gain,
             pan: 0.0,
             category,
+            spatial: VoiceSpatial::default(),
         })
     }
 
@@ -3774,6 +3848,7 @@ mod tests {
             gain,
             pan: 0.0,
             category: AudioCategory::Ambient,
+            spatial: VoiceSpatial::default(),
         }
     }
 
@@ -4352,6 +4427,7 @@ mod tests {
             gain,
             pan: 0.0,
             category: AudioCategory::Ambient,
+            spatial: VoiceSpatial::default(),
         }
     }
 
@@ -4831,5 +4907,203 @@ mod tests {
             sink.wait_timeout(Duration::from_secs(120)),
             "the session ends once its sender drops"
         );
+    }
+
+    /// A mixer at 48 kHz, where a filter's cutoffs mean what they say.
+    fn filter_mixer(channels: u16, gains: CategoryGains) -> Mixer {
+        let (_commands, command_rx) = crossbeam_channel::unbounded();
+        let (_music_tx, music_rx) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+        Mixer::new(
+            command_rx,
+            music_rx,
+            channels,
+            48_000,
+            gains,
+            default_limits(),
+        )
+    }
+
+    /// `len` mono samples of a sine at `hz`, amplitude 0.5.
+    fn sine(hz: f32, len: usize) -> Arc<Vec<f32>> {
+        Arc::new(
+            (0..len)
+                .map(|n| 0.5 * (std::f32::consts::TAU * hz * n as f32 / 48_000.0).sin())
+                .collect(),
+        )
+    }
+
+    /// A keyed voice on `samples` filtered by `filter`, sweeping over four blocks.
+    fn filtered_start(n: u64, samples: &Arc<Vec<f32>>, filter: VoiceFilter) -> VoiceCommand {
+        VoiceCommand::VoiceStart {
+            id: LoopKey::Voice(n),
+            voice: Voice {
+                dsp: VoiceDsp::new(filter, 48_000, 4 * MIX_BLOCK_FRAMES),
+                ..one_shot(samples, 1.0, AudioCategory::Sfx)
+            },
+        }
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    /// The steady-state level of `hz` through `filter`, in dB against the unfiltered sine.
+    fn level_db(hz: f32, filter: VoiceFilter) -> f32 {
+        let tone = sine(hz, 12_000);
+        let mut mixer = filter_mixer(1, CategoryGains::default());
+        mixer.apply(filtered_start(0, &tone, filter));
+        let out = render(&mut mixer, 8192);
+        20.0 * (rms(&out[4096..]) / rms(&tone[4096..8192])).log10()
+    }
+
+    #[test]
+    fn a_bypass_filter_runs_no_stage_and_a_filter_synced_back_to_bypass_is_bit_identical() {
+        let tone = sine(440.0, 16_000);
+        assert!(!VoiceDsp::new(VoiceFilter::default(), 48_000, 480).is_active());
+        let mut plain = filter_mixer(1, CategoryGains::default());
+        plain.apply(filtered_start(0, &tone, VoiceFilter::BYPASS));
+        let mut moved = filter_mixer(1, CategoryGains::default());
+        moved.apply(filtered_start(
+            0,
+            &tone,
+            VoiceFilter::band_pass(300.0, 3400.0),
+        ));
+        render(&mut plain, MIX_BLOCK_FRAMES);
+        render(&mut moved, MIX_BLOCK_FRAMES);
+        moved.apply(VoiceCommand::VoiceSync {
+            id: LoopKey::Voice(0),
+            gain: 1.0,
+            pan: 0.0,
+            filter: VoiceFilter::BYPASS,
+        });
+        render(&mut plain, 5 * MIX_BLOCK_FRAMES);
+        render(&mut moved, 5 * MIX_BLOCK_FRAMES);
+        assert!(!moved.loops[&LoopKey::Voice(0)].dsp.is_active());
+        let (a, b) = (render(&mut plain, 2048), render(&mut moved, 2048));
+        assert!(a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()));
+    }
+
+    #[test]
+    fn a_low_pass_cuts_the_highs_and_keeps_the_lows() {
+        let filter = VoiceFilter::band_pass(0.0, 1200.0);
+        let high = level_db(5000.0, filter);
+        let low = level_db(200.0, filter);
+        assert!(high <= -20.0, "5 kHz is {high} dB");
+        assert!(low.abs() <= 0.5, "200 Hz is {low} dB");
+    }
+
+    #[test]
+    fn a_high_pass_cuts_the_lows_and_keeps_the_highs() {
+        let filter = VoiceFilter::band_pass(1000.0, LOW_PASS_OPEN_HZ);
+        let low = level_db(100.0, filter);
+        let high = level_db(5000.0, filter);
+        assert!(low <= -20.0, "100 Hz is {low} dB");
+        assert!(high.abs() <= 0.5, "5 kHz is {high} dB");
+    }
+
+    #[test]
+    fn a_voice_sync_filter_move_sweeps_in_log_steps_and_keeps_the_cursor() {
+        let tone = sine(440.0, 20_000);
+        let mut mixer = filter_mixer(1, CategoryGains::default());
+        mixer.apply(filtered_start(
+            0,
+            &tone,
+            VoiceFilter::band_pass(0.0, 8000.0),
+        ));
+        render(&mut mixer, MIX_BLOCK_FRAMES);
+        mixer.apply(VoiceCommand::VoiceSync {
+            id: LoopKey::Voice(0),
+            gain: 1.0,
+            pan: 0.0,
+            filter: VoiceFilter::band_pass(0.0, 1000.0),
+        });
+        let planned = (1000.0f32.log2() - 8000.0f32.log2()) / 4.0;
+        let mut last = 8000.0f32.log2();
+        for block in 1..=4 {
+            render(&mut mixer, MIX_BLOCK_FRAMES);
+            let voice = &mixer.loops[&LoopKey::Voice(0)];
+            let now = voice.dsp.cutoffs().0.expect("a live stage").log2();
+            assert!(
+                (now - last - planned).abs() < 1e-2,
+                "block {block}: {now} after {last}"
+            );
+            assert_eq!(
+                voice.pos,
+                (1 + block) * MIX_BLOCK_FRAMES,
+                "the cursor never moves"
+            );
+            last = now;
+        }
+        assert!((last - 1000.0f32.log2()).abs() < 1e-2);
+    }
+
+    #[test]
+    fn a_loop_sync_with_a_new_filter_keeps_the_cursor() {
+        let tone = sine(440.0, 20_000);
+        let mut mixer = filter_mixer(1, CategoryGains::default());
+        let sync = |filter: VoiceFilter| VoiceCommand::LoopSync {
+            id: bed(),
+            voice: Voice {
+                dsp: VoiceDsp::new(filter, 48_000, 480),
+                ..looping(&tone, 1.0, AudioCategory::Ambient)
+            },
+        };
+        mixer.apply(sync(VoiceFilter::BYPASS));
+        render(&mut mixer, 100);
+        let filter = VoiceFilter::band_pass(300.0, 3400.0);
+        mixer.apply(sync(filter));
+        let running = &mixer.loops[&bed()];
+        assert_eq!(running.pos, 100, "the loop is not restarted");
+        assert_eq!(running.dsp.filter(), filter);
+        let (low, high) = running.dsp.cutoffs();
+        assert_eq!(
+            (low.map(f32::round), high.map(f32::round)),
+            (Some(LOW_PASS_OPEN_HZ), Some(HIGH_PASS_OPEN_HZ)),
+            "the new sides sweep in from open"
+        );
+        mixer.apply(sync(filter));
+        assert_eq!(
+            mixer.loops[&bed()].dsp.cutoffs().0.map(f32::round),
+            Some(LOW_PASS_OPEN_HZ),
+            "resending the same filter does not restart the sweep"
+        );
+    }
+
+    #[test]
+    fn a_panned_stereo_voice_filters_both_channels() {
+        let mono = sine(5000.0, 16_000);
+        let stereo: Arc<Vec<f32>> = Arc::new(mono.iter().flat_map(|&s| [s, s]).collect());
+        let heard = |filter: VoiceFilter| {
+            let mut mixer = filter_mixer(2, CategoryGains::default());
+            mixer.apply(VoiceCommand::OneShot(Voice {
+                dsp: VoiceDsp::new(filter, 48_000, 480),
+                ..panned(&stereo, 0.5)
+            }));
+            let out = render(&mut mixer, 2 * 6144);
+            let channel = |c: usize| -> Vec<f32> {
+                out[2 * 3072..].iter().skip(c).step_by(2).copied().collect()
+            };
+            (rms(&channel(0)), rms(&channel(1)))
+        };
+        let open = heard(VoiceFilter::BYPASS);
+        let cut = heard(VoiceFilter::band_pass(0.0, 1200.0));
+        assert!(
+            cut.0 < open.0 * 0.1 && cut.1 < open.1 * 0.1,
+            "{open:?} -> {cut:?}"
+        );
+    }
+
+    #[test]
+    fn the_authored_master_scales_the_mix_and_every_bus_round_trips() {
+        let half = CategoryGains::default().with(Bus::Master, 0.5);
+        let mut mixer = test_mixer(1, half, default_limits());
+        mixer.apply(one_shot_command(&constant(0.5, 8), 0.5));
+        assert_eq!(render(&mut mixer, 2), [0.125, 0.125]);
+        for bus in Bus::ALL {
+            let gains = CategoryGains::default().with(bus, 0.3);
+            for other in Bus::ALL {
+                assert_eq!(gains.gain(other), if other == bus { 0.3 } else { 1.0 });
+            }
+        }
     }
 }

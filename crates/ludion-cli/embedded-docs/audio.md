@@ -230,7 +230,7 @@ fn game() -> EngineBuilder {
     Engine::builder()
         .system("hit_sounds", hit_sounds)
         // "Ambience sits under the effects." — one authored mixdown, not a per-run flag.
-        .category_gains(CategoryGains { sfx: 1.0, ambient: 0.6, music: 0.8 })
+        .category_gains(CategoryGains::default().with(Bus::Ambient, 0.6))
         .default_scene("scenes/plaza.yaml")
 }
 ```

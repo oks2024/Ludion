@@ -7,6 +7,7 @@ use ludion_core::math::sin_cos;
 use ludion_ecs::World;
 
 use super::component::{CharacterMotorState, in_force};
+use super::ignore::motor_partner;
 use super::report::{MotorError, TurnReport};
 use super::resize::{fit_blocker, motor_of};
 use super::shape::yaw_of;
@@ -85,11 +86,12 @@ pub fn turn_character<P: PhysicsPose>(
     let physics = world
         .resource::<PhysicsWorld>()
         .ok_or(MotorError::NoPhysicsWorld)?;
+    let partner = motor_partner(world, entity);
     let mut clear = current;
     let mut blocked_by = None;
     for step in 1..=steps as u32 {
         let at = current + delta * step as f32 / steps;
-        if let Some(blocker) = fit_blocker(physics, entity, &force, feet, at) {
+        if let Some(blocker) = fit_blocker(physics, entity, &force, feet, at, partner) {
             blocked_by = Some(blocker);
             break;
         }

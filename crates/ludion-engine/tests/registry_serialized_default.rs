@@ -21,10 +21,10 @@ fn fixtures(name: &str) -> Vec<Value> {
         "Name" => vec![json!("n")],
         "Parent" => vec![entity_ref()],
         "JointMotor" => vec![json!({ "target": [0.0], "stiffness": 0.0, "damping": 0.0 })],
-        "JointZero" => vec![json!({ "rotation": [0.0, 0.0, 0.0, 1.0] })],
         "JointPoses" => vec![json!({ "stiffness": 0.0, "damping": 0.0, "poses": { "a": [0.0] } })],
         "PoseBlend" => vec![json!({ "pose": "a", "weight": 0.0 })],
         "ParentJoint" => vec![json!({ "joint": "j" })],
+        "IgnoreCollisions" => vec![json!({ "with": entity_ref() })],
         "PrefabInstance" => vec![json!({
             "source": "p.prefab.yaml",
             "part": "a",
@@ -39,6 +39,16 @@ fn fixtures(name: &str) -> Vec<Value> {
                 "group": entity_ref(),
                 "selected": 1,
                 "items": [{ "text": "a", "detail": "b", "atlas": "i.atlas.yaml", "frame": "f", "enabled": false }],
+            }),
+        ],
+        "UiShape" => vec![
+            json!({}),
+            json!({
+                "group": entity_ref(),
+                "shape": { "type": "ring", "radius": 20.0, "thickness": 4.0, "start_deg": 10.0, "sweep_deg": 90.0 },
+                "fill": [1.0, 1.0, 1.0, 1.0],
+                "stroke": { "width": 2.0, "color": [0.0, 0.0, 0.0, 1.0] },
+                "rotation": 15.0,
             }),
         ],
         "SightTarget" => vec![json!({ "class": "c" })],
@@ -96,7 +106,11 @@ fn fixtures(name: &str) -> Vec<Value> {
         "OccludedSilhouette" => vec![json!({}), json!({ "outline": {}, "when": "always" })],
         "RenderView" => vec![
             json!({ "name": "v" }),
-            json!({ "name": "v", "size": [64, 32], "enabled": false, "order": -1 }),
+            json!({ "name": "v", "size": [64, 32], "enabled": false, "order": -1, "layers": ["radar"] }),
+        ],
+        "RenderLayers" => vec![
+            json!({ "layers": ["radar"] }),
+            json!({ "layers": ["a", "b"] }),
         ],
         "Rain" => vec![
             json!({}),
@@ -115,6 +129,10 @@ fn fixtures(name: &str) -> Vec<Value> {
             json!({ "started": 120, "parts": [
                 { "part": "torso", "rotation": [0.0, 0.0, 0.0, 1.0], "translation": [0.0, 1.0, 0.0] },
             ] }),
+        ],
+        "AnimGraphState" => vec![
+            json!({}),
+            json!({ "state": "run", "entered": 60, "previous": "idle" }),
         ],
         "ReflectionProbe" => vec![
             json!({ "shape": { "box": { "extent": [1.0, 1.0, 1.0] } } }),

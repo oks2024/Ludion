@@ -128,6 +128,8 @@ if let Some(feet) = spot { let _ = resume_character(world, guard, feet, yaw, Non
 
 Call these from a system registered before the physics systems.
 
+- **`IgnoreCollisions { with }`** (a component on the motor) makes the motor's own queries look through one entity's collider: its sweeps, ground probes, posture and resize tests, `character_fit` and `resume_character`. Two capsules at a 0.5 m choke overlap, so a paired action ignores its partner. It changes only what the motor sees: the solver's contacts with a dynamic body that `with` names still push it. It holds one entity; without the component every result is unchanged. `character_fit_ignoring(world, hero, None, feet, yaw, Some(partner))` is `character_fit` looking through `partner` for that one test, in place of the component's.
+
 ## Freshness
 
 Casts and overlaps see the last completed physics step. A press or wall coming at the character is seen one tick late: one tick of overlap, then depenetration, and `stuck` up to a tick late; the platform carry is the explicit exception. Queries skip sensors by default, so the motor never stands on, or reports, a trigger volume (`ludion docs physics-sensors`). The motor's own capsule and the layers its `layer` ignores (`ludion docs collision-layers`) are excluded from its casts.

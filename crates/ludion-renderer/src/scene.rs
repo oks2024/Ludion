@@ -975,6 +975,75 @@ impl UiClip {
     };
 }
 
+/// The geometry of one [`UiInstance::Shape`], in screen pixels relative to the shape's origin, +Y down.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum UiShapeGeometry {
+    /// A disc, annulus or slice of either: clock radians, 0 at 12 o'clock, clockwise.
+    /// `sweep >= 2π` is the whole annulus or disc; `radius_inner <= 0` is a disc.
+    Sector {
+        /// The outer radius.
+        radius_outer: f32,
+        /// The hole radius.
+        radius_inner: f32,
+        /// Where the sweep starts, clock radians.
+        start: f32,
+        /// How far it runs clockwise, radians.
+        sweep: f32,
+    },
+    /// A segment `a`–`b` of half-width `half_width`, with round or butt ends.
+    Segment {
+        /// First end point.
+        a: [f32; 2],
+        /// Second end point.
+        b: [f32; 2],
+        /// Half the width.
+        half_width: f32,
+        /// Round caps (a capsule) rather than butt ones (an oriented box).
+        round: bool,
+    },
+    /// A rounded box centred on the origin.
+    RoundedBox {
+        /// Half the width and height.
+        half_size: [f32; 2],
+        /// The corner radius, at most the shorter half side.
+        radius: f32,
+    },
+}
+
+impl UiShapeGeometry {
+    /// `[left, top, right, bottom]` relative to the origin, padded by `stroke_width / 2`. A sector
+    /// bounds to its full square, whatever its sweep.
+    pub fn local_bounds(&self, stroke_width: f32) -> [f32; 4] {
+        let pad = stroke_width * 0.5;
+        let [l, t, r, b] = match *self {
+            UiShapeGeometry::Sector { radius_outer, .. } => {
+                [-radius_outer, -radius_outer, radius_outer, radius_outer]
+            }
+            UiShapeGeometry::Segment {
+                a, b, half_width, ..
+            } => [
+                a[0].min(b[0]) - half_width,
+                a[1].min(b[1]) - half_width,
+                a[0].max(b[0]) + half_width,
+                a[1].max(b[1]) + half_width,
+            ],
+            UiShapeGeometry::RoundedBox { half_size, .. } => {
+                [-half_size[0], -half_size[1], half_size[0], half_size[1]]
+            }
+        };
+        [l - pad, t - pad, r + pad, b + pad]
+    }
+}
+
+/// The stroke of a [`UiInstance::Shape`], centred on the shape's edge.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct UiShapeStroke {
+    /// The width in pixels, above 0.
+    pub width_px: f32,
+    /// Linear RGBA, straight alpha.
+    pub color: [f32; 4],
+}
+
 /// One resolved screen-space UI element: a colored/textured rect, or a run of screen-space
 /// text. `ludion-engine`'s `extract()` resolves anchor + offset + size/measured-text into this plain
 /// pixel-space data — the renderer never sees an anchor or a canvas (boundary rule,
@@ -1022,6 +1091,21 @@ pub enum UiInstance {
         /// An outline drawn under the glyphs, or `None`.
         outline: Option<GlyphOutline>,
         /// The element's rotation; `quads` stay axis-aligned.
+        rotation: UiRotation,
+    },
+    /// An analytic shape: an SDF drawn over its bounds quad, a stroke over a fill.
+    Shape {
+        /// The shape's local `(0, 0)` in screen pixels.
+        origin_px: [f32; 2],
+        /// The geometry, relative to `origin_px`.
+        geometry: UiShapeGeometry,
+        /// Linear RGBA interior, straight alpha, or `None`.
+        fill: Option<[f32; 4]>,
+        /// The edge outline, or `None`.
+        stroke: Option<UiShapeStroke>,
+        /// The fragment clip from the element's `UiGroup` chain.
+        clip: UiClip,
+        /// The element's rotation; when rotated `pivot_px == origin_px`.
         rotation: UiRotation,
     },
 }
@@ -1626,6 +1710,8 @@ pub struct RenderViewData {
     pub size: (u32, u32),
     /// The view's camera, built with the aspect of `size`.
     pub camera: RenderCamera,
+    /// The layer mask the view draws; `u32::MAX` for a frame with no layers.
+    pub layers: u32,
 }
 
 /// Everything the renderer needs to draw one frame — plain data, no ECS, no paths.
@@ -1754,6 +1840,9 @@ pub struct RenderScene {
     /// The scene's rain, `None` when it has none or its intensity is 0 (the frame is then identical to
     /// one without the component).
     pub rain: Option<crate::rain::RainData>,
+    /// `None` for an unlayered frame. A layered frame's main scene holds only the items its camera's
+    /// layers draw; this is the full scene and every item's mask, which each secondary view filters.
+    pub layered: Option<Box<crate::layers::LayeredSource>>,
 }
 
 impl RenderScene {
@@ -1797,6 +1886,7 @@ impl RenderScene {
             viewmodel: None,
             views: Vec::new(),
             rain: None,
+            layered: None,
         }
     }
 }

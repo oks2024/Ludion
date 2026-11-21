@@ -12,6 +12,7 @@
 //! [`ComponentInfo::entity_refs`]: crate::ComponentInfo::entity_refs
 
 use std::borrow::Cow;
+use std::marker::PhantomData;
 
 use ludion_core::ids::EntityId;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
@@ -23,11 +24,16 @@ use crate::asset_path::pointer_segment;
 /// `"hierarchy": true` on a tree link.
 pub const ENTITY_REF_KEYWORD: &str = "x-entity-ref";
 
+/// The schema keyword [`EntityRefCollection`] stamps on a list or map: its elements may hold marked
+/// entity references.
+pub const ENTITY_REF_COLLECTION_KEYWORD: &str = "x-entity-ref-collection";
+
 /// Schema proxy for an [`EntityId`](ludion_core::ids::EntityId) field that must **not** name the
 /// entity carrying the component. Never constructed: a game writes
 /// `#[schemars(with = "EntityRefSchema")]` (the name is in `ludion::prelude`), or
 /// `with = "Option<EntityRefSchema>"` for an optional field. A list or map of references is refused
-/// at registration (`L1392`): hold each reference in its own field.
+/// at registration (`L1392`) unless wrapped in [`EntityRefCollection`]; otherwise hold each
+/// reference in its own field.
 ///
 /// # Example
 /// ```
@@ -113,6 +119,57 @@ impl JsonSchema for EntityRefSelfSchema {
     }
 }
 
+/// Schema proxy that sanctions a list (`Vec<T>`) or a string-keyed map (`BTreeMap<String, V>`) whose
+/// elements hold marked entity references at any depth. Never constructed: a game writes
+/// `#[schemars(with = "EntityRefCollection<Vec<T>>")]`. The walk reports each such reference as a
+/// pattern field whose suffix holds a `/*` step; [`ComponentInfo::entity_ref_sites`] expands it to the
+/// concrete references of a value. Use `Option<EntityRefSchema>` for the elements' references so a
+/// despawned target nulls on save or carry instead of refusing the save. A tuple is never sanctioned.
+///
+/// # Example
+/// ```
+/// use ludion_core::ids::EntityId;
+/// use ludion_ecs::{EntityRefCollection, EntityRefSchema, Registry};
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// struct Slot {
+///     #[schemars(with = "Option<EntityRefSchema>")]
+///     who: Option<EntityId>,
+/// }
+///
+/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// struct Roster {
+///     #[schemars(with = "EntityRefCollection<Vec<Slot>>")]
+///     slots: Vec<Slot>,
+/// }
+///
+/// let mut registry = Registry::new();
+/// registry.register::<Roster>("Roster").unwrap();
+/// let info = registry.get("Roster").unwrap();
+/// assert_eq!(info.entity_refs()[0].suffix, "/slots/*/who");
+/// ```
+///
+/// [`ComponentInfo::entity_ref_sites`]: crate::ComponentInfo::entity_ref_sites
+pub struct EntityRefCollection<C>(PhantomData<C>);
+
+impl<C: JsonSchema> JsonSchema for EntityRefCollection<C> {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Owned(format!("EntityRefCollection<{}>", C::schema_name()))
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let mut schema = C::json_schema(generator);
+        schema.insert(ENTITY_REF_COLLECTION_KEYWORD.to_string(), Value::Bool(true));
+        schema
+    }
+}
+
 /// One entity-reference field of a registered component; see
 /// [`ComponentInfo::entity_refs`](crate::ComponentInfo::entity_refs).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,9 +188,64 @@ pub struct EntityRefField {
     pub nullable: bool,
     /// The field is a tree link (`Parent`): a scene rejects a cycle through it (`L1035`).
     pub hierarchy: bool,
+    /// The suffix holds a `/*` wildcard step (the field sits under an [`EntityRefCollection`]): it
+    /// is a pattern, and [`EntityRefField::sites`] expands it against a value.
+    pub collection: bool,
 }
 
 impl EntityRefField {
+    /// The concrete fields of this one in `value`: itself when it holds no wildcard, otherwise one
+    /// clone per element (array index ascending, object keys in byte order) with `*` replaced.
+    /// A branch whose container is absent, `null` or not a list/map yields none; the segments after
+    /// the last wildcard are not checked, so an absent optional field still has its site.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_ecs::EntityRefField;
+    /// use serde_json::json;
+    ///
+    /// let field = EntityRefField {
+    ///     suffix: "/slots/*/who".to_string(),
+    ///     allow_self: false,
+    ///     optional: true,
+    ///     nullable: true,
+    ///     hierarchy: false,
+    ///     collection: true,
+    /// };
+    /// let sites = field.sites(&json!({"slots": [{"who": null}, {}]}));
+    /// assert_eq!(sites[1].suffix, "/slots/1/who");
+    /// ```
+    pub fn sites(&self, value: &Value) -> Vec<EntityRefField> {
+        if !self.collection {
+            return vec![self.clone()];
+        }
+        let segments: Vec<&str> = self.suffix.split('/').skip(1).collect();
+        let mut pointers = Vec::new();
+        expand_sites(value, &segments, String::new(), &mut pointers);
+        pointers
+            .into_iter()
+            .map(|suffix| EntityRefField {
+                suffix,
+                collection: false,
+                ..self.clone()
+            })
+            .collect()
+    }
+
+    /// Whether the concrete `pointer` is a site of this field: segment by segment, a `*` matches
+    /// exactly one segment.
+    pub fn matches(&self, pointer: &str) -> bool {
+        let mut pattern = self.suffix.split('/');
+        let mut concrete = pointer.split('/');
+        loop {
+            match (pattern.next(), concrete.next()) {
+                (None, None) => return true,
+                (Some(want), Some(have)) if want == "*" || want == have => {}
+                _ => return false,
+            }
+        }
+    }
+
     /// The entity this field names in `value` (the component's own JSON value), or `None` when the
     /// field is absent, `null` or not an `{index, generation}` id.
     ///
@@ -149,6 +261,7 @@ impl EntityRefField {
     ///     optional: false,
     ///     nullable: false,
     ///     hierarchy: false,
+    ///     collection: false,
     /// };
     /// let value = json!({"holder": {"index": 3, "generation": 0}});
     /// assert_eq!(field.target(&value), Some(EntityId::new(3, 0)));
@@ -161,6 +274,49 @@ impl EntityRefField {
             value.pointer(&self.suffix)?
         };
         serde_json::from_value(at.clone()).ok()
+    }
+}
+
+/// Appends to `out` the concrete pointers `segments` (escaped, possibly holding `*`) denotes in
+/// `value`, below `path`.
+fn expand_sites(value: &Value, segments: &[&str], path: String, out: &mut Vec<String>) {
+    let Some(star) = segments.iter().position(|s| *s == "*") else {
+        out.push(segments.iter().fold(path, |at, s| format!("{at}/{s}")));
+        return;
+    };
+    let mut here = value;
+    let mut at = path;
+    for segment in &segments[..star] {
+        let key = segment.replace("~1", "/").replace("~0", "~");
+        let next = match here {
+            Value::Object(map) => map.get(&key),
+            Value::Array(items) => key.parse::<usize>().ok().and_then(|i| items.get(i)),
+            _ => None,
+        };
+        let Some(next) = next else { return };
+        here = next;
+        at = format!("{at}/{segment}");
+    }
+    let rest = &segments[star + 1..];
+    match here {
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                expand_sites(item, rest, format!("{at}/{index}"), out);
+            }
+        }
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_unstable();
+            for key in keys {
+                expand_sites(
+                    &map[key],
+                    rest,
+                    format!("{at}/{}", pointer_segment(key)),
+                    out,
+                );
+            }
+        }
+        _ => {}
     }
 }
 
@@ -207,6 +363,7 @@ pub fn entity_ref_fields(schema: &Value) -> Vec<EntityRefField> {
             kept.optional |= later.optional;
             kept.nullable &= later.nullable;
             kept.hierarchy |= later.hierarchy;
+            kept.collection |= later.collection;
         }
         same
     });
@@ -372,6 +529,7 @@ fn walk(root: &Value, node: &Value, at: At<'_>, depth: usize, found: &mut Found)
                     .get("hierarchy")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                collection: at.suffix.split('/').any(|segment| segment == "*"),
             });
         }
         return;
@@ -413,14 +571,15 @@ fn walk(root: &Value, node: &Value, at: At<'_>, depth: usize, found: &mut Found)
             walk(root, branch, step, depth + 1, found);
         }
     }
+    let sanctioned = node.get(ENTITY_REF_COLLECTION_KEYWORD) == Some(&Value::Bool(true));
     for each in ["items", "additionalProperties"] {
         if let Some(inner) = node.get(each).filter(|inner| inner.is_object()) {
             let child = format!("{}/*", at.suffix);
             let step = At {
                 suffix: &child,
-                optional: true,
+                optional: if sanctioned { optional } else { true },
                 nullable: false,
-                in_collection: true,
+                in_collection: at.in_collection || !sanctioned,
             };
             walk(root, inner, step, depth + 1, found);
         }
@@ -482,6 +641,7 @@ mod tests {
             optional,
             nullable: false,
             hierarchy: false,
+            collection: false,
         }
     }
 
@@ -638,6 +798,117 @@ mod tests {
             entity_refs_in_collections(&schema),
             ["/list/*", "/map/*", "/pair/0"]
         );
+    }
+
+    fn sanctioned(mut schema: Value) -> Value {
+        schema[ENTITY_REF_COLLECTION_KEYWORD] = json!(true);
+        schema
+    }
+
+    fn pattern(suffix: &str, nullable: bool) -> EntityRefField {
+        EntityRefField {
+            nullable,
+            collection: true,
+            ..field(suffix, false, true)
+        }
+    }
+
+    #[test]
+    fn a_sanctioned_list_and_map_are_pattern_fields_not_collection_refs() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "list": sanctioned(json!({"type": "array", "items": {
+                    "type": "object",
+                    "properties": {"source": marker(false)},
+                    "required": ["source"]
+                }})),
+                "map": sanctioned(json!({"type": "object", "additionalProperties": marker(false)}))
+            },
+            "required": ["list", "map"]
+        });
+        let required = |suffix| EntityRefField {
+            optional: false,
+            ..pattern(suffix, false)
+        };
+        assert_eq!(
+            entity_ref_fields(&schema),
+            [required("/list/*/source"), required("/map/*")]
+        );
+        assert!(entity_refs_in_collections(&schema).is_empty());
+    }
+
+    #[test]
+    fn a_plain_collection_inside_a_sanctioned_element_is_still_reported() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"list": sanctioned(json!({"type": "array", "items": {
+                "type": "object",
+                "properties": {"inner": {"type": "array", "items": marker(false)}},
+                "required": ["inner"]
+            }}))},
+            "required": ["list"]
+        });
+        assert!(entity_ref_fields(&schema).is_empty());
+        assert_eq!(entity_refs_in_collections(&schema), ["/list/*/inner/*"]);
+    }
+
+    #[test]
+    fn a_sanctioned_tuple_is_still_reported() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"pair": sanctioned(json!({
+                "type": "array", "prefixItems": [marker(false), {"type": "integer"}]
+            }))},
+            "required": ["pair"]
+        });
+        assert!(entity_ref_fields(&schema).is_empty());
+        assert_eq!(entity_refs_in_collections(&schema), ["/pair/0"]);
+    }
+
+    #[test]
+    fn sites_expand_arrays_and_maps_in_order() {
+        let list = pattern("/slots/*/who", true);
+        let value = json!({"slots": [{"who": null}, {}, {"who": {"index": 1, "generation": 0}}]});
+        let suffixes: Vec<String> = list.sites(&value).into_iter().map(|s| s.suffix).collect();
+        assert_eq!(suffixes, ["/slots/0/who", "/slots/1/who", "/slots/2/who"]);
+        assert!(
+            list.sites(&value)
+                .iter()
+                .all(|s| !s.collection && s.nullable)
+        );
+
+        let map = pattern("/by/*", false);
+        let value = json!({"by": {"b": null, "a/x": null, "a": null}});
+        let suffixes: Vec<String> = map.sites(&value).into_iter().map(|s| s.suffix).collect();
+        assert_eq!(suffixes, ["/by/a", "/by/a~1x", "/by/b"]);
+    }
+
+    #[test]
+    fn sites_of_an_empty_missing_or_null_container_are_empty() {
+        let list = pattern("/slots/*/who", true);
+        assert!(list.sites(&json!({"slots": []})).is_empty());
+        assert!(list.sites(&json!({})).is_empty());
+        assert!(list.sites(&json!({"slots": null})).is_empty());
+        assert!(list.sites(&json!({"slots": 3})).is_empty());
+    }
+
+    #[test]
+    fn a_field_without_a_wildcard_is_its_own_site() {
+        let plain = field("/holder", false, true);
+        assert_eq!(plain.sites(&json!({})), std::slice::from_ref(&plain));
+    }
+
+    #[test]
+    fn matches_is_segment_wise() {
+        let list = pattern("/slots/*/who", true);
+        assert!(list.matches("/slots/3/who"));
+        assert!(list.matches("/slots/*/who"));
+        assert!(!list.matches("/slots/3"));
+        assert!(!list.matches("/slots/3/who/x"));
+        assert!(!list.matches("/slots/3/whom"));
+        assert!(!list.matches("/other/3/who"));
+        assert!(field("/holder", false, false).matches("/holder"));
     }
 
     #[test]

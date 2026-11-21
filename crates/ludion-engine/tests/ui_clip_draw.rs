@@ -120,10 +120,26 @@ fn assert_hit_agrees_with_pixels(
             .iter()
             .any(|&id| ui_hit(world, id, VIEWPORT, [x, y], now))
     };
-    let background = luma(&image.rgba, image.width, 4, 4);
-    // Half coverage of white over the clear: the target blends in linear light and stores sRGB, so
-    // half coverage lands near 0.735 of the way from the background to white.
-    let half_cover = f64::from(background) + 0.735 * f64::from(765 - background);
+    // Half coverage of white over the clear, exactly: the target blends in linear light and stores sRGB,
+    // so each channel of half coverage is encode(0.5 * decode(clear) + 0.5), not a fixed share of the way up.
+    let decode = |v: f64| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ludion_core::math::f64::powf((v + 0.055) / 1.055, 2.4)
+        }
+    };
+    let encode = |v: f64| {
+        if v <= 0.003_130_8 {
+            v * 12.92
+        } else {
+            1.055 * ludion_core::math::f64::powf(v, 1.0 / 2.4) - 0.055
+        }
+    };
+    let i = ((4 * image.width + 4) * 4) as usize;
+    let half_cover: f64 = (0..3)
+        .map(|c| 255.0 * encode(0.5 * decode(f64::from(image.rgba[i + c]) / 255.0) + 0.5))
+        .sum();
     let mut edge = 0u32;
     let mut band_mismatch = 0u32;
     let mut drawn_pixels = 0u32;
@@ -211,4 +227,72 @@ fn needs_gpu_ui_hit_agrees_with_a_rotated_draw() {
         return;
     };
     assert_hit_agrees_with_pixels(&image, &world, &[ids[2]], (960, 540), 5_000);
+}
+
+/// A white 270-degree ring and a 60-degree wedge, both turned 30 degrees about their origins, inside a
+/// rect-clipped group turned 20 degrees: the drawn pixels are each shape cut by the turned clip.
+const SHAPES_SCENE: &str = "\
+format: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - components:
+      UiGroup:
+        offset:
+          - 300.0
+          - 150.0
+        size:
+          - 360.0
+          - 360.0
+        clip: rect
+        rotation: 20.0
+  - components:
+      UiShape:
+        anchor: center
+        group:
+          index: 1
+          generation: 0
+        shape:
+          type: ring
+          radius: 220.0
+          thickness: 100.0
+          start_deg: 45.0
+          sweep_deg: 270.0
+        fill:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        rotation: 30.0
+  - components:
+      UiShape:
+        anchor: center
+        group:
+          index: 1
+          generation: 0
+        shape:
+          type: wedge
+          radius: 100.0
+          start_deg: 0.0
+          sweep_deg: 60.0
+        fill:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        rotation: 30.0
+";
+
+#[test]
+fn needs_gpu_ui_hit_agrees_with_drawn_shapes() {
+    let Some((image, world, ids)) = render(SHAPES_SCENE) else {
+        return;
+    };
+    assert_hit_agrees_with_pixels(&image, &world, &[ids[2], ids[3]], (960, 540), 5_000);
 }

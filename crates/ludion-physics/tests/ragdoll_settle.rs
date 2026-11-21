@@ -255,6 +255,7 @@ fn a_ball_motor_reaches_a_multi_axis_target() {
                 anchor: [0.0; 3],
                 break_impulse: None,
                 collide: false,
+                zero: None,
             },
         )
         .expect("a fresh entity accepts a joint");

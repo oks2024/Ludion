@@ -614,6 +614,7 @@ fn switch_ragdolls(
         anchor: [0.0; 3],
         break_impulse: None,
         collide: false,
+        zero: None,
     };
     world.insert(carrier, pin).expect("just spawned");
 }

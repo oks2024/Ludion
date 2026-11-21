@@ -61,7 +61,9 @@
 //!   `UiList`), and the engine guide's
 //!   "Screen-space UI" chapter (`ludion docs screen-ui`) and its `UiList` spoke (`ludion docs ui-list`).
 //!   [`UiRadial`] is the tool wheel: items on a ring picked by stick angle, cursor or mouse delta
-//!   through `UiRadial::navigate` and a [`UiRadialNav`] (`ludion docs ui-radial`).
+//!   through `UiRadial::navigate` and a [`UiRadialNav`] (`ludion docs ui-radial`). [`UiShape`] is an
+//!   analytic line, circle, ring, arc, wedge or rounded rectangle with a fill and a stroke
+//!   (`ludion docs ui-shapes`).
 //! - **ECS surface** — [`World`] (and its `query`/`get`/`spawn` methods), [`Registry`], [`Schedule`],
 //!   [`SystemCtx`], [`Parent`], and the [`Component`] marker. A [`Transform`] is local under a
 //!   [`Parent`]: [`world_transform`] reads the composed [`WorldPose`] (never stored, never hashed)
@@ -151,7 +153,9 @@
 //!   blend, steered by [`set_layer_params`], and fire events with `events: true`. [`blend_clocks`]
 //!   keeps the [`BlendClock`] phase (and each layer's [`LayerPhase`]) of a character whose
 //!   `Animation.clip` or layer clip names a blend space, so its footstep events fire once per
-//!   stride at any speed (`ludion docs animation-layers`).
+//!   stride at any speed (`ludion docs animation-layers`). [`AnimGraph`] is a game's `static` table of
+//!   [`AnimState`]s and [`AnimEdge`]s (with an [`AnimGate`] each): [`AnimGraph::step`] crossfades and fades
+//!   layers on a transition only, recording the state in [`AnimGraphState`].
 //! - **Ragdolls** — [`switch_to_ragdoll`] (or [`switch_to_ragdoll_with`], whose
 //!   [`LimitsFrom::Rest`] measures joint limits and targets from the rig rest pose) promotes a posed
 //!   `Mesh.shape: assembly` entity into one `rigid` body entity per part, joined by [`Joint`]s (fixed
@@ -190,7 +194,8 @@
 //!   path and a gain). Draining and playback are the engine's job; a system only pushes.
 //!   [`play_sound`] queues a plain one-shot in one call; positional and loop calls stay on
 //!   [`AudioQueue`]. `AudioQueue::play_on` plays a one-shot that follows an entity and returns a
-//!   [`VoiceId`] for `voice_stop`.
+//!   [`VoiceId`] for `voice_stop`; `AudioQueue::push_on` starts one with a [`VoiceFilter`] (in a
+//!   [`VoiceSpatial`]).
 //!   [`AudioEmitter`] (with [`AudioCategory`]) is the declarative half: a looping sound placed in
 //!   the world, kept in sync with the listener's distance by the engine, so a discoverable bell or
 //!   chant needs no system at all. [`CategoryGains`] is the mixdown half — the master gain each
@@ -227,9 +232,9 @@
 //!   it swaps a room, so probes spawned at runtime capture the world that holds them from the next tick.
 //!   `EngineBuilder::probe_bake_worlds` bakes those rooms; `Engine::probe_coverage` returns a
 //!   [`ProbeCoverage`] whose `check()` fails with `L1279` for a probe the store lacks.
-//! - **Anti-aliasing** — [`RenderSettings`]: the resource an options-menu system sets with
-//!   `request_anti_aliasing(`[`AntiAliasing`]`)`, beating the host's choice and the builder's
-//!   `anti_aliasing` default from the next frame. Write-only: a system cannot read the effective mode.
+//! - **Anti-aliasing** — [`Settings::request_anti_aliasing`]`(`[`AntiAliasing`]`)`: the options-menu
+//!   request, beating the host's `--aa` choice and the builder's `anti_aliasing` default from the next
+//!   frame, and persisted by `save()`. A system cannot read the effective mode.
 //! - **Player settings** — [`Settings`]: the resource an options menu sets (`request_bus_volume`,
 //!   `request_window_mode`, `request_quality`, `request_anti_aliasing`, `save()`); [`SettingsView`] reads
 //!   the values in force; [`WindowMode`] and [`QualityPreset`] name the choices. `ludion docs settings`.
@@ -247,7 +252,8 @@
 //! - **Marking a field** — [`EntityRefSchema`] / [`EntityRefSelfSchema`] and [`AssetPathSchema`]:
 //!   `#[schemars(with = "EntityRefSchema")]` on an [`EntityId`] field (or `Option<…>` of it) makes
 //!   scene load range-check it and `scene.save` remap it; `with = "AssetPathSchema"` on a `String`
-//!   makes it a content-root path. A list or map of references is refused (`L1392`).
+//!   makes it a content-root path. A list or map of references is refused (`L1392`) unless wrapped in
+//!   [`EntityRefCollection`] (`with = "EntityRefCollection<Vec<T>>"`).
 //! - **Wire surface** — [`Command`] and the [`command`] params module, for driving an engine
 //!   directly in tests.
 //!
@@ -269,47 +275,50 @@ pub use ludion_engine::{
     LANE_OFF, LANE_ON, LANE_PATH, LaneConstraint, LaneEnds, LaneInput, LayerMode, LayerPhase,
     ListenerOrientation, Look, LookAhead, MOTOR_AIRBORNE, MOTOR_CARRY, MOTOR_CEILING,
     MOTOR_GROUND_NORMAL, MOTOR_GROUNDED, MOTOR_PROBE, MOTOR_STUCK, MOTOR_WALL, MapSpawn, MapWrap,
-    Mesh, MeshGrid, MeshSource, Mirror, MixLayer, MotionSegment, Name, Nav, NavAgent, NavConfig,
-    NavGoal, NavLink, NavPath, NavReplan, NavRoute, NavRouteStatus, NavSteering, NoInterpolate,
-    Noise, NoiseId, NoiseRecord, NoiseZone, NoiseZoneShape, PARTICLE_MAX_LIVE_PER_EMITTER,
-    ParentJoint, ParticleBlend, ParticleEmitter, PathDocument, PathFollower, PathFrame,
-    PathInterpolation, PathMetric, PathMode, PathOrient, PathRequest, PathSampler, PathStatus,
-    PatternDoc, PatternPlayer, PendingNoise, Perceiver, PerceiverMemory, PerceiverStatus,
-    PerceptionConfig, PerceptionResults, PerceptionState, PlaybackControls, PlaybackInput,
-    PlaybackOutcome, PlaybackSpeed, PointLight, PostProcess, PrefabApplied, PrefabInstance,
-    PrefabPrewarm, PrefabReverted, ProbeCoverage, ProbeCoverageEntry, ProbeRefreeze, ProbeShape,
-    Profile, ProjectileConfig, ProjectileLook, ProjectileVisual, ProjectileVisuals, Projectiles,
-    Projection, QualityPreset, RampSpec, Recenter, ReflectionProbe, RenderExtent, RenderSettings,
-    ReplayEntry, ReplayPlayback, ReplayPlaybackConfig, Require, Residue, ResidueStore,
-    RestoreOutcome, ResumeOutcome, RigCollision, RigCollisionConfig, RigConfig, RigMode, RigState,
-    Rumble, RumbleEffect, RunRecording, RunRecordingConfig, RunSave, SceneSwitch, Sense,
-    SequenceEvents, Settings, SettingsView, ShakeConfig, Shutdown, SightPoint, SightSample,
-    SightSampleRecord, SightTarget, SightZone, SkinBone, SpotLight, Springs, Sprite, SpriteBlend,
-    Static, Stimulus, StimulusRecord, Subtitles, SurfaceNoise, SuspendInfo, SweepShape, SwitchTo,
-    Text, TextOutline, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
-    TransformHierarchy, TurnSpec, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase,
-    UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat,
+    Mesh, MeshGrid, MeshSource, Mirror, MixLayer, MotionSegment, Name, Nav, NavAgent, NavClass,
+    NavConfig, NavGoal, NavLink, NavPath, NavReplan, NavRoute, NavRouteStatus, NavSteering,
+    NoInterpolate, Noise, NoiseId, NoiseRecord, NoiseZone, NoiseZoneShape,
+    PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter, PathDocument,
+    PathFollower, PathFrame, PathInterpolation, PathMetric, PathMode, PathOrient, PathRequest,
+    PathSampler, PathStatus, PatternDoc, PatternPlayer, PendingNoise, Perceiver, PerceiverMemory,
+    PerceiverStatus, PerceptionConfig, PerceptionResults, PerceptionState, PlaybackControls,
+    PlaybackInput, PlaybackOutcome, PlaybackSpeed, PointLight, PostProcess, PrefabApplied,
+    PrefabInstance, PrefabPrewarm, PrefabReverted, ProbeCoverage, ProbeCoverageEntry,
+    ProbeRefreeze, ProbeShape, Profile, ProjectileConfig, ProjectileLook, ProjectileVisual,
+    ProjectileVisuals, Projectiles, Projection, QualityPreset, RampSpec, Recenter, ReflectionProbe,
+    RenderExtent, ReplayEntry, ReplayPlayback, ReplayPlaybackConfig, Require, Residue,
+    ResidueStore, RestoreOutcome, ResumeOutcome, RigCollision, RigCollisionConfig, RigConfig,
+    RigMode, RigState, Rumble, RumbleEffect, RunRecording, RunRecordingConfig, RunSave,
+    SceneSwitch, Sense, SequenceEvents, Settings, SettingsView, ShakeConfig, Shutdown, SightPoint,
+    SightSample, SightSampleRecord, SightTarget, SightZone, SkinBone, SpotLight, Springs, Sprite,
+    SpriteBlend, Static, Stimulus, StimulusRecord, Subtitles, SurfaceNoise, SuspendInfo,
+    SweepShape, SwitchTo, Text, TextOutline, TileAppearance, Tilemap, TimelineEntry, TrackRig,
+    Transform, TransformHierarchy, TurnSpec, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock,
+    UiEase, UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat,
     UiTweenTrack, UiWorldAnchor, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel,
     ViewmodelLens, Visibility, Volley, VolleyCenter, VolleyShape, WindowMode, WorldPose, ZoneSweep,
     add_fov_kick, add_kick, add_look, add_look_counts, add_trauma, advance_volleys,
     animation_events, blend_clocks, builtin_registry, bullet_age, bullet_is_alive, bullet_position,
-    camera_occluders, camera_relative, camera_relative_yaw, character_fit, check_path, crossfade,
-    debug_draw, despawn_instance, dialogue_update, emit_noise, fade_ik_target, fade_layer,
-    first_person_eye, fits_character, forget, forget_all, lane_error_colour, lane_frame,
-    lane_relative, load_assembly, move_character, move_character_with, move_characters,
-    nav_distance, nav_link_done, nav_path, nav_project, nav_reachable, nav_steer, nav_update,
-    orbit_eye, path_follow, path_follower_motion, perception_update, play_layer, play_patterns,
-    play_sound, posed_joint_world, prepare_map, prepare_prefab, prewarm_prefab,
-    probe_character_ground, projectiles_step, reparent, report_diagnostic, report_full_diagnostic,
-    report_stimulus, resize_character, resume_character, revert_prefab, sequence_update,
-    set_character_posture, set_clip_speed, set_layer_params, set_look, snap_rig, spawn_map,
-    spawn_prefab, spawn_projectile, stimuli, suspend_character, switch_skin_to_ragdoll,
-    switch_to_ragdoll, teleport_character, turn_character, unpack_prefab, validate_pattern_docs,
-    volley_hits, world_transform,
+    camera_occluders, camera_relative, camera_relative_yaw, character_fit, character_fit_ignoring,
+    check_path, crossfade, debug_draw, despawn_instance, dialogue_update, emit_noise,
+    fade_ik_target, fade_layer, first_person_eye, fits_character, forget, forget_all,
+    lane_error_colour, lane_frame, lane_relative, load_assembly, move_character,
+    move_character_with, move_characters, nav_distance, nav_link_done, nav_path, nav_project,
+    nav_random_point, nav_raycast, nav_reachable, nav_steer, nav_update, orbit_eye, path_follow,
+    path_follower_motion, perception_update, play_layer, play_patterns, play_sound,
+    posed_joint_world, prepare_map, prepare_prefab, prewarm_prefab, probe_character_ground,
+    projectiles_step, reparent, report_diagnostic, report_full_diagnostic, report_stimulus,
+    resize_character, resume_character, revert_prefab, sequence_update, set_character_posture,
+    set_clip_speed, set_layer_params, set_look, snap_rig, spawn_map, spawn_prefab,
+    spawn_projectile, stimuli, suspend_character, switch_skin_to_ragdoll, switch_to_ragdoll,
+    teleport_character, turn_character, unpack_prefab, validate_pattern_docs, volley_hits,
+    world_transform,
 };
+pub use ludion_engine::{AnimEdge, AnimGate, AnimGraph, AnimGraphState, AnimState};
 
 pub use ludion_engine::MeshBlend;
 pub use ludion_engine::Rain;
+pub use ludion_engine::RenderLayers;
 pub use ludion_engine::RenderView;
 pub use ludion_engine::VoiceId;
 pub use ludion_engine::ui::UiNav;
@@ -324,6 +333,7 @@ pub use ludion_engine::{
 };
 pub use ludion_engine::{LimitsFrom, RagdollSwitch, switch_to_ragdoll_with};
 pub use ludion_engine::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
+pub use ludion_engine::{PairedFit, PairedRoleFit, Warp, paired_fit};
 pub use ludion_engine::{
     PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
     patrol_update,
@@ -331,10 +341,12 @@ pub use ludion_engine::{
 pub use ludion_engine::{
     PoseSnapshot, RagdollToAssembly, SnapshotPart, ragdoll_landing, switch_ragdoll_to_assembly,
 };
+pub use ludion_engine::{UiLineCap, UiShape, UiShapeType, UiStroke};
+pub use ludion_engine::{VoiceFilter, VoiceSpatial};
 
 pub use ludion_ecs::{
-    AssetPathSchema, Component, EntityRefSchema, EntityRefSelfSchema, Parent, Phase, Registry,
-    Schedule, SemanticValidate, SystemCtx, World,
+    AssetPathSchema, Component, EntityRefCollection, EntityRefSchema, EntityRefSelfSchema, Parent,
+    Phase, Registry, Schedule, SemanticValidate, SystemCtx, World,
 };
 
 pub use ludion_sim::rebind::{CaptureOptions, CaptureResult, CaptureSlot, Resolve};
@@ -350,18 +362,18 @@ pub use single::SingleExt;
 
 pub use ludion_physics::{
     Blast, BlastHit, CellSurfaces, CharacterMotor, CharacterMotorState, ContactEvent, ContactPhase,
-    ExitCause, Falloff, GroundHit, GroundProbe, JointBroken, LaneEnd, LaneFrame, LaneReport,
-    LayerSet, MotorError, MoveConstraint, MoveReport, PartSurface, PhysicsError, PhysicsWorld,
-    PlatformCarry, PlatformPose, PointHit, Posture, PostureReport, PostureShape, QueryFilter,
-    QueryHit, ResizeReport, ResumeReport, SensorEvent, SensorPhase, SurfaceHit, SurfaceId,
-    SurfaceOverlay, SurfacePart, SurfaceTable, SurfaceTag, SurfaceVelocity, TurnReport,
+    ExitCause, Falloff, GroundHit, GroundProbe, IgnoreCollisions, JointBroken, LaneEnd, LaneFrame,
+    LaneReport, LayerSet, MotorError, MoveConstraint, MoveReport, PartSurface, PhysicsError,
+    PhysicsWorld, PlatformCarry, PlatformPose, PointHit, Posture, PostureReport, PostureShape,
+    QueryFilter, QueryHit, ResizeReport, ResumeReport, SensorEvent, SensorPhase, SurfaceHit,
+    SurfaceId, SurfaceOverlay, SurfacePart, SurfaceTable, SurfaceTag, SurfaceVelocity, TurnReport,
     height_in_force, motor_capsule_segment, motor_in_force, teleport_kinematic,
 };
 pub use ludion_projectiles as projectiles;
 pub use ludion_spatial::{
     AxisLock, Body, Collider, CombineRule, CompoundPart, ContactMaterial, GroundPosition, Joint,
-    JointKind, JointMotor, JointPoses, JointZero, NoParent, ParentPose, Plane, PoseBlend,
-    RigidBody, Shape, SpatialVolume, Velocity, VolumeShape, WorldPosition, spatial, spatial3d,
+    JointKind, JointMotor, JointPoses, NoParent, ParentPose, Plane, PoseBlend, RigidBody, Shape,
+    SpatialVolume, Velocity, VolumeShape, WorldPosition, spatial, spatial3d,
 };
 
 pub use ludion_core::codes::code;

@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets and W5a (ground feet) mechanized (2026-11-19); A3 deferred; W3, W5b, W6 not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); A3 deferred; W5b, W6 not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -169,6 +169,21 @@ No `WorldHash`, replay, wire-schema or existing golden moved; the component sche
 No `WorldHash`, replay, wire-schema, component-schema or existing golden moved; new golden
 `assembly-ground.png` blessed on the RTX 3090, macOS twin owed.
 
+### W3 — `AnimGraph` and `AnimGraphState`
+
+| file | role |
+|---|---|
+| `crates/ludion-engine/src/anim_graph.rs` | `AnimGraph`, `AnimState`, `AnimEdge`, `AnimGate`: `step`, `current`, `describe`, with unit tests |
+| `crates/ludion-components/src/anim_graph_state.rs`, `lib.rs` | the hashed `AnimGraphState`, registered after `PoseSnapshot` |
+| `crates/ludion-core/src/codes.rs` | `L4290`, `L4291` |
+| `crates/ludion-testkit/tests/anim_graph_cycle.rs` | the six-state port of `CYCLE`: equal `Animation` every tick, the switch log, a snapshot restore |
+| `crates/ludion-engine/tests/anim_graph.rs`, `examples/anim_graph.rs` | an assembly driven through carry, wave and idle; layer enter/leave, one-shot end, `Interrupts`, thread invariance, `L4290`; the runnable example |
+| `docs/animation-layers.md` §State graph, `character-animation.md`, `voxel-animation.md`, `components-fx.md`, embedded mirrors | the API, the step rules and the initial-state idiom |
+
+No `WorldHash`, trace, replay, protocol schema or golden moved (no committed scene carries
+`AnimGraphState`); the component schema snapshot gained `AnimGraphState` only. `CYCLE`, `cycle_builder`,
+`character-cycle.trace.txt` and `character-cycle.lrp` are untouched (decision 53).
+
 ## Trigger
 
 The game's characters do locomotion plus something else on one skin: carry a body, aim, peek around a
@@ -215,7 +230,10 @@ share one driver shape.
    highest-weight clip (ties go to the lower index) so footstep noise stays on the feet.
 9. **A Rust `AnimGraph` helper** (W3), not an asset: a table of `(clip, from, leave, next, fade)` plus an
    `AnimGraphState` component, replacing `CYCLE` in `crates/ludion-testkit/tests/common/mod.rs` with an
-   identical switch log and `.lrp`. There is no animation asset language.
+   identical switch log and `.lrp`. There is no animation asset language. *Amended (2026-11-20): the shipped table
+   is states + edges (the request's §6 shape) rather than `(clip, from, leave, next, fade)` rows, because states
+   that share a clip (carry vs locomotion) need their own identity; the `CYCLE` swap moves to R14 (decisions
+   50–53).*
 10. **IK and look-at** (W4): `IkRig` and `IkTargets` components, a look-at chain and a two-bone solver, run
     after layers; the final pose goes through `posed_joint_world` so sockets follow. (Decision 36 replaces
     `IkRig` with the assembly's `ik:` key.)
@@ -319,6 +337,7 @@ share one driver shape.
     IK in the ragdoll switch: a ragdoll that must start from an IK'd pose. **Entity targets**: a target that
     must follow an entity without per-tick writes — it needs registry support for entity references inside a
     map (`L1392`); until then game code writes `point` from the entity's world position each tick it moves.
+    Registry support now exists: `EntityRefCollection` (`Plan/ai-behaviour.md` decision 16).
 
 40. **`render --model --look/--ik` pose through the one solver** (`apply_assembly_ik` on the sheet's
     placements, then the gap analysis). `--look [NAME=]YAW,PITCH` takes a number or `lo..hi` per side (`Look`'s
@@ -370,6 +389,31 @@ share one driver shape.
     completed physics step. No foot pitch to the normal (a third part; trigger: an assembly with a separate
     foot part), no moving-platform ground (trigger: a character must stand on a kinematic body), not in the
     model sheet, the ragdoll switch or skinned characters.
+50. **`AnimGraph<S, I>` API and `step` semantics.** `AnimState { id, name, plays, layers: (layer, clip, weight),
+    one_shot }`, `AnimGate { None, Interrupts, OnEvent(name), MinTicks(n) }`, `AnimEdge { from: Option<S>, to, when:
+    fn(&I) -> bool, fade, gate }`, `AnimGraph { states, edges }` (plain `pub` structs, so a game writes a `static`)
+    with `step`, `current` and `describe`. The request's `State`/`Edge` carry an `Anim` prefix because the prelude
+    has other `State`-like names. `step` walks `edges` in declaration order; an edge is a candidate when `from` is
+    `None` or the current state and `to` is not the current state (no self-transitions, so a `from: None` edge never
+    restarts its own target), and is taken when `when` and its gate pass (`MinTicks` reads `game_frame − entered`,
+    `OnEvent` reads `AnimationEvents` for the current state's clip). While the current state is `one_shot` and its
+    `end` has not fired, only `Interrupts` edges qualify. The first taken edge wins. Entering writes `crossfade` (even
+    for an unchanged clip: a state restarts its clip), `AnimGraphState`, and the layers: each of the new state's layers
+    is played and faded to its weight over `fade`, each layer only the old state listed fades to `0`. Nothing firing
+    writes nothing, so the hash stays quiet between transitions.
+51. **`AnimGraphState { state, entered, previous }`** records a stable state *name* (not `Debug` output, not an
+    index), `previous` omitted when empty. There is no implicit entry: a game spawns it beside an `Animation` already
+    playing that state's clip. A name the graph lacks is a runtime `step` error, not a load error, because the graph
+    is Rust and invisible at load. No `SemanticValidate`. A graph is game-side Rust called from the game's own system
+    after `animation_events`: no system registration, wire command or scene key.
+52. **Errors write nothing.** `L4290` (`ANIM_GRAPH_STATE_INVALID`): no `AnimGraphState`, an unknown state name (help:
+    the nearest declared name and the declared list), no `Animation`, or a layer the entity lacks, checked before the
+    first write. `L4291` (`ANIM_GRAPH_INVALID`): duplicate state names, duplicate state ids, or an edge naming an undeclared state.
+53. **The `CYCLE` swap is an R14 re-record item.** `common::cycle_builder` moving onto a graph puts a hashed
+    `AnimGraphState` on the mannequin, which moves every `character-cycle.trace.txt` line and the `.lrp`
+    (`ludion-sim/src/hash.rs` rule 4). W3 proves the port instead: `anim_graph_cycle.rs` runs `CYCLE` and a six-state
+    graph port side by side and asserts an identical `Animation` every tick. Vigil's `animate_player` on the graph
+    (the request's acceptance) waits for the same round. **Trigger:** R14.
 
 ## Waves
 
@@ -388,7 +432,8 @@ share one driver shape.
 - **W2c (shipped).** `check-scene` masks and blends, `render --model … --blend/--layer` strips
   (`model_sheet.rs` + CLI; decision 35).
 - **W2d (shipped).** The gallery humanoid, `assembly-layers.yaml` and two goldens (macOS twins owed).
-- **W3.** `AnimGraph` and `AnimGraphState` (decision 9).
+- **W3 (shipped 2026-11-20).** `AnimGraph` and `AnimGraphState` (decisions 9 and 50–53). Moving `CYCLE` and
+  vigil's `animate_player` onto the graph is an R14 re-record item (decision 53).
 - **W4a (shipped).** The `ik:` key, `IkTargets`, look-at and two-part IK in extract (decisions 36–39).
 - **W4b (shipped).** `check-scene` lists `ik:`, `render --model --look/--ik`, `GoldenTest.look`/`ik`, and the
   look-at-at-its-yaw-limit golden (decision 40; macOS twin owed).

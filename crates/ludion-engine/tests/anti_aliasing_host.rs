@@ -10,8 +10,8 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::FrameIndex;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::{
-    AntiAliasing, DebugCategories, Engine, EngineBuilder, FrameSize, QualitySetting,
-    RenderSettings, builtin_registry, render_scene_with_builder, render_scene_with_registry,
+    AntiAliasing, DebugCategories, Engine, EngineBuilder, FrameSize, QualitySetting, Settings,
+    builtin_registry, render_scene_with_builder, render_scene_with_registry,
 };
 
 /// A bright, yaw-rotated cube on black: every silhouette edge is a staircase SMAA visibly moves.
@@ -162,7 +162,7 @@ fn toggle(world: &mut World, ctx: &SystemCtx) {
         FrameIndex(2) => AntiAliasing::Off,
         _ => return,
     };
-    if let Some(settings) = world.resource_mut::<RenderSettings>() {
+    if let Some(settings) = world.resource_mut::<Settings>() {
         settings.request_anti_aliasing(mode);
     }
 }

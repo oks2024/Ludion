@@ -606,8 +606,9 @@ impl Settings {
         self.requests.quality = Some(preset);
     }
 
-    /// Requests an anti-aliasing mode from the next render on. Below a game's
-    /// [`RenderSettings`](crate::RenderSettings) request and the host's `--aa` flag.
+    /// Requests an anti-aliasing mode from the next render on. This session's request beats the
+    /// host's `--aa` flag; [`save`](Settings::save) persists it to the settings file, which sits
+    /// below `--aa` at the next boot. The last request in a tick wins.
     pub fn request_anti_aliasing(&mut self, mode: AntiAliasing) {
         self.requests.anti_aliasing = Some(mode);
     }
@@ -629,10 +630,37 @@ impl Settings {
     }
 }
 
+/// Resolves the anti-aliasing mode an engine renders with.
+///
+/// Precedence is `game` (the game's [`Settings::request_anti_aliasing`] this session) → `host`
+/// ([`Engine::set_anti_aliasing`](crate::Engine::set_anti_aliasing), the `--aa` flag) → `builder` (the
+/// settings file's value if any, else the game's packaged
+/// [`EngineBuilder::anti_aliasing`](crate::EngineBuilder::anti_aliasing), `Off` unless set). Resolved on
+/// read from separately held values, as [`resolve_render_scale`](crate::resolve_render_scale) is, so
+/// the order they are set in never matters.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{AntiAliasing::{Off, Smaa}, resolve_anti_aliasing};
+///
+/// assert_eq!(resolve_anti_aliasing(None, None, Smaa), Smaa);
+/// // The host beats the packaged default, and the game's own choice beats the host.
+/// assert_eq!(resolve_anti_aliasing(None, Some(Off), Smaa), Off);
+/// assert_eq!(resolve_anti_aliasing(Some(Smaa), Some(Off), Off), Smaa);
+/// ```
+pub fn resolve_anti_aliasing(
+    game: Option<AntiAliasing>,
+    host: Option<AntiAliasing>,
+    builder: AntiAliasing,
+) -> AntiAliasing {
+    game.or(host).unwrap_or(builder)
+}
+
 /// An ECS resource: the player settings in force, read-only.
 ///
 /// **Deterministic:** it is a pure function of the settings file at start and the sim's own
-/// [`Settings`] calls, never of a host flag, so a system may branch on it. It lives on the engine
+/// [`Settings`] calls, never of a host flag, so a system may branch on it — except
+/// [`live_window_mode`](SettingsView::live_window_mode), host state for display only. It lives on the engine
 /// like the requests do, so a world rebuild or `engine.restore` does not roll it back. It shows every
 /// field, set or not; `None` means the player never chose one.
 ///
@@ -648,11 +676,15 @@ impl Settings {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SettingsView {
     doc: SettingsDoc,
+    live_window: Option<WindowMode>,
 }
 
 impl SettingsView {
-    pub(crate) fn from_doc(doc: &SettingsDoc) -> Self {
-        SettingsView { doc: doc.clone() }
+    pub(crate) fn from_doc(doc: &SettingsDoc, live_window: Option<WindowMode>) -> Self {
+        SettingsView {
+            doc: doc.clone(),
+            live_window,
+        }
     }
 
     /// A bus's volume, `1.0` when unset (the master included).
@@ -660,9 +692,19 @@ impl SettingsView {
         self.doc.volume(bus)
     }
 
-    /// The window mode the player chose, if any.
+    /// The window mode the player saved or requested, if any — the saved or requested choice; see
+    /// [`live_window_mode`](SettingsView::live_window_mode) for the window itself.
     pub fn window_mode(&self) -> Option<WindowMode> {
         self.doc.display.window
+    }
+
+    /// The window's mode right now, as the window host last reported it: `None` headless.
+    ///
+    /// **Host state, for display only** (an options menu showing the real mode after a fullscreen
+    /// chord): never branch hashed state on it. [`window_mode`](SettingsView::window_mode) stays the
+    /// deterministic saved choice, and the chord never writes it.
+    pub fn live_window_mode(&self) -> Option<WindowMode> {
+        self.live_window
     }
 
     /// The quality preset the player chose, if any.

@@ -4,6 +4,7 @@ use ludion_core::ids::EntityId;
 use ludion_ecs::World;
 
 use super::component::{CharacterMotorState, check_in_force, in_force, posture_motor};
+use super::ignore::motor_partner;
 use super::report::{MotorError, PostureReport};
 use super::resize::{fit_blocker, motor_of};
 use super::shape::{InForce, yaw_of};
@@ -80,7 +81,14 @@ pub fn set_character_posture<P: PhysicsPose>(
         } else {
             0.0
         };
-        if let Some(blocker) = fit_blocker(physics, entity, &target, feet, yaw) {
+        if let Some(blocker) = fit_blocker(
+            physics,
+            entity,
+            &target,
+            feet,
+            yaw,
+            motor_partner(world, entity),
+        ) {
             return Ok(PostureReport {
                 posture: held,
                 blocked_by: Some(blocker),

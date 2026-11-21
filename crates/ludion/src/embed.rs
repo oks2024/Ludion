@@ -308,6 +308,9 @@ pub struct Embedded {
     cursor_lock: Receiver<bool>,
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     window_mode: Receiver<ludion_engine::WindowMode>,
+    /// The sender the window host reports the window's actual mode with.
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    window_mode_report: Sender<ludion_engine::WindowMode>,
     /// The engine's rumble commands for the pad thread, and the sender the host stops them with.
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     rumble: Receiver<ludion_core::rumble::RumbleCommand>,
@@ -343,6 +346,8 @@ struct Boot {
     cursor_lock: Sender<bool>,
     /// The engine's channel for the player's window-mode requests, armed in `run_boot`.
     window_mode: Sender<ludion_engine::WindowMode>,
+    /// The window host's reports of the actual window mode, armed in `run_boot`.
+    window_mode_reports: Receiver<ludion_engine::WindowMode>,
     /// The engine's channel for rumble commands, armed in `run_boot`.
     rumble: Sender<ludion_core::rumble::RumbleCommand>,
 }
@@ -500,6 +505,8 @@ impl Embedded {
         let (lock_tx, cursor_lock) = crossbeam_channel::unbounded::<bool>();
         let (window_mode_tx, window_mode) =
             crossbeam_channel::unbounded::<ludion_engine::WindowMode>();
+        let (window_mode_report_tx, window_mode_reports) =
+            crossbeam_channel::unbounded::<ludion_engine::WindowMode>();
         let (rumble_tx, rumble) = crossbeam_channel::unbounded();
         let rumble_stop = rumble_tx.clone();
 
@@ -517,6 +524,7 @@ impl Embedded {
             render_fault: fault_tx,
             cursor_lock: lock_tx,
             window_mode: window_mode_tx,
+            window_mode_reports,
             rumble: rumble_tx,
         };
         // The scene load used to run on `main`'s stack; keep its headroom on the boot thread.
@@ -546,6 +554,7 @@ impl Embedded {
             render_fault,
             cursor_lock,
             window_mode,
+            window_mode_report: window_mode_report_tx,
             rumble,
             rumble_stop,
             running,
@@ -591,6 +600,13 @@ impl Embedded {
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub(crate) fn window_mode_requests(&self) -> Receiver<ludion_engine::WindowMode> {
         self.window_mode.clone()
+    }
+
+    /// Tells the engine the window's actual mode, for
+    /// [`SettingsView::live_window_mode`](ludion_engine::SettingsView::live_window_mode).
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
+    pub(crate) fn report_window_mode(&self, mode: ludion_engine::WindowMode) {
+        let _ = self.window_mode_report.send(mode);
     }
 
     /// Where the engine sends its rumble commands, for the window host's pad thread.
@@ -911,6 +927,7 @@ fn run_boot(boot: Boot) -> bool {
         render_fault,
         cursor_lock,
         window_mode,
+        window_mode_reports,
         rumble,
     } = boot;
 
@@ -991,6 +1008,7 @@ fn run_boot(boot: Boot) -> bool {
     engine.arm_render_fault_notify(render_fault);
     engine.set_cursor_lock_sender(cursor_lock);
     engine.set_window_mode_sender(window_mode);
+    engine.set_window_mode_reports(window_mode_reports);
     engine.set_rumble_sender(rumble);
 
     // Before any renderer exists, and before a listener moves the engine onto its own sim thread.

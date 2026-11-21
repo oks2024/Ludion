@@ -288,6 +288,7 @@ fn a_static_pin_marks_the_group_pinned() {
                 anchor: [0.0; 3],
                 break_impulse: None,
                 collide: false,
+                zero: None,
             },
         )
         .unwrap();

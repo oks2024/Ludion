@@ -22,7 +22,7 @@
    the Engine, so they outlive rebuilds and a restore does not roll them back. Host state: never hashed,
    snapshotted, recorded or on the wire.
 4. **Precedence.** Quality: flag → env → file → packaged → full (a pinned quality persists a request but
-   does not apply it). AA: game `RenderSettings` → `--aa` → file → builder. Window: flag → env → file →
+   does not apply it). AA: game `Settings` request → `--aa` → file → builder. Window: flag → env → file →
    builder. Volumes: the file *is* the `User` mix layer.
 5. **Requests persist only on `save()`**, and only under `EngineBuilder::persist_settings()`; without
    it the file is never read or written.
@@ -34,8 +34,9 @@
 8. **YAML over TOML** (request question 2: the game's answer). **Explicit `save()`** (Q3). **The view
    exposes every field** (Q4). **Unknown bus names are kept and reported once** (Q6).
 9. **Emit** writes every present value in schema order and omits unset optional fields.
-10. **`RenderSettings` stays as it is** (a non-persisting runtime request); the file's AA slot sits
-    below it and `--aa`.
+10. **`RenderSettings` is folded into `Settings`** (R13, owner ruling 2026-11-19): `Settings::request_anti_aliasing`
+    is the game's one runtime request. It beats `--aa` for the session, and `save()` persists it to the
+    file, which sits below `--aa` at the next boot. There is no clear.
 11. **The header carries the settings in force at arm, only when non-default** (`save_docs["settings"]`,
     outside `replay_content_hash`, so a default recording's header is byte-identical). A replay installs
     the view only (`install_settings_from_text`): never render state, never the window, never disk.
@@ -47,8 +48,9 @@
     already applied at build, stays; only without one does the resolved (packaged or full) setting apply.
 13. **The window is peeked before the engine** (`settings_window_mode_at`: no backup, no warning; the
     build reports once). Start: flag, then env, then file, then builder. A runtime request always
-    applies, through `HostEvent::WindowMode`. The chord stays non-persisting, so after a chord the view
-    can disagree with the window.
+    applies, through `HostEvent::WindowMode`. The chord stays non-persisting; the view reports the live mode
+    through its own host-state accessor, `SettingsView::live_window_mode()`, fed by a host-to-engine channel
+    (never a `Command`), and a request is sent when it differs from the live mode, else from the file's.
 14. **`engine.describe` gains a `settings` section:** `persisted`, `quality_pinned`, `values`.
     The existing `quality` and `anti_aliasing` keys already report the effective values.
 
@@ -65,7 +67,7 @@
   `settings`, from 0021 W2b) and replay install; `describe` settings section; desktop-window and
   quality docs.
 - **W3:** text settings with 0024, rumble with 0021 W4 (binds `set_rumble_intensity`), brightness with 0019.
-- **Live window mode (scheduled, owner ruling 2026-11-19):** the settings view reports the live window mode, so it
+- **Live window mode (shipped, R13):** the settings view reports the live window mode, so it
   never disagrees with the window after a chord (decision 13); the chord stays non-persisting.
 
 ## Status
@@ -87,11 +89,15 @@ and the facade boot test. Live smoke is owed to a human: boot borderless from th
 macOS, and a menu request toggles the window. No `replay_content_hash`, `WorldHash`, replay, golden or
 protocol schema moved.
 
+**R13:** `RenderSettings` is folded into `Settings` (decisions 4, 10), and `SettingsView::live_window_mode()` follows the window
+(decision 13). The window host reports its mode over a channel on start, after a chord, a request and a resize. No
+`replay_content_hash`, `WorldHash`, replay, golden or schema snapshot moved. Live smoke owed to a human, with W2's.
+
 ## Owner rulings (2026-11-19)
 
-- Rejected: the chord stays temporary, keeping the Clockout 0023 ruling; the settings view reports the live window mode instead (Waves). The window chord writes `display.window` (reverses the Clockout 0023 ruling; W2 ships it
+- Shipped (R13). The chord stays temporary, keeping the Clockout 0023 ruling; the settings view reports the live window mode instead (Waves). The window chord writes `display.window` (reverses the Clockout 0023 ruling; W2 ships it
   non-persisting).
-- Accepted, scheduled (R13 API break round). Fold `RenderSettings::request_anti_aliasing` into `Settings` (breaking).
+- Shipped (R13). Fold `RenderSettings::request_anti_aliasing` into `Settings` (breaking).
 - Accepted, scheduled (R14 re-record round). A snapshot field so keyframes carry the view (moves `replay_content_hash`; the corpus is re-recorded).
 - Accepted. `mute_unfocused`.
 - Accepted. Inline quality override objects in the file.

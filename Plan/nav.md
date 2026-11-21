@@ -23,7 +23,13 @@
    restored world re-samples from its restored physics.
 7. **Agents emit a velocity** (`NavSteering`); moving the body stays game or motor code, so the
    engine owns no movement model to guess at.
-8. **One agent class per `Nav`**: radius, height, step and slope are the config's.
+8. **Several agent classes per `Nav`** (Neon Shroud request 0004 §1; owner ruling 2026-11-19, amends "one class per
+   `Nav`"). `NavConfig.classes` lists up to 8 `NavClass`es (name, radius, height, step, slope); each gets its own grid,
+   flow cache and link table, all derived (decision 6 holds). An empty `classes` is one implicit class named `""`
+   built from the legacy `agent_*`, `max_step` and `max_slope_deg` fields, so a config without `classes` builds
+   today's grid. `NavAgent.class`, `PathRequest.class` and `NavLink.classes` pick a class by name. `NavAgent` and
+   `PathRequest` lose `Copy`, and `nav_distance`, `nav_reachable` and `nav_project` gain a `class` parameter
+   (owner-accepted breaks).
 9. **The crate is `ludion::nav` at the facade root**: a prelude `nav` clashed with a game module.
 10. **Point-to-point A* beside the flow fields** (Neon Shroud request 0004). `find_path` over the same links
     answers "path from A to B, reachable, how far, nearest walkable point"; fields stay for many agents
@@ -73,6 +79,19 @@
     `nav_link_done`; the engine never moves the body. A pending link that no longer resolves (disabled, removed,
     moved) replans under both `replan` modes; a route `at_link` is never replanned. Request amendment 2's link
     half, flow fields ignoring links and a zero velocity while `at_link` are **accepted by the owner 2026-11-19**.
+17. **Classes share one down-walk.** Each column does one floor down-walk and one headroom ray; every class adds its
+    own capsule overlap and derives its own height, step and slope from the shared samples. Sampling order is
+    unchanged, so a single class samples exactly as before. The class count is at most 8; `dirty_rect` pads by the
+    widest class radius.
+18. **A class is chosen by name.** Empty is the first class. An unknown name is `L4147`: a query returns it as an
+    error; `nav_steer` leaves a walker of that class standing still (zero velocity, no route write) and reports it
+    once per entity; a `NavLink.classes` entry naming no class reports it once per link. `NavLink.classes` empty
+    permits every class, and a link is in a class's table only when both ends snap on that class's grid; `L4145`
+    fires only when an end snaps on no permitted class.
+19. **`nav_raycast` and `nav_random_point` are class-aware queries.** `nav_raycast` returns the first point a
+    straight walk leaves the class's grid (`None` when the whole line is walkable). `nav_random_point` is uniform
+    over the nodes within `radius` metres of path distance (grid links, no off-mesh links) from `around`, in
+    ascending `NodeId`, with one `gen_range_usize` draw.
 
 **Known second way (temporary):** vigil keeps its game-side 2D nav (`games/vigil/src/nav.rs`).
 Moving it to the layered grid moves its `WorldHash`; the exit is the owed migration, gated by
@@ -115,6 +134,12 @@ Wave 3 (request 0004 §4), by commit subject: `ludion-nav` gains `NavLinks`, `fi
 `string_pull_linked`; the engine gains `NavLink`, `NavRouteStatus::AtLink` with `NavRoute.links`/`link`, and
 `nav_link_done`; `L1526`, `L4145`, `L4146`. A scene with no `NavLink` routes and hashes as before. Only the
 component schema snapshot moved.
+Wave 2a (request 0004 §1, §2), by commit subject: agent classes — `NavConfig.classes` and `NavClass`, one grid, flow cache and
+link table per class from one shared down-walk, `NavAgent.class`, `PathRequest.class`, `NavLink.classes`, a `class` argument on
+`nav_distance`, `nav_reachable` and `nav_project`, and the class-aware `nav_raycast` and `nav_random_point` (`ludion-nav` gains
+`line_exit` and `reachable_within`); `L4147`; `ludion docs nav` §Classes and example `nav_class`. `NavAgent` and `PathRequest` lose
+`Copy`. A config with no `classes` builds the same grid and routes; tests pin a single class equal to the legacy fields,
+1- and 8-thread grids and traces, and the gap, ramp, link and unknown-class cases. Only the component schema snapshot moved.
 
 ## Waves (Neon Shroud request 0004)
 
@@ -127,9 +152,11 @@ independently shippable; later ones add fields and components, never reshape ear
   `patrol_update`, `patrol_motion`; `L1522`–`L1525`, `L4142`–`L4144`; `ludion docs patrol`, example `patrol`
   (request §3). Amends `Plan/character-controller.md` decision 9 (patrols leave `kind: path`) — the Tech Lead
   ratified it. No gallery scene: `ludion render` runs no game systems, so a patrol would never move there.
-- **2 — agent classes:** a per-class grid (radius, height, step, slope) and `PathRequest.class`. Amends
-  decision 8 (one class per `Nav`); the trigger is met (walkers and forklifts) — **accepted 2026-11-19, scheduled
-  (R13)**. Also `nav_random_point`, `nav_raycast` and the `nav` trace channel.
+- **2a — agent classes (shipped):** `NavConfig.classes`, `NavAgent.class`, `PathRequest.class`, `NavLink.classes`,
+  `nav_raycast`, `nav_random_point`; `L4147`; `ludion docs nav` §Classes, example `nav_class` (decisions 8, 17–19).
+  Amends decision 8 (one class per `Nav`); the trigger is met (walkers and forklifts) — **accepted 2026-11-19**.
+- **2b — the `nav` trace channel:** nav records on the trace surface; it touches the shared trace code, so it is
+  its own subtask after 2a.
 - **3 — off-mesh links (shipped):** `NavLink`, `NavRouteStatus::AtLink`, `nav_link_done`; `L1526`, `L4145`, `L4146`
   (decisions 14–16).
 - **4 — dynamic blockers:** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics. Amends
@@ -139,11 +166,10 @@ independently shippable; later ones add fields and components, never reshape ear
 
 **Open questions, answered.** Planning is synchronous with a per-tick cap, not async (the cap bounds the
 cost and keeps the result a function of the tick). Waypoint entity references wait for wave 3: `NavRoute`
-keeps plain points. `nav_random_point`, `nav_raycast` and the `nav` trace channel wait for wave 2.
+keeps plain points. `nav_random_point` and `nav_raycast` shipped with wave 2a; the `nav` trace channel is wave 2b.
 
 ## Explicitly out of scope (triggers recorded)
 
-- **Several agent classes per world** — trigger: a game with two agent sizes (met: wave 2).
 - **A 3D flying field** — trigger: flyers stuck behind geometry in play.
 - **Avoidance beyond separation** — wave 5.
 - **Links in flow fields** — trigger: a chasing crowd that must climb.

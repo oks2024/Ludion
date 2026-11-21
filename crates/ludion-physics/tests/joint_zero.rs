@@ -1,4 +1,4 @@
-//! `JointZero` on the wrapper: a stored zero replaces the zero captured from the bodies' pose at
+//! `Joint.zero` on the wrapper: a stored zero replaces the zero captured from the bodies' pose at
 //! build, so a motor target and the limits are measured from it; it survives a body rebuild and a
 //! solver snapshot, and adding one to a live joint rebuilds the joint.
 
@@ -9,10 +9,9 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::TickRate;
 use ludion_ecs::{Schedule, World};
 use ludion_physics::{NoParent, PhysicsSettings, PhysicsSpace, PhysicsWorld, install};
-use ludion_spatial::{
-    Body, Collider, Joint, JointKind, JointMotor, JointZero, RigidBody, Shape, Velocity,
-};
+use ludion_spatial::{Body, Collider, Joint, JointKind, JointMotor, RigidBody, Shape, Velocity};
 
+const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 const LINK_RADIUS: f32 = 0.5;
 /// A link's inertia about its hinge at one metre: `m·r²` plus the sphere's own `2/5·m·R²`.
 const LINK_INERTIA: f32 = 1.0 + 0.4 * LINK_RADIUS * LINK_RADIUS;
@@ -46,7 +45,7 @@ fn schedule() -> Schedule {
 /// pose the test calls rest.
 fn world_at_40(
     limits: Option<[f32; 2]>,
-    zero: Option<JointZero>,
+    zero: Option<[f32; 4]>,
     motor: Option<f32>,
 ) -> (World, EntityId) {
     let mut world = World::new();
@@ -110,12 +109,10 @@ fn world_at_40(
                 anchor: [0.0; 3],
                 break_impulse: None,
                 collide: false,
+                zero,
             },
         )
         .unwrap();
-    if let Some(zero) = zero {
-        world.insert(bob, zero).unwrap();
-    }
     if let Some(target) = motor {
         world.insert(bob, firm_drive(target)).unwrap();
     }
@@ -135,7 +132,7 @@ fn run(world: &mut World, schedule: &mut Schedule, frames: std::ops::Range<u64>)
 
 #[test]
 fn a_motor_target_is_measured_from_the_stored_zero() {
-    let (mut world, bob) = world_at_40(Some([-30.0, 30.0]), Some(JointZero::default()), Some(0.0));
+    let (mut world, bob) = world_at_40(Some([-30.0, 30.0]), Some(IDENTITY), Some(0.0));
     let mut sched = schedule();
     run(&mut world, &mut sched, 0..300);
     let a = angle(&world, bob);
@@ -154,7 +151,7 @@ fn without_a_zero_the_same_motor_holds_the_start_pose() {
 /// A switch pose outside the limits measured from the zero is pulled back to the limit, not refused.
 #[test]
 fn a_start_outside_the_limits_from_the_zero_is_clamped() {
-    let (mut world, bob) = world_at_40(Some([-30.0, 30.0]), Some(JointZero::default()), None);
+    let (mut world, bob) = world_at_40(Some([-30.0, 30.0]), Some(IDENTITY), None);
     let mut sched = schedule();
     run(&mut world, &mut sched, 0..300);
     let a = angle(&world, bob);
@@ -173,7 +170,7 @@ fn bump_mass(world: &mut World, bob: EntityId) {
 
 #[test]
 fn a_body_rebuild_keeps_the_stored_zero() {
-    let (mut world, bob) = world_at_40(Some([-30.0, 30.0]), Some(JointZero::default()), None);
+    let (mut world, bob) = world_at_40(Some([-30.0, 30.0]), Some(IDENTITY), None);
     let mut sched = schedule();
     run(&mut world, &mut sched, 0..120);
     let before = angle(&world, bob);
@@ -195,7 +192,11 @@ fn adding_a_zero_to_a_live_joint_rebuilds_it() {
     run(&mut world, &mut sched, 0..120);
     let held = angle(&world, bob);
     assert!((held - START_DEGREES).abs() <= 1.5, "held {held}");
-    world.insert(bob, JointZero::default()).unwrap();
+    world
+        .get_mut::<Joint>(bob)
+        .unwrap()
+        .expect("the link carries a joint")
+        .zero = Some(IDENTITY);
     run(&mut world, &mut sched, 120..480);
     let a = angle(&world, bob);
     assert!(
@@ -206,10 +207,7 @@ fn adding_a_zero_to_a_live_joint_rebuilds_it() {
 
 #[test]
 fn a_degenerate_zero_is_treated_as_absent() {
-    let zero = JointZero {
-        rotation: [0.0, 0.0, 0.0, 0.0],
-    };
-    let (mut world, bob) = world_at_40(None, Some(zero), Some(0.0));
+    let (mut world, bob) = world_at_40(None, Some([0.0, 0.0, 0.0, 0.0]), Some(0.0));
     let mut sched = schedule();
     run(&mut world, &mut sched, 0..300);
     let a = angle(&world, bob);
@@ -233,7 +231,7 @@ fn trace(
 /// The solver blob round-trips with a zero, and a world resumed from it continues bit-identically.
 #[test]
 fn the_solver_blob_round_trips_with_a_zero() {
-    let build = || world_at_40(Some([-30.0, 30.0]), Some(JointZero::default()), Some(0.0));
+    let build = || world_at_40(Some([-30.0, 30.0]), Some(IDENTITY), Some(0.0));
     let (mut reference, bob) = build();
     let mut sched = schedule();
     let full = trace(&mut reference, &mut sched, 0..200, bob);

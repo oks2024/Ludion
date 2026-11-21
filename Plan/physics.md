@@ -241,7 +241,7 @@ observe.
 Two hashed, sim-only components beside `JointMotor` (in `ludion-spatial`): `JointPoses` on each jointed part (named poses in `JointMotor.target` units and arity, plus `stiffness`, `damping`, optional `max_force`) and `PoseBlend { pose, weight }` on the group root. The engine system `pose_blend` runs immediately before the physics triple (physics scenes only, after every game system) and writes each part's `JointMotor = { pose·w, stiffness·w, damping·w, max_force }` only when it differs from what the part carries, removing it at `w == 0` so a limp group can settle and sleep (`ludion docs physics-joints` "Pose blends").
 
 - **Group rule.** A part's group root is `JointPoses.group`, else `SkinBone.skin`; neither means the part is inert. Why: `switch_to_ragdoll` leaves no part-to-root link, and adding one would move the WorldHash of every existing voxel ragdoll, so a voxel game sets `group:` on the returned parts.
-- **Rest-relative targets.** Poses are measured from the joint's captured zero; `switch_skin_to_ragdoll` switches at the rest pose, so a pose's zero is the rig rest. Any future posed switch must keep rest-relative zeros. `JointZero` and `LimitsFrom::Rest` keep the zeros rest-relative for the posed voxel switch (`Plan/paired-animations.md`).
+- **Rest-relative targets.** Poses are measured from the joint's captured zero; `switch_skin_to_ragdoll` switches at the rest pose, so a pose's zero is the rig rest. Any future posed switch must keep rest-relative zeros. `Joint.zero` and `LimitsFrom::Rest` keep the zeros rest-relative for the posed voxel switch (`Plan/paired-animations.md`).
 - **`L4035`** warns once per (group, pose) when a `PoseBlend` above weight 0 names a pose none of its parts carries; weight 0 never warns.
 - **Later addition:** a pose from a clip (`clip at t` through the sim-side sampler).
 - **Out of scope:** a contact-material blend; engine-driven weight ramps.
@@ -352,7 +352,7 @@ The thinnest thing a game can run.
 - Hinge, ball, slider, fixed — limits and a break impulse each — as components, created and destroyed
   at runtime through the existing `entity.spawn`/`entity.destroy`/`component.*` commands, so a
   mid-flight grab can form one at runtime.
-  Amended 2026-11-19 (owner): a joint may carry a stored rest-relative zero (`JointZero`, folded into `Joint.zero` in the R13 API break round) that pose blends measure from, see Plan/paired-animations.md d1.
+  Amended 2026-11-19 (owner): a joint may carry a stored rest-relative zero (`Joint.zero`; W1 shipped it as a `JointZero` component, folded into `Joint` in R13) that pose blends measure from, see Plan/paired-animations.md d1.
 - Ruled 2026-09-23: no joint commands — a joint is a component on a carrier entity, so `entity.spawn`
   is the one way; the schema hash does not move.
 - The ragdoll: an assembly's parts as rigid bodies under its joint list, and the clip-to-ragdoll switch

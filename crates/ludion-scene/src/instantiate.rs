@@ -79,7 +79,8 @@ fn remap_refs(registry: &Registry, name: &str, value: &mut Value, ids: &[EntityI
     let Some(info) = registry.get(name) else {
         return;
     };
-    for field in info.entity_refs() {
+    let sites = info.entity_ref_sites(value);
+    for field in &sites {
         let reference = if field.suffix.is_empty() {
             Some(&mut *value)
         } else {

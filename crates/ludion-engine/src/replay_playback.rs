@@ -195,6 +195,7 @@ pub(crate) struct SavedHost {
     pub(crate) input_bindings: ludion_sim::actions::InputBindingsDoc,
     pub(crate) settings: crate::settings::SettingsDoc,
     pub(crate) anti_aliasing_settings: Option<ludion_renderer::AntiAliasing>,
+    pub(crate) anti_aliasing_game: Option<ludion_renderer::AntiAliasing>,
     pub(crate) speed: Speed,
     pub(crate) render_size: (u32, u32),
     pub(crate) return_to: String,

@@ -464,6 +464,7 @@ fn jointed_overlap(
                 anchor: [0.0, 0.3, 0.0],
                 break_impulse: None,
                 collide: true,
+                zero: None,
             },
         )
         .expect("a live entity accepts a joint");
@@ -596,6 +597,7 @@ fn build(world: &mut World) {
                     anchor,
                     break_impulse: None,
                     collide: false,
+                    zero: None,
                 },
             )
             .expect("a fresh entity accepts a joint");

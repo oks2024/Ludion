@@ -127,11 +127,11 @@ fn a_link_joins_the_floors_for_nav_path() {
     assert_eq!(path.links.len(), 1);
     let i = path.links[0] as usize;
     assert!(path.waypoints[i][1] < 0.5 && path.waypoints[i + 1][1] > 2.5);
-    assert!(nav_reachable(linked.world(), START, GOAL).unwrap());
+    assert!(nav_reachable(linked.world(), START, GOAL, "").unwrap());
 
     let mut bare = build(&floors());
     run(&mut bare, 3);
-    assert!(!nav_reachable(bare.world(), START, GOAL).unwrap());
+    assert!(!nav_reachable(bare.world(), START, GOAL, "").unwrap());
     let partial = nav_path(bare.world(), &req).unwrap();
     assert!(partial.links.is_empty());
 }

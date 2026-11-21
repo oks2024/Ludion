@@ -22,9 +22,10 @@
 //! A loop's *playback* state lives only in the sink — the engine holds no table of what is sounding,
 //! and a world rebuild sends [`AudioMessage::StopAllLoops`] rather than diffing against one.
 
+use ludion_core::audio::LOW_PASS_OPEN_HZ;
 pub use ludion_core::audio::{
     AudioCategory, AudioEvent, AudioMessage, Bus, CategoryGains, DUCK_FLOOR_DB, LoopId, MixLayer,
-    VoiceId,
+    VoiceFilter, VoiceId, VoiceSpatial,
 };
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -160,17 +161,43 @@ impl AudioQueue {
         range: f32,
         category: AudioCategory,
     ) -> VoiceId {
+        let event = AudioEvent {
+            category,
+            ..AudioEvent::new(sound, gain)
+        };
+        self.push_on(entity, event, range)
+    }
+
+    /// [`play_on`](Self::play_on) for a whole [`AudioEvent`], the way to start an attached voice with
+    /// a filter: its `spatial` rides every message the voice sends (the event's `pan` is overwritten
+    /// by the follow, as in [`push_at`](Self::push_at)). Returns the id [`voice_stop`] takes.
+    ///
+    /// ```
+    /// # use ludion_ecs::World;
+    /// # use ludion_engine::audio::{AudioEvent, AudioQueue, VoiceFilter, VoiceSpatial};
+    /// # let guard = World::new().spawn();
+    /// let mut queue = AudioQueue::default();
+    /// // A radio: only 300 Hz to 3.4 kHz gets through.
+    /// let radio = AudioEvent {
+    ///     spatial: VoiceSpatial {
+    ///         filter: VoiceFilter::band_pass(300.0, 3400.0),
+    ///         send: 0.0,
+    ///     },
+    ///     ..AudioEvent::new("voice/radio.wav", 1.0)
+    /// };
+    /// let id = queue.push_on(guard, radio, 18.0);
+    /// queue.voice_stop(id, 6);
+    /// ```
+    ///
+    /// [`voice_stop`]: Self::voice_stop
+    pub fn push_on(&mut self, entity: EntityId, mut event: AudioEvent, range: f32) -> VoiceId {
         let id = VoiceId(self.next_voice);
         self.next_voice += 1;
-        let sound = sound.into();
-        let gain = self.finite_gain(&sound, gain);
+        event.gain = self.finite_gain(&event.sound, event.gain);
         self.pending.push(Queued::On {
             id,
             entity,
-            event: AudioEvent {
-                category,
-                ..AudioEvent::new(sound, gain)
-            },
+            event,
             range,
         });
         id
@@ -208,6 +235,7 @@ impl AudioQueue {
             gain,
             pan: 0.0,
             category: AudioCategory::Ambient,
+            spatial: VoiceSpatial::default(),
         }));
     }
 
@@ -480,6 +508,11 @@ pub(crate) const RESYNC_GAIN_RATIO: f32 = 0.01;
 /// the stereo field, far under what a listener hears; the sink slews it over a few milliseconds.
 pub(crate) const RESYNC_PAN_STEP: f32 = 0.02;
 
+/// How far an occluded sound's low-pass cutoff may drift from the last one sent before it is sent
+/// again: 5% of the sent cutoff, under a semitone, a sweep the sink smooths in log2 frequency. A
+/// cutoff entering or leaving bypass is always sent.
+pub(crate) const RESYNC_CUTOFF_RATIO: f32 = 0.05;
+
 /// Within this distance of the listener a positional sound's pan scales down toward centre, so a
 /// sound passing through the listener never jumps from one side to the other.
 pub(crate) const PAN_INNER_RADIUS: f32 = 0.5;
@@ -514,30 +547,41 @@ pub(crate) struct SentLoop {
     pub(crate) gain: f32,
     pub(crate) pan: f32,
     pub(crate) category: AudioCategory,
+    /// The low-pass cutoff sent: open unless occlusion muffles the loop.
+    pub(crate) low_pass_hz: f32,
 }
 
 impl SentLoop {
-    /// Whether a sync of `sound` at `gain` and `pan` on `category` would say nothing new: the same
-    /// sound and bus, a gain within [`RESYNC_GAIN_RATIO`] and a pan within [`RESYNC_PAN_STEP`] of
-    /// the ones sent.
+    /// Whether a sync of `sound` at `gain`, `pan` and `low_pass_hz` on `category` would say nothing
+    /// new: the same sound and bus, a gain within [`RESYNC_GAIN_RATIO`], a pan within
+    /// [`RESYNC_PAN_STEP`] and a cutoff within [`RESYNC_CUTOFF_RATIO`] of the ones sent.
     pub(crate) fn is_current(
         &self,
         sound: &str,
         gain: f32,
         pan: f32,
+        low_pass_hz: f32,
         category: AudioCategory,
     ) -> bool {
         self.sound == sound
             && self.category == category
-            && resync_is_current(self.gain, self.pan, gain, pan)
+            && resync_is_current(
+                (self.gain, self.pan, self.low_pass_hz),
+                (gain, pan, low_pass_hz),
+            )
     }
 }
 
-/// Whether `gain` and `pan` are within [`RESYNC_GAIN_RATIO`] and [`RESYNC_PAN_STEP`] of the `sent_gain`
-/// and `sent_pan` the sink already has: the filter an emitter and an attached voice share.
-pub(crate) fn resync_is_current(sent_gain: f32, sent_pan: f32, gain: f32, pan: f32) -> bool {
+/// Whether `now` (gain, pan, low-pass cutoff) is within [`RESYNC_GAIN_RATIO`], [`RESYNC_PAN_STEP`]
+/// and [`RESYNC_CUTOFF_RATIO`] of the `sent` the sink already has — and both cutoffs bypass or both
+/// not: the filter an emitter and an attached voice share. Without occlusion every cutoff is the
+/// authored one, so the cutoff test never fires.
+pub(crate) fn resync_is_current(sent: (f32, f32, f32), now: (f32, f32, f32)) -> bool {
+    let ((sent_gain, sent_pan, sent_cutoff), (gain, pan, cutoff)) = (sent, now);
     (gain - sent_gain).abs() <= sent_gain * RESYNC_GAIN_RATIO
         && (pan - sent_pan).abs() <= RESYNC_PAN_STEP
+        && (cutoff >= LOW_PASS_OPEN_HZ) == (sent_cutoff >= LOW_PASS_OPEN_HZ)
+        && (cutoff - sent_cutoff).abs() <= sent_cutoff * RESYNC_CUTOFF_RATIO
 }
 
 /// An attached voice (`AudioQueue::play_on`) the engine keeps following: the entity it rides, what
@@ -549,7 +593,11 @@ pub(crate) struct AttachedVoice {
     pub(crate) range: f32,
     pub(crate) sent_gain: f32,
     pub(crate) sent_pan: f32,
+    /// The low-pass cutoff of the last message sent.
+    pub(crate) sent_low_pass_hz: f32,
     pub(crate) ends: FrameIndex,
+    /// The filter and send every message of this voice carries.
+    pub(crate) spatial: VoiceSpatial,
 }
 
 /// A rule that ducks buses while a sound on another bus is live
@@ -698,6 +746,9 @@ pub(crate) struct ListenerPose {
     pub(crate) position: [f32; 3],
     pub(crate) right: [f32; 3],
     pub(crate) up: [f32; 3],
+    /// The entity the ear is on (the `AudioListener` carrier or the camera), whose hierarchy never
+    /// occludes.
+    pub(crate) entity: Option<EntityId>,
 }
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -996,11 +1047,13 @@ mod tests {
             gain: 0.6,
             pan: 0.0,
             category: AudioCategory::Ambient,
+            low_pass_hz: LOW_PASS_OPEN_HZ,
         };
-        assert!(sent.is_current("bell.wav", 0.605, 0.0, AudioCategory::Ambient));
-        assert!(!sent.is_current("bell.wav", 0.61, 0.0, AudioCategory::Ambient));
-        assert!(!sent.is_current("gong.wav", 0.6, 0.0, AudioCategory::Ambient));
-        assert!(!sent.is_current("bell.wav", 0.6, 0.0, AudioCategory::Sfx));
+        let open = LOW_PASS_OPEN_HZ;
+        assert!(sent.is_current("bell.wav", 0.605, 0.0, open, AudioCategory::Ambient));
+        assert!(!sent.is_current("bell.wav", 0.61, 0.0, open, AudioCategory::Ambient));
+        assert!(!sent.is_current("gong.wav", 0.6, 0.0, open, AudioCategory::Ambient));
+        assert!(!sent.is_current("bell.wav", 0.6, 0.0, open, AudioCategory::Sfx));
     }
 
     #[test]
@@ -1010,21 +1063,52 @@ mod tests {
             gain: 0.6,
             pan: 0.3,
             category: AudioCategory::Ambient,
+            low_pass_hz: LOW_PASS_OPEN_HZ,
         };
+        let open = LOW_PASS_OPEN_HZ;
         assert!(sent.is_current(
             "bell.wav",
             0.6,
             0.3 + RESYNC_PAN_STEP / 2.0,
+            open,
             AudioCategory::Ambient
         ));
         assert!(sent.is_current(
             "bell.wav",
             0.6,
             0.3 - RESYNC_PAN_STEP / 2.0,
+            open,
             AudioCategory::Ambient
         ));
-        assert!(!sent.is_current("bell.wav", 0.6, 0.33, AudioCategory::Ambient));
-        assert!(!sent.is_current("bell.wav", 0.6, 0.0, AudioCategory::Ambient));
+        assert!(!sent.is_current("bell.wav", 0.6, 0.33, open, AudioCategory::Ambient));
+        assert!(!sent.is_current("bell.wav", 0.6, 0.0, open, AudioCategory::Ambient));
+    }
+
+    #[test]
+    fn a_resync_needs_a_cutoff_move_past_five_percent_or_a_bypass_change() {
+        let sent = SentLoop {
+            sound: "bell.wav".to_string(),
+            gain: 0.6,
+            pan: 0.0,
+            category: AudioCategory::Ambient,
+            low_pass_hz: 1200.0,
+        };
+        let at = |hz: f32| sent.is_current("bell.wav", 0.6, 0.0, hz, AudioCategory::Ambient);
+        assert!(at(1200.0 * 1.04));
+        assert!(!at(1200.0 * 1.06));
+        assert!(!at(LOW_PASS_OPEN_HZ));
+        // Open to open is current whatever the ratio.
+        let open = SentLoop {
+            low_pass_hz: LOW_PASS_OPEN_HZ,
+            ..sent
+        };
+        assert!(open.is_current(
+            "bell.wav",
+            0.6,
+            0.0,
+            LOW_PASS_OPEN_HZ,
+            AudioCategory::Ambient
+        ));
     }
 
     /// The falloff at the four distances that pin its shape: full gain on top of the emitter, half at
@@ -1085,6 +1169,7 @@ mod tests {
             position: [0.0; 3],
             right: [1.0, 0.0, 0.0],
             up: [0.0, 1.0, 0.0],
+            entity: None,
         }
     }
 

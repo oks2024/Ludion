@@ -36,6 +36,9 @@ pub struct RenderView {
     /// Draw order among views, lowest first; ties go by entity (default 0).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub order: i32,
+    /// The layers the view draws (default none, meaning `[default]`). Absent is omitted from the document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
 }
 
 fn default_size() -> [u32; 2] {
@@ -58,7 +61,7 @@ impl SemanticValidate for RenderView {
     /// Rejects what a schema cannot (`L2370`, pointer into the field): an empty `name` and a `size` axis
     /// outside `16..=2048`. A wrong *shape* is the schema's job.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
-        let mut out = Vec::new();
+        let mut out = crate::render_layers::field_layer_diagnostics(value, "layers");
         let mut reject = |path: String, what: String| {
             out.push(
                 Diagnostic::new(code::RENDER_VIEW_INVALID, format!("`RenderView` {what}"))

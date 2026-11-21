@@ -1,6 +1,6 @@
 # Plan: Paired animations and a posed ragdoll — rest-relative zeros, part velocity, the way back, `kind: paired`
 
-> Status: **W1–W4 mechanized (2026-11-18); W5–W6 not started.** Driver: Neon Shroud request 0008
+> Status: **W1–W4 mechanized; W5a in progress (fit: 0008-05; run: 0008-06); W5b, W6 not started.** Driver: Neon Shroud request 0008
 > (`engine-requests/0008-paired-animations-and-posed-ragdoll.md`). A takedown aligns two voxel assemblies,
 > plays one clip on both, and ends with the target ragdolled at the pose it died in; the way back
 > (get-up) re-poses an assembly from a ragdoll. The design below was written from the tree on 2026-11-18,
@@ -12,15 +12,17 @@
 
 | file | role |
 |---|---|
-| `crates/ludion-spatial/src/joint_zero.rs`, `lib.rs` | `JointZero { rotation }` (default identity), `SemanticValidate`, `L1750` |
+| `crates/ludion-spatial/src/joint.rs` | `Joint.zero` (R13; W1 shipped it as `JointZero { rotation }` in `joint_zero.rs`), `SemanticValidate`, `L1750` at `/zero` |
 | `crates/ludion-core/src/codes.rs` | `JOINT_ZERO_INVALID` (`L1750`) and its explain entry |
-| `crates/ludion-components/src/lib.rs` | `JointZero` registered last (registry 80), sim-only |
-| `crates/ludion-physics/src/joints.rs`, `world.rs`, `systems.rs` | `JointSource { joint, zero }` (same JSON bytes as a bare `Joint` when `zero` is `None`), `build_generic_joint(.., zero)`, the gather reads the carrier's `JointZero`, reconcile compares the whole source |
+| `crates/ludion-components/src/lib.rs` | `JointZero` registered last (registry 80), sim-only; removed in R13 |
+| `crates/ludion-physics/src/joints.rs`, `world.rs`, `systems.rs` | `build_generic_joint` reads `joint.zero`, reconcile compares the whole `Joint` (W1 wrapped it in a `JointSource { joint, zero }`, removed R13; same JSON bytes as a bare `Joint` when `zero` is `None`) |
 | `crates/ludion-engine/src/ragdoll.rs`, `lib.rs`; `crates/ludion/src/prelude.rs` | `RagdollSwitch`, `LimitsFrom`, `switch_to_ragdoll_with`; layers in the sampled pose |
 | `crates/ludion-physics/tests/joint_zero.rs`, `crates/ludion-engine/tests/ragdoll_rest.rs` | the zero, rebuild, live add, blob, motor, `JointPoses`, snapshot, threads, layered proofs |
 | `docs/physics-joints.md`, `docs/voxel-assemblies.md`, `crates/ludion-engine/examples/ragdoll_switch.rs` | §Rules, §Ragdolls, `--limits-from-rest` |
 
-A scene, replay or game that never inserts a `JointZero` and calls `switch_to_ragdoll` poses and hashes as
+**R13 (API break):** `JointZero` folded into `Joint.zero`; no hash, schema, trace, golden or replay moved (a zero-less `Joint` serializes as before).
+
+A scene, replay or game that never sets a zero and calls `switch_to_ragdoll` poses and hashes as
 before: no `WorldHash`, replay, trace, physics blob, wire-schema or golden moved. Only
 `component_schemas.json` re-blessed. The one behaviour change is decision 4: a layered assembly's switch
 now samples its `AnimationLayers`; no game or replay called `switch_to_ragdoll` on a layered assembly, and
@@ -73,6 +75,20 @@ reads the snapshot only for a bound fade. No `WorldHash`, replay, trace, wire-sc
 Nothing plays a paired action yet. No component, `WorldHash`, replay, trace, wire-schema, schema snapshot or
 golden moved; nothing was blessed.
 
+### W5a — paired fit (`IgnoreCollisions`, `PairedLibrary`, `paired_fit`), L4370–L4373
+
+| file | role |
+|---|---|
+| `crates/ludion-physics/src/motor/ignore.rs`, `mod.rs`, `lib.rs`, `mover.rs`, `resize.rs`, `suspend.rs`, `posture.rs`, `turn.rs`, `queries.rs`, `sweep.rs` | `IgnoreCollisions`, `QueryFilter::ignore_partner`, the `partner` on `SweepFilter` and `motor_filter`, `character_fit_ignoring` |
+| `crates/ludion-physics/tests/motor_ignore.rs` | fit, move, bit-identity and blob proofs |
+| `crates/ludion-engine/src/paired.rs`, `engine.rs`, `lib.rs`, `motor.rs` | `PairedLibrary`, `aligned_targets`, `paired_fit`, `Warp`, `PairedFit`; the `character_fit_ignoring` wrapper |
+| `crates/ludion-core/src/codes.rs` | `L4370`–`L4373` |
+| `crates/ludion-components/src/lib.rs`, `ludion-testkit/src/drift.rs`, `registry_serialized_default.rs`, the facade prelude | `IgnoreCollisions` registered (sim-only), seeds, exports |
+| `crates/ludion-engine/tests/paired_fit.rs` + `fixtures/paired/three-roles.paired.yaml` | the fit proofs |
+| `docs/paired-actions.md`, `docs/motor.md` (+ mirrors) | §Can it start?, the `IgnoreCollisions` paragraph |
+
+No `WorldHash`, replay, protocol schema, `PHYSICS_BLOB_VERSION` or golden moved. Only `component_schemas.json` re-blessed. The M4 cross-arch twin of the aligned-pose test is owed.
+
 ## Trigger
 
 The game's takedowns, chokes and neck-breaks end in a collapse, and its collapse already calls
@@ -81,11 +97,12 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
 
 ## Decisions
 
-1. **`JointZero` is a carrier component, not a `Joint.zero` field (the request's shape).** `Joint` is a plain
-   pub struct and two external games build it with struct literals; a new field breaks both. The conservative
-   form is a component beside `Joint` on the carrier (the child part). Folding it into `Joint` is **accepted 2026-11-19, scheduled (R13 API break round)**.
+1. **A stored zero (amended R13: `Joint.zero`, the request's shape).** W1 shipped it as a `JointZero` carrier
+   component beside `Joint`, because `Joint` is a plain pub struct that external games build with struct literals.
+   The owner ruled 2026-11-19 that a better engine API beats an external game building unchanged, so R13 folded it
+   into `Joint` as `zero: Option<[f32; 4]>` (absent from the text and the physics blob when `None`) and removed `JointZero`.
 2. **`LimitsFrom::{SwitchPose (default), Rest}`.** `SwitchPose` is `switch_to_ragdoll` exactly. `Rest`
-   inserts `JointZero` at the identity on each joint carrier (an assembly's parts have no rest rotation, so
+   sets `Joint.zero` to the identity on each joint (an assembly's parts have no rest rotation, so
    the rest relative rotation is the identity for every joint). `RagdollSwitch` is `#[non_exhaustive]` and
    built from its default, so W2's `part_velocity` field is additive.
 3. **A switch pose outside a rest limit is clamped by the solver on the first step**, a bounded, documented
@@ -95,8 +112,8 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
    for layers (trigger fired: a ragdoll that must start from a layered pose).
 5. **`hold` and the scale channel are ignored** (`Plan/animation-clips.md` d19).
 6. **Shapes differ from the request:** `game_time` instead of `ctx`, the `Result<_, Diagnostic>` return of
-   `switch_to_ragdoll`, and `JointZero` instead of `Joint.zero`.
-7. **The stored-zero math.** `JointZero.rotation` is `q_a⁻¹·q_b`, xyzw. The anchors keep coinciding at the
+   `switch_to_ragdoll` (and, until R13, `JointZero` instead of `Joint.zero`).
+7. **The stored-zero math.** `Joint.zero` (W1: `JointZero.rotation`) is `q_a⁻¹·q_b`, xyzw. The anchors keep coinciding at the
    bodies' current poses; only the rotation of the second frame comes from the zero:
    `frame2 = (pb⁻¹·pa·frame1).translation` with rotation `r0⁻¹·frame1.rotation`. A non-finite or
    near-zero quaternion is treated as absent (`L1750` on the validated paths).
@@ -170,6 +187,21 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
     role `a`'s cells (`/ s_a`); 0 means touching or overlapping; it is cell-quantized like the model sheet's
     posed gaps. The warp report is each role's aligned offset, yaw, planar distance from the reference, the
     mover and `ticks`; its start pose is runtime, so the path from it is W5's `paired_fit`.
+22. **`IgnoreCollisions { with }`.** A hashed `ludion-physics` component: the motor's casts and fit tests
+    ignore `with`'s collider. It is read at query time and is not in the physics blob. Absent means
+    bit-identical. The solver pair filter for dynamic bodies rides `Plan/character-controller.md` decision 28
+    (carry). It holds one ref; N roles need the L1392 collection (W5b).
+23. **Document resolution (answers decision 18).** `paired_fit` and `start_paired` take the document's
+    content-root path. A non-hashed `PairedLibrary` loads it lazily through `check_paired_files` (the
+    `AnimationLibrary` rule: rebuilt at every world build; `asset.reload` does not reach it). There is no
+    builder opt-in, and the `KINDS` row stays `doc_store: false`.
+24. **The aligned pose.** `moves: <role>` moves that role onto the other; `split` meets at the pair's
+    midpoint, preserving the mean feet position and the mean yaw. Planar only: feet height is kept.
+25. **`paired_fit`.** The cast must be exactly the document's roles; W5a takes two roles, more is `L4373`.
+    Entity checks are `L4371`, the scale check `L4372`. Warp: each moving role's planar distance and absolute
+    yaw change against `max_warp`. Every motor role is fit-tested at its target pose and role `posture`,
+    ignoring its partner; a role without a motor is not fit-tested. Nothing is mutated.
+26. **Differences from the request.** `Warp { distance, yaw_deg }`; `PairedFit` adds `over_warp` and `roles`.
 
 ## Waves
 
@@ -181,9 +213,11 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
   the placement and face-up rule (decisions 10–14).
 - **W4 (shipped).** The `kind: paired` document: the `KINDS` row, parse and validate, `L1752`–`L1755`,
   `check-scene` contacts and warp report (decisions 15–21). 0008's runtime range L4370–89 stays for W5.
-- **W5.** Paired runtime: `paired_fit`, `start_paired`, `paired_motion`, `abort_paired`, hashed
-  `PairedAction`, `paired:<action>` events, the lockstep guard, N roles, per-role `posture:`; refuse a cast
-  whose entity scale differs from the role's `scale`; blend and prefab roles.
+- **W5a.** Fit (0008-05): `IgnoreCollisions`, `PairedLibrary`, `paired_fit`. Run (0008-06): `PairedAction`,
+  `start_paired`, `paired_motion`, `abort_paired`, `paired_update` with events, end and the lockstep guard.
+- **W5b.** N roles, after the L1392 collection; prefab and blend roles (decisions 16–17 stay deferred,
+  triggers unchanged); 0007 root motion after the warp, which does not exist yet; `abort_paired` crossfading
+  to a clip; the guard naming the writer system.
 - **W6.** `render --paired`, the `paired-takedown` gallery scene and goldens.
 
 ## Open questions, with the game's answers
@@ -202,8 +236,8 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
 
 ## Owner rulings (2026-11-19)
 
-- Accepted, scheduled (R13 API break round; the owner fixes the external games, vigil moves in the same change). Folding `JointZero` into `Joint` (`Joint.zero`, the request's shape) at a breaking window, when the two
-  external games' struct literals can move.
+- Shipped R13 (accepted 2026-11-19; the owner fixes the external games by hand, vigil needed no change). `JointZero` is
+  folded into `Joint` (`Joint.zero`, the request's shape); `Joint` literals gain `zero: None`.
 - Accepted, read conservatively: `LimitsFrom::Rest` is the documented choice for new content, and the serde default is not flipped, so existing voxel ragdoll hashes stay put.
 - Accepted. The request's three plan amendments: `Plan/physics.md` W3 joints and the pose-blend rule (`Joint` gains an
   optional stored zero, here as a component); `Plan/animation-clips.md` decision 14 (the outgoing crossfade
@@ -213,7 +247,7 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
 
 - A skinned rest-relative switch: `switch_skin_to_ragdoll` already switches at the rig rest pose.
 - Look-at, IK and ground placement in the switch pose.
-- Flipping the `LimitsFrom` default. (The `Joint` field change, folding `JointZero` into `Joint.zero`, is accepted 2026-11-19, scheduled (R13 API break round).)
+- Flipping the `LimitsFrom` default. (The `Joint` field change, folding `JointZero` into `Joint.zero`, shipped in R13.)
 
 ## Risks
 

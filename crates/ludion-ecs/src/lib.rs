@@ -89,8 +89,9 @@ mod world;
 pub use asset_path::{ASSET_PATH_KEYWORD, AssetPathSchema, asset_path_fields, for_each_asset_path};
 pub use entity::{AllocatorState, MAX_ENTITY_SLOTS, PRESENTATION_BASE, Phase, is_presentation};
 pub use entity_ref::{
-    ENTITY_REF_KEYWORD, EntityRefField, EntityRefSchema, EntityRefSelfSchema, entity_ref_fields,
-    entity_ref_shapes, entity_refs_in_collections,
+    ENTITY_REF_COLLECTION_KEYWORD, ENTITY_REF_KEYWORD, EntityRefCollection, EntityRefField,
+    EntityRefSchema, EntityRefSelfSchema, entity_ref_fields, entity_ref_shapes,
+    entity_refs_in_collections,
 };
 pub use hierarchy::{ChildMap, Parent};
 pub use par_query::ParCtx;

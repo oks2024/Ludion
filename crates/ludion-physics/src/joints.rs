@@ -5,7 +5,7 @@
 
 use ludion_core::ids::EntityId;
 use ludion_core::math::{sin, sqrt};
-use ludion_spatial::{Joint, JointKind, JointMotor, JointZero, expected_targets};
+use ludion_spatial::{Joint, JointKind, JointMotor, expected_targets};
 use rapier3d::prelude::{
     GenericJoint, ImpulseJointHandle, JointAxesMask, JointAxis, MotorModel, Pose, Rotation, Vector,
 };
@@ -51,64 +51,15 @@ pub(crate) struct JointEntry {
     /// precedent. Encoded through [`source_as_json`] for the same reason: `Joint`'s `limits` and
     /// `break_impulse` fields are `skip_serializing_if`, which desyncs bincode's positional codec.
     #[serde(with = "source_as_json")]
-    pub(crate) source: JointSource,
-}
-
-/// What a joint was built from: the authored [`Joint`] and the carrier's stored [`JointZero`], if any.
-/// Compared as a whole every tick, so adding, editing or removing a zero rebuilds the joint like
-/// any `Joint` edit.
-///
-/// The JSON bytes of a source with no zero are exactly `serde_json::to_vec(&joint)`, so a world that
-/// never uses a zero serializes as it did before the zero existed. A source with a zero is the
-/// joint's own object with a `zero` key appended.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct JointSource {
-    pub(crate) joint: Joint,
-    pub(crate) zero: Option<JointZero>,
-}
-
-impl Serialize for JointSource {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        struct WithZero<'a> {
-            #[serde(flatten)]
-            joint: &'a Joint,
-            zero: &'a JointZero,
-        }
-        match &self.zero {
-            None => self.joint.serialize(serializer),
-            Some(zero) => WithZero {
-                joint: &self.joint,
-                zero,
-            }
-            .serialize(serializer),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for JointSource {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let mut value = serde_json::Value::deserialize(deserializer)?;
-        let zero = match value.as_object_mut().and_then(|map| map.remove("zero")) {
-            Some(zero) => Some(serde_json::from_value(zero).map_err(serde::de::Error::custom)?),
-            None => None,
-        };
-        let joint = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-        Ok(Self { joint, zero })
-    }
+    pub(crate) source: Joint,
 }
 
 /// The rapier joint for `joint`'s kind, with `anchor` and the kind's `axis` read in `a`'s local
 /// frame and its second frame derived against `b`'s current pose `pb` so the bodies' current
-/// relative pose — `pa` — becomes the joint's zero (`Plan/physics.md` design decision 3), unless `zero`
-/// is given, whose rotation is used instead. Angles are authored in degrees, the `Transform`
-/// convention, and converted to radians here.
-pub(crate) fn build_generic_joint(
-    pa: Pose,
-    pb: Pose,
-    joint: &Joint,
-    zero: Option<&JointZero>,
-) -> GenericJoint {
+/// relative pose — `pa` — becomes the joint's zero (`Plan/physics.md` design decision 3), unless
+/// `joint.zero` is set, whose rotation is used instead. Angles are authored in degrees, the
+/// `Transform` convention, and converted to radians here.
+pub(crate) fn build_generic_joint(pa: Pose, pb: Pose, joint: &Joint) -> GenericJoint {
     let mut generic = GenericJoint::new(locked_axes(&joint.kind));
     generic.set_local_anchor1(to_vector(joint.anchor));
     match &joint.kind {
@@ -139,7 +90,7 @@ pub(crate) fn build_generic_joint(
     }
     generic.contacts_enabled = joint.collide;
     let current = pb.inverse() * pa * generic.local_frame1;
-    generic.local_frame2 = match zero.and_then(zero_rotation) {
+    generic.local_frame2 = match joint.zero.and_then(zero_rotation) {
         // The anchors still coincide at the bodies' current poses; only the rotation comes from the
         // stored zero: at `pb.rot = pa.rot · r0` the two frames are aligned.
         Some(r0) => Pose::from_parts(
@@ -154,8 +105,7 @@ pub(crate) fn build_generic_joint(
 /// The stored zero as a unit rotation, or `None` when it is non-finite or shorter than 1e-6 (treated as
 /// absent, the checks `L1750` makes on the validated paths). Normalized by hand with the pure-Rust
 /// `sqrt`: glam's `normalize` is not on the determinism allowlist.
-fn zero_rotation(zero: &JointZero) -> Option<Rotation> {
-    let [x, y, z, w] = zero.rotation;
+fn zero_rotation([x, y, z, w]: [f32; 4]) -> Option<Rotation> {
     let length = sqrt(x * x + y * y + z * z + w * w);
     if !length.is_finite() || length < 1e-6 {
         return None;
@@ -339,41 +289,25 @@ mod tests {
             anchor: [0.0; 3],
             break_impulse: None,
             collide: false,
+            zero: None,
         }
     }
 
-    /// A source with no zero encodes to exactly the bytes a bare `Joint` did, so a world that never
-    /// uses a zero serializes as before.
+    /// A zero-less joint encodes to exactly the bytes of the bare `Joint` with no `zero` key, so a
+    /// world that never uses a zero serializes as it did before the field existed.
     #[test]
-    fn a_source_without_a_zero_encodes_as_the_bare_joint() {
+    fn a_zero_less_joints_blob_bytes_are_the_bare_joint() {
         let joint = joint();
-        let source = JointSource {
-            joint: joint.clone(),
-            zero: None,
-        };
-        assert_eq!(
-            serde_json::to_vec(&source).unwrap(),
-            serde_json::to_vec(&joint).unwrap()
-        );
+        let bytes = serde_json::to_vec(&joint).unwrap();
+        assert!(!String::from_utf8(bytes).unwrap().contains("zero"));
     }
 
     #[test]
-    fn a_source_round_trips_with_and_without_a_zero() {
-        for zero in [
-            None,
-            Some(JointZero {
-                rotation: [0.0, 0.5, 0.0, 0.866],
-            }),
-        ] {
-            let source = JointSource {
-                joint: joint(),
-                zero,
-            };
+    fn a_joint_round_trips_with_and_without_a_zero() {
+        for zero in [None, Some([0.0, 0.5, 0.0, 0.866])] {
+            let source = Joint { zero, ..joint() };
             let bytes = serde_json::to_vec(&source).unwrap();
-            assert_eq!(
-                serde_json::from_slice::<JointSource>(&bytes).unwrap(),
-                source
-            );
+            assert_eq!(serde_json::from_slice::<Joint>(&bytes).unwrap(), source);
         }
     }
 }

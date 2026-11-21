@@ -52,7 +52,7 @@ use crate::components::{
     GroundMarkerGrid, GroundMarkerShape, MapWrap, Mesh, MeshBlend, MeshGrid, MeshSource,
     ParentJoint, ParticleEmitter, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe,
     Rim, SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform,
-    UiList, UiRadial, UiRect, UiText,
+    UiList, UiRadial, UiRect, UiShape, UiText,
 };
 use crate::components::{AnimationLayer, AnimationLayers, BlendClock, LayerMode, layer_weight_at};
 use crate::docs::DocStore;
@@ -837,9 +837,18 @@ fn extract_inner(
     let mut path_index: StableMap<String, usize> = StableMap::new();
     let mut errors: Vec<Diagnostic> = Vec::new();
 
-    let collect = blend.is_some();
+    // The layer table, `None` for a scene that authors no layers: that frame takes no layer path.
+    let mut frame_layers = match crate::render_layers::FrameLayers::of(world, &ids, view.is_some())
+    {
+        Ok(layers) => layers,
+        Err(diagnostic) => {
+            errors.push(diagnostic);
+            None
+        }
+    };
+    let collect = blend.is_some() || frame_layers.is_some();
     let mut sprites = Vec::with_capacity(placed.sprites.len());
-    // The entity behind each sprite, parallel to `sprites` (blend data only).
+    // The entity behind each sprite, parallel to `sprites` (blend and layer data only).
     let mut sprite_keys: Vec<Option<EntityId>> = Vec::new();
     let mut bullet_keys: Vec<(InstanceKey, u32)> = Vec::new();
     for sprite in &placed.sprites {
@@ -948,6 +957,12 @@ fn extract_inner(
     );
     // Volley bullets carry no entity key: they blend by instance key (`bullet_keys`).
     sprite_keys.resize(if collect { sprites.len() } else { 0 }, None);
+    // The pixel snap below drops the blend keys; the layer masks still need each sprite's owner.
+    let sprite_layer_owners = if frame_layers.is_some() {
+        sprite_keys.clone()
+    } else {
+        Vec::new()
+    };
 
     // `pixel_snap` (extract-only, hash-neutral): when the single orthographic camera opts in and a
     // sprite names an atlas whose `pixels_per_unit` defines a texel grid, snap the view height so one
@@ -996,7 +1011,13 @@ fn extract_inner(
         rate: sim_now.rate(),
     };
     let mut groups = ui::group::UiGroups::default();
-    let view_table = crate::secondary_view::extract_views(world, &ids, &mut errors, degraded);
+    let view_table = crate::secondary_view::extract_views(
+        world,
+        &ids,
+        frame_layers.as_ref(),
+        &mut errors,
+        degraded,
+    );
     for (index, &id) in ids.iter().enumerate() {
         if let Some(rect) = get::<UiRect>(world, id)
             && rect.visible
@@ -1306,6 +1327,31 @@ fn extract_inner(
                 },
             );
         }
+        if let Some(shape) = get::<UiShape>(world, id)
+            && shape.visible
+        {
+            let hud_start = ui_entries.len();
+            let shape = ui::hud::pre_shape(&hud, id, shape, degraded);
+            if let Some(row) = ui::shape::shape_instance(&shape, viewport) {
+                ui_entries.push((shape.order, id, row));
+            }
+            ui::hud::post(
+                &hud,
+                &mut poses,
+                id,
+                ui::hud::HudElement::Shape,
+                shape.anchor,
+                &mut ui_entries,
+                hud_start,
+                ui::hud::Grouping {
+                    group: shape.group,
+                    fill_group: false,
+                    rotation_deg: shape.rotation,
+                    groups: &mut groups,
+                    degraded: &mut *degraded,
+                },
+            );
+        }
     }
     // Pinned, documented order: ascending `order`, ties broken by ascending `EntityId` — screen
     // space has no view depth to sort by instead. This is the determinism contract for
@@ -1374,6 +1420,8 @@ fn extract_inner(
     let mut inherit = MeshInherit::default();
     // Blended instances, outside `meshes`; `blend_group` numbers their owning entities consecutively.
     let mut blended: Vec<BlendedMesh> = Vec::new();
+    // The owning entity of each `blended` entry, parallel to it (layer masks).
+    let mut blended_owners: Vec<EntityId> = Vec::new();
     let mut blend_group: Option<(EntityId, u32)> = None;
     let mut blend_viewmodel_reported: Vec<EntityId> = Vec::new();
     for mesh in &placed.meshes {
@@ -1519,7 +1567,10 @@ fn extract_inner(
                         medium,
                     };
                     match blend {
-                        Some(mode) => blended.push(blended_mesh(instance, mode, group)),
+                        Some(mode) => {
+                            blended.push(blended_mesh(instance, mode, group));
+                            blended_owners.push(mesh.id);
+                        }
                         None => {
                             mesh_owners.push(mesh.id);
                             meshes.push(instance);
@@ -1570,7 +1621,10 @@ fn extract_inner(
                 bone_offset,
             );
             match blend {
-                Some(mode) => blended.push(blended_mesh(instance, mode, group)),
+                Some(mode) => {
+                    blended.push(blended_mesh(instance, mode, group));
+                    blended_owners.push(mesh.id);
+                }
                 None => {
                     mesh_owners.push(mesh.id);
                     meshes.push(instance);
@@ -1765,6 +1819,7 @@ fn extract_inner(
         viewmodel,
         views: view_table.views,
         rain: crate::rain::extract_rain(world, &ids, now, degraded),
+        layered: None,
     };
     if let Some(data) = scene.viewmodel.as_mut() {
         data.particles = scene
@@ -1819,51 +1874,66 @@ fn extract_inner(
     if let (Some(cam), Some(_)) = (viewmodel_camera, &scene.viewmodel) {
         ludion_renderer::compose_viewmodel(&mut scene, drawn_camera_model(world, &ids, cam));
     }
-    if let Some(blend) = blend {
+    let mut keys = blend.is_some().then(|| BlendKeys {
+        meshes: mesh_owners
+            .iter()
+            .zip(&scene.meshes)
+            .enumerate()
+            // The kept statics are fixed: keyed to nothing, so the pose table never holds them.
+            .map(|(i, (&owner, mesh))| (i >= static_count && !mesh.viewmodel).then_some(owner))
+            // Appended projectile meshes have no owner entity: unkeyed, but present, so the
+            // list stays parallel to `scene.meshes`.
+            .chain(
+                projectile_keys
+                    .iter()
+                    .filter(|(_, item)| {
+                        matches!(item, ProjectileItem::Mesh(_) | ProjectileItem::Posed(_))
+                    })
+                    .map(|_| None),
+            )
+            .collect(),
+        projectiles: projectile_keys,
+        sprites: sprite_keys,
+        lights: light_ids,
+        spot_lights: spot_light_ids,
+        texts: text_keys.clone(),
+        ground_markers: ground_marker_ids.clone(),
+        drop_shadows: drop_shadow_ids.clone(),
+        decals: decal_ids.clone(),
+        particles: particle_keys.clone(),
+        bullets: bullet_keys,
+    });
+    // A layered frame keeps in the main scene only what the main camera draws; the full scene rides on
+    // it for the views. The blend keys follow the filtered lists, so they stay parallel to them.
+    if let Some(layers) = frame_layers.as_mut() {
+        let masks = layers.masks(
+            world,
+            &scene,
+            &crate::render_layers::Owners {
+                meshes: &mesh_owners,
+                blended: &blended_owners,
+                sprites: &sprite_layer_owners,
+                ground_markers: &ground_marker_ids,
+                drop_shadows: &drop_shadow_ids,
+                decals: &decal_ids,
+                particles: &particle_keys,
+                texts: &text_keys,
+            },
+        );
+        let full = std::mem::replace(&mut scene, RenderScene::empty(viewport));
+        let (main, remap) = ludion_renderer::split_layers(full, masks);
+        scene = main;
+        if let Some(keys) = keys.as_mut() {
+            keys.retain(&remap);
+        }
+    }
+    if let (Some(blend), Some(keys)) = (blend, keys) {
         let camera_key = if view.is_none() && !pixel_snapped {
             single_camera(world, &ids).ok().flatten()
         } else {
             None
         };
-        fill_blend(
-            blend,
-            world,
-            &mut poses,
-            &ids,
-            viewport,
-            camera_key,
-            BlendKeys {
-                meshes: mesh_owners
-                    .iter()
-                    .zip(&scene.meshes)
-                    .enumerate()
-                    // The kept statics are fixed: keyed to nothing, so the pose table never holds them.
-                    .map(|(i, (&owner, mesh))| {
-                        (i >= static_count && !mesh.viewmodel).then_some(owner)
-                    })
-                    // Appended projectile meshes have no owner entity: unkeyed, but present, so the
-                    // list stays parallel to `scene.meshes`.
-                    .chain(
-                        projectile_keys
-                            .iter()
-                            .filter(|(_, item)| {
-                                matches!(item, ProjectileItem::Mesh(_) | ProjectileItem::Posed(_))
-                            })
-                            .map(|_| None),
-                    )
-                    .collect(),
-                projectiles: projectile_keys,
-                sprites: sprite_keys,
-                lights: light_ids,
-                spot_lights: spot_light_ids,
-                texts: text_keys,
-                ground_markers: ground_marker_ids,
-                drop_shadows: drop_shadow_ids,
-                decals: decal_ids,
-                particles: particle_keys,
-                bullets: bullet_keys,
-            },
-        );
+        fill_blend(blend, world, &mut poses, &ids, viewport, camera_key, keys);
     }
     Ok(scene)
 }
@@ -1881,6 +1951,47 @@ struct BlendKeys {
     particles: Vec<InstanceKey>,
     bullets: Vec<(InstanceKey, u32)>,
     projectiles: Vec<(u64, ProjectileItem)>,
+}
+
+impl BlendKeys {
+    /// Follows a layer filter: drops the keys of removed items and renumbers the indices the bullet and
+    /// projectile keys hold. A key list shorter than its scene list (appended items have none) is a
+    /// prefix of it, so it filters by its own indices.
+    fn retain(&mut self, remap: &ludion_renderer::Remap) {
+        fn keep<T>(keys: &mut Vec<T>, remap: &[Option<u32>]) {
+            let mut index = 0;
+            keys.retain(|_| {
+                let kept = remap.get(index).is_none_or(Option::is_some);
+                index += 1;
+                kept
+            });
+        }
+        let at = |map: &[Option<u32>], index: u32| map.get(index as usize).copied().flatten();
+        keep(&mut self.meshes, &remap.meshes);
+        keep(&mut self.sprites, &remap.sprites);
+        keep(&mut self.texts, &remap.texts);
+        keep(&mut self.ground_markers, &remap.ground_markers);
+        keep(&mut self.drop_shadows, &remap.drop_shadows);
+        keep(&mut self.decals, &remap.decals);
+        keep(&mut self.particles, &remap.particles);
+        self.bullets = std::mem::take(&mut self.bullets)
+            .into_iter()
+            .filter_map(|(key, sprite)| Some((key, at(&remap.sprites, sprite)?)))
+            .collect();
+        self.projectiles = std::mem::take(&mut self.projectiles)
+            .into_iter()
+            .filter_map(|(id, item)| {
+                let item = match item {
+                    ProjectileItem::Mesh(i) => ProjectileItem::Mesh(at(&remap.meshes, i)?),
+                    ProjectileItem::Posed(i) => ProjectileItem::Posed(at(&remap.meshes, i)?),
+                    ProjectileItem::Particle(i) => {
+                        ProjectileItem::Particle(at(&remap.particles, i)?)
+                    }
+                };
+                Some((id, item))
+            })
+            .collect();
+    }
 }
 
 /// The entity whose blend delta moves `id`: the outermost parent across a resolved `ParentJoint`
@@ -1982,7 +2093,7 @@ fn fill_blend(
         blend.snaps.insert(at, key);
     }
     blend.camera = camera_key.map(|key| {
-        let cam = get::<Camera>(world, key).copied().unwrap_or_default();
+        let cam = get::<Camera>(world, key).cloned().unwrap_or_default();
         let (near, far) = cam.depth_range();
         let pose = render_pose(world, poses, key);
         let (rotation, translation, projection) = compose_camera(
@@ -5474,7 +5585,7 @@ fn scene_lod(world: &World, ids: &[EntityId]) -> LodSettings {
     let camera = single_camera(world, ids)
         .ok()
         .flatten()
-        .and_then(|id| get::<Camera>(world, id).copied())
+        .and_then(|id| get::<Camera>(world, id).cloned())
         .unwrap_or_default();
     LodSettings {
         bias: camera.lod_bias.filter(|b| b.is_finite()).unwrap_or(0.0),
@@ -5613,7 +5724,7 @@ fn drawn_pose(
 /// The drawn camera's world model (camera space to world): the one transform a viewmodel item is
 /// composed onto. [`build_camera`] inverts exactly this matrix.
 pub(crate) fn drawn_camera_model(world: &World, ids: &[EntityId], id: EntityId) -> Mat4 {
-    let cam = get::<Camera>(world, id).copied().unwrap_or_default();
+    let cam = get::<Camera>(world, id).cloned().unwrap_or_default();
     let (rotation, translation, _) = drawn_pose(world, ids, id, &cam);
     Mat4::from_rotation_translation(rotation, translation)
 }
@@ -5690,7 +5801,7 @@ pub(crate) fn build_camera(
     id: EntityId,
     viewport: (u32, u32),
 ) -> RenderCamera {
-    let cam = get::<Camera>(world, id).copied().unwrap_or_default();
+    let cam = get::<Camera>(world, id).cloned().unwrap_or_default();
     let (near, far) = cam.depth_range();
     let (rotation, translation, cam_projection) = drawn_pose(world, ids, id, &cam);
     let model = Mat4::from_rotation_translation(rotation, translation);

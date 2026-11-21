@@ -1158,6 +1158,163 @@ entities: []
     );
 }
 
+/// One element of a sanctioned reference collection; the reference is nullable.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug, PartialEq)]
+struct Slot {
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    who: Option<EntityId>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug, PartialEq)]
+struct Roster {
+    #[schemars(with = "ludion_ecs::EntityRefCollection<Vec<Slot>>")]
+    slots: Vec<Slot>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug, PartialEq)]
+struct Ledger {
+    #[schemars(with = "ludion_ecs::EntityRefCollection<BTreeMap<String, Slot>>")]
+    by_name: BTreeMap<String, Slot>,
+}
+
+/// One element of a sanctioned collection whose reference is required.
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug, PartialEq)]
+struct Post {
+    #[schemars(with = "ludion_ecs::EntityRefSchema")]
+    who: EntityId,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug, PartialEq)]
+struct Duty {
+    #[schemars(with = "ludion_ecs::EntityRefCollection<Vec<Post>>")]
+    posts: Vec<Post>,
+}
+
+fn collection_engine(root: &std::path::Path) -> Engine {
+    let mut engine = Engine::builder()
+        .components(|r| {
+            r.register::<Roster>("Roster")?;
+            r.register::<Ledger>("Ledger")?;
+            r.register::<Duty>("Duty")
+        })
+        .project_root(root)
+        .build()
+        .unwrap();
+    engine
+        .load_inline_scene("format: 1\nseed: 5\nentities: []\n")
+        .unwrap();
+    engine
+}
+
+/// A sanctioned list and map remap element by element on save, a dead target nulls its own
+/// element only, and a snapshot restore round-trips the component.
+#[test]
+fn collection_refs_follow_their_entities_through_save_and_snapshot() {
+    let root = temp_project();
+    let mut engine = collection_engine(&root);
+    let a = spawn_named(&mut engine, "A");
+    let b = spawn_named(&mut engine, "B");
+    let c = spawn_named(&mut engine, "C");
+    let ref_to =
+        |id: EntityId| json!({ "who": { "index": id.index, "generation": id.generation } });
+    spawn_with(
+        &mut engine,
+        "roster",
+        "Roster",
+        json!({ "slots": [ref_to(b), ref_to(c), { "who": null }] }),
+    );
+    spawn_with(
+        &mut engine,
+        "ledger",
+        "Ledger",
+        json!({ "by_name": { "x": ref_to(c), "w": ref_to(b) } }),
+    );
+
+    let snapshot = match ok(&mut engine, Command::EngineSnapshot) {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("{other:?}"),
+    };
+    let mut restored = Engine::builder()
+        .components(|r| {
+            r.register::<Roster>("Roster")?;
+            r.register::<Ledger>("Ledger")?;
+            r.register::<Duty>("Duty")
+        })
+        .build()
+        .unwrap();
+    match ok(
+        &mut restored,
+        Command::EngineRestore(EngineRestoreParams { snapshot }),
+    ) {
+        ResponseBody::Restored { report } => assert!(report.is_clean(), "{report:?}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(engine.world_hash().unwrap(), restored.world_hash().unwrap());
+
+    // Destroying A shifts every later position down by one; destroying C leaves two elements dangling.
+    for entity in [a, c] {
+        ok(
+            &mut engine,
+            Command::EntityDestroy(EntityDestroyParams { entity }),
+        );
+    }
+    ok(
+        &mut engine,
+        Command::SceneSave(SceneSaveParams {
+            path: "out.yaml".into(),
+            force: false,
+        }),
+    );
+    let saved = std::fs::read_to_string(root.join("out.yaml")).unwrap();
+    let mut reloaded = collection_engine(&root);
+    reloaded.load_inline_scene(&saved).unwrap();
+    let ids: Vec<EntityId> = reloaded.world().entities().collect();
+    // Document order after the destroys: B, roster, ledger.
+    assert_eq!(ids.len(), 3);
+    let b_ref = json!({ "who": { "index": 0, "generation": 0 } });
+    let none = json!({ "who": null });
+    assert_eq!(
+        component_value(&mut reloaded, ids[1], "Roster")["slots"],
+        json!([b_ref, none, none]),
+        "B follows to position 0; the dead C and the empty slot are none"
+    );
+    assert_eq!(
+        component_value(&mut reloaded, ids[2], "Ledger")["by_name"],
+        json!({ "w": b_ref, "x": none }),
+    );
+}
+
+/// A required element reference whose target is gone refuses the save like a single required field.
+#[test]
+fn a_required_collection_ref_naming_a_despawned_entity_is_l1018_on_save() {
+    let root = temp_project();
+    let mut engine = collection_engine(&root);
+    let a = spawn_named(&mut engine, "a");
+    let b = spawn_named(&mut engine, "b");
+    let ref_to =
+        |id: EntityId| json!({ "who": { "index": id.index, "generation": id.generation } });
+    spawn_with(
+        &mut engine,
+        "duty",
+        "Duty",
+        json!({ "posts": [ref_to(a), ref_to(b)] }),
+    );
+    ok(
+        &mut engine,
+        Command::EntityDestroy(EntityDestroyParams { entity: b }),
+    );
+    assert_eq!(
+        err_code(
+            &mut engine,
+            Command::SceneSave(SceneSaveParams {
+                path: "out.yaml".into(),
+                force: false,
+            }),
+        ),
+        "L1018",
+    );
+}
+
 /// A `Joint` naming a despawned entity cannot be expressed as a valid scene — `scene.save` refuses
 /// it with the same `L1018` `Parent` uses, generalized.
 #[test]

@@ -9,10 +9,9 @@ use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 use ludion_core::ids::EntityId;
 use ludion_core::time::{FrameIndex, GameClock, TickRate};
 use ludion_ecs::{Parent, Schedule, SystemCtx, World};
-use ludion_spatial::{Body, Collider, Joint, JointMotor, JointZero, Plane, Shape, Velocity};
+use ludion_spatial::{Body, Collider, Joint, JointMotor, Plane, Shape, Velocity};
 
 use crate::PhysicsPose;
-use crate::joints::JointSource;
 use crate::layer_set::{LayerSet, QueryLayers};
 use crate::meshes::ColliderMeshes;
 use crate::meshes::TriangleMesh;
@@ -400,7 +399,7 @@ struct WriteInputs {
     motor_rejections: Vec<(EntityId, DiagnosticCode, String)>,
     velocities: Vec<(EntityId, Velocity)>,
     plane: Option<Plane>,
-    joints: Vec<(EntityId, JointSource)>,
+    joints: Vec<(EntityId, Joint)>,
     motors: Vec<(EntityId, JointMotor)>,
     /// Each live entity's own `Collider`, recorded only when there is no world yet: the cold
     /// create path reads it straight off the entity, so a prime must see it unchanged too.
@@ -598,16 +597,9 @@ fn gather<P: PhysicsPose, R: ParentPose>(
         PhysicsSpace::Free => None,
         PhysicsSpace::Planar => Some(Plane::of(world)),
     };
-    let authored: Vec<(EntityId, Joint)> = world
+    let mut joints: Vec<(EntityId, Joint)> = world
         .query_ids::<(&Joint,)>()
         .map(|(entity, (joint,))| (entity, joint.clone()))
-        .collect();
-    let mut joints: Vec<(EntityId, JointSource)> = authored
-        .into_iter()
-        .map(|(entity, joint)| {
-            let zero = world.get::<JointZero>(entity).ok().flatten().copied();
-            (entity, JointSource { joint, zero })
-        })
         .collect();
     joints.sort_by_key(|(entity, _)| (world.spawn_rank(*entity).unwrap_or(u64::MAX), *entity));
     let motors: Vec<(EntityId, JointMotor)> = world

@@ -12,9 +12,9 @@ description: Player settings — volumes, quality, AA, window mode; the request/
 1. Build with `Engine::builder().persist_settings()`; the file `<save_root>/save/settings.yaml` is read
    at build. Without it the file is never read or written and requests only apply to the session.
 2. A menu system writes `world.resource_mut::<Settings>()`: `request_bus_volume(Bus, f32)`,
-   `request_master_volume`, `request_quality(QualityPreset)`, `request_anti_aliasing`,
+   `request_master_volume`, `request_quality(QualityPreset)`, `request_anti_aliasing` (beats `--aa` this session),
    `request_window_mode(WindowMode)`, then `save()` (several calls in a frame are one write).
-3. It reads `world.resource::<SettingsView>()` (`volume`, `quality`, `anti_aliasing`, `window_mode`).
+3. It reads `world.resource::<SettingsView>()` (`volume`, `quality`, `anti_aliasing`, `window_mode`, and `live_window_mode` for the window as it is now).
 4. `cargo run -p ludion --example settings_menu` shows two boots on one scratch directory.
 
 `ludion::run` and `ludion::launch` turn persistence on; a game built straight from `Engine::builder()`
@@ -28,7 +28,9 @@ calls `persist_settings()` itself.
   otherwise kept over a packaged default, and a menu request applies only unpinned.
 - **Window.** The window opens before the engine, so the file is peeked first: `--fullscreen`, then
   `LUDION_FULLSCREEN`, then `display.window`, then the builder. A `request_window_mode` always applies,
-  even after a start flag. The Alt+Enter chord does not write the file, so the view can disagree after it.
+  even after a start flag. The Alt+Enter chord does not write the file: `window_mode()` stays the saved choice, and
+  `live_window_mode()` follows the window (host state for display only, `None` headless; never branch
+  hashed state on it). A request for the file's own mode still reaches a window the chord moved.
 - **Replay.** A recording carries the settings in force when it was armed in
   `ReplayHeader.save_docs["settings"]`, only if they are not the defaults. A replay installs them into
   `SettingsView` and nothing else: no render state, no window, and it never reads or writes the file.
@@ -63,11 +65,11 @@ Unset optional fields are omitted. The writer is canonical (stable order, shorte
 - **Requests apply at the frame boundary.** Volumes go to the `User` mix layer (one `BusGain` per
   changed bus, logged); AA and quality apply at the next render; a window mode goes to the host channel
   `set_window_mode_sender`, once per change. NaN volumes are ignored; others are clamped.
-- **`SettingsView` is deterministic**: the file at start plus the sim's own requests, never a host flag.
+- **`SettingsView` is deterministic** — all but `live_window_mode()`: the file at start plus the sim's own requests, never a host flag.
   It lives on the engine, so a rebuild or `engine.restore` does not roll it back. Settings are never
   hashed, snapshotted or on the wire; a `WorldHash` trace is the same with or without requests.
-- **Precedence.** Quality: host flag (`pin_quality`) → file or request → full. AA: `RenderSettings` →
-  `--aa` → file or request → builder. Volumes: the file is the `User` layer.
+- **Precedence.** Quality: host flag (`pin_quality`) → file or request → full. AA: `Settings` request →
+  `--aa` → file → builder. Volumes: the file is the `User` layer.
 - **Sink seed.** `set_audio_sender` sends one `User` `BusGain` per saved bus that is not `1.0`, unlogged.
 - A failed write is `L4343`; the previous whole file stays.
 

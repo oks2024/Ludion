@@ -41,6 +41,8 @@ pub struct AudioEvent {
     pub pan: f32,
     /// Which mixdown bus the sound belongs to.
     pub category: AudioCategory,
+    /// The per-voice filter and reverb send; the default is bypass.
+    pub spatial: VoiceSpatial,
 }
 
 impl AudioEvent {
@@ -52,8 +54,91 @@ impl AudioEvent {
             gain,
             pan: 0.0,
             category: AudioCategory::Sfx,
+            spatial: VoiceSpatial::default(),
         }
     }
+}
+
+/// At or above this cutoff the low-pass is off.
+pub const LOW_PASS_OPEN_HZ: f32 = 20_000.0;
+/// At or below this cutoff the high-pass is off.
+pub const HIGH_PASS_OPEN_HZ: f32 = 20.0;
+
+/// A voice's low-pass and high-pass cutoffs. A side at its open frequency is bypassed: the sink
+/// does not run it, so an all-open filter leaves the voice bit-identical to an unfiltered one.
+///
+/// # Example
+///
+/// ```
+/// use ludion_core::audio::{AudioEvent, VoiceFilter, VoiceSpatial};
+///
+/// // "A radio: only 300 Hz to 3.4 kHz gets through."
+/// let filter = VoiceFilter::band_pass(300.0, 3400.0);
+/// assert!(filter.low_pass_on() && filter.high_pass_on());
+/// assert!(!VoiceFilter::default().low_pass_on());
+/// let event = AudioEvent {
+///     spatial: VoiceSpatial { filter, send: 0.0 },
+///     ..AudioEvent::new("voice/radio.wav", 1.0)
+/// };
+/// assert_eq!(event.spatial.filter, filter);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VoiceFilter {
+    /// The low-pass cutoff in Hz; [`LOW_PASS_OPEN_HZ`] or more is off.
+    pub low_pass_hz: f32,
+    /// The high-pass cutoff in Hz; [`HIGH_PASS_OPEN_HZ`] or less is off.
+    pub high_pass_hz: f32,
+}
+
+impl VoiceFilter {
+    /// Both sides open: no filtering.
+    pub const BYPASS: VoiceFilter = VoiceFilter {
+        low_pass_hz: LOW_PASS_OPEN_HZ,
+        high_pass_hz: 0.0,
+    };
+
+    /// A band: frequencies below `high_pass_hz` and above `low_pass_hz` are cut.
+    pub fn band_pass(high_pass_hz: f32, low_pass_hz: f32) -> VoiceFilter {
+        VoiceFilter {
+            low_pass_hz,
+            high_pass_hz,
+        }
+    }
+
+    /// Whether the low-pass runs (a NaN cutoff reads as off).
+    pub fn low_pass_on(&self) -> bool {
+        self.low_pass_hz < LOW_PASS_OPEN_HZ
+    }
+
+    /// Whether the high-pass runs (a NaN cutoff reads as off).
+    pub fn high_pass_on(&self) -> bool {
+        self.high_pass_hz > HIGH_PASS_OPEN_HZ
+    }
+}
+
+impl Default for VoiceFilter {
+    /// [`BYPASS`](Self::BYPASS).
+    fn default() -> VoiceFilter {
+        VoiceFilter::BYPASS
+    }
+}
+
+/// Per-voice spatial state the sink applies: a [`VoiceFilter`] and a reverb send.
+///
+/// # Example
+///
+/// ```
+/// use ludion_core::audio::VoiceSpatial;
+///
+/// assert_eq!(VoiceSpatial::default().send, 0.0);
+/// assert!(!VoiceSpatial::default().filter.low_pass_on());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct VoiceSpatial {
+    /// The filter; the default is bypass.
+    pub filter: VoiceFilter,
+    /// The reverb send level; the sink has no reverb bus, so it is carried and not mixed.
+    pub send: f32,
 }
 
 /// Which mixdown bus a sound belongs to.
@@ -151,31 +236,39 @@ pub enum MixLayer {
 /// The game authors it once (`EngineBuilder::category_gains`) and the host hands it to the playback
 /// sink, which multiplies every voice by its own bus's value while mixing. It is a mixdown decision,
 /// the same category of thing as which device to open — never simulation state: it reaches no
-/// `WorldHash`, no snapshot and no audio log, so changing a value here cannot move a replay. There
-/// is no authored field for the `voice` and `ui` buses (they read `1.0`) and the master bus is `1.0`;
-/// runtime volume, ducking and pause go through [`AudioMessage::BusGain`] and
+/// `WorldHash`, no snapshot and no audio log, so changing a value here cannot move a replay. Every
+/// bus, the master included, has an authored field; runtime volume, ducking and pause go through [`AudioMessage::BusGain`] and
 /// [`AudioMessage::BusPause`].
 ///
 /// It lives here, beside [`AudioCategory`], because the engine (which stores the authored value) and
-/// the sink (which applies it) both need the type and neither may depend on the other.
+/// the sink (which applies it) both need the type and neither may depend on the other. It is
+/// `#[non_exhaustive]`: build it from the default with [`with`](Self::with).
 ///
 /// # Example
 ///
 /// ```
-/// use ludion_core::audio::{AudioCategory, CategoryGains};
+/// use ludion_core::audio::{AudioCategory, Bus, CategoryGains};
 ///
 /// // "Ambience sits under the effects."
-/// let gains = CategoryGains { sfx: 1.0, ambient: 0.6, music: 0.8 };
+/// let gains = CategoryGains::default().with(Bus::Ambient, 0.6);
 /// assert_eq!(gains.gain_for(AudioCategory::Ambient), 0.6);
+/// assert_eq!(gains.gain(Bus::Ambient), 0.6);
 /// // The default is the identity: the authored gains, untouched.
 /// assert_eq!(CategoryGains::default().gain_for(AudioCategory::Ambient), 1.0);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct CategoryGains {
+    /// The master gain over every bus.
+    pub master: f32,
     /// The master gain of the sound-effect bus.
     pub sfx: f32,
     /// The master gain of the ambient bus.
     pub ambient: f32,
+    /// The master gain of the dialogue bus.
+    pub voice: f32,
+    /// The master gain of the interface bus.
+    pub ui: f32,
     /// The master gain of the music bus. Music only travels in [`AudioMessage::MusicPlay`],
     /// [`AudioMessage::MusicSet`] and their companions, so its bus is implied: there is no
     /// [`AudioCategory`] for it and [`gain_for`](Self::gain_for) never returns it.
@@ -186,8 +279,11 @@ impl Default for CategoryGains {
     /// Identity: every bus at `1.0`, so the mixdown is exactly the sum of the authored gains.
     fn default() -> CategoryGains {
         CategoryGains {
+            master: 1.0,
             sfx: 1.0,
             ambient: 1.0,
+            voice: 1.0,
+            ui: 1.0,
             music: 1.0,
         }
     }
@@ -197,11 +293,32 @@ impl CategoryGains {
     /// The master gain a voice on `category` is multiplied by while mixing (the music bus is read
     /// from [`music`](Self::music) directly).
     pub fn gain_for(&self, category: AudioCategory) -> f32 {
-        match category {
-            AudioCategory::Sfx => self.sfx,
-            AudioCategory::Ambient => self.ambient,
-            AudioCategory::Voice | AudioCategory::Ui => 1.0,
+        self.gain(Bus::from(category))
+    }
+
+    /// The authored gain of `bus`.
+    pub fn gain(&self, bus: Bus) -> f32 {
+        match bus {
+            Bus::Master => self.master,
+            Bus::Sfx => self.sfx,
+            Bus::Ambient => self.ambient,
+            Bus::Voice => self.voice,
+            Bus::Ui => self.ui,
+            Bus::Music => self.music,
         }
+    }
+
+    /// These gains with `bus` set to `gain`.
+    pub fn with(mut self, bus: Bus, gain: f32) -> CategoryGains {
+        match bus {
+            Bus::Master => self.master = gain,
+            Bus::Sfx => self.sfx = gain,
+            Bus::Ambient => self.ambient = gain,
+            Bus::Voice => self.voice = gain,
+            Bus::Ui => self.ui = gain,
+            Bus::Music => self.music = gain,
+        }
+        self
     }
 }
 
@@ -280,7 +397,7 @@ pub enum LoopId {
 /// # Example
 ///
 /// ```
-/// use ludion_core::audio::{AudioCategory, AudioMessage, LoopId};
+/// use ludion_core::audio::{AudioCategory, AudioMessage, LoopId, VoiceSpatial};
 ///
 /// // "Keep `sfx/wind.wav` looping at 0.4." — the same message that starts it and updates it.
 /// let message = AudioMessage::LoopSync {
@@ -289,6 +406,7 @@ pub enum LoopId {
 ///     gain: 0.4,
 ///     pan: 0.0,
 ///     category: AudioCategory::Ambient,
+///     spatial: VoiceSpatial::default(),
 /// };
 /// assert_ne!(message, AudioMessage::StopAllLoops);
 /// ```
@@ -308,6 +426,8 @@ pub enum AudioMessage {
         pan: f32,
         /// Which mixdown bus the loop belongs to.
         category: AudioCategory,
+        /// The loop's filter and reverb send; a resend retargets the running voice.
+        spatial: VoiceSpatial,
     },
     /// Silence the loop running under `id`, if any; the sink fades it out over about 10 ms.
     LoopStop {
@@ -402,7 +522,7 @@ pub enum AudioMessage {
     /// and [`VoiceStop`](AudioMessage::VoiceStop) fades it out while it plays.
     ///
     /// ```
-    /// use ludion_core::audio::{AudioCategory, AudioMessage, VoiceId};
+    /// use ludion_core::audio::{AudioCategory, AudioMessage, VoiceId, VoiceSpatial};
     ///
     /// // "A guard's chatter, started at 80% a little left of centre."
     /// let message = AudioMessage::VoiceStart {
@@ -411,6 +531,7 @@ pub enum AudioMessage {
     ///     gain: 0.8,
     ///     pan: -0.2,
     ///     category: AudioCategory::Voice,
+    ///     spatial: VoiceSpatial::default(),
     /// };
     /// assert_ne!(message, AudioMessage::StopAllLoops);
     /// ```
@@ -425,9 +546,11 @@ pub enum AudioMessage {
         pan: f32,
         /// Which mixdown bus the voice belongs to.
         category: AudioCategory,
+        /// The voice's filter and reverb send.
+        spatial: VoiceSpatial,
     },
-    /// Slew the voice `id` to a new `gain` and `pan`, keeping its cursor. A voice that has ended
-    /// is ignored.
+    /// Slew the voice `id` to a new `gain`, `pan` and filter, keeping its cursor. A voice that has
+    /// ended is ignored.
     VoiceSync {
         /// The voice addressed.
         id: VoiceId,
@@ -435,6 +558,8 @@ pub enum AudioMessage {
         gain: f32,
         /// The target stereo position.
         pan: f32,
+        /// The target filter and reverb send.
+        spatial: VoiceSpatial,
     },
     /// Fade the voice `id` out over `fade_frames` sim ticks (at least about 10 ms), then retire it.
     VoiceStop {

@@ -37,6 +37,7 @@ pub(crate) mod group;
 pub(crate) mod hit;
 pub mod hud;
 pub(crate) mod radial;
+pub(crate) mod shape;
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -44,6 +45,7 @@ use std::ops::Range;
 pub use hit::ui_hit;
 pub use ludion_components::ui::UiNav;
 pub use radial::{RadialItemLayout, RadialLayout, radial_hit, radial_layout};
+pub use shape::ui_shape_hit;
 
 use crate::components::{Anchor, TextOutline, UiList, UiRect, UiText};
 use ludion_components::ui::{
@@ -2289,6 +2291,7 @@ mod tests {
             prev: true,
             next: true,
             activate: true,
+            back: true,
         };
         assert_eq!(list.navigate(everything), None);
         assert_eq!(list.selected, 1);
@@ -2380,11 +2383,31 @@ mod tests {
         });
         assert!(UiNav::from_input(&input).prev);
 
-        // A button the menu does not bind is not menu intent.
+        // East is `back`, an edge like the rest.
         input.begin_tick();
         input.apply(InputEvent::GamepadButtonDown {
             button: GamepadButton::East,
         });
+        assert!(UiNav::from_input(&input).back);
+        input.begin_tick();
+        assert!(!UiNav::from_input(&input).back, "back is an edge");
+
+        // A button the menu does not bind is not menu intent.
+        input.begin_tick();
+        input.apply(InputEvent::GamepadButtonDown {
+            button: GamepadButton::West,
+        });
+        assert_eq!(UiNav::from_input(&input), UiNav::default());
+    }
+
+    #[test]
+    fn nav_from_input_reads_escape_as_a_back_edge() {
+        let mut input = InputState::default();
+        input.begin_tick();
+        input.apply(InputEvent::KeyDown { key: Key::Escape });
+        let nav = UiNav::from_input(&input);
+        assert!(nav.back && !nav.prev && !nav.next && !nav.activate);
+        input.begin_tick();
         assert_eq!(UiNav::from_input(&input), UiNav::default());
     }
 }

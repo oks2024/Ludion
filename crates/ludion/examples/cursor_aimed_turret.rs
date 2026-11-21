@@ -55,7 +55,7 @@ fn aim_turret(world: &mut World, _ctx: &SystemCtx) {
     let Some((camera, cam_xform)) = world
         .query::<(&Camera, &Transform)>()
         .next()
-        .map(|(cam, xform)| (*cam, *xform))
+        .map(|(cam, xform)| (cam.clone(), *xform))
     else {
         return; // no camera — nothing to unproject against this frame
     };

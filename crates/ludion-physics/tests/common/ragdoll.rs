@@ -199,6 +199,7 @@ pub fn build_ragdoll(
                         anchor: *anchor,
                         break_impulse: None,
                         collide: false,
+                        zero: None,
                     },
                 )
                 .expect("a fresh entity accepts a joint");

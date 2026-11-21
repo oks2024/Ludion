@@ -14,8 +14,9 @@ use ludion_renderer::{SpriteInstance, UiClip, UiInstance, UiRotation};
 
 use super::group::{UiGroups, clip_contains, cos_sin};
 use super::hud::{self, Grouping, HudElement, HudFrame, UiEntry};
+use super::shape::{shape_contains, shape_instance};
 use super::{FontFace, radial_hit, radial_layout, ui_list_draw, ui_text_draw};
-use crate::components::{Anchor, UiList, UiRadial, UiRect, UiText};
+use crate::components::{Anchor, UiList, UiRadial, UiRect, UiShape, UiText};
 use crate::fonts::FontLibrary;
 use crate::hierarchy::WorldAffines;
 
@@ -169,6 +170,23 @@ pub fn ui_hit(
             return true;
         }
     }
+    if let Some(shape) = world.get::<UiShape>(entity).ok().flatten()
+        && shape.visible
+    {
+        let shape = hud::pre_shape(&probe.frame, entity, shape, &mut probe.degraded);
+        if let Some(row) = shape_instance(&shape, viewport)
+            && probe.hit(
+                HudElement::Shape,
+                shape.anchor,
+                shape.group,
+                false,
+                shape.rotation,
+                row,
+            )
+        {
+            return true;
+        }
+    }
     if let Some(radial) = world.get::<UiRadial>(entity).ok().flatten()
         && radial.visible
         && !radial.items.is_empty()
@@ -264,8 +282,27 @@ impl Probe<'_> {
         let Some(b) = hud::bounds(&entries) else {
             return false;
         };
-        let (UiInstance::Rect { clip, rotation, .. } | UiInstance::Text { clip, rotation, .. }) =
-            &entries[0].2;
+        if let UiInstance::Shape {
+            origin_px,
+            geometry,
+            fill,
+            stroke,
+            clip,
+            rotation,
+        } = &entries[0].2
+        {
+            // The origin is the pivot, so the cursor turns back about it and the SDF takes it relative.
+            let [x, y] = unrotate(self.cursor, rotation);
+            return shape_contains(
+                geometry,
+                fill.is_some(),
+                stroke.map(|s| s.width_px),
+                [x - origin_px[0], y - origin_px[1]],
+            ) && clip_contains(clip, self.cursor);
+        }
+        let (UiInstance::Rect { clip, rotation, .. }
+        | UiInstance::Text { clip, rotation, .. }
+        | UiInstance::Shape { clip, rotation, .. }) = &entries[0].2;
         // The geometry is axis-aligned and the draw turns it about the pivot, so the cursor turns
         // back the other way before the bounds test (decision 52).
         let [x, y] = unrotate(self.cursor, rotation);

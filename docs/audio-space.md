@@ -64,6 +64,25 @@ queue.voice_stop(id, 6); // optional: fade it out over 6 ticks
 - **Ids count up from `0` per queue** and restart when the world rebuilds (`scene.load`, restore).
 - A device reopen drops attached voices, as it drops one-shots; only loops come back.
 
+## Filters
+
+A voice carries `spatial: VoiceSpatial { filter: VoiceFilter { low_pass_hz, high_pass_hz }, send }`; the default is
+bypass. `AudioQueue::push_on` is `play_on` for a whole `AudioEvent`, so a voice can start filtered:
+
+```rust,ignore
+let radio = AudioEvent { category: AudioCategory::Voice,
+    spatial: VoiceSpatial { filter: VoiceFilter::band_pass(300.0, 3400.0), send: 0.0 }, ..AudioEvent::new("voice/radio.wav", 1.0) };
+let id = queue.push_on(guard, radio, 18.0); // entity, event, range
+```
+
+- **Bypass is not run.** A low-pass at `20000` Hz or more, a high-pass at `20` Hz or less (or a NaN cutoff) is off: the
+  sink keeps no filter for that side, so the voice is bit-identical to an unfiltered one.
+- **One biquad per side**, per voice, ahead of gain; a cutoff change sweeps in log frequency over the ~10 ms ramp.
+  Channels past the eighth pass unfiltered.
+- **The filter rides every message:** `OneShot`, `VoiceStart`, `VoiceSync` and `LoopSync` carry `spatial`; a
+  resent `LoopSync` or `VoiceSync` retargets the running voice and keeps its cursor.
+- **`send` is carried, not mixed:** there is no reverb bus yet.
+
 ## Gotchas
 
 - A WAV that is not 16-bit PCM never decodes: its voice still starts (the sink reports it) but is never followed

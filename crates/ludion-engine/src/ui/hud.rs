@@ -20,12 +20,14 @@ use ludion_core::time::TickRate;
 use ludion_ecs::World;
 use ludion_renderer::{UiClip, UiInstance, UiRotation};
 
+use super::shape::scale_geometry;
+
 use super::group::{GroupXf, UiGroups, cos_sin};
 use super::{
     canvas_anchor_px, group_delta, nine_slice, pixel_scale, place_world_anchor, sub_uv,
     ui_tween_sample,
 };
-use crate::components::{Anchor, UiList, UiRect, UiText};
+use crate::components::{Anchor, UiList, UiRect, UiShape, UiShapeType, UiText};
 use crate::hierarchy::WorldAffines;
 
 /// One `(order, entity, instance)` row of `extract`'s UI list, before the final sort.
@@ -54,6 +56,7 @@ pub(crate) enum HudElement {
     List,
     Radial,
     Group,
+    Shape,
 }
 
 impl HudElement {
@@ -66,9 +69,12 @@ impl HudElement {
             UiTweenField::Scale => !matches!(self, HudElement::List),
             UiTweenField::Rotation => matches!(
                 self,
-                HudElement::Rect { .. } | HudElement::Text | HudElement::Group
+                HudElement::Rect { .. } | HudElement::Text | HudElement::Group | HudElement::Shape
             ),
-            UiTweenField::Color => matches!(self, HudElement::Rect { .. } | HudElement::Text),
+            UiTweenField::Color => matches!(
+                self,
+                HudElement::Rect { .. } | HudElement::Text | HudElement::Shape
+            ),
             UiTweenField::Size => matches!(self, HudElement::Rect { .. } | HudElement::Group),
         }
     }
@@ -103,6 +109,7 @@ fn element_name(element: HudElement) -> &'static str {
         HudElement::List => "UiList",
         HudElement::Radial => "UiRadial",
         HudElement::Group => "UiGroup",
+        HudElement::Shape => "UiShape",
     }
 }
 
@@ -205,6 +212,44 @@ pub(crate) fn pre_rect<'a>(
     }
     if let Some(opacity) = s.opacity {
         fade(&mut out.color, opacity);
+    }
+    Cow::Owned(out)
+}
+
+/// The shape to resolve: `shape` with its tracks at this frame applied. `color` replaces the fill, or
+/// the stroke colour of a shape with no fill (every `line` and `arc`); opacity scales both.
+pub(crate) fn pre_shape<'a>(
+    frame: &HudFrame<'_>,
+    id: EntityId,
+    shape: &'a UiShape,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> Cow<'a, UiShape> {
+    let s = sample(frame, id, HudElement::Shape, degraded);
+    if s.opacity.is_none() && s.offset.is_none() && s.color.is_none() {
+        return Cow::Borrowed(shape);
+    }
+    let mut out = shape.clone();
+    if let Some([x, y]) = s.offset {
+        out.offset = [out.offset[0] + x, out.offset[1] + y];
+    }
+    if let Some(color) = s.color {
+        let stroke_only = matches!(
+            out.shape,
+            UiShapeType::Line { .. } | UiShapeType::Arc { .. }
+        );
+        match (&mut out.fill, &mut out.stroke) {
+            (fill @ Some(_), _) if !stroke_only => *fill = Some(color),
+            (_, Some(stroke)) => stroke.color = color,
+            _ => {}
+        }
+    }
+    if let Some(opacity) = s.opacity {
+        if let Some(fill) = &mut out.fill {
+            fade(fill, opacity);
+        }
+        if let Some(stroke) = &mut out.stroke {
+            fade(&mut stroke.color, opacity);
+        }
     }
     Cow::Owned(out)
 }
@@ -319,6 +364,15 @@ pub(crate) fn bounds(instances: &[UiEntry]) -> Option<[f32; 4]> {
         match instance {
             UiInstance::Rect { rect_px: r, .. } => grow([r[0], r[1], r[0] + r[2], r[1] + r[3]]),
             UiInstance::Text { quads, .. } => quads.iter().for_each(|q| grow(q.pos)),
+            UiInstance::Shape {
+                origin_px: o,
+                geometry,
+                stroke,
+                ..
+            } => {
+                let [l, t, r, b] = geometry.local_bounds(stroke.map_or(0.0, |s| s.width_px));
+                grow([o[0] + l, o[1] + t, o[0] + r, o[1] + b]);
+            }
         }
     }
     out
@@ -357,6 +411,20 @@ pub(crate) fn transform_instances(
                 }
                 turn(rotation);
             }
+            UiInstance::Shape {
+                origin_px,
+                geometry,
+                stroke,
+                rotation,
+                ..
+            } => {
+                *origin_px = [x(origin_px[0]), y(origin_px[1])];
+                scale_geometry(geometry, scale);
+                if let Some(stroke) = stroke {
+                    stroke.width_px *= scale;
+                }
+                turn(rotation);
+            }
         }
     }
 }
@@ -369,6 +437,14 @@ fn multiply_alpha(instances: &mut [UiEntry], opacity: f32) {
                 color[3] *= opacity;
                 if let Some(outline) = outline {
                     outline.color[3] *= opacity;
+                }
+            }
+            UiInstance::Shape { fill, stroke, .. } => {
+                if let Some(fill) = fill {
+                    fill[3] *= opacity;
+                }
+                if let Some(stroke) = stroke {
+                    stroke.color[3] *= opacity;
                 }
             }
         }
@@ -434,7 +510,11 @@ pub(crate) fn post(
     let Some(b) = bounds(&entries[start..]) else {
         return;
     };
-    let centre = [(b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5];
+    // A shape scales and turns about its origin, not its bounds centre (decision 55).
+    let centre = match (element, &entries[start].2) {
+        (HudElement::Shape, UiInstance::Shape { origin_px, .. }) => *origin_px,
+        _ => [(b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5],
+    };
     let mut delta = [0.0, 0.0];
     let mut opacity = 1.0;
     if let Some(a) = world_anchor {
@@ -459,7 +539,9 @@ pub(crate) fn post(
         };
         for (_, _, instance) in &mut entries[start..] {
             match instance {
-                UiInstance::Rect { rotation: r, .. } | UiInstance::Text { rotation: r, .. } => {
+                UiInstance::Rect { rotation: r, .. }
+                | UiInstance::Text { rotation: r, .. }
+                | UiInstance::Shape { rotation: r, .. } => {
                     *r = rotation;
                 }
             }
@@ -532,7 +614,9 @@ fn apply_group(entries: &mut [UiEntry], start: usize, group: Option<GroupXf>) {
     };
     for (_, _, instance) in &mut entries[start..] {
         match instance {
-            UiInstance::Rect { clip, .. } | UiInstance::Text { clip, .. } => *clip = xf.clip,
+            UiInstance::Rect { clip, .. }
+            | UiInstance::Text { clip, .. }
+            | UiInstance::Shape { clip, .. } => *clip = xf.clip,
         }
     }
     if xf.rotation != 0.0 {
@@ -567,6 +651,11 @@ fn rotate_into_group(instances: &mut [UiEntry], xf: &GroupXf) {
                 };
                 (rotation, pivot)
             }
+            UiInstance::Shape {
+                origin_px,
+                rotation,
+                ..
+            } => (rotation, *origin_px),
         };
         let moved = map(pivot);
         rotation.radians += xf.rotation;
@@ -587,6 +676,18 @@ fn rotate_into_group(instances: &mut [UiEntry], xf: &GroupXf) {
                     let [x0, y0] = place([q.pos[0], q.pos[1]]);
                     let [x1, y1] = place([q.pos[2], q.pos[3]]);
                     q.pos = [x0, y0, x1, y1];
+                }
+            }
+            UiInstance::Shape {
+                origin_px,
+                geometry,
+                stroke,
+                ..
+            } => {
+                *origin_px = moved;
+                scale_geometry(geometry, xf.scale);
+                if let Some(stroke) = stroke {
+                    stroke.width_px *= xf.scale;
                 }
             }
         }
@@ -791,7 +892,9 @@ mod tests {
         let mut rows = vec![rect(0.0, 0.0, 1.0, 1.0), text([0.0; 4])];
         multiply_alpha(&mut rows, 0.5);
         for (_, _, instance) in &rows {
-            let (UiInstance::Rect { color, .. } | UiInstance::Text { color, .. }) = instance;
+            let (UiInstance::Rect { color, .. } | UiInstance::Text { color, .. }) = instance else {
+                continue;
+            };
             assert_eq!(color[3], 0.5);
         }
     }
@@ -926,8 +1029,129 @@ mod tests {
         assert_eq!(rect_of(&plain[0]).1, UiRotation::NONE);
     }
 
+    fn shape_row(origin: [f32; 2]) -> UiEntry {
+        (
+            0,
+            EntityId::new(0, 0),
+            UiInstance::Shape {
+                origin_px: origin,
+                geometry: ludion_renderer::UiShapeGeometry::Sector {
+                    radius_outer: 40.0,
+                    radius_inner: 30.0,
+                    start: 0.0,
+                    sweep: 1.0,
+                },
+                fill: Some([1.0; 4]),
+                stroke: Some(ludion_renderer::UiShapeStroke {
+                    width_px: 4.0,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                }),
+                clip: UiClip::NONE,
+                rotation: UiRotation::NONE,
+            },
+        )
+    }
+
+    fn shape_of(entry: &UiEntry) -> ([f32; 2], f32, f32, f32, UiRotation) {
+        let UiInstance::Shape {
+            origin_px,
+            geometry:
+                ludion_renderer::UiShapeGeometry::Sector {
+                    radius_outer,
+                    radius_inner,
+                    ..
+                },
+            stroke,
+            rotation,
+            ..
+        } = &entry.2
+        else {
+            unreachable!()
+        };
+        (
+            *origin_px,
+            *radius_outer,
+            *radius_inner,
+            stroke.map_or(0.0, |s| s.width_px),
+            *rotation,
+        )
+    }
+
+    #[test]
+    fn a_shape_under_a_scaled_group_scales_its_lengths_and_maps_its_origin() {
+        let xf = GroupXf {
+            scale: 2.0,
+            offset: [10.0, 20.0],
+            ..identity_xf()
+        };
+        let mut rows = vec![shape_row([100.0, 50.0])];
+        apply_group(&mut rows, 0, Some(xf));
+        let (origin, outer, inner, stroke, rotation) = shape_of(&rows[0]);
+        assert_eq!(origin, [210.0, 120.0]);
+        assert_eq!((outer, inner, stroke), (80.0, 60.0, 8.0));
+        assert_eq!(rotation, UiRotation::NONE);
+    }
+
+    #[test]
+    fn a_rotated_group_adds_its_turn_with_the_pivot_at_the_mapped_origin() {
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let xf = GroupXf {
+            rotation: quarter,
+            offset: [150.0, -50.0],
+            ..identity_xf()
+        };
+        let mut rows = vec![shape_row([10.0, 10.0])];
+        apply_group(&mut rows, 0, Some(xf));
+        let (origin, outer, _, _, rotation) = shape_of(&rows[0]);
+        // (10, 10) -> R(90 degrees)(10, 10) + (150, -50) = (140, -40).
+        assert!((origin[0] - 140.0).abs() < 1e-3 && (origin[1] + 40.0).abs() < 1e-3);
+        assert_eq!(rotation.radians, quarter);
+        assert_eq!(rotation.pivot_px, origin);
+        assert_eq!(outer, 40.0);
+    }
+
+    #[test]
+    fn a_shape_scales_and_turns_about_its_origin() {
+        let world = World::new();
+        let frame = HudFrame {
+            world: &world,
+            view: Mat4::IDENTITY,
+            projection: Mat4::IDENTITY,
+            viewport: (1920, 1080),
+            real_frame: 0,
+            game_frame: 0,
+            rate: TickRate::DEFAULT,
+        };
+        let mut rows = vec![shape_row([300.0, 200.0])];
+        let (mut groups, mut degraded) = (UiGroups::default(), Vec::new());
+        post(
+            &frame,
+            &mut WorldAffines::new(),
+            EntityId::new(0, 0),
+            HudElement::Shape,
+            Anchor::TopLeft,
+            &mut rows,
+            0,
+            Grouping {
+                group: None,
+                fill_group: false,
+                rotation_deg: 30.0,
+                groups: &mut groups,
+                degraded: &mut degraded,
+            },
+        );
+        let (origin, _, _, _, rotation) = shape_of(&rows[0]);
+        assert_eq!(origin, [300.0, 200.0]);
+        assert_eq!(rotation.pivot_px, [300.0, 200.0]);
+        assert_eq!(rotation.radians, 30.0f32.to_radians());
+    }
+
     #[test]
     fn element_support_matrix() {
+        assert!(HudElement::Shape.supports(UiTweenField::Scale));
+        assert!(HudElement::Shape.supports(UiTweenField::Rotation));
+        assert!(HudElement::Shape.supports(UiTweenField::Color));
+        assert!(!HudElement::Shape.supports(UiTweenField::Size));
         let rect = HudElement::Rect { fill: false };
         assert!(rect.supports(UiTweenField::Size));
         assert!(!HudElement::Text.supports(UiTweenField::Size));

@@ -90,7 +90,7 @@
 ## Owner rulings (2026-11-19)
 
 - Accepted, scheduled (W2b, for amendment 2). Request amendments 2 (a per-entity clock domain, W2b) and 3 (waits are not a state machine).
-- Accepted. `SequenceDoc.clock` becomes an `Option` (a public field type; no game uses sequences, grep of both game roots
+- Shipped in W2a (decision 13). `SequenceDoc.clock` becomes an `Option` (a public field type; no game uses sequences, grep of both game roots
   2026-11-19), and `sequences::release` is a single latch taking a handle, not the request's `release(entity)`.
 - Accepted. `skippable` defaults to `true`.
 - Accepted. The API differs from the request (decision 4): free functions over `&mut World`, one entity per binding.

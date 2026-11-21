@@ -17,6 +17,10 @@
 //! [`PathRequest`] (A* plus string pulling), and an agent that also carries a `NavGoal` walks a planned
 //! `NavRoute` instead of reading a field. The route is hashed sim state; the grid stays derived.
 //!
+//! Several agent sizes share one world through [`NavConfig::classes`]: one grid, flow cache and link
+//! table per [`NavClass`], all derived, built from one shared floor down-walk. A [`NavAgent`], a
+//! [`PathRequest`] and a [`NavLink`] pick a class by name; an empty name is the first class.
+//!
 //! A `NavLink` entity adds a directed edge between two nodes (a ladder, a vault). `nav_update` rebuilds
 //! the derived link table every call; routes plan across it, and a walker that reaches a link start stops
 //! with `NavRoute.status = at_link` until the game calls [`nav_link_done`]. The engine never moves the body.
@@ -28,10 +32,12 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::math::sqrt;
 use ludion_core::par;
+use ludion_core::rng::DeterministicRng;
 use ludion_ecs::{SystemCtx, World};
 use ludion_nav::{
     ColumnSource, FloorSample, FlowCache, GridParams, NavGrid, NavLinks, NodeId, OffMeshLink,
-    PathOptions, PathStatus, find_path_linked, nearest_node, string_pull_linked, walkable_line,
+    PathOptions, PathStatus, find_path_linked, line_exit, nearest_node, reachable_within,
+    string_pull_linked, walkable_line,
 };
 use ludion_physics::{LayerSet, PhysicsError, PhysicsWorld, QueryFilter, StaticBody};
 use ludion_renderer::DebugSegment;
@@ -51,6 +57,44 @@ const MAX_COLUMN_LAYERS: usize = 32;
 const SAMPLE_CHUNK: usize = 64;
 /// Most columns a grid may have.
 const MAX_COLUMNS: u64 = 1 << 22;
+
+/// One agent size: the grid built for it drops floors it cannot stand on or fit under.
+///
+/// # Example
+/// ```
+/// use ludion_engine::NavClass;
+///
+/// let forklift = NavClass { name: "forklift".into(), radius: 1.0, ..NavClass::default() };
+/// assert_eq!(forklift.height, 1.8);
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NavClass {
+    /// The name agents, requests and links pick the class by; non-empty and unique.
+    pub name: String,
+    /// The agent's radius: a floor is dropped where a capsule of this radius collides.
+    pub radius: f32,
+    /// The agent's height: a floor needs this much headroom.
+    pub height: f32,
+    /// Largest step up or down on flat ground.
+    pub max_step: f32,
+    /// Steepest walkable surface, degrees from horizontal.
+    pub max_slope_deg: f32,
+}
+
+impl Default for NavClass {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            radius: 0.4,
+            height: 1.8,
+            max_step: 0.4,
+            max_slope_deg: 45.0,
+        }
+    }
+}
+
+/// Most agent classes a config may define.
+const MAX_CLASSES: usize = 8;
 
 /// The grid's extent and the agent it is built for.
 ///
@@ -88,11 +132,16 @@ pub struct NavConfig {
     pub flow_radius: f32,
     /// Static-collider layers that are not walkable ground or obstacles (optional; empty by
     /// default). Names come from the scene's `physics.layers`.
-    pub ignore_layers: Vec<String>,
+    #[schemars(with = "Vec<String>")]
+    pub ignore_layers: LayerSet,
     /// Most routes `nav_steer` plans per tick; agents over the cap wait in `planning` until the next
     /// tick (default `8`, at least `1`).
     #[serde(default = "default_max_path_requests")]
     pub max_path_requests_per_tick: u32,
+    /// Agent classes, one grid each (default none: one class named `""` from `agent_radius`,
+    /// `agent_height`, `max_step` and `max_slope_deg`, which are ignored when this is set). At most 8.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub classes: Vec<NavClass>,
 }
 
 fn default_max_path_requests() -> u32 {
@@ -113,8 +162,9 @@ impl Default for NavConfig {
             max_step: 0.4,
             max_slope_deg: 45.0,
             flow_radius: 48.0,
-            ignore_layers: Vec::new(),
+            ignore_layers: LayerSet::default(),
             max_path_requests_per_tick: default_max_path_requests(),
+            classes: Vec::new(),
         }
     }
 }
@@ -125,13 +175,11 @@ impl NavConfig {
     /// # Errors
     /// `L4032` if a value is not finite, a size or radius is not positive, the grid has no columns
     /// or more than 4194304, `y_min >= y_max`, the slope is outside `(0, 90)`, a layer name is
-    /// empty, or `max_path_requests_per_tick` is 0.
+    /// empty, `max_path_requests_per_tick` is 0, or `classes` has more than 8 entries, an empty or
+    /// repeated name, or a class value out of range (paths `/classes/{i}/...`).
     pub fn validate(&self) -> Result<(), Diagnostic> {
-        let invalid = |path: &str, what: String, help: &str| {
-            Diagnostic::new(code::NAV_CONFIG_INVALID, what)
-                .with_path(path)
-                .with_help(help)
-        };
+        let invalid = invalid_config;
+        let legacy = self.classes.is_empty();
         for (i, v) in self.origin.iter().enumerate() {
             if !v.is_finite() {
                 return Err(invalid(
@@ -148,7 +196,8 @@ impl NavConfig {
             ("/flow_radius", "flow_radius", self.flow_radius),
         ];
         for (path, name, v) in positive {
-            if !v.is_finite() || v <= 0.0 {
+            let agent_field = path.starts_with("/agent_");
+            if (legacy || !agent_field) && (!v.is_finite() || v <= 0.0) {
                 return Err(invalid(
                     path,
                     format!("nav `{name}` is {v}, not a positive finite number"),
@@ -181,7 +230,7 @@ impl NavConfig {
                 "set `y_min` below `y_max`",
             ));
         }
-        if !self.max_step.is_finite() || self.max_step < 0.0 {
+        if legacy && (!self.max_step.is_finite() || self.max_step < 0.0) {
             return Err(invalid(
                 "/max_step",
                 format!(
@@ -191,7 +240,7 @@ impl NavConfig {
                 "use the tallest step the agent climbs, in metres",
             ));
         }
-        if !(self.max_slope_deg > 0.0 && self.max_slope_deg < 90.0) {
+        if legacy && !(self.max_slope_deg > 0.0 && self.max_slope_deg < 90.0) {
             return Err(invalid(
                 "/max_slope_deg",
                 format!(
@@ -201,7 +250,7 @@ impl NavConfig {
                 "use the steepest walkable angle in degrees, e.g. 45.0",
             ));
         }
-        if let Some(i) = self.ignore_layers.iter().position(String::is_empty) {
+        if let Some(i) = self.ignore_layers.iter().position(str::is_empty) {
             return Err(invalid(
                 &format!("/ignore_layers/{i}"),
                 "a nav `ignore_layers` name is empty".to_string(),
@@ -216,35 +265,144 @@ impl NavConfig {
                 "use at least 1; the default is 8",
             ));
         }
+        if self.classes.len() > MAX_CLASSES {
+            return Err(invalid(
+                "/classes",
+                format!(
+                    "nav `classes` has {} entries, more than the {MAX_CLASSES} allowed",
+                    self.classes.len()
+                ),
+                "merge classes of similar size, or drop the ones no agent uses",
+            ));
+        }
+        for (i, class) in self.classes.iter().enumerate() {
+            if class.name.is_empty() {
+                return Err(invalid(
+                    &format!("/classes/{i}/name"),
+                    format!("nav class {i} has an empty `name`"),
+                    "name the class; agents, requests and links pick it by name",
+                ));
+            }
+            if self.classes[..i].iter().any(|c| c.name == class.name) {
+                return Err(invalid(
+                    &format!("/classes/{i}/name"),
+                    format!("nav class name `{}` is used twice", class.name),
+                    "give every class its own name",
+                ));
+            }
+            check_agent(&format!("/classes/{i}/"), class)?;
+        }
         Ok(())
     }
 
-    fn grid_params(&self) -> GridParams {
+    /// The classes grids are built for: `classes`, or the legacy agent fields as one class named `""`.
+    fn resolved_classes(&self) -> Vec<NavClass> {
+        if self.classes.is_empty() {
+            vec![NavClass {
+                name: String::new(),
+                radius: self.agent_radius,
+                height: self.agent_height,
+                max_step: self.max_step,
+                max_slope_deg: self.max_slope_deg,
+            }]
+        } else {
+            self.classes.clone()
+        }
+    }
+
+    /// The index of the class called `name`; `""` is the first class. `None` for a name no class has.
+    pub fn class_index(&self, name: &str) -> Option<usize> {
+        if name.is_empty() {
+            return Some(0);
+        }
+        self.classes.iter().position(|c| c.name == name)
+    }
+
+    /// The class names, for a diagnostic's help.
+    fn class_names(&self) -> String {
+        if self.classes.is_empty() {
+            "no classes are defined: leave the class empty".to_string()
+        } else {
+            self.classes
+                .iter()
+                .map(|c| format!("`{}`", c.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    }
+
+    fn grid_params(&self, class: &NavClass) -> GridParams {
         GridParams {
             origin: self.origin,
             cell_size: self.cell_size,
             nx: self.nx,
             nz: self.nz,
-            agent_height: self.agent_height,
-            max_step: self.max_step,
-            max_slope_deg: self.max_slope_deg,
+            agent_height: class.height,
+            max_step: class.max_step,
+            max_slope_deg: class.max_slope_deg,
         }
     }
 }
 
-/// The nav resource: config, the grid once built, and the flow-field cache that shares one field per
-/// target cell.
+fn invalid_config(path: &str, what: String, help: &str) -> Diagnostic {
+    Diagnostic::new(code::NAV_CONFIG_INVALID, what)
+        .with_path(path)
+        .with_help(help)
+}
+
+/// Checks a class's numbers; `base` is the pointer prefix, `/classes/{i}/`.
+fn check_agent(base: &str, class: &NavClass) -> Result<(), Diagnostic> {
+    for (field, v) in [("radius", class.radius), ("height", class.height)] {
+        if !v.is_finite() || v <= 0.0 {
+            return Err(invalid_config(
+                &format!("{base}{field}"),
+                format!(
+                    "nav class `{}` `{field}` is {v}, not a positive finite number",
+                    class.name
+                ),
+                "use a finite value above zero, in metres",
+            ));
+        }
+    }
+    if !class.max_step.is_finite() || class.max_step < 0.0 {
+        return Err(invalid_config(
+            &format!("{base}max_step"),
+            format!(
+                "nav class `{}` `max_step` is {}, not a finite number >= 0",
+                class.name, class.max_step
+            ),
+            "use the tallest step the agent climbs, in metres",
+        ));
+    }
+    if !(class.max_slope_deg > 0.0 && class.max_slope_deg < 90.0) {
+        return Err(invalid_config(
+            &format!("{base}max_slope_deg"),
+            format!(
+                "nav class `{}` `max_slope_deg` is {}, outside (0, 90)",
+                class.name, class.max_slope_deg
+            ),
+            "use the steepest walkable angle in degrees, e.g. 45.0",
+        ));
+    }
+    Ok(())
+}
+
+/// The nav resource: config, one grid per agent class once built, and per class the flow-field cache
+/// that shares one field per target cell and the off-mesh link table.
 ///
-/// Installed by the engine when the builder is given `.nav(..)`.
+/// Installed by the engine when the builder is given `.nav(..)`. The unqualified accessors
+/// ([`grid`](Nav::grid), [`cache`](Nav::cache), [`links`](Nav::links)) read the **first class**;
+/// [`grid_for`](Nav::grid_for) reads a class by name.
 pub struct Nav {
     config: NavConfig,
-    grid: Option<NavGrid>,
-    cache: FlowCache,
+    classes: Vec<NavClass>,
+    grids: Vec<NavGrid>,
+    caches: Vec<FlowCache>,
     last_statics: Vec<StaticBody>,
     full_rebuild: bool,
     rebuilds: u64,
     cells: Vec<[u32; 2]>,
-    table: LinkTable,
+    tables: Vec<LinkTable>,
 }
 
 /// One enabled `NavLink` as the table holds it; its index in [`LinkTable::entries`] is the edge's tag.
@@ -282,15 +440,20 @@ impl Nav {
     /// `L4032` if the config is invalid.
     pub fn new(config: NavConfig) -> Result<Self, Diagnostic> {
         config.validate()?;
+        let classes = config.resolved_classes();
         Ok(Self {
-            cache: FlowCache::new(config.flow_radius),
+            caches: classes
+                .iter()
+                .map(|_| FlowCache::new(config.flow_radius))
+                .collect(),
+            tables: classes.iter().map(|_| LinkTable::default()).collect(),
+            classes,
             config,
-            grid: None,
+            grids: Vec::new(),
             last_statics: Vec::new(),
             full_rebuild: true,
             rebuilds: 0,
             cells: Vec::new(),
-            table: LinkTable::default(),
         })
     }
 
@@ -299,34 +462,43 @@ impl Nav {
         &self.config
     }
 
-    /// The grid, `None` until the first [`nav_update`] with a physics world.
+    /// The first class's grid, `None` until the first [`nav_update`] with a physics world.
     pub fn grid(&self) -> Option<&NavGrid> {
-        self.grid.as_ref()
+        self.grids.first()
     }
 
-    /// The off-mesh edges the last [`nav_update`] built from the enabled `NavLink`s; empty until then.
+    /// The grid of the class called `class` (`""` is the first); `None` for an unknown class or before
+    /// the first [`nav_update`].
+    pub fn grid_for(&self, class: &str) -> Option<&NavGrid> {
+        self.grids.get(self.config.class_index(class)?)
+    }
+
+    /// The first class's off-mesh edges the last [`nav_update`] built from the enabled `NavLink`s; empty
+    /// until then.
     pub fn links(&self) -> &NavLinks {
-        &self.table.links
+        &self.tables[0].links
     }
 
-    /// The flow-field cache, read-only: [`FlowCache::get`] answers only for a field already built.
+    /// The first class's flow-field cache, read-only: [`FlowCache::get`] answers only for a field already
+    /// built.
     pub fn cache(&self) -> &FlowCache {
-        &self.cache
+        &self.caches[0]
     }
 
-    /// The flow-field cache. Borrow the [`grid`](Nav::grid) separately; they are distinct fields
-    /// when read through [`parts`](Nav::parts).
+    /// The first class's flow-field cache. Borrow the [`grid`](Nav::grid) separately; they are distinct
+    /// fields when read through [`parts`](Nav::parts).
     pub fn cache_mut(&mut self) -> &mut FlowCache {
-        &mut self.cache
+        &mut self.caches[0]
     }
 
-    /// The grid and the cache together, so a field can be asked for from the cache against the grid.
+    /// The first class's grid and cache together, so a field can be asked for from the cache against
+    /// the grid.
     pub fn parts(&mut self) -> (Option<&NavGrid>, &mut FlowCache) {
-        (self.grid.as_ref(), &mut self.cache)
+        (self.grids.first(), &mut self.caches[0])
     }
 
-    fn split(&mut self) -> (Option<&NavGrid>, &mut FlowCache, &LinkTable) {
-        (self.grid.as_ref(), &mut self.cache, &self.table)
+    fn split_class(&mut self, i: usize) -> (Option<&NavGrid>, &mut FlowCache, &LinkTable) {
+        (self.grids.get(i), &mut self.caches[i], &self.tables[i])
     }
 
     /// Replaces the config and schedules a full rebuild at the next [`nav_update`].
@@ -335,7 +507,12 @@ impl Nav {
     /// `L4032` if the config is invalid; the old config stays.
     pub fn set_config(&mut self, config: NavConfig) -> Result<(), Diagnostic> {
         config.validate()?;
-        self.cache = FlowCache::new(config.flow_radius);
+        self.classes = config.resolved_classes();
+        let n = self.classes.len();
+        self.caches = (0..n).map(|_| FlowCache::new(config.flow_radius)).collect();
+        self.grids.truncate(n);
+        self.tables.truncate(n);
+        self.tables.resize_with(n, LinkTable::default);
         self.config = config;
         self.full_rebuild = true;
         Ok(())
@@ -353,7 +530,7 @@ impl Nav {
     }
 }
 
-/// A column source over a pre-sampled rectangle of columns.
+/// A column source over a pre-sampled rectangle of columns (one per class).
 struct Presampled {
     min: [u32; 2],
     width: u32,
@@ -375,15 +552,17 @@ fn eps(y: f32) -> f32 {
     1e-3 * y.abs().max(1.0)
 }
 
-/// Samples the floors of the column centred on `(x, z)`.
+/// Samples the floors of the column centred on `(x, z)`, one list per class: the down-walk and the headroom
+/// ray are shared, the capsule overlap and the height derive are the class's own.
 fn sample_column(
     physics: &PhysicsWorld,
     filter: &QueryFilter,
     config: &NavConfig,
+    classes: &[NavClass],
     x: f32,
     z: f32,
-) -> Result<Vec<FloorSample>, PhysicsError> {
-    let mut out = Vec::new();
+) -> Result<Vec<Vec<FloorSample>>, PhysicsError> {
+    let mut out: Vec<Vec<FloorSample>> = classes.iter().map(|_| Vec::new()).collect();
     let mut origin = config.y_max;
     for _ in 0..MAX_COLUMN_LAYERS {
         let reach = origin - config.y_min;
@@ -411,64 +590,76 @@ fn sample_column(
             filter,
         )?;
         let headroom = up.first().map_or(f32::INFINITY, |h| h.distance);
-        let bottom = y + config.max_step;
-        let top = (bottom + 2.0 * config.agent_radius).max(y + config.agent_height);
-        let shape = Shape::Capsule {
-            half_height: ((top - bottom) * 0.5 - config.agent_radius).max(1e-4),
-            radius: config.agent_radius,
-        };
-        let centre = [x, (top + bottom) * 0.5, z];
-        if !physics
-            .overlap(&shape, centre, [0.0, 0.0, 0.0, 1.0], filter)?
-            .is_empty()
-        {
-            continue;
+        for (class, floors) in classes.iter().zip(&mut out) {
+            let bottom = y + class.max_step;
+            let top = (bottom + 2.0 * class.radius).max(y + class.height);
+            let shape = Shape::Capsule {
+                half_height: ((top - bottom) * 0.5 - class.radius).max(1e-4),
+                radius: class.radius,
+            };
+            let centre = [x, (top + bottom) * 0.5, z];
+            if !physics
+                .overlap(&shape, centre, [0.0, 0.0, 0.0, 1.0], filter)?
+                .is_empty()
+            {
+                continue;
+            }
+            floors.push(FloorSample {
+                y,
+                normal,
+                headroom,
+            });
         }
-        out.push(FloorSample {
-            y,
-            normal,
-            headroom,
-        });
     }
     Ok(out)
 }
 
-/// Samples every cell in `cells` in parallel, in cell order.
+/// Samples every cell in `cells` in parallel, in cell order; one [`Presampled`] per class.
 fn presample(
     physics: &PhysicsWorld,
     filter: &QueryFilter,
     config: &NavConfig,
+    classes: &[NavClass],
     cells: &[[u32; 2]],
     min: [u32; 2],
     width: u32,
-) -> Result<Presampled, PhysicsError> {
+) -> Result<Vec<Presampled>, PhysicsError> {
     let chunks = par::par_map_chunks(cells, SAMPLE_CHUNK, |_, chunk| {
         chunk
             .iter()
             .map(|&[i, j]| {
                 let x = config.origin[0] + (i as f32 + 0.5) * config.cell_size;
                 let z = config.origin[1] + (j as f32 + 0.5) * config.cell_size;
-                sample_column(physics, filter, config, x, z)
+                sample_column(physics, filter, config, classes, x, z)
             })
             .collect::<Result<Vec<_>, _>>()
     });
-    let mut columns = Vec::with_capacity(cells.len());
+    let mut sources: Vec<Presampled> = classes
+        .iter()
+        .map(|_| Presampled {
+            min,
+            width,
+            columns: Vec::with_capacity(cells.len()),
+        })
+        .collect();
     for chunk in chunks {
-        columns.extend(chunk?);
+        for column in chunk? {
+            for (source, floors) in sources.iter_mut().zip(column) {
+                source.columns.push(floors);
+            }
+        }
     }
-    Ok(Presampled {
-        min,
-        width,
-        columns,
-    })
+    Ok(sources)
 }
 
 /// The inclusive cell rectangle the statics that differ between `old` and `new` can affect, or
-/// `None` when nothing differs or the change lies off the grid. Both lists are sorted by entity.
+/// `None` when nothing differs or the change lies off the grid. Both lists are sorted by entity. `radius`
+/// is the widest class radius.
 fn dirty_rect(
     old: &[StaticBody],
     new: &[StaticBody],
     config: &NavConfig,
+    radius: f32,
 ) -> Option<([u32; 2], [u32; 2])> {
     let mut lo = [f32::INFINITY; 2];
     let mut hi = [f32::NEG_INFINITY; 2];
@@ -511,7 +702,7 @@ fn dirty_rect(
     if !dirty {
         return None;
     }
-    let pad = config.agent_radius + config.cell_size;
+    let pad = radius + config.cell_size;
     let cell = |v: f32, axis: usize, n: u32| {
         ((v - config.origin[axis]) / config.cell_size)
             .floor()
@@ -567,15 +758,28 @@ pub fn nav_update(world: &mut World, _ctx: &SystemCtx) {
         Some(physics) => update(&mut nav, physics),
         None => Ok(()),
     };
-    let unsnapped = match nav.grid.as_ref() {
-        Some(grid) => {
-            let (table, unsnapped) = build_links(world, grid);
-            nav.table = table;
-            unsnapped
-        }
-        None => Vec::new(),
+    let (unsnapped, unknown) = if !nav.grids.is_empty() && nav.grids.len() == nav.classes.len() {
+        let (tables, unsnapped, unknown) = build_links(world, &nav.grids, &nav.classes);
+        nav.tables = tables;
+        (unsnapped, unknown)
+    } else {
+        (Vec::new(), Vec::new())
     };
+    let names = nav.config.class_names();
     world.insert_resource(nav);
+    for (entity, index, name) in unknown {
+        let key = format!("{}/classes/{index}", offender_key(world, entity));
+        report_full(
+            world,
+            key,
+            Diagnostic::new(
+                code::NAV_CLASS_UNKNOWN,
+                format!("the `NavLink` `classes` entry `{name}` is not a nav class, so it permits nothing"),
+            )
+            .with_path(format!("/components/NavLink/classes/{index}"))
+            .with_help(format!("use one of: {names}; `ludion explain L4147`")),
+        );
+    }
     for (entity, end, nearest) in unsnapped {
         let help = match nearest {
             Some(d) => format!(
@@ -612,78 +816,115 @@ pub fn nav_update(world: &mut World, _ctx: &SystemCtx) {
 /// A link end that snapped to nothing: its entity, `"from"` or `"to"`, and the nearest node's distance.
 type Unsnapped = (EntityId, &'static str, Option<f32>);
 
-/// The link table from the enabled `NavLink`s, ascending by entity, each end snapped to the grid; plus
-/// the ends that snapped to nothing as `(entity, "from" | "to", nearest node distance)`.
-fn build_links(world: &mut World, grid: &NavGrid) -> (LinkTable, Vec<Unsnapped>) {
+/// A `NavLink` `classes` entry no class has: the link entity, the entry's index and its text.
+type UnknownClass = (EntityId, usize, String);
+
+/// The link tables from the enabled `NavLink`s, ascending by entity, one per class: each end snapped to the
+/// class's grid, a link left out of a class its `classes` does not permit or where an end does not snap.
+/// Also the ends that snapped on no permitted class as `(entity, "from" | "to", nearest node distance on
+/// the first class's grid)`, and the `classes` entries naming no class.
+fn build_links(
+    world: &mut World,
+    grids: &[NavGrid],
+    classes: &[NavClass],
+) -> (Vec<LinkTable>, Vec<Unsnapped>, Vec<UnknownClass>) {
     let mut found: Vec<(EntityId, NavLink)> = world
         .query_ids::<(&NavLink,)>()
         .map(|(id, (link,))| (id, link.clone()))
         .collect();
     found.sort_by_key(|(id, _)| *id);
-    let mut table = LinkTable::default();
+    let mut tables: Vec<LinkTable> = grids.iter().map(|_| LinkTable::default()).collect();
+    let mut edges: Vec<Vec<OffMeshLink>> = grids.iter().map(|_| Vec::new()).collect();
     let mut unsnapped = Vec::new();
-    let mut edges = Vec::new();
+    let mut unknown = Vec::new();
     for (entity, link) in found.into_iter().filter(|(_, l)| l.enabled) {
         let affine = crate::hierarchy::world_affine(world, entity);
         let posed = |p: [f32; 3]| affine.as_ref().map_or(p, |a| a.transform_point(p));
-        let snap = |p: [f32; 3]| {
+        let snap = |grid: &NavGrid, p: [f32; 3]| {
             if p.iter().all(|c| c.is_finite()) {
                 nearest_node(grid, p, link.snap_radius)
             } else {
                 None
             }
         };
-        let (from, to) = (snap(posed(link.from)), snap(posed(link.to)));
-        for (end, node, point) in [("from", from, link.from), ("to", to, link.to)] {
-            if node.is_none() {
-                let p = posed(point);
-                let wide = if p.iter().all(|c| c.is_finite()) {
-                    nearest_node(grid, p, 1.0e6)
-                } else {
-                    None
-                };
-                let distance = wide.map(|n| {
-                    let q = grid.node_pos(n);
-                    let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
-                    sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
-                });
-                unsnapped.push((entity, end, distance));
+        for (i, name) in link.classes.iter().enumerate() {
+            if !classes.iter().any(|c| c.name == *name) {
+                unknown.push((entity, i, name.clone()));
             }
         }
-        let (Some(from), Some(to)) = (from, to) else {
+        let ends = [posed(link.from), posed(link.to)];
+        let mut permitted = false;
+        let mut end_snapped = [false; 2];
+        for (k, grid) in grids.iter().enumerate() {
+            if !link.classes.is_empty() && !link.classes.iter().any(|n| *n == classes[k].name) {
+                continue;
+            }
+            permitted = true;
+            let (from, to) = (snap(grid, ends[0]), snap(grid, ends[1]));
+            end_snapped[0] |= from.is_some();
+            end_snapped[1] |= to.is_some();
+            let (Some(from), Some(to)) = (from, to) else {
+                continue;
+            };
+            let (a, b) = (grid.node_pos(from), grid.node_pos(to));
+            let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let table = &mut tables[k];
+            edges[k].push(OffMeshLink {
+                from,
+                to,
+                cost: sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) + link.cost,
+                bidirectional: link.bidirectional,
+                tag: table.entries.len() as u32,
+            });
+            table.entries.push(LinkEntry {
+                entity,
+                from,
+                to,
+                bidirectional: link.bidirectional,
+            });
+        }
+        if !permitted {
             continue;
-        };
-        let (a, b) = (grid.node_pos(from), grid.node_pos(to));
-        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-        edges.push(OffMeshLink {
-            from,
-            to,
-            cost: sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) + link.cost,
-            bidirectional: link.bidirectional,
-            tag: table.entries.len() as u32,
-        });
-        table.entries.push(LinkEntry {
-            entity,
-            from,
-            to,
-            bidirectional: link.bidirectional,
-        });
+        }
+        for (end, p, snapped) in [
+            ("from", ends[0], end_snapped[0]),
+            ("to", ends[1], end_snapped[1]),
+        ] {
+            if snapped {
+                continue;
+            }
+            let wide = if p.iter().all(|c| c.is_finite()) {
+                nearest_node(&grids[0], p, 1.0e6)
+            } else {
+                None
+            };
+            let distance = wide.map(|n| {
+                let q = grids[0].node_pos(n);
+                let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+                sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+            });
+            unsnapped.push((entity, end, distance));
+        }
     }
-    table.links = NavLinks::new(edges);
-    (table, unsnapped)
+    for (table, edges) in tables.iter_mut().zip(edges) {
+        table.links = NavLinks::new(edges);
+    }
+    (tables, unsnapped, unknown)
 }
 
 fn update(nav: &mut Nav, physics: &PhysicsWorld) -> Result<(), PhysicsError> {
     let mut statics: Vec<StaticBody> = physics.static_bodies().collect();
     statics.sort_by_key(|s| s.entity);
     let config = nav.config.clone();
+    let classes = nav.classes.clone();
+    let radius = classes.iter().map(|c| c.radius).fold(0.0, f32::max);
     let filter = QueryFilter::new()
         .only_fixed()
-        .ignore_set(&LayerSet::from(config.ignore_layers.clone()));
-    let full = nav.full_rebuild || nav.grid.is_none();
+        .ignore_set(&config.ignore_layers);
+    let full = nav.full_rebuild || nav.grids.len() != classes.len();
     let (min, max) = if full {
         ([0, 0], [config.nx - 1, config.nz - 1])
-    } else if let Some(rect) = dirty_rect(&nav.last_statics, &statics, &config) {
+    } else if let Some(rect) = dirty_rect(&nav.last_statics, &statics, &config, radius) {
         rect
     } else {
         nav.last_statics = statics;
@@ -696,13 +937,21 @@ fn update(nav: &mut Nav, physics: &PhysicsWorld) -> Result<(), PhysicsError> {
             nav.cells.push([i, j]);
         }
     }
-    let source = presample(physics, &filter, &config, &nav.cells, min, width)?;
-    match &mut nav.grid {
-        Some(grid) if !full => grid.rebuild_region(&source, min, max),
-        slot => {
-            *slot = Some(NavGrid::build(config.grid_params(), &source));
-            // A fresh grid restarts its generation, which would pass off stale fields as current.
-            nav.cache = FlowCache::new(config.flow_radius);
+    let sources = presample(physics, &filter, &config, &classes, &nav.cells, min, width)?;
+    if full {
+        nav.grids = classes
+            .iter()
+            .zip(&sources)
+            .map(|(class, source)| NavGrid::build(config.grid_params(class), source))
+            .collect();
+        // A fresh grid restarts its generation, which would pass off stale fields as current.
+        nav.caches = classes
+            .iter()
+            .map(|_| FlowCache::new(config.flow_radius))
+            .collect();
+    } else {
+        for (grid, source) in nav.grids.iter_mut().zip(&sources) {
+            grid.rebuild_region(source, min, max);
         }
     }
     nav.last_statics = statics;
@@ -719,9 +968,9 @@ fn update(nav: &mut Nav, physics: &PhysicsWorld) -> Result<(), PhysicsError> {
 /// use ludion_engine::PathRequest;
 ///
 /// let req = PathRequest { max_cost: 40.0, ..PathRequest::new([0.0, 0.0, 0.0], [9.0, 0.0, 3.0]) };
-/// assert!(req.partial && req.snap_radius == 1.0);
+/// assert!(req.partial && req.snap_radius == 1.0 && req.class.is_empty());
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PathRequest {
     /// World start; snapped to the nearest walkable node within `snap_radius`.
     pub from: [f32; 3],
@@ -736,6 +985,8 @@ pub struct PathRequest {
     pub partial: bool,
     /// How far, in metres, an end off the walkable grid may snap to a node (default `1`).
     pub snap_radius: f32,
+    /// The `NavConfig.classes` entry to plan for; empty is the first class (default empty).
+    pub class: String,
 }
 
 impl PathRequest {
@@ -749,6 +1000,7 @@ impl PathRequest {
             max_expanded: opts.max_expanded,
             partial: opts.partial,
             snap_radius: 1.0,
+            class: String::new(),
         }
     }
 }
@@ -781,17 +1033,37 @@ impl NavPath {
     }
 }
 
-fn nav_grid(world: &World) -> Result<&NavGrid, Diagnostic> {
-    world
+/// The grid and link table of `class`: `L4140` before the grids exist, `L4147` for an unknown class.
+fn nav_class<'a>(
+    world: &'a World,
+    class: &str,
+) -> Result<(&'a NavGrid, &'a LinkTable), Diagnostic> {
+    let nav = world
         .resource::<Nav>()
-        .and_then(Nav::grid)
+        .filter(|nav| !nav.grids.is_empty())
         .ok_or_else(|| {
             Diagnostic::new(
                 code::NAV_NOT_READY,
                 "a navigation query ran before the nav grid exists",
             )
             .with_help("opt in with `Engine::builder().nav(NavConfig::default())` and run `nav_update` before querying")
-        })
+        })?;
+    let index = nav
+        .config
+        .class_index(class)
+        .filter(|&i| i < nav.grids.len())
+        .ok_or_else(|| {
+            Diagnostic::new(
+                code::NAV_CLASS_UNKNOWN,
+                format!("navigation class `{class}` is not defined"),
+            )
+            .with_path("/class")
+            .with_help(format!(
+                "use one of: {}; `ludion explain L4147`",
+                nav.config.class_names()
+            ))
+        })?;
+    Ok((&nav.grids[index], &nav.tables[index]))
 }
 
 fn bad_request(path: &str, what: String, help: &str) -> Diagnostic {
@@ -910,8 +1182,8 @@ fn plan(grid: &NavGrid, table: &LinkTable, req: &PathRequest, project_start: boo
 /// `links` on the answer lists the waypoints where a traversal starts.
 ///
 /// # Errors
-/// `L4140` before the grid exists (no `.nav(..)` opt-in, or `nav_update` has not run); `L4141` for a
-/// non-finite point, a negative or NaN `max_cost`, a negative or non-finite `snap_radius`, or a zero
+/// `L4140` before the grid exists (no `.nav(..)` opt-in, or `nav_update` has not run); `L4147` for a
+/// `class` the config does not define; `L4141` for a non-finite point, a negative or NaN `max_cost`, a negative or non-finite `snap_radius`, or a zero
 /// `max_expanded`.
 ///
 /// # Example
@@ -924,19 +1196,14 @@ fn plan(grid: &NavGrid, table: &LinkTable, req: &PathRequest, project_start: boo
 /// assert_eq!(err.code.as_str(), "L4140");
 /// ```
 pub fn nav_path(world: &World, req: &PathRequest) -> Result<NavPath, Diagnostic> {
-    let grid = nav_grid(world)?;
+    let (grid, table) = nav_class(world, &req.class)?;
     check_request(req)?;
-    let table = world.resource::<Nav>().map(|nav| &nav.table);
-    Ok(plan(
-        grid,
-        table.unwrap_or(&LinkTable::default()),
-        req,
-        true,
-    ))
+    Ok(plan(grid, table, req, true))
 }
 
 /// The walking distance in metres from `from` to `to` along the grid, or `None` when the goal cannot be
-/// reached (either end off the grid, or no route). Ends snap within one metre.
+/// reached (either end off the grid, or no route). Ends snap within one metre. `class` names the agent
+/// class (`""` is the first).
 ///
 /// # Errors
 /// As [`nav_path`].
@@ -946,22 +1213,24 @@ pub fn nav_path(world: &World, req: &PathRequest) -> Result<NavPath, Diagnostic>
 /// use ludion_engine::{Engine, NavConfig, nav_distance};
 ///
 /// let engine = Engine::builder().nav(NavConfig::default()).build().unwrap();
-/// assert!(nav_distance(engine.world(), [0.0; 3], [5.0, 0.0, 5.0]).is_err());
+/// assert!(nav_distance(engine.world(), [0.0; 3], [5.0, 0.0, 5.0], "").is_err());
 /// ```
 pub fn nav_distance(
     world: &World,
     from: [f32; 3],
     to: [f32; 3],
+    class: &str,
 ) -> Result<Option<f32>, Diagnostic> {
     let req = PathRequest {
         partial: false,
+        class: class.to_string(),
         ..PathRequest::new(from, to)
     };
     let path = nav_path(world, &req)?;
     Ok((path.status == PathStatus::Complete).then_some(path.cost))
 }
 
-/// Whether `to` can be walked to from `from` along the grid. Ends snap within one metre.
+/// Whether `to` can be walked to from `from` along the `class` grid. Ends snap within one metre.
 ///
 /// # Errors
 /// As [`nav_path`].
@@ -971,41 +1240,118 @@ pub fn nav_distance(
 /// use ludion_engine::{Engine, NavConfig, nav_reachable};
 ///
 /// let engine = Engine::builder().nav(NavConfig::default()).build().unwrap();
-/// assert!(nav_reachable(engine.world(), [0.0; 3], [5.0, 0.0, 5.0]).is_err());
+/// assert!(nav_reachable(engine.world(), [0.0; 3], [5.0, 0.0, 5.0], "").is_err());
 /// ```
-pub fn nav_reachable(world: &World, from: [f32; 3], to: [f32; 3]) -> Result<bool, Diagnostic> {
-    Ok(nav_distance(world, from, to)?.is_some())
+pub fn nav_reachable(
+    world: &World,
+    from: [f32; 3],
+    to: [f32; 3],
+    class: &str,
+) -> Result<bool, Diagnostic> {
+    Ok(nav_distance(world, from, to, class)?.is_some())
 }
 
 /// The nearest walkable point to `p` within `max_dist` metres: `p` itself lifted or dropped onto the
 /// floor when it is over walkable ground, else the centre of the nearest walkable cell; `None` when
-/// nothing is that close.
+/// nothing is that close. `class` names the agent class (`""` is the first).
 ///
 /// # Errors
-/// `L4140` before the grid exists; `L4141` for a non-finite `p` or a negative or non-finite `max_dist`.
+/// `L4140` before the grid exists; `L4147` for an unknown `class`; `L4141` for a non-finite `p` or a
+/// negative or non-finite `max_dist`.
 ///
 /// # Example
 /// ```
 /// use ludion_engine::{Engine, NavConfig, nav_project};
 ///
 /// let engine = Engine::builder().nav(NavConfig::default()).build().unwrap();
-/// assert!(nav_project(engine.world(), [0.0; 3], 2.0).is_err());
+/// assert!(nav_project(engine.world(), [0.0; 3], "", 2.0).is_err());
 /// ```
 pub fn nav_project(
     world: &World,
     p: [f32; 3],
+    class: &str,
     max_dist: f32,
 ) -> Result<Option<[f32; 3]>, Diagnostic> {
-    let grid = nav_grid(world)?;
+    let (grid, _) = nav_class(world, class)?;
     check_point("p", p)?;
     check_radius("max_dist", max_dist)?;
     Ok(nearest_node(grid, p, max_dist).map(|node| project(grid, p, node)))
+}
+
+/// Where a straight walk from `from` toward `to` first leaves the `class` grid: the point on the line
+/// where the next step has no link (a wall, a drop, a slope too steep for the class), at the floor height
+/// of the last node reached. `None` when the whole line is walkable; `Some(from)` when `from` itself is
+/// off the grid.
+///
+/// # Errors
+/// `L4140` before the grid exists; `L4147` for an unknown `class`; `L4141` for a non-finite point.
+///
+/// # Example
+/// ```
+/// use ludion_engine::{Engine, NavConfig, nav_raycast};
+///
+/// let engine = Engine::builder().nav(NavConfig::default()).build().unwrap();
+/// assert!(nav_raycast(engine.world(), [0.0; 3], [5.0, 0.0, 5.0], "").is_err());
+/// ```
+pub fn nav_raycast(
+    world: &World,
+    from: [f32; 3],
+    to: [f32; 3],
+    class: &str,
+) -> Result<Option<[f32; 3]>, Diagnostic> {
+    let (grid, _) = nav_class(world, class)?;
+    check_point("from", from)?;
+    check_point("to", to)?;
+    Ok(line_exit(grid, from, to))
+}
+
+/// A uniformly random walkable point among the nodes within `radius` metres of walking distance of
+/// `around` on the `class` grid (grid links only, no off-mesh links), drawn from `rng` with one
+/// `gen_range_usize` call. `around` snaps to a node within one metre; `None` when it is off the grid.
+/// The nodes are taken in ascending node order, so the answer is a pure function of the grid and the
+/// generator state.
+///
+/// # Errors
+/// `L4140` before the grid exists; `L4147` for an unknown `class`; `L4141` for a non-finite `around` or
+/// a negative or non-finite `radius`.
+///
+/// # Example
+/// ```
+/// use ludion_core::rng::DeterministicRng;
+/// use ludion_engine::{Engine, NavConfig, nav_random_point};
+///
+/// let engine = Engine::builder().nav(NavConfig::default()).build().unwrap();
+/// let mut rng = DeterministicRng::new(7);
+/// assert!(nav_random_point(engine.world(), [0.0; 3], 5.0, "", &mut rng).is_err());
+/// ```
+pub fn nav_random_point(
+    world: &World,
+    around: [f32; 3],
+    radius: f32,
+    class: &str,
+    rng: &mut DeterministicRng,
+) -> Result<Option<[f32; 3]>, Diagnostic> {
+    let (grid, _) = nav_class(world, class)?;
+    check_point("around", around)?;
+    check_radius("radius", radius)?;
+    let Some(start) = nearest_node(grid, around, 1.0) else {
+        return Ok(None);
+    };
+    let nodes = reachable_within(grid, start, radius);
+    if nodes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(
+        grid.node_pos(nodes[rng.gen_range_usize(0..nodes.len())]),
+    ))
 }
 
 /// One agent as the steering phase sees it.
 struct Steer {
     entity: EntityId,
     agent: NavAgent,
+    /// The agent's class index; `None` for a name the config does not define.
+    class: Option<usize>,
     pos: [f32; 3],
     /// The walking agent's target node, `None` for a flyer, a routed agent, or a target off the grid.
     node: Option<NodeId>,
@@ -1162,7 +1508,7 @@ fn plan_route(
 pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
     let mut agents: Vec<(EntityId, NavAgent)> = world
         .query_ids::<(&NavAgent,)>()
-        .map(|(id, (agent,))| (id, *agent))
+        .map(|(id, (agent,))| (id, agent.clone()))
         .collect();
     if agents.is_empty() {
         return;
@@ -1172,9 +1518,13 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
         .into_iter()
         .filter_map(|(entity, agent)| {
             let pos = world_transform(world, entity)?.trs.translation;
+            let class = world
+                .resource::<Nav>()
+                .map_or(Some(0), |nav| nav.config.class_index(&agent.class));
             Some(Steer {
                 entity,
                 agent,
+                class,
                 pos,
                 node: None,
                 goal: world.get::<NavGoal>(entity).ok().flatten().copied(),
@@ -1195,17 +1545,21 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
     let mut nav = world.remove_resource::<Nav>();
     if let Some(nav) = nav.as_mut() {
         let mut budget = nav.config.max_path_requests_per_tick;
-        let (grid, cache, table) = nav.split();
-        if let Some(grid) = grid {
-            for steer in steers.iter_mut().filter(|s| !s.agent.flying) {
-                if let Some(goal) = steer.goal {
-                    plan_route(grid, table, steer, goal, &mut budget);
-                    continue;
-                }
-                steer.node = grid.node_at(steer.agent.target);
-                if let Some(node) = steer.node {
-                    cache.field(grid, node);
-                }
+        for steer in steers.iter_mut().filter(|s| !s.agent.flying) {
+            let Some(class) = steer.class else {
+                continue;
+            };
+            let (grid, cache, table) = nav.split_class(class);
+            let Some(grid) = grid else {
+                continue;
+            };
+            if let Some(goal) = steer.goal {
+                plan_route(grid, table, steer, goal, &mut budget);
+                continue;
+            }
+            steer.node = grid.node_at(steer.agent.target);
+            if let Some(node) = steer.node {
+                cache.field(grid, node);
             }
         }
     }
@@ -1220,14 +1574,23 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
             &empty
         }
     };
-    let grid = nav.as_ref().and_then(Nav::grid);
-    let cache = nav.as_ref().map(|n| &n.cache);
-    let table = nav.as_ref().map(|n| &n.table);
+    let views: Vec<ClassView> = nav.as_ref().map_or_else(Vec::new, |n| {
+        (0..n.classes.len())
+            .map(|i| ClassView {
+                grid: n.grids.get(i),
+                cache: &n.caches[i],
+                table: &n.tables[i],
+            })
+            .collect()
+    });
     let chunks = par::par_map_chunks(&steers, STEER_CHUNK, |_, chunk| {
         let mut scratch: Vec<Neighbor> = Vec::new();
         chunk
             .iter()
-            .map(|steer| steer_one(steer, grid, table, cache, index, &mut scratch))
+            .map(|steer| {
+                let view = steer.class.and_then(|c| views.get(c));
+                steer_one(steer, view, index, &mut scratch)
+            })
             .collect::<Vec<([f32; 3], Option<Advance>)>>()
     });
 
@@ -1240,10 +1603,42 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
         }
         write_route(world, steer, advance);
     }
+    let names = nav.as_ref().map(|n| n.config.class_names());
     if let Some(mut nav) = nav {
-        nav.cache.end_frame();
+        for cache in &mut nav.caches {
+            cache.end_frame();
+        }
         world.insert_resource(nav);
     }
+    for steer in steers
+        .iter()
+        .filter(|s| s.class.is_none() && !s.agent.flying)
+    {
+        let key = offender_key(world, steer.entity);
+        report_full(
+            world,
+            key,
+            Diagnostic::new(
+                code::NAV_CLASS_UNKNOWN,
+                format!(
+                    "the `NavAgent` class `{}` is not a nav class, so the agent stands still",
+                    steer.agent.class
+                ),
+            )
+            .with_path("/components/NavAgent/class")
+            .with_help(format!(
+                "use one of: {}; `ludion explain L4147`",
+                names.as_deref().unwrap_or("none")
+            )),
+        );
+    }
+}
+
+/// One class's derived state as the parallel steering phase reads it.
+struct ClassView<'a> {
+    grid: Option<&'a NavGrid>,
+    cache: &'a FlowCache,
+    table: &'a LinkTable,
 }
 
 /// Tells a routed agent its game-played link traversal is finished: the route continues from the link's
@@ -1316,19 +1711,24 @@ fn write_route(world: &mut World, steer: &mut Steer, advance: Option<Advance>) {
 
 fn steer_one(
     steer: &Steer,
-    grid: Option<&NavGrid>,
-    table: Option<&LinkTable>,
-    cache: Option<&FlowCache>,
+    view: Option<&ClassView>,
     index: &Index3d,
     scratch: &mut Vec<Neighbor>,
 ) -> ([f32; 3], Option<Advance>) {
     let Steer {
         entity, agent, pos, ..
     } = steer;
+    // A walker of an unknown class stands still.
+    if !agent.flying && steer.class.is_none() {
+        return ([0.0; 3], None);
+    }
+    let grid = view.and_then(|v| v.grid);
+    let table = view.map(|v| v.table);
+    let cache = view.map(|v| v.cache);
     let mut advance = None;
     let mut velocity = if agent.flying {
         let target = steer.goal.map_or(agent.target, |g| g.at);
-        seek_flying(&NavAgent { target, ..*agent }, *pos)
+        seek_flying(agent, target, *pos)
     } else if steer.goal.is_some() {
         let (velocity, adv) = seek_routed(steer, grid, table);
         advance = adv;
@@ -1417,12 +1817,8 @@ fn seek_routed(
     )
 }
 
-fn seek_flying(agent: &NavAgent, pos: [f32; 3]) -> [f32; 3] {
-    let to = [
-        agent.target[0] - pos[0],
-        agent.target[1] - pos[1],
-        agent.target[2] - pos[2],
-    ];
+fn seek_flying(agent: &NavAgent, target: [f32; 3], pos: [f32; 3]) -> [f32; 3] {
+    let to = [target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]];
     let d = sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
     if d <= agent.arrive_radius || d <= 0.0 {
         return [0.0; 3];
@@ -1593,7 +1989,7 @@ pub(crate) fn debug_lines(
         }
     }
     if parts.grid {
-        for entry in &nav.table.entries {
+        for entry in &nav.tables[0].entries {
             let (a, b) = (grid.node_pos(entry.from), grid.node_pos(entry.to));
             if (within(eye, a) || within(eye, b)) && lines.len() < NAV_MAX_SEGMENTS {
                 lines.push(seg(lifted(a), lifted(b), LINK_OFFMESH_COLOR));

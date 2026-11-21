@@ -1,11 +1,11 @@
 ---
-description: Navigation — walkability grid, flow fields, paths, off-mesh NavLink, NavAgent/NavGoal steering
+description: Navigation — walkability grid, agent classes, flow fields, paths, NavLink, NavAgent steering
 ---
 
 # Navigation: a grid from the colliders, one flow field per target, agents that steer
 
 **Scope:** `NavConfig`, `Engine::nav`, `nav_update`, `NavAgent`, `NavSteering`, `nav_steer`, `NavGoal`, `NavRoute`,
-`NavLink`, `nav_link_done`, `nav_path` and its queries. The
+`NavLink`, `nav_link_done`, `nav_path` and its queries, `NavClass`. The
 engine writes a desired velocity; moving the body is yours — `ludion docs motor` for a capsule,
 `ludion docs components` for the rows. Static colliders come from `ludion docs physics` and
 `ludion docs collision-layers`; the neighbour index is `ludion docs spatial-3d`.
@@ -40,17 +40,18 @@ Engine::builder()
 | `cell_size` | `1` | finite, `> 0` |
 | `nx`, `nz` | `64` | `>= 1`, `nx * nz <= 4194304` |
 | `y_min`, `y_max` | `-8`, `32` | finite, `y_min < y_max`; floors are looked for inside |
-| `agent_radius` | `0.4` | finite, `> 0`; a floor is dropped where a capsule this wide collides |
-| `agent_height` | `1.8` | finite, `> 0`; the headroom a floor needs |
-| `max_step` | `0.4` | finite, `>= 0`; largest step on flat ground (slopes widen it) |
-| `max_slope_deg` | `45` | in `(0, 90)` |
+| `agent_radius` | `0.4` | finite, `> 0`; a floor is dropped where a capsule this wide collides (ignored when `classes` is set) |
+| `agent_height` | `1.8` | finite, `> 0`; the headroom a floor needs (ignored when `classes` is set) |
+| `max_step` | `0.4` | finite, `>= 0`; largest step on flat ground, slopes widen it (ignored when `classes` is set) |
+| `max_slope_deg` | `45` | in `(0, 90)` (ignored when `classes` is set) |
+| `classes` | `[]` | at most 8 `NavClass { name, radius, height, max_step, max_slope_deg }`, names non-empty and unique; see Classes |
 | `flow_radius` | `48` | finite, `> 0`; how far a field reaches from its target |
-| `ignore_layers` | `[]` | names declared in `physics.layers`, none empty |
+| `ignore_layers` | `[]` | names declared in `physics.layers`, none empty (Rust type `LayerSet`; text is a list) |
 | `max_path_requests_per_tick` | `8` | `>= 1`; routes `nav_steer` plans per tick |
 
 A bad value is `L4032` with a JSON Pointer to the field; `ludion explain L4032`.
 
-`NavAgent` fields and defaults: `ludion docs components`. `target` is `[0,0,0]`, `speed` `4`,
+`NavAgent` fields and defaults: `ludion docs components`. `class` is `""` (the first class), `target` is `[0,0,0]`, `speed` `4`,
 `flying` `false`, `arrive_radius` `0.5`, `separation_radius` `0.75`, `separation_strength` `2`,
 `separation_neighbors` `4` (at most 16), `neighbor_layers` all bits (`0` turns separation off).
 A negative or non-finite field, or too many neighbours, is `L1340`. `NavSteering { velocity }` is
@@ -58,7 +59,7 @@ what `nav_steer` writes each tick.
 
 ## Rules
 
-- **One agent class per `Nav`.** Radius, height, step and slope belong to the config, not the agent.
+- **Agent size belongs to the config, not the agent.** One class by default; several with `classes` (below).
 - **Only static colliders shape the grid**, so motors, props and the player never block it;
   `ignore_layers` optionally drops static layers that are not ground or obstacles.
 - **The grid reads the last completed physics step**: a static spawned at tick N is in the grid from
@@ -87,10 +88,12 @@ after `nav_update` has built the grid (before it: `L4140`):
 ```rust
 let req = PathRequest { max_cost: 60.0, ..PathRequest::new(from, to) };
 let path = nav_path(world, &req)?;              // NavPath { status, cost, waypoints, expanded }
-let metres = nav_distance(world, from, to)?;    // Option<f32>: None when unreachable
-let ok = nav_reachable(world, from, to)?;
-let on_floor = nav_project(world, p, 2.0)?;     // Option<[f32; 3]>: nearest walkable point
+let metres = nav_distance(world, from, to, "")?;   // Option<f32>: None when unreachable
+let ok = nav_reachable(world, from, to, "")?;
+let on_floor = nav_project(world, p, "", 2.0)?;   // Option<[f32; 3]>: nearest walkable point
 ```
+
+The `""` is the agent class (the first class); `PathRequest.class` is the same field.
 
 - `status` is `Complete`, `Partial` (a path to the reachable node nearest the goal) or `Unreachable`;
   `partial: false` turns `Partial` into `Unreachable`.
@@ -100,6 +103,36 @@ let on_floor = nav_project(world, p, 2.0)?;     // Option<[f32; 3]>: nearest wal
   `Unreachable`. `max_cost` and `max_expanded` (default 20000) bound the search.
 - A bad request (non-finite point, negative `max_cost` or `snap_radius`, zero `max_expanded`) is
   `L4141` with a pointer; the queries are pure and change nothing.
+
+## Classes
+
+One world can hold several agent sizes. `NavConfig.classes` lists up to 8 `NavClass`es; the grid is sampled
+once per column (floors and headroom shared) and each class adds its own capsule test and its own height, step
+and slope, giving one grid, flow cache and link table per class (all derived):
+
+```rust
+let config = NavConfig {
+    classes: vec![
+        NavClass { name: "walker".into(), radius: 0.3, max_slope_deg: 40.0, ..NavClass::default() },
+        NavClass { name: "forklift".into(), radius: 1.0, max_slope_deg: 10.0, ..NavClass::default() },
+    ],
+    ..NavConfig::default()
+};
+```
+
+- A class is chosen by name: `NavAgent: { class: forklift }`, `PathRequest { class: "forklift".into(), .. }`, the
+  `class` argument of the queries. An empty name is the first class. With no `classes` there is one class, `""`,
+  built from `agent_radius`, `agent_height`, `max_step` and `max_slope_deg`; a config without `classes` builds the
+  same grid it always did.
+- An unknown name is `L4147`: a query returns it as an error, `nav_steer` leaves that walker standing still (zero
+  velocity) and reports it once. Flyers ignore `class`.
+- `NavLink.classes: [walker]` limits a link to those classes (empty is all). A link is in a class's table only when
+  both ends snap on that class's grid; `L4145` fires only when an end snaps on no permitted class. A `classes`
+  entry naming no class is `L4147` once per link.
+- `nav_raycast(world, from, to, class)` returns where a straight walk first leaves the class's grid (`None` when the
+  whole line is walkable). `nav_random_point(world, around, radius, class, &mut rng)` is a uniform pick among the
+  nodes within `radius` metres of walking distance of `around` (grid links only), one `gen_range_usize` draw.
+- The `nav` debug view draws the first class.
 
 ## Goals and routes
 
@@ -178,3 +211,4 @@ Put the motors on a layer that ignores itself, so they don't block each other. N
 - `ludion docs components` — the `NavAgent`, `NavSteering`, `NavGoal` and `NavRoute` rows.
 - `cargo run -p ludion --example nav_path` — a wall between an agent and its goal.
 - `cargo run -p ludion --example nav_link` — a ladder between two floors.
+- `cargo run -p ludion --example nav_class` — a walker and a forklift through one gap.

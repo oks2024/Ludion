@@ -675,6 +675,21 @@ pub mod code {
     pub const SEQUENCE_KEY_DEGRADED: DiagnosticCode = DiagnosticCode::new("L4353");
     /// `L4354` — a `sequences::` call reached an engine that did not opt in with `.sequences()`.
     pub const SEQUENCES_NOT_ENABLED: DiagnosticCode = DiagnosticCode::new("L4354");
+    /// `L4370` — `paired_fit` found no `kind: paired` document at the path it was given: the engine
+    /// has no project, or the document fails to load (the loader's diagnostics follow).
+    pub const PAIRED_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L4370");
+    /// `L4371` — a paired cast names an unknown, repeated or missing role, or an entity that cannot
+    /// play its role: dead, no `Transform`, parented, or not the role's assembly.
+    pub const PAIRED_CAST_INVALID: DiagnosticCode = DiagnosticCode::new("L4371");
+    /// `L4372` — a cast entity's scale is not uniform or differs from its role's `scale`.
+    pub const PAIRED_SCALE_MISMATCH: DiagnosticCode = DiagnosticCode::new("L4372");
+    /// `L4373` — a paired document has a shape the runtime does not play yet: more than two roles.
+    pub const PAIRED_UNSUPPORTED: DiagnosticCode = DiagnosticCode::new("L4373");
+    /// `L4290` — `AnimGraph::step` found no `AnimGraphState`, a state name the graph does not declare,
+    /// no `Animation`, or a layer the entity's `AnimationLayers` lacks. Nothing was written.
+    pub const ANIM_GRAPH_STATE_INVALID: DiagnosticCode = DiagnosticCode::new("L4290");
+    /// `L4291` — an `AnimGraph` table has duplicate state names, or an edge names an undeclared state.
+    pub const ANIM_GRAPH_INVALID: DiagnosticCode = DiagnosticCode::new("L4291");
 
     /// `L1122` — a saved player profile could not be written to disk at a frame boundary. The engine
     /// stages the canonical text to a hidden `.tmp` sibling, syncs it to disk and renames it over
@@ -1272,8 +1287,8 @@ pub mod code {
     /// JSON Pointer names the offending field.
     pub const JOINT_MOTOR_INVALID: DiagnosticCode = DiagnosticCode::new("L1188");
 
-    /// `L1750` — a `JointZero` is structurally invalid: its `rotation` holds a non-finite element or
-    /// has a length under 1e-6, so it is not a quaternion. The JSON Pointer is `/rotation`.
+    /// `L1750` — a `Joint`'s `zero` is structurally invalid: it holds a non-finite element or has a
+    /// length under 1e-6, so it is not a quaternion. The JSON Pointer is `/zero`.
     pub const JOINT_ZERO_INVALID: DiagnosticCode = DiagnosticCode::new("L1750");
 
     /// `L1751` — a `PoseSnapshot` is structurally invalid: a part's `rotation` or `translation`
@@ -2022,6 +2037,8 @@ pub mod code {
     pub const UI_RADIAL_INVALID: DiagnosticCode = DiagnosticCode::new("L1619");
     /// `L1620` — a `UiRect`, `UiText` or `UiGroup` `rotation` is not finite.
     pub const UI_ROTATION_INVALID: DiagnosticCode = DiagnosticCode::new("L1620");
+    /// `L1621` — a `UiShape` has a non-finite number, a bad radius, thickness, sweep, size or stroke width, or a fill or missing stroke on a stroke-only kind.
+    pub const UI_SHAPE_INVALID: DiagnosticCode = DiagnosticCode::new("L1621");
     /// `L2302` — a UI element's `group` could not be resolved; drawn ungrouped.
     pub const UI_GROUP_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2302");
     /// `L2303` — more than two clipping groups in a UI element's chain; the outer ones are dropped.
@@ -2047,8 +2064,9 @@ pub mod code {
     /// submit was interrupted before any job was accepted. Raised by `ludion-gen`.
     pub const GENERATION_JOBS_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L1391");
 
-    /// `L1392` — a component registration marks an entity reference inside a list or map, which the
-    /// range check, the save remap and the carry remap cannot address. Raised by `ludion-ecs`.
+    /// `L1392` — a component registration marks an entity reference inside a list, map or tuple not
+    /// wrapped in `EntityRefCollection`, which the range check, the save remap and the carry remap
+    /// cannot address; wrap it, or hold each reference in its own field. Raised by `ludion-ecs`.
     pub const ENTITY_REF_IN_COLLECTION: DiagnosticCode = DiagnosticCode::new("L1392");
 
     /// `L1394` — the world holds a `PatternPlayer` naming a pattern, or a `Volley`, but the schedule
@@ -2261,6 +2279,10 @@ pub mod code {
 
     /// `L2374` — more than 4 `RenderView`s are enabled; the extras are not rendered. Raised by extract.
     pub const RENDER_VIEW_BUDGET: DiagnosticCode = DiagnosticCode::new("L2374");
+
+    /// `L2375` — a `RenderLayers` list, `Camera.layers` or `RenderView.layers` is empty, holds an empty or
+    /// repeated name, or the scene uses more than 31 layer names besides `default`.
+    pub const RENDER_LAYERS_INVALID: DiagnosticCode = DiagnosticCode::new("L2375");
 
     /// `L2380` — a `Rain` field is non-finite or out of range.
     pub const RAIN_INVALID: DiagnosticCode = DiagnosticCode::new("L2380");
@@ -2832,6 +2854,10 @@ pub mod code {
     /// `L4146` — `nav_link_done` was called for an entity whose `NavRoute` is not `at_link`. An **error**
     /// returned to the caller.
     pub const NAV_NOT_AT_LINK: DiagnosticCode = DiagnosticCode::new("L4146");
+    /// `L4147` — a nav agent, a path request or a `NavLink.classes` entry names an agent class that
+    /// `NavConfig.classes` does not define. An **error** from the queries; a **warning** from `nav_steer`
+    /// (the agent stands still) and `nav_update` (a link entry), reported once per offender.
+    pub const NAV_CLASS_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L4147");
 
     /// `L4033` — a `ProjectileLook::Mesh` asset or `ProjectileLook::Voxel` model cannot be drawn: at `build` the file does not
     /// exist (an **error**, refused with a nearest-name suggestion); at extract it failed to load
@@ -2907,6 +2933,14 @@ pub mod code {
     /// `when` bus of `Master` or `Music`, or a `duck` list that is empty or names `Master` or the
     /// `when` bus. An **error**: `build` refuses it. Raised by `EngineBuilder::build`.
     pub const AUDIO_DUCK_RULE_INVALID: DiagnosticCode = DiagnosticCode::new("L5100");
+    /// `L5101` — an `audio_occlusion` config cannot run: `rays` not 1, 3 or 5, a negative or
+    /// non-finite `spread_m`, a `per_hit_db` or `max_db` that is not finite or is above 0 (or a
+    /// `max_db` above `per_hit_db`), an `occluded_low_pass_hz` outside the open range, a zero
+    /// `interval_ticks`, or a `max_rays_per_tick` below `rays`. An **error**: `build` refuses it.
+    pub const AUDIO_OCCLUSION_INVALID: DiagnosticCode = DiagnosticCode::new("L5101");
+    /// `L5102` — the physics query behind audio occlusion refused the configured `QueryFilter`
+    /// (an undeclared layer name). A **warning**, once per engine: every source then reads clear.
+    pub const AUDIO_OCCLUSION_QUERY_REJECTED: DiagnosticCode = DiagnosticCode::new("L5102");
     /// `L5130` — `dialogue::say` named a line (or a line's speaker) no `kind: dialogue` doc defines.
     pub const DIALOGUE_UNKNOWN_LINE: DiagnosticCode = DiagnosticCode::new("L5130");
     /// `L5131` — a `world`-channel line was said without a live speaker entity.
@@ -7468,21 +7502,23 @@ Fix: give `target` one number for a hinge or slider and three for a ball, and gi
         severity: Severity::Error,
         title: "joint zero is structurally invalid",
         explanation: "\
-A `JointZero` component's `rotation` is not a quaternion the solver can measure a joint from.
+A `Joint`'s `zero` is not a quaternion the solver can measure the joint from.
 
-Two cases raise it, both at `/rotation`:
+Two cases raise it, both at `/zero`:
 
   - an element is not finite;
   - the four elements have a length under 1e-6, so the quaternion cannot be normalized.
 
-A `JointZero` stores the joint's zero rotation (`q_a⁻¹·q_b`, `[x, y, z, w]`) in place of the one the
-physics layer would capture from the bodies' pose at build. It does nothing without a `Joint` on
-the same entity.
+`Joint.zero` stores the joint's zero rotation (`q_a⁻¹·q_b`, `[x, y, z, w]`) in place of the one the
+physics layer would capture from the bodies' pose at build.
 
-Fix: give `rotation` four finite numbers of a non-zero quaternion:
+Fix: give `zero` four finite numbers of a non-zero quaternion:
 
-  JointZero:
-    rotation: [0.0, 0.0, 0.0, 1.0]",
+  Joint:
+    a: { index: 0, generation: 0 }
+    b: { index: 1, generation: 0 }
+    kind: { fixed: {} }
+    zero: [0.0, 0.0, 0.0, 1.0]",
     },
     CodeEntry {
         code: code::POSE_SNAPSHOT_INVALID,
@@ -9888,6 +9924,16 @@ agent that reached a link start waits for it.
 Fix: call `nav_link_done` only while the agent's `NavRoute.status` is `at_link`.",
     },
     CodeEntry {
+        code: code::NAV_CLASS_UNKNOWN,
+        severity: Severity::Warning,
+        title: "the nav agent class is not defined",
+        explanation: "A `NavAgent.class`, a `PathRequest.class` or a `NavLink.classes` entry names a class that
+`NavConfig.classes` does not define. A query returns this as an error; `nav_steer` leaves the agent standing
+still and `nav_update` skips the link entry, each reporting once per offender. The help lists the class names.
+
+Fix: use a name from `NavConfig.classes`, or leave the class empty for the first class.",
+    },
+    CodeEntry {
         code: code::INPUT_BINDING_SOURCES,
         severity: Severity::Error,
         title: "a binding has zero or several sources",
@@ -10213,6 +10259,19 @@ A `UiRect`, `UiText` or `UiGroup` has a `rotation` that is not finite (pointer
 `/entities/{i}/components/{Component}/rotation`). A scene with one is refused.
 
 Fix: give `rotation` a finite value in degrees (positive is clockwise on screen; 0 draws unrotated).",
+    },
+    CodeEntry {
+        code: code::UI_SHAPE_INVALID,
+        severity: Severity::Error,
+        title: "a UiShape is invalid",
+        explanation: "\
+A `UiShape` has one of: a non-finite number; a `radius` that is not above 0; a `ring` `thickness` that is
+not in `(0, radius]`; a `wedge` `inner_radius` outside `[0, radius)`; a `sweep_deg` outside `[0, 360]`; a
+negative `size` component or `corner_radius`; a stroke `width` that is not above 0; a `fill` on a `line` or
+`arc` (they draw only their stroke); or a `line` or `arc` with no `stroke`. The pointer
+(`/entities/{i}/components/UiShape/{field}`) names the field. A scene with one is refused.
+
+Fix: correct the field; give a `line` or `arc` a `stroke` and drop its `fill`.",
     },
     CodeEntry {
         code: code::UI_GROUP_UNRESOLVED,
@@ -11138,6 +11197,18 @@ Fix: keep `view` and remove the other texture fields, or drop `view`.",
 each further one is skipped and a `UiRect` that shows it draws nothing. Raised once per skipped view by extract.
 
 Fix: disable views that are not on screen (`enabled: false`) or merge them.",
+    },
+    CodeEntry {
+        code: code::RENDER_LAYERS_INVALID,
+        severity: Severity::Error,
+        title: "render layers are not valid",
+        explanation: "A `RenderLayers` list, `Camera.layers` or `RenderView.layers` is empty, holds an empty name, or repeats a
+name (JSON Pointer `/layers` or `/layers/<i>`). Extract raises it too when a scene uses more than 31 layer
+names besides `default`; the extra names are ignored.
+
+Fix: list each layer name once, at least one per list, and keep the scene to 31 names besides `default`.
+
+    RenderLayers: { layers: [radar] }",
     },
     CodeEntry {
         code: code::RAIN_INVALID,
@@ -13423,6 +13494,35 @@ Fix: write the rule in the valid shape, e.g.
                depth_db: -9.0, attack_ticks: 6, release_ticks: 30 }",
     },
     CodeEntry {
+        code: code::AUDIO_OCCLUSION_INVALID,
+        severity: Severity::Error,
+        title: "an audio occlusion config is invalid",
+        explanation: "\
+An `Engine::builder().audio_occlusion(config)` config cannot run, so `build` refuses it. The message
+names the bad field.
+
+Occlusion casts `rays` (1, 3 or 5) from the listener to each positional source. `spread_m` is the
+side-ray offset at the source and must be finite and at least 0. `per_hit_db` is the loss per distinct
+blocker on one ray and `max_db` the floor; both must be finite and at most 0, and `max_db` may not be
+above `per_hit_db`. `occluded_low_pass_hz` is the cutoff when every ray is blocked and must lie
+strictly between the filter's open ends (20 Hz and 20 kHz). `interval_ticks` must be at least 1, and
+`max_rays_per_tick` at least `rays`, or no source could ever be cast.
+
+Fix: start from `AudioOcclusion::default()` and change one field at a time.",
+    },
+    CodeEntry {
+        code: code::AUDIO_OCCLUSION_QUERY_REJECTED,
+        severity: Severity::Warning,
+        title: "the audio occlusion query was refused",
+        explanation: "\
+The physics query behind audio occlusion refused the `QueryFilter` in `AudioOcclusion::filter`, most
+often because it names a physics layer the game never declared. This is a warning, raised once per
+engine: every source then reads as unoccluded, so the game keeps playing.
+
+Fix: declare the layer in `physics.layers`, or change `include_layer` / `ignore_layer` in the filter
+to a declared name.",
+    },
+    CodeEntry {
         code: code::DIALOGUE_CONFIG_INVALID,
         severity: Severity::Error,
         title: "the dialogue config is invalid",
@@ -13708,6 +13808,76 @@ A `sequences::play` call reached an engine that did not opt in, so there is no `
 document type and no player system data.
 
 Fix: add `.sequences()` to `Engine::builder()` and schedule `sequence_update`.",
+    },
+    CodeEntry {
+        code: code::PAIRED_UNKNOWN,
+        severity: Severity::Error,
+        title: "no paired document loads at that path",
+        explanation: "\
+`paired_fit` was given a content-root path that is not a loadable `kind: paired` document: the engine has
+no project root, the file is missing, or it fails the checks `ludion check-scene` runs on it. The loader's
+own diagnostics (`L1752`–`L1754`, or the asset error) follow this one. A failed load is remembered until the
+next world build.
+
+Fix: pass the document's path relative to the project's content root, and fix what the diagnostics after it
+name; see `ludion docs paired-actions`.",
+    },
+    CodeEntry {
+        code: code::PAIRED_CAST_INVALID,
+        severity: Severity::Error,
+        title: "a paired cast cannot play its role",
+        explanation: "\
+The cast given to `paired_fit` does not match the document: a role name the document lacks (the message
+names the nearest), a role cast twice or not at all, or an entity that is dead, has no `Transform`, is
+`Parent`ed, or whose `Mesh` is not the voxel assembly the role names. A cast entity whose motor cannot be
+tested at its target (an unknown `posture`) is refused here too. The pointer is `/roles/<role>`.
+
+Fix: cast exactly the document's roles, each with a live, unparented entity that draws the role's assembly;
+see `ludion docs paired-actions`.",
+    },
+    CodeEntry {
+        code: code::PAIRED_SCALE_MISMATCH,
+        severity: Severity::Error,
+        title: "a paired cast entity has the wrong scale",
+        explanation: "\
+A cast entity's `Transform.scale` is not uniform, or differs from the role's `scale` by more than 1e-5
+relative. The document's offsets are metres and its contacts are measured at the role's scale, so a cast
+at another scale would align and measure wrongly. The pointer is `/roles/<role>`.
+
+Fix: set the entity's uniform scale to the role's `scale`, or change the role's `scale`; see
+`ludion docs paired-actions`.",
+    },
+    CodeEntry {
+        code: code::PAIRED_UNSUPPORTED,
+        severity: Severity::Error,
+        title: "a paired document is not playable yet",
+        explanation: "\
+The runtime fits and plays paired documents of exactly two roles. A document with more roles checks fine
+with `ludion check-scene`, but `paired_fit` refuses it.
+
+Fix: split the action into pairs of roles; see `ludion docs paired-actions`.",
+    },
+    CodeEntry {
+        code: code::ANIM_GRAPH_STATE_INVALID,
+        severity: Severity::Error,
+        title: "an animation graph cannot step this entity",
+        explanation: "\
+`AnimGraph::step` could not read the entity's state: it has no `AnimGraphState`, the state's name is not
+one the graph declares, it has no `Animation`, or a transition names a layer its `AnimationLayers` lacks.
+Nothing was written.
+
+Fix: spawn `AnimGraphState { state: \"<a declared name>\", .. }` beside an `Animation` already playing
+that state's clip, and give the entity every layer the graph's states list.",
+    },
+    CodeEntry {
+        code: code::ANIM_GRAPH_INVALID,
+        severity: Severity::Error,
+        title: "an animation graph table is malformed",
+        explanation: "\
+An `AnimGraph` declares two states with the same `name` or `id`, or an edge's `from`/`to` names a state the
+table does not declare. `step` refuses the graph and writes nothing.
+
+Fix: give each state a unique name and id and declare every state an edge uses; `describe()` prints the table.",
     },
     CodeEntry {
         code: code::PROTOCOL_CALL_TIMED_OUT,
@@ -14285,6 +14455,7 @@ mod tests {
         code::UI_TEXT_OUTLINE_INVALID,
         code::UI_RADIAL_INVALID,
         code::UI_ROTATION_INVALID,
+        code::UI_SHAPE_INVALID,
         code::UI_GROUP_UNRESOLVED,
         code::UI_CLIP_NESTING,
         code::UI_TEXT_OUTLINE_CLAMPED,
@@ -14338,6 +14509,7 @@ mod tests {
         code::UI_RECT_VIEW_UNRESOLVED,
         code::UI_RECT_VIEW_CONFLICT,
         code::RENDER_VIEW_BUDGET,
+        code::RENDER_LAYERS_INVALID,
         code::RAIN_INVALID,
         code::RAIN_DUPLICATE,
         code::RAIN_STREAK_BUDGET,
@@ -14455,6 +14627,7 @@ mod tests {
         code::PATROL_WITHOUT_AGENT,
         code::NAV_LINK_UNSNAPPED,
         code::NAV_NOT_AT_LINK,
+        code::NAV_CLASS_UNKNOWN,
         code::PERCEPTION_CONFIG_INVALID,
         code::PERCEPTION_DEFERRED,
         code::PROJECTILE_LOOK_ASSET,
@@ -14471,6 +14644,8 @@ mod tests {
         code::AUDIO_GAIN_NON_FINITE,
         code::MUSIC_STEM_MISMATCHED,
         code::AUDIO_DUCK_RULE_INVALID,
+        code::AUDIO_OCCLUSION_INVALID,
+        code::AUDIO_OCCLUSION_QUERY_REJECTED,
         code::DIALOGUE_CONFIG_INVALID,
         code::STRINGS_DUPLICATE_KEY,
         code::DIALOGUE_DUPLICATE_LINE,
@@ -14498,6 +14673,12 @@ mod tests {
         code::SEQUENCE_ROLE_MISSING,
         code::SEQUENCE_KEY_DEGRADED,
         code::SEQUENCES_NOT_ENABLED,
+        code::PAIRED_UNKNOWN,
+        code::PAIRED_CAST_INVALID,
+        code::PAIRED_SCALE_MISMATCH,
+        code::PAIRED_UNSUPPORTED,
+        code::ANIM_GRAPH_STATE_INVALID,
+        code::ANIM_GRAPH_INVALID,
     ];
 
     #[test]
@@ -14686,6 +14867,7 @@ mod tests {
             code::PATROL_POINT_UNREACHABLE,
             code::PATROL_WITHOUT_AGENT,
             code::NAV_LINK_UNSNAPPED,
+            code::NAV_CLASS_UNKNOWN,
             code::INPUT_ACTION_UNKNOWN,
             code::INPUT_OVERRIDE_UNKNOWN,
             code::INPUT_OVERRIDE_INVALID,
@@ -14743,6 +14925,7 @@ mod tests {
             code::MUSIC_TRACK_UNPLAYABLE,
             code::AUDIO_GAIN_NON_FINITE,
             code::MUSIC_STEM_MISMATCHED,
+            code::AUDIO_OCCLUSION_QUERY_REJECTED,
             code::STRINGS_PLACEHOLDER_MISMATCH,
             code::STRING_FELL_BACK,
             code::STRING_MISSING,

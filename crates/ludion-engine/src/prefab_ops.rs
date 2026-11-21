@@ -228,7 +228,7 @@ pub(crate) fn create(
             let Ok(Some(value)) = info.serialize(world, id) else {
                 continue;
             };
-            for field in info.entity_refs() {
+            for field in &info.entity_ref_sites(&value) {
                 if let Some(target) = ref_target(&value, field)
                     && !position.contains_key(&target)
                 {
@@ -415,7 +415,8 @@ fn expected_parts(
                 continue;
             };
             let mut restorable = true;
-            for field in info.entity_refs() {
+            let sites = info.entity_ref_sites(&value);
+            for field in &sites {
                 let Some(target) = ref_target(&value, field) else {
                     continue;
                 };
@@ -772,7 +773,7 @@ pub(crate) fn apply(
                 ));
             }
             if info
-                .entity_refs()
+                .entity_ref_sites(value)
                 .iter()
                 .any(|field| ref_target(value, field).is_some())
             {

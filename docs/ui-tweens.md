@@ -35,7 +35,7 @@ components:
 
 ## Rules
 
-- **Support:** `opacity` and `offset` work on every element; `scale` on `UiRect`, `UiText` and `UiGroup`; `rotation` on the same three (a list or radial takes none: tween its group); `color` on `UiRect` and `UiText`; `size` on `UiRect` and `UiGroup`. An unsupported track is skipped and reported once per entity as the degraded warning `L2300`.
+- **Support:** `opacity` and `offset` work on every element; `scale` on `UiRect`, `UiText` and `UiGroup`; `rotation` on the same three (a list or radial takes none: tween its group); `color` on `UiRect`, `UiText` and `UiShape`; `UiShape` takes `opacity`, `offset`, `scale` (about its origin), `rotation` and `color`, not `size`; `size` on `UiRect` and `UiGroup`. An unsupported track is skipped and reported once per entity as the degraded warning `L2300`.
 - **The default clock is `real`**, not the gameplay clock: it keeps running while a `GameClock` hold freezes the game, so a pause menu can fade in over a frozen picture. `clock: game` stands still during a hold. This is the one stamp that does not want `ctx.game_frame` (`ludion docs game-clock`). Neither clock is wall time; `sim.pause` stops both.
 - The value is exactly `from` at `start` and exactly `to` at `start + duration` for every ease. Pure sim logic and tests sample the same function: `ludion::math::ui_tween_sample`.
 

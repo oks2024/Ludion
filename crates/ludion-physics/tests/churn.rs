@@ -109,6 +109,7 @@ impl Scene {
                             anchor: *anchor,
                             break_impulse: None,
                             collide: false,
+                            zero: None,
                         },
                     )
                     .unwrap();
@@ -289,6 +290,7 @@ fn dummy_joint(entity: EntityId) -> Joint {
         anchor: [0.0; 3],
         break_impulse: None,
         collide: false,
+        zero: None,
     }
 }
 

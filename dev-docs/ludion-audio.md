@@ -71,12 +71,20 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   `Engine::audible_emitters` is no counter-example: a `StableMap<EntityId, SentLoop>` of the last
   sync per emitter in earshot (the resend filter), no playback state, cleared by the same rebuild.
 - **Per-category master gain is the sink's, not the world's.** `AudioSink::spawn` takes a
-  `CategoryGains { sfx, ambient, music }` (identity by default); `mix_into` multiplies each voice by
-  `gains.gain_for(voice.category)` once per voice per callback, and `MusicPlayer` applies `music`.
+  `CategoryGains` (`master sfx ambient voice ui music`, identity by default, `#[non_exhaustive]`, built with
+  `with(bus, gain)`); `Mixer::new` reads `gains.gain(bus)` for every `BusState`, `mix_into` multiplies each
+  voice by its bus level once per callback, and `MusicPlayer` applies `music`.
   It is a mixdown/output concern, so no gain value can reach a `WorldHash`, a replay or the
   `audio_log`. The **game** authors it (`EngineBuilder::category_gains`), rides on the built
   `Engine`, and the facade's `wire_audio` reads it there — one value, no per-host knob, no runtime
   setter.
+- **Per-voice filters are `dsp.rs`.** `Voice.dsp: VoiceDsp` holds an optional low-pass and high-pass RBJ
+  biquad (Direct Form II transposed, Q = 1/sqrt 2), `Copy` and allocation-free for the callback. A bypassed
+  side has no stage and `advance_into` runs today's exact path; a live stage filters each raw sample **before**
+  gain. Built on the sink thread (`route`, `declared_voice`), settled at its target; `VoiceSync` and a same-sound
+  `LoopSync` call `retarget`, which sweeps in log2 frequency over `ceil(ramp / MIX_BLOCK_FRAMES)` blocks, one
+  step per `advance_into`, and drops a stage once it has swept open. Channels past `MAX_FILTER_CHANNELS` (8)
+  pass unfiltered. `VoiceSpatial::send` is carried and not mixed.
 - **The decode cache is keyed on the file, not the path, and holds failures too.** Every attempt is
   stamped with the file's `(len, mtime)` (`stamp_of`, re-read at most every `STAMP_RECHECK`, 500 ms), so
   a WAV regenerated under a running host is re-decoded on its next message after that; a failed decode

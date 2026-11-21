@@ -28,11 +28,14 @@ pub struct UiNav {
     pub next: bool,
     /// Activate the item under the cursor.
     pub activate: bool,
+    /// Leave this menu: close it or go up a level. [`UiList::navigate`] ignores it; the game acts on it.
+    pub back: bool,
 }
 
 impl UiNav {
     /// Reads this frame's menu intent under the engine's default bindings: `Up`/`DpadUp` is `prev`,
-    /// `Down`/`DpadDown` is `next`, and `Enter`/`Space`/`GamepadButton::South` is `activate`.
+    /// `Down`/`DpadDown` is `next`, `Enter`/`Space`/`GamepadButton::South` is `activate`, and
+    /// `Escape`/`GamepadButton::East` is `back`.
     ///
     /// **Discrete edges only** (`was_pressed`, never `is_held`): one press is one step, a held
     /// direction does not repeat, and no hidden repeat-latch state exists to desynchronize. An analog
@@ -60,6 +63,7 @@ impl UiNav {
             activate: input.was_pressed(Key::Enter)
                 || input.was_pressed(Key::Space)
                 || pad.was_pressed(GamepadButton::South),
+            back: input.was_pressed(Key::Escape) || pad.was_pressed(GamepadButton::East),
         }
     }
 
@@ -68,7 +72,7 @@ impl UiNav {
     /// The reserved action names are `ui_prev`, `ui_next`, `ui_activate` and `ui_back`. Each field
     /// whose action the map defines is that action's [`pressed`](Actions::pressed); a field whose
     /// action is undefined keeps [`from_input`](UiNav::from_input)'s default, so a map may define
-    /// only some. `ui_back` has no field: read it with `actions.pressed(ActionName::new("ui_back"))`.
+    /// only some.
     ///
     /// # Example
     ///
@@ -102,6 +106,7 @@ impl UiNav {
             prev: read("ui_prev", default.prev),
             next: read("ui_next", default.next),
             activate: read("ui_activate", default.activate),
+            back: read("ui_back", default.back),
         }
     }
 }
@@ -115,7 +120,7 @@ impl UiList {
     ///
     /// The cursor **wraps** at both ends and **never lands on a disabled item**; a list whose items
     /// are all disabled keeps its cursor where it is and refuses activation. An empty list moves
-    /// nothing and returns `None`.
+    /// nothing and returns `None`. `back` is ignored: the game closes the menu.
     ///
     /// # Example
     ///
@@ -1182,6 +1187,34 @@ mod tests {
             actions.take_unknown().is_empty(),
             "from_actions never reports L4270"
         );
+    }
+
+    #[test]
+    fn from_actions_reads_ui_back() {
+        use ludion_core::time::TickRate;
+        use ludion_sim::InputEvent;
+        use ludion_sim::actions::{ActionMap, InputActionsDoc};
+
+        let doc: InputActionsDoc = serde_json::from_value(json!({
+            "actions": { "ui_back": { "kind": "button", "bindings": [{ "key": "B" }] } }
+        }))
+        .unwrap();
+        let mut actions = Actions::new(ActionMap::compile(&doc, TickRate::DEFAULT).unwrap());
+        let mut input = InputState::default();
+        input.begin_tick();
+        input.apply(InputEvent::KeyDown { key: Key::B });
+        actions.resolve(&input);
+        assert!(
+            UiNav::from_actions(&actions, &input).back,
+            "the rebound key reads"
+        );
+
+        // Escape is the default only while `ui_back` is undefined.
+        let mut input = InputState::default();
+        input.begin_tick();
+        input.apply(InputEvent::KeyDown { key: Key::Escape });
+        actions.resolve(&input);
+        assert!(!UiNav::from_actions(&actions, &input).back);
     }
 
     fn tween(track: Value) -> Value {

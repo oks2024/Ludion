@@ -255,7 +255,7 @@ pub struct ClipEvent {
 /// module docs). Rewritten on every run: a consumer reads it in the same tick, after that system.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AnimationEvents {
-    fired: Vec<ClipEvent>,
+    pub(crate) fired: Vec<ClipEvent>,
 }
 
 impl AnimationEvents {

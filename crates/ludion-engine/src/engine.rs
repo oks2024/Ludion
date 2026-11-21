@@ -65,8 +65,10 @@ use crate::asset_cache::AssetCache;
 use crate::audio::{
     AttachedVoice, AudioCategory, AudioDistance, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
     Bus, CategoryGains, DUCK_FLOOR_DB, DuckRule, ListenerPose, LoopId, ManualDuck, MixLayer,
-    Queued, SentLoop, VoiceId, audible_voice, db_to_gain, resync_is_current,
+    Queued, SentLoop, VoiceId, VoiceSpatial, audible_gain, audible_voice, db_to_gain,
+    resync_is_current,
 };
+use crate::audio_occlusion::{AudioOcclusion, Measure, OccluderKey, OcclusionState};
 use crate::builtin_registry;
 use crate::components::{
     AudioEmitter, AudioListener, Camera, ListenerOrientation, Name, ReflectionProbe, Transform,
@@ -378,8 +380,9 @@ pub struct Engine {
     /// Whether extract keeps the static scene. Host setting, same status as `frustum_culling`.
     static_scene_on: bool,
     /// The mode the game's own systems last requested through
-    /// [`RenderSettings`](crate::RenderSettings), the strongest source. Lives here rather than in the
-    /// world so a district switch or restore does not forget it; same status as the others.
+    /// [`Settings::request_anti_aliasing`](crate::Settings::request_anti_aliasing), the strongest
+    /// source. Lives here rather than in the world so a district switch or restore does not forget it;
+    /// same status as the others.
     anti_aliasing_game: Option<AntiAliasing>,
     /// The pointer lock the game last requested through [`CursorLock`](crate::CursorLock). Lives here
     /// so a world rebuild does not forget it; host state, never hashed or snapshotted.
@@ -417,6 +420,12 @@ pub struct Engine {
     /// The window host's channel for window-mode changes
     /// ([`set_window_mode_sender`](Engine::set_window_mode_sender)); unset headless.
     window_mode_sender: Option<crossbeam_channel::Sender<crate::WindowMode>>,
+    /// The window host's reports of the window's actual mode
+    /// ([`set_window_mode_reports`](Engine::set_window_mode_reports)); unset headless.
+    window_mode_reports: Option<crossbeam_channel::Receiver<crate::WindowMode>>,
+    /// The window's mode as last reported: host state shown by
+    /// [`SettingsView::live_window_mode`](crate::SettingsView::live_window_mode), never hashed.
+    live_window_mode: Option<crate::WindowMode>,
     /// The host's render quality setting ([`set_quality`](Engine::set_quality)) — which optional
     /// effects to draw, plus the label of the choice that produced them. Default
     /// [`QualitySetting::default`] (everything the scene authors, labelled `"full"`). A client
@@ -560,6 +569,13 @@ pub struct Engine {
     /// The ducking rules ([`EngineBuilder::audio_duck`](crate::EngineBuilder::audio_duck)): authored,
     /// so they survive a rebuild. Never hashed.
     pub(crate) duck_rules: Vec<DuckRule>,
+    /// The occlusion config ([`EngineBuilder::audio_occlusion`](crate::EngineBuilder::audio_occlusion)):
+    /// authored, so it survives a rebuild. `None` is today's stream. Never hashed.
+    pub(crate) audio_occlusion: Option<AudioOcclusion>,
+    /// Each positional source's occlusion result, the round-robin cursor and the tick's ray budget.
+    /// Host-side bookkeeping like `audible_emitters`: never hashed or snapshotted, reset by
+    /// [`install_audio_queue`](Engine::install_audio_queue).
+    occlusion_state: OcclusionState,
     /// Live plain one-shots on a rule's `when` bus and the frame each ends.
     duck_shots: Vec<(Bus, FrameIndex)>,
     /// The live [`AudioQueue::duck_start`] ducks by key.
@@ -980,6 +996,8 @@ impl Engine {
             anti_aliasing_settings: None,
             quality_pinned: false,
             window_mode_sender: None,
+            window_mode_reports: None,
+            live_window_mode: None,
             quality: QualitySetting::default(),
             textures: TextureSource::default(),
             cook_resolved: false,
@@ -1020,6 +1038,8 @@ impl Engine {
             attached_voices: StableMap::new(),
             voice_ticks: StableMap::new(),
             duck_rules: Vec::new(),
+            audio_occlusion: None,
+            occlusion_state: OcclusionState::default(),
             duck_shots: Vec::new(),
             manual_ducks: StableMap::new(),
             rules_live: Vec::new(),
@@ -1058,7 +1078,6 @@ impl Engine {
         engine.install_probe_refreeze();
         engine.install_prefab_prewarm();
         engine.install_shutdown();
-        engine.install_render_settings();
         engine.install_cursor_lock();
         engine.install_rumble();
         engine.install_settings();
@@ -1068,6 +1087,7 @@ impl Engine {
         engine.install_render_extent();
         engine.install_plane();
         engine.install_animation_library();
+        engine.install_paired_library();
         engine.install_skin_rests();
         engine.install_path_library();
         engine.install_font_library();
@@ -1287,7 +1307,7 @@ impl Engine {
 
     /// Sets this host's anti-aliasing mode, beating the game's packaged default from
     /// [`EngineBuilder::anti_aliasing`](crate::EngineBuilder::anti_aliasing) but not the game's own
-    /// runtime request through [`RenderSettings`](crate::RenderSettings).
+    /// runtime request through [`Settings`](crate::Settings).
     ///
     /// A host switch, not a protocol command: it changes how pixels are drawn, never the sim. Applies
     /// from the next render.
@@ -1295,9 +1315,9 @@ impl Engine {
         self.anti_aliasing_override = Some(mode);
     }
 
-    /// The anti-aliasing mode this engine renders with: the game's runtime request, else the host's
-    /// [`set_anti_aliasing`](Engine::set_anti_aliasing), else the player's settings file or
-    /// [`Settings`](crate::Settings) request, else the builder default, else `Off`
+    /// The anti-aliasing mode this engine renders with: the game's [`Settings`](crate::Settings)
+    /// request this session, else the host's [`set_anti_aliasing`](Engine::set_anti_aliasing), else
+    /// the player's settings file, else the builder default, else `Off`
     /// ([`resolve_anti_aliasing`](crate::resolve_anti_aliasing)). Resolved on read from three
     /// separately held values, so the order they are set in never matters.
     pub fn anti_aliasing(&self) -> AntiAliasing {
@@ -2122,9 +2142,13 @@ impl Engine {
         }
         crate::input_actions::drain_unknown(self.driver.world_mut());
         self.drain_diagnostics();
+        if let Some(config) = &self.audio_occlusion {
+            self.occlusion_state.begin_tick(config);
+        }
         self.drain_audio(frame);
         self.drain_rumble();
         self.drain_settings(frame);
+        self.refresh_occlusion(frame);
         self.sync_audio_emitters(frame);
         self.sync_attached_voices(frame);
         self.sync_ducks(frame);
@@ -2134,7 +2158,6 @@ impl Engine {
         self.drain_run_save(frame);
         self.take_host_requests();
         self.drain_residue_clear();
-        self.drain_render_settings();
         self.drain_cursor_lock();
         if !self.drain_shutdown() && !self.drain_checkpoint_restore(frame) {
             self.drain_scene_switch(frame);
@@ -2430,6 +2453,12 @@ impl Engine {
                     };
                     event.gain = gain;
                     event.pan = pan;
+                    if let Some(listener) = listener.as_ref()
+                        && let Some(measure) = self.occlusion_now(listener, None, position)
+                        && let Some(config) = &self.audio_occlusion
+                    {
+                        (event.gain, event.spatial) = measure.apply(config, gain, event.spatial);
+                    }
                     self.track_duck_shot(frame, event.category, &event.sound);
                     self.emit_audio(frame, AudioMessage::OneShot(event));
                 }
@@ -2442,11 +2471,31 @@ impl Engine {
                     if !self.driver.world().is_alive(entity) {
                         continue;
                     }
-                    let (gain, pan) = listener
+                    let (mut gain, pan) = listener
                         .as_ref()
                         .and_then(|l| self.voice_gain_pan(l, entity, event.gain, range))
                         .unwrap_or((0.0, 0.0));
                     let ticks = self.clip_ticks(&event.sound);
+                    let tracked = ticks.is_some_and(|ticks| ticks > 0);
+                    // The first result is applied unsmoothed, so a voice starting behind a wall
+                    // starts muffled.
+                    let mut spatial = event.spatial;
+                    if let Some(listener) = listener.as_ref() {
+                        let at = self.entity_position(entity);
+                        if let Some(measure) = self.occlusion_now(listener, Some(entity), at)
+                            && let Some(config) = &self.audio_occlusion
+                        {
+                            (gain, spatial) = measure.apply(config, gain, spatial);
+                            if tracked {
+                                self.occlusion_state.record(
+                                    config,
+                                    OccluderKey::Voice(id),
+                                    frame,
+                                    measure,
+                                );
+                            }
+                        }
+                    }
                     if let Some(ticks) = ticks.filter(|&ticks| ticks > 0) {
                         self.attached_voices.insert(
                             id,
@@ -2457,7 +2506,9 @@ impl Engine {
                                 range,
                                 sent_gain: gain,
                                 sent_pan: pan,
+                                sent_low_pass_hz: spatial.filter.low_pass_hz,
                                 ends: FrameIndex(frame.0 + ticks),
+                                spatial: event.spatial,
                             },
                         );
                     }
@@ -2469,6 +2520,7 @@ impl Engine {
                             gain,
                             pan,
                             category: event.category,
+                            spatial,
                         },
                     );
                 }
@@ -2504,6 +2556,107 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// `entity`'s world position, the origin when it has no transform.
+    fn entity_position(&self, entity: EntityId) -> [f32; 3] {
+        crate::hierarchy::world_transform(self.driver.world(), entity)
+            .map_or([0.0; 3], |at| at.trs.translation)
+    }
+
+    /// One budgeted occlusion cast at `at` now, or `None` when occlusion is off.
+    fn occlusion_now(
+        &mut self,
+        listener: &ListenerPose,
+        source: Option<EntityId>,
+        at: [f32; 3],
+    ) -> Option<Measure> {
+        let config = self.audio_occlusion.as_ref()?;
+        let measure = self
+            .occlusion_state
+            .cast(self.driver.world(), config, listener, source, at);
+        self.flush_occlusion_rejection();
+        Some(measure)
+    }
+
+    /// Reports `L5102` if a cast was refused since the last call (the state latches it, so once).
+    fn flush_occlusion_rejection(&mut self) {
+        if let Some(message) = self.occlusion_state.rejected.take() {
+            crate::diagnostics::report(
+                self.driver.world_mut(),
+                code::AUDIO_OCCLUSION_QUERY_REJECTED,
+                "audio_occlusion",
+                message,
+            );
+        }
+    }
+
+    /// Re-casts the occlusion rays of every positional source due this tick, between
+    /// [`drain_audio`](Engine::drain_audio) and the emitter sync. Candidates are the audible
+    /// `AudioEmitter`s and every tracked attached voice, ascending by key; the ones with no result or
+    /// an `interval_ticks`-old one are due, and the ray budget walks them round-robin from the
+    /// cursor, so an uncast source keeps its last result. Then every result slews one tick. A no-op
+    /// with occlusion off or no listener.
+    fn refresh_occlusion(&mut self, frame: FrameIndex) {
+        if self.audio_occlusion.is_none() {
+            return;
+        }
+        let Some(listener) = audio_listener(self.driver.world_mut()) else {
+            return;
+        };
+        let ids: Vec<EntityId> = self
+            .driver
+            .world_mut()
+            .query_ids::<(&AudioEmitter, &Transform)>()
+            .map(|(id, _)| id)
+            .collect();
+        let mut candidates: Vec<(OccluderKey, EntityId, [f32; 3])> = Vec::new();
+        let world = self.driver.world();
+        for id in ids {
+            let Ok(Some(emitter)) = world.get::<AudioEmitter>(id) else {
+                continue;
+            };
+            let Some(at) = crate::hierarchy::world_transform(world, id) else {
+                continue;
+            };
+            let at = at.trs.translation;
+            if audible_gain(
+                emitter.gain,
+                emitter.range,
+                listener.position,
+                at,
+                self.audio_distance,
+            )
+            .is_some()
+            {
+                candidates.push((OccluderKey::Entity(id), id, at));
+            }
+        }
+        for (&id, voice) in self.attached_voices.iter() {
+            if world.is_alive(voice.entity) {
+                let at = self.entity_position(voice.entity);
+                candidates.push((OccluderKey::Voice(id), voice.entity, at));
+            }
+        }
+        candidates.sort_by_key(|candidate| candidate.0);
+        let Some(config) = self.audio_occlusion.as_ref() else {
+            return;
+        };
+        let keys: Vec<OccluderKey> = candidates.iter().map(|candidate| candidate.0).collect();
+        let state = &mut self.occlusion_state;
+        state.retain(&keys);
+        let due = state.due(config, frame, &keys);
+        for key in state.select(&due, u32::from(config.rays)) {
+            let Ok(index) = candidates.binary_search_by_key(&key, |candidate| candidate.0) else {
+                continue;
+            };
+            let (_, entity, at) = candidates[index];
+            let measure = state.probe(self.driver.world(), config, &listener, Some(entity), at);
+            state.record(config, key, frame, measure);
+        }
+        state.step_all();
+        state.end_tick(config);
+        self.flush_occlusion_rejection();
     }
 
     /// Records a plain one-shot on a rule's `when` bus as live until its WAV ends. The clip is read
@@ -2668,18 +2821,36 @@ impl Engine {
             let Some(listener) = &listener else {
                 continue;
             };
-            let (gain, pan) = self
+            let (mut gain, pan) = self
                 .voice_gain_pan(listener, entity, authored, range)
                 .unwrap_or((0.0, 0.0));
             let Some(voice) = self.attached_voices.get_mut(&id) else {
                 continue;
             };
-            if resync_is_current(voice.sent_gain, voice.sent_pan, gain, pan) {
+            let mut spatial = voice.spatial;
+            if let Some(config) = &self.audio_occlusion {
+                let measure = self.occlusion_state.applied(&OccluderKey::Voice(id));
+                (gain, spatial) = measure.apply(config, gain, spatial);
+            }
+            let low_pass_hz = spatial.filter.low_pass_hz;
+            if resync_is_current(
+                (voice.sent_gain, voice.sent_pan, voice.sent_low_pass_hz),
+                (gain, pan, low_pass_hz),
+            ) {
                 continue;
             }
             voice.sent_gain = gain;
             voice.sent_pan = pan;
-            self.emit_audio(frame, AudioMessage::VoiceSync { id, gain, pan });
+            voice.sent_low_pass_hz = low_pass_hz;
+            self.emit_audio(
+                frame,
+                AudioMessage::VoiceSync {
+                    id,
+                    gain,
+                    pan,
+                    spatial,
+                },
+            );
         }
     }
 
@@ -2751,9 +2922,18 @@ impl Engine {
                 continue;
             };
             audible.insert(id);
+            let (gain, spatial) = match &self.audio_occlusion {
+                Some(config) => self
+                    .occlusion_state
+                    .applied(&OccluderKey::Entity(id))
+                    .apply(config, gain, VoiceSpatial::default()),
+                None => (gain, VoiceSpatial::default()),
+            };
+            let low_pass_hz = spatial.filter.low_pass_hz;
             let sent = self.audible_emitters.get(&id);
-            if sent.is_some_and(|sent| sent.is_current(&emitter.sound, gain, pan, emitter.category))
-            {
+            if sent.is_some_and(|sent| {
+                sent.is_current(&emitter.sound, gain, pan, low_pass_hz, emitter.category)
+            }) {
                 continue;
             }
             self.audible_emitters.insert(
@@ -2763,6 +2943,7 @@ impl Engine {
                     gain,
                     pan,
                     category: emitter.category,
+                    low_pass_hz,
                 },
             );
             syncs.push(AudioMessage::LoopSync {
@@ -2771,6 +2952,7 @@ impl Engine {
                 gain,
                 pan,
                 category: emitter.category,
+                spatial,
             });
         }
         let stops: Vec<EntityId> = self
@@ -3706,6 +3888,7 @@ impl Engine {
             input_bindings: self.input_bindings_at_start.clone(),
             settings: self.settings.clone(),
             anti_aliasing_settings: self.anti_aliasing_settings,
+            anti_aliasing_game: self.anti_aliasing_game,
             speed: self.driver.speed(),
             render_size: self.render_size,
             return_to: return_to.to_string(),
@@ -3829,6 +4012,7 @@ impl Engine {
             input_bindings,
             settings,
             anti_aliasing_settings,
+            anti_aliasing_game,
             speed,
             render_size,
             return_to,
@@ -3845,6 +4029,7 @@ impl Engine {
         let quality_left = self.settings.graphics.quality;
         self.settings = settings;
         self.anti_aliasing_settings = anti_aliasing_settings;
+        self.anti_aliasing_game = anti_aliasing_game;
         if quality_left != self.settings.graphics.quality
             && !self.quality_pinned
             && let Some(preset) = self.settings.graphics.quality
@@ -3994,20 +4179,6 @@ impl Engine {
         }
         self.session.residue.clear();
         self.install_residue_store();
-    }
-
-    /// Moves the game's pending [`RenderSettings`](crate::RenderSettings) request onto the engine, which
-    /// outlives every world rebuild. Render-only and a pure function of the sim: nothing about it is
-    /// recorded, hashed or snapshotted, and the next render pushes it to the renderer.
-    fn drain_render_settings(&mut self) {
-        let requested = self
-            .driver
-            .world_mut()
-            .resource_mut::<crate::RenderSettings>()
-            .and_then(crate::RenderSettings::take);
-        if let Some(choice) = requested {
-            self.anti_aliasing_game = choice;
-        }
     }
 
     /// Moves the game's pending [`CursorLock`](crate::CursorLock) request onto the engine and sends it
@@ -4296,6 +4467,7 @@ impl Engine {
             .insert_resource(AudioQueue::default());
         self.audible_emitters.clear();
         self.attached_voices.clear();
+        self.occlusion_state = OcclusionState::default();
         self.voice_ticks.clear();
         // The blanket stop below resets the sink's duck layer, so no `Duck` message goes out.
         self.duck_shots.clear();
@@ -4586,17 +4758,8 @@ impl Engine {
             .insert_resource(crate::Shutdown::default());
     }
 
-    /// Installs a fresh (empty) [`RenderSettings`](crate::RenderSettings) resource into the current
-    /// world, the [`install_shutdown`](Engine::install_shutdown) mold. Excluded from the world hash and
-    /// from snapshots.
-    fn install_render_settings(&mut self) {
-        self.driver
-            .world_mut()
-            .insert_resource(crate::RenderSettings::default());
-    }
-
     /// Installs a fresh (empty) [`CursorLock`](crate::CursorLock) resource into the current world, the
-    /// [`install_render_settings`](Engine::install_render_settings) mold.
+    /// [`install_shutdown`](Engine::install_shutdown) mold.
     fn install_cursor_lock(&mut self) {
         self.driver
             .world_mut()
@@ -4615,10 +4778,38 @@ impl Engine {
     /// [`SettingsView`](crate::SettingsView) of the settings in force into the current world, the
     /// [`install_cursor_lock`](Engine::install_cursor_lock) mold.
     fn install_settings(&mut self) {
-        let view = crate::SettingsView::from_doc(&self.settings);
+        let view = crate::SettingsView::from_doc(&self.settings, self.live_window_mode);
         let world = self.driver.world_mut();
         world.insert_resource(crate::Settings::default());
         world.insert_resource(view);
+    }
+
+    /// Rewrites the world's [`SettingsView`](crate::SettingsView) from the settings in force and the
+    /// live window mode.
+    fn refresh_settings_view(&mut self) {
+        let view = crate::SettingsView::from_doc(&self.settings, self.live_window_mode);
+        if let Some(resource) = self
+            .driver
+            .world_mut()
+            .resource_mut::<crate::SettingsView>()
+        {
+            *resource = view;
+        }
+    }
+
+    /// Takes the window host's mode reports, keeps the last, and refreshes the view when it changed —
+    /// even with no [`Settings`](crate::Settings) request pending.
+    fn drain_window_mode_reports(&mut self) {
+        let Some(reports) = &self.window_mode_reports else {
+            return;
+        };
+        let Some(latest) = reports.try_iter().last() else {
+            return;
+        };
+        if self.live_window_mode != Some(latest) {
+            self.live_window_mode = Some(latest);
+            self.refresh_settings_view();
+        }
     }
 
     /// Installs a replay header's settings (`None` for the defaults) **without touching disk**: the
@@ -4662,6 +4853,7 @@ impl Engine {
     /// one write a `save()` asks for. A replay (`profile_off_disk`) updates its view but never
     /// reaches the window or the disk. Host state: nothing here is hashed or snapshotted.
     fn drain_settings(&mut self, frame: FrameIndex) {
+        self.drain_window_mode_reports();
         let requests = match self.driver.world_mut().resource_mut::<crate::Settings>() {
             Some(settings) if settings.is_pending() => settings.take(),
             _ => return,
@@ -4685,6 +4877,7 @@ impl Engine {
         if let Some(mode) = requests.anti_aliasing {
             self.settings.graphics.anti_aliasing = Some(mode.name().to_string());
             self.anti_aliasing_settings = Some(mode);
+            self.anti_aliasing_game = Some(mode);
         }
         if let Some(preset) = requests.quality
             && self.settings.graphics.quality != Some(preset)
@@ -4696,24 +4889,21 @@ impl Engine {
                 self.set_quality(setting);
             }
         }
-        if let Some(mode) = requests.window
-            && self.settings.display.window != Some(mode)
-        {
-            self.settings.display.window = Some(mode);
-            if !self.profile_off_disk
+        if let Some(mode) = requests.window {
+            // The window's own mode (a chord may have moved it) decides whether to send; the file
+            // value only decides whether the saved choice changes.
+            let before = self.live_window_mode.or(self.settings.display.window);
+            if self.settings.display.window != Some(mode) {
+                self.settings.display.window = Some(mode);
+            }
+            if before != Some(mode)
+                && !self.profile_off_disk
                 && let Some(sender) = &self.window_mode_sender
             {
                 let _ = sender.send(mode);
             }
         }
-        let view = crate::SettingsView::from_doc(&self.settings);
-        if let Some(resource) = self
-            .driver
-            .world_mut()
-            .resource_mut::<crate::SettingsView>()
-        {
-            *resource = view;
-        }
+        self.refresh_settings_view();
         if requests.save && self.settings_persistence && !self.profile_off_disk {
             self.write_settings();
         }
@@ -4842,6 +5032,14 @@ impl Engine {
     /// is rebuilt from disk rather than snapshotted, and is never hashed.
     pub(crate) fn install_animation_library(&mut self) {
         let library = crate::animation_events::AnimationLibrary::new(self.project_root.clone());
+        self.driver.world_mut().insert_resource(library);
+    }
+
+    /// Installs an empty [`PairedLibrary`](crate::paired::PairedLibrary) over the project root after
+    /// every world (re)build, the [`install_animation_library`](Engine::install_animation_library)
+    /// mold: `paired_fit` fills it lazily, it is never hashed, and `asset.reload` does not reach it.
+    pub(crate) fn install_paired_library(&mut self) {
+        let library = crate::paired::PairedLibrary::new(self.project_root.clone());
         self.driver.world_mut().insert_resource(library);
     }
 
@@ -5636,6 +5834,18 @@ impl Engine {
         self.window_mode_sender = Some(sender);
     }
 
+    /// Wires the reverse channel: the window host reports the window's actual mode here (at start,
+    /// after a fullscreen chord or a menu request, after the user's own resize), and the engine keeps
+    /// the last for [`SettingsView::live_window_mode`](crate::SettingsView::live_window_mode). It is a
+    /// host-to-engine channel, never a command: nothing is recorded or hashed. A headless engine
+    /// leaves it unset.
+    pub fn set_window_mode_reports(
+        &mut self,
+        reports: crossbeam_channel::Receiver<crate::WindowMode>,
+    ) {
+        self.window_mode_reports = Some(reports);
+    }
+
     /// The window mode the player chose (the settings file at build, then every request), `None`
     /// before any choice.
     pub fn settings_window_mode(&self) -> Option<crate::WindowMode> {
@@ -5931,6 +6141,19 @@ impl Engine {
     /// Whether positional sounds are panned across the stereo field, as the builder authored it.
     pub fn audio_pan(&self) -> AudioPan {
         self.audio_pan
+    }
+
+    /// The occlusion config, as the builder authored it; `None` when positional sounds are never
+    /// occluded.
+    pub fn audio_occlusion(&self) -> Option<&AudioOcclusion> {
+        self.audio_occlusion.as_ref()
+    }
+
+    /// The most rays any one tick has cast for audio occlusion since the last world rebuild — the
+    /// budget check tests read.
+    #[doc(hidden)]
+    pub fn audio_occlusion_peak_rays(&self) -> u32 {
+        self.occlusion_state.peak_rays
     }
 
     /// The plane this game's 2D queries live in, as the builder authored it.
@@ -7995,7 +8218,7 @@ pub(crate) fn remap_entity_refs(
     position: &BTreeMap<EntityId, usize>,
 ) -> Result<Value, Diagnostic> {
     let component = info.name();
-    for field in info.entity_refs() {
+    for field in &info.entity_ref_sites(&value) {
         let suffix = field.suffix.as_str();
         let raw = if suffix.is_empty() {
             &value
@@ -8790,7 +9013,6 @@ impl Engine {
             switch.mark_arrived_by_restart();
         }
         self.install_shutdown();
-        self.install_render_settings();
         self.install_cursor_lock();
         self.install_rumble();
         self.install_settings();
@@ -8806,6 +9028,7 @@ impl Engine {
         self.install_render_extent();
         self.install_plane();
         self.install_animation_library();
+        self.install_paired_library();
         self.install_skin_rests();
         self.install_path_library();
         self.install_font_library();
@@ -9090,8 +9313,8 @@ fn audio_listener(world: &mut World) -> Option<ListenerPose> {
     let second = ears.next();
     drop(ears);
     let Some(ear) = first else {
-        let (position, rotation) = camera_ear(world)?;
-        return Some(listener_pose(position, rotation));
+        let (camera, position, rotation) = camera_ear(world)?;
+        return Some(listener_pose(camera, position, rotation));
     };
     if let Some(other) = second {
         crate::diagnostics::report(
@@ -9115,37 +9338,41 @@ fn audio_listener(world: &mut World) -> Option<ListenerPose> {
     let rotation = match orientation {
         ListenerOrientation::Listener => own_rotation,
         ListenerOrientation::Camera => match camera_ear(world) {
-            Some((_, camera_rotation)) => camera_rotation,
+            Some((_, _, camera_rotation)) => camera_rotation,
             None => own_rotation,
         },
     };
-    Some(listener_pose(position, rotation))
+    Some(listener_pose(ear, position, rotation))
 }
 
-/// The lowest-`EntityId` [`Camera`]'s world position and rotation (`None` rotation: no [`Transform`]),
-/// or `None` when the world has no camera.
-fn camera_ear(world: &mut World) -> Option<([f32; 3], Option<[f32; 4]>)> {
+/// The lowest-`EntityId` [`Camera`], its world position and rotation (`None` rotation: no
+/// [`Transform`]), or `None` when the world has no camera.
+fn camera_ear(world: &mut World) -> Option<(EntityId, [f32; 3], Option<[f32; 4]>)> {
     // A typed join over the `Camera` storage, not a per-entity probe of every live entity — free in
     // a scene with none, and `query_ids` yields ascending `EntityId` so the first row is the lowest.
     let (id, _) = world.query_ids::<(&Camera,)>().next()?;
     Some(match crate::hierarchy::world_transform(world, id) {
-        Some(pose) => (pose.trs.translation, Some(pose.trs.rotation)),
-        None => ([0.0; 3], None),
+        Some(pose) => (id, pose.trs.translation, Some(pose.trs.rotation)),
+        None => (id, [0.0; 3], None),
     })
 }
 
-/// The stereo axes of an ear at `position` turned by `rotation`; `None` is the default orientation.
-fn listener_pose(position: [f32; 3], rotation: Option<[f32; 4]>) -> ListenerPose {
+/// The stereo axes of the ear on `entity` at `position` turned by `rotation`; `None` is the default
+/// orientation.
+fn listener_pose(entity: EntityId, position: [f32; 3], rotation: Option<[f32; 4]>) -> ListenerPose {
+    let entity = Some(entity);
     match rotation {
         Some(rotation) => ListenerPose {
             position,
             right: ludion_core::math::quat_rotate(rotation, [1.0, 0.0, 0.0]),
             up: ludion_core::math::quat_rotate(rotation, [0.0, 1.0, 0.0]),
+            entity,
         },
         None => ListenerPose {
             position,
             right: [1.0, 0.0, 0.0],
             up: [0.0, 1.0, 0.0],
+            entity,
         },
     }
 }

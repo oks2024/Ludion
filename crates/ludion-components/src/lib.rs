@@ -32,10 +32,11 @@ use ludion_core::time::FrameIndex;
 use ludion_ecs::{Parent, Registry, SemanticValidate};
 use ludion_physics::PhysicsPose;
 use ludion_spatial::{
-    Collider, GroundPosition, Joint, JointMotor, JointPoses, JointZero, Plane, PoseBlend,
-    SpatialVolume, Velocity, WorldPosition,
+    Collider, GroundPosition, Joint, JointMotor, JointPoses, Plane, PoseBlend, SpatialVolume,
+    Velocity, WorldPosition,
 };
 
+pub mod anim_graph_state;
 pub mod animation_layers;
 pub mod audio;
 pub mod blend_clock;
@@ -55,10 +56,13 @@ pub mod pose_snapshot;
 pub mod prefab;
 pub mod radial;
 pub mod rain;
+pub mod render_layers;
 pub mod render_view;
 pub mod ui;
+pub mod ui_shape;
 pub mod validators;
 
+pub use anim_graph_state::AnimGraphState;
 pub use animation_layers::{
     AnimationLayer, AnimationLayers, LayerMode, fade_layer, layer_weight, layer_weight_at,
     play_layer, set_layer_params,
@@ -87,11 +91,13 @@ pub use pose_snapshot::{PoseSnapshot, SnapshotPart};
 pub use prefab::PrefabInstance;
 pub use radial::{AimKind, MAX_RADIAL_ITEMS, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
 pub use rain::{MAX_RAIN_HEIGHT_SPAN, Rain, rain_problems};
+pub use render_layers::{DEFAULT_RENDER_LAYER, RenderLayers, layer_names_diagnostics};
 pub use render_view::{RENDER_VIEW_SIZE_RANGE, RenderView};
 pub use ui::{
     TextOutline, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav,
     UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
 };
+pub use ui_shape::{UiLineCap, UiShape, UiShapeType, UiStroke};
 
 /// An entity's human-readable name — the world-side home of a scene entity's `name:` field.
 ///
@@ -3615,7 +3621,7 @@ impl Default for Projection {
 
 /// The scene's camera. Exactly one is expected; zero uses a default framing, more than one is an
 /// error at extract time (`L2101`).
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct Camera {
     /// The projection (default 60° perspective).
     #[serde(default)]
@@ -3641,6 +3647,10 @@ pub struct Camera {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 3))]
     pub shadow_bias_levels: Option<u32>,
+    /// The layers the main camera draws (default none, meaning every layer). Absent is omitted from the
+    /// document and the hash. See `ludion docs render-views`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
 }
 
 impl Default for Camera {
@@ -3651,6 +3661,7 @@ impl Default for Camera {
             far: 1000.0,
             lod_bias: None,
             shadow_bias_levels: None,
+            layers: None,
         }
     }
 }
@@ -3687,6 +3698,7 @@ impl SemanticValidate for Camera {
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut found = Self::validate_lod(value);
         found.extend(Self::validate_depth(value));
+        found.extend(render_layers::field_layer_diagnostics(value, "layers"));
         found
     }
 }
@@ -3906,7 +3918,7 @@ impl CameraOffset {
             },
             Camera {
                 projection: self.projection(camera.projection),
-                ..*camera
+                ..camera.clone()
             },
         )
     }
@@ -4129,15 +4141,17 @@ impl SemanticValidate for ViewmodelLens {
 ///
 /// `speed`, `arrive_radius`, `separation_radius` and `separation_strength` are finite and not
 /// negative; `separation_neighbors` is at most 16. A field out of range is `L1340`. `neighbor_layers`
-/// is the `Index3d` layer mask the neighbours are read from; `0` turns separation off.
+/// is the `Index3d` layer mask the neighbours are read from; `0` turns separation off. `class` names
+/// the `NavConfig.classes` entry whose grid the agent walks (empty is the first class).
 ///
 /// ```yaml
 /// components:
 ///   NavAgent:
 ///     speed: 3.5
 ///     neighbor_layers: 2
+///     class: forklift
 /// ```
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct NavAgent {
     /// World position the agent heads for (default the origin).
     #[serde(default, skip_serializing_if = "is_zero_vec3")]
@@ -4182,6 +4196,9 @@ pub struct NavAgent {
         skip_serializing_if = "is_nav_neighbor_layers_default"
     )]
     pub neighbor_layers: u32,
+    /// The `NavConfig.classes` entry this agent walks; empty is the first class (default empty).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub class: String,
 }
 
 /// Most separation neighbours a [`NavAgent`] may ask for.
@@ -4198,6 +4215,7 @@ impl Default for NavAgent {
             separation_strength: nav_sep_strength_default(),
             separation_neighbors: nav_sep_neighbors_default(),
             neighbor_layers: nav_neighbor_layers_default(),
+            class: String::new(),
         }
     }
 }
@@ -6687,11 +6705,7 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<OccludedSilhouette>("OccludedSilhouette")
         .expect("unique");
-    // The stored joint zero, appended after `OccludedSilhouette`: read by `ludion-physics` when it builds a joint.
-    registry
-        .register_validated::<JointZero>("JointZero")
-        .expect("unique");
-    // The tool wheel, appended after `JointZero`: drawn by `extract`, moved by `UiRadial::navigate`.
+    // The tool wheel, appended after `OccludedSilhouette`: drawn by `extract`, moved by `UiRadial::navigate`.
     registry
         .register_validated::<UiRadial>("UiRadial")
         .expect("unique");
@@ -6709,6 +6723,23 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<PoseSnapshot>("PoseSnapshot")
         .expect("unique");
+    // A game's Rust `AnimGraph` state, appended after `PoseSnapshot`: read and written by `AnimGraph::step` only.
+    registry
+        .register::<AnimGraphState>("AnimGraphState")
+        .expect("unique");
+    // The analytic screen shape, appended after `AnimGraphState`: drawn by `extract` through `ui_shape.wgsl`.
+    registry
+        .register_validated::<UiShape>("UiShape")
+        .expect("unique");
+    // The render layers, appended after `UiShape`: read by `extract`, filter what each camera draws.
+    registry
+        .register_validated::<RenderLayers>("RenderLayers")
+        .expect("unique");
+    // The motor's partner ignore (`ludion-physics`), appended after `RenderLayers`: read at query time by the
+    // character motor's casts and fit tests, never part of the physics blob.
+    registry
+        .register_validated::<ludion_physics::IgnoreCollisions>("IgnoreCollisions")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -6722,7 +6753,6 @@ const SIM_ONLY_COMPONENTS: [&str; 34] = [
     "Velocity",
     "Joint",
     "JointMotor",
-    "JointZero",
     "CharacterMotor",
     "CharacterMotorState",
     "SurfaceVelocity",
@@ -6752,6 +6782,7 @@ const SIM_ONLY_COMPONENTS: [&str; 34] = [
     "PerceiverStatus",
     "SightSampleRecord",
     "NavLink",
+    "IgnoreCollisions",
 ];
 
 #[cfg(test)]
@@ -6774,7 +6805,6 @@ mod tests {
             "Velocity",
             "Joint",
             "JointMotor",
-            "JointZero",
             "CharacterMotor",
             "CharacterMotorState",
             "SurfaceVelocity",
@@ -6804,6 +6834,7 @@ mod tests {
             "PerceiverStatus",
             "SightSampleRecord",
             "NavLink",
+            "IgnoreCollisions",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -7239,18 +7270,21 @@ mod tests {
                 "NavLink",
                 "GroundMarkerClip",
                 "OccludedSilhouette",
-                "JointZero",
                 "UiRadial",
                 "RenderView",
                 "IkTargets",
                 "Rain",
                 "PoseSnapshot",
+                "AnimGraphState",
+                "UiShape",
+                "RenderLayers",
+                "IgnoreCollisions",
             ]
         );
         assert_eq!(
             registry.len(),
-            85,
-            "appending `PoseSnapshot` grows the registry to 85"
+            88,
+            "appending `IgnoreCollisions` grows the registry to 88"
         );
     }
 
@@ -8648,7 +8682,7 @@ mod tests {
             shadow_bias_levels: Some(2),
             ..Camera::default()
         };
-        let back: Camera = serde_json::from_value(serde_json::to_value(set).unwrap()).unwrap();
+        let back: Camera = serde_json::from_value(serde_json::to_value(&set).unwrap()).unwrap();
         assert_eq!(back, set);
     }
 
@@ -11330,6 +11364,7 @@ entities:
             ("Volley", vec![("/source", true, true, true)]),
             ("UiWorldAnchor", vec![("/target", false, false, false)]),
             ("UiGroup", vec![("/group", false, true, true)]),
+            ("UiShape", vec![("/group", false, true, true)]),
         ] {
             let info = registry.get(component).expect("registered");
             let fields: Vec<(&str, bool, bool, bool)> = info

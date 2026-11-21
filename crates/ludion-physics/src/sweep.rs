@@ -87,6 +87,7 @@ pub struct SweepFilter {
     only_fixed: bool,
     exclude: Option<EntityId>,
     exclude_also: Option<EntityId>,
+    partner: Option<EntityId>,
 }
 
 impl SweepFilter {
@@ -111,6 +112,7 @@ impl SweepFilter {
         }
         Some(entity) == self.exclude
             || Some(entity) == self.exclude_also
+            || Some(entity) == self.partner
             || (!self.include_sensors && collider.is_sensor())
             || (self.included != 0 && member & self.included == 0)
             || member & self.ignored != 0
@@ -184,6 +186,7 @@ impl PhysicsWorld {
             only_fixed: filter.only_fixed,
             exclude: filter.exclude,
             exclude_also: None,
+            partner: filter.partner,
         })
     }
 

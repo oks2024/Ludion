@@ -1,5 +1,5 @@
 ---
-description: Masks, AnimationLayers and blend spaces on skinned characters and voxel assemblies
+description: Masks, AnimationLayers, blend spaces and the AnimGraph state graph for skins and voxel assemblies
 ---
 
 # Animation layers
@@ -153,6 +153,54 @@ blends:
 
 Errors: `L1199` for a malformed `blends:` entry, `L1200` for a duplicate position, a name clash,
 collinear 2D points, an unbound or non-looping point clip, or a `sync` event a point clip lacks.
+
+## State graph
+
+An `AnimGraph` is a `static` table in your game's Rust: states, edges and `fn` conditions. It is not
+an asset and not a pose source — it only chooses which clip and layers to write, and only when an edge
+fires, so the hash stays quiet between transitions.
+
+```rust
+use ludion::prelude::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pose { Idle, Carry, Wave }
+struct Inputs { carrying: bool, wave: bool }
+
+static GRAPH: AnimGraph<Pose, Inputs> = AnimGraph {
+    states: &[
+        AnimState { id: Pose::Idle, name: "idle", plays: "idle", layers: &[], one_shot: false },
+        AnimState { id: Pose::Carry, name: "carry", plays: "idle", layers: &[("carry", "carry", 1.0)], one_shot: false },
+        AnimState { id: Pose::Wave, name: "wave", plays: "wave", layers: &[], one_shot: true },
+    ],
+    edges: &[
+        AnimEdge { from: None, to: Pose::Wave, when: |i| i.wave, fade: 0.0, gate: AnimGate::Interrupts },
+        AnimEdge { from: Some(Pose::Idle), to: Pose::Carry, when: |i| i.carrying, fade: 0.2, gate: AnimGate::None },
+        AnimEdge { from: Some(Pose::Carry), to: Pose::Idle, when: |i| !i.carrying, fade: 0.2, gate: AnimGate::None },
+        AnimEdge { from: Some(Pose::Wave), to: Pose::Idle, when: |_| true, fade: 0.15, gate: AnimGate::OnEvent("end") },
+    ],
+};
+// In a system registered after `animation_events`: GRAPH.step(world, entity, &inputs, ctx)?
+```
+
+- **Initial state.** There is no implicit entry. Spawn `AnimGraphState { state: "idle", .. }` (scene
+  YAML or Rust) beside an `Animation` already playing that state's clip. The state is recorded by its
+  stable `name`, not an index.
+- **`step(world, entity, &inputs, ctx)`** walks `edges` in declaration order; the first candidate whose
+  `when` and gate pass is taken. An edge is a candidate when `from` is `None` or the current state, and
+  `to` is not the current state (no self-transitions: a `from: None` edge never restarts its own
+  target). Gates: `None`; `Interrupts`; `OnEvent(name)` (fired this tick on the current state's clip);
+  `MinTicks(n)` (gameplay ticks since the state was entered).
+- **One-shots.** While the current state is `one_shot` and its clip's `end` has not fired, only
+  `Interrupts` edges qualify, so a one-shot finishes unless something interrupts it.
+- **Entering** a state calls `crossfade` to its clip (even when the clip is unchanged: a state restarts
+  it) and rewrites `AnimGraphState`. Each `(layer, clip, weight)` it lists is played and faded to its
+  weight over the edge's `fade`; a layer the old state listed and the new one does not fades to `0`.
+  `step` returns `Ok(Some(new))`, or `Ok(None)` having written nothing.
+- **Errors write nothing.** `L4290`: no `AnimGraphState` or `Animation`, an unknown state name (the
+  help names the nearest), or a layer the entity's `AnimationLayers` lacks. `L4291`: duplicate state
+  names or ids, or an edge naming an undeclared state. `describe()` prints the table as text.
+- `current(world, entity)` reads the id of the state the entity is in.
 
 ## What it does not do
 

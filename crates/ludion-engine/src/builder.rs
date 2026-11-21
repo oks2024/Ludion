@@ -120,6 +120,7 @@ pub struct EngineBuilder {
     audio_distance: AudioDistance,
     audio_pan: AudioPan,
     duck_rules: Vec<DuckRule>,
+    audio_occlusion: Option<crate::AudioOcclusion>,
     plane: Plane,
     render_size: Option<(u32, u32)>,
     anti_aliasing: AntiAliasing,
@@ -176,6 +177,7 @@ impl EngineBuilder {
             audio_distance: AudioDistance::default(),
             audio_pan: AudioPan::default(),
             duck_rules: Vec::new(),
+            audio_occlusion: None,
             plane: Plane::default(),
             render_size: None,
             anti_aliasing: AntiAliasing::default(),
@@ -514,6 +516,31 @@ impl EngineBuilder {
         self
     }
 
+    /// Turns on geometry occlusion of positional audio: every `AudioEmitter` loop, `play_at` /
+    /// `push_at` one-shot and `play_on` / `push_on` voice is muffled and quieted while static
+    /// geometry lies between it and the listener (see [`AudioOcclusion`](crate::AudioOcclusion)).
+    /// Global sounds are never occluded. Off unless called: the message stream is then byte-identical
+    /// to a build without the call. `build` refuses a config that cannot run with `L5101`.
+    ///
+    /// Authored once on the game, not simulation state: no `WorldHash`, no replay, and a world
+    /// rebuild keeps the config but resets every source's result.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{AudioOcclusion, Engine};
+    ///
+    /// let engine = Engine::builder()
+    ///     .audio_occlusion(AudioOcclusion::default())
+    ///     .build()?;
+    /// assert!(engine.audio_occlusion().is_some());
+    /// # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
+    /// ```
+    #[must_use]
+    pub fn audio_occlusion(mut self, occlusion: crate::AudioOcclusion) -> Self {
+        self.audio_occlusion = Some(occlusion);
+        self
+    }
+
     /// Sets the plane this game's 2D queries live in — collision, and any engine feature that turns
     /// a 2D angle into a world direction. Default: [`Plane::Xz`], the ground plane.
     ///
@@ -540,7 +567,7 @@ impl EngineBuilder {
 
     /// Sets the anti-aliasing mode this game ships with ([`AntiAliasing::Off`] unless set). A packaged
     /// default: a host's [`Engine::set_anti_aliasing`] beats it, and so does the game's own runtime
-    /// request through [`RenderSettings`](crate::RenderSettings).
+    /// request through [`Settings`](crate::Settings).
     #[must_use]
     pub fn anti_aliasing(mut self, mode: AntiAliasing) -> Self {
         self.anti_aliasing = mode;
@@ -1386,6 +1413,9 @@ impl EngineBuilder {
             ));
         }
         crate::audio::validate_duck_rules(&self.duck_rules)?;
+        if let Some(occlusion) = &self.audio_occlusion {
+            crate::audio_occlusion::validate(occlusion)?;
+        }
         if let Some(config) = &self.projectile_config {
             config.validate()?;
         }
@@ -1436,6 +1466,7 @@ impl EngineBuilder {
         engine.audio_distance = self.audio_distance;
         engine.audio_pan = self.audio_pan;
         engine.duck_rules = self.duck_rules;
+        engine.audio_occlusion = self.audio_occlusion;
         // Set before the mirror: `install_plane` copies the field onto the world, and every later
         // world (re)build re-runs it.
         engine.plane = self.plane;
@@ -1894,6 +1925,7 @@ mod tests {
     /// it is the identity, so a game that says nothing hears the gains its systems asked for.
     #[test]
     fn the_authored_mixdown_rides_the_built_engine() {
+        use crate::Bus;
         let root = fresh_dir("gains");
         assert_eq!(
             Engine::builder()
@@ -1904,11 +1936,9 @@ mod tests {
             CategoryGains::default()
         );
 
-        let gains = CategoryGains {
-            sfx: 1.0,
-            ambient: 0.6,
-            music: 0.8,
-        };
+        let gains = CategoryGains::default()
+            .with(Bus::Ambient, 0.6)
+            .with(Bus::Music, 0.8);
         let engine = Engine::builder()
             .project_root(&root)
             .category_gains(gains)

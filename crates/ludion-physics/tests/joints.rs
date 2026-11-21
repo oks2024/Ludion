@@ -87,6 +87,7 @@ fn spawn_linked(world: &mut World, anchor: EntityId, at: [f32; 3], kind: JointKi
                 anchor: [0.0; 3],
                 break_impulse: None,
                 collide: false,
+                zero: None,
             },
         )
         .expect("a fresh entity accepts a joint");
@@ -249,6 +250,7 @@ fn fixed_joint_world_with_iterations(
                 anchor: [0.0; 3],
                 break_impulse,
                 collide: false,
+                zero: None,
             },
         )
         .expect("a fresh entity accepts a joint");
@@ -333,6 +335,7 @@ fn a_joint_re_added_to_a_broken_carrier_forms() {
                 anchor: [0.0; 3],
                 break_impulse: None,
                 collide: false,
+                zero: None,
             },
         )
         .expect("a live entity accepts a joint");
@@ -473,6 +476,7 @@ fn a_missing_body_leaves_the_joint_inert_and_is_reported() {
                 anchor: [0.0; 3],
                 break_impulse: None,
                 collide: false,
+                zero: None,
             },
         )
         .expect("a fresh entity accepts a joint");
@@ -546,6 +550,7 @@ fn an_inert_joint_queues_its_carrier_exactly_once_over_ten_ticks() {
                 anchor: [0.0; 3],
                 break_impulse: None,
                 collide: false,
+                zero: None,
             },
         )
         .expect("a fresh entity accepts a joint");

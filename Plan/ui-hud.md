@@ -1,6 +1,8 @@
 # Plan: HUD motion and shapes — tweens, world anchors, rotation, clipping (Neon Shroud request 0020)
 
-> Status: **Waves 1, 2, 3a, 4a, 4b, 5a, 6a mechanized (2026-11-19)** — W3a: `rotation` on `UiRect`/`UiText`/`UiGroup`
+> Status: **Waves 1, 2, 3a, 3b, 4a, 4b, 5a, 6a mechanized (2026-11-20)** — W3b: `UiShape` (`line circle ring arc wedge rounded_rect`, fill and
+> stroke, decisions 53–61, `L1621`, `ui_shape.wgsl`, `ludion::math::ui_shape_hit`, `docs/ui-shapes.md`; the `ui-shapes` golden is blessed on
+> the RTX 3090, the macOS golden is owed on the M4); W3a: `rotation` on `UiRect`/`UiText`/`UiGroup`
 > (decisions 45–52, `L1620`, `UiTweenField::Rotation`, `ui_rect_corners`/`ui_point_in`, rotated clip and hit; the `ui-rotation`
 > golden is blessed on the RTX 3090, the macOS golden is owed on the M4); W6a: `UiRadial` (decisions 37–44, `L1619`,
 > `radial_layout`/`radial_hit`, `docs/ui-radial.md`; labels and icons only, wedges are W6b); W5a: `outline` on `UiText`/`UiList` (decisions 31–36,
@@ -13,7 +15,7 @@
 > `UiTween` and `UiWorldAnchor`, resolved in `extract`
 > (`ui/hud.rs`; the component and schema snapshots moved once, no golden, replay or protocol hash);
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
-> component schema snapshot moved). Waves 3b, 3c, 5b and 6b–7 are recorded below and not started. Owed: the
+> component schema snapshot moved). Waves 3c, 5b and 6b–7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -233,6 +235,42 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
     clip test uses the rotated SDF twin. `ui_rect_corners(&UiRect, viewport)` (TL, TR, BR, BL) and
     `ui_point_in(&UiRect, viewport, cursor)` are ungrouped and untweened. All trig goes through
     `ludion_core::math::sin_cos`, and a rotation of exactly 0 takes no trig.
+53. **`UiShape` fields** (`ludion-components/src/ui_shape.rs`, the `radial.rs` pattern): `anchor` (default top_left), `offset`
+    (canvas units, +Y down), `group`; `shape: UiShapeType` (default a circle of radius 16); `fill: Option<[f32; 4]>` and
+    `stroke: Option<UiStroke { width, color }>`, skipped when none; `rotation` (degrees, skipped when 0, `L1620`), `order`,
+    `visible`. There is no `fill_group` field. A shape with neither fill nor stroke draws nothing, silently.
+54. **`UiShapeType`** is `#[serde(tag = "type", rename_all = "snake_case")]`, mirroring `GroundMarkerShape`; the request wrote
+    `kind:`, which in Ludion names a document kind. `line { from, to, cap: butt|round }`; `circle { radius }`;
+    `ring { radius, thickness, start_deg = 0, sweep_deg = 360 }` (the band `[radius − thickness, radius]`);
+    `arc { radius, start_deg, sweep_deg }`; `wedge { radius, inner_radius = 0, start_deg, sweep_deg }`;
+    `rounded_rect { size, corner_radius = 0 }`, centred on the origin. Angles are clock degrees (decision 38).
+55. **Origin rule.** The shape's local `(0, 0)` sits at `canvas_anchor_px(anchor) + offset·ps`; inside a group it moves by
+    `group_delta` like every element. Every length is in canvas units × `pixel_scale`. Scale (tween or group) and rotation
+    pivot on the **origin**, not a bounds centre — a documented difference from decision 46.
+56. **Stroke** is centred on the shape's edge. `line` and `arc` are stroke-only: their geometry is the stroke band, drawn in
+    `stroke.color` (an arc becomes a sector `[r − w/2, r + w/2]`, a line a segment of half-width `w/2`). A `fill` on them, or a
+    missing `stroke`, is `L1621`.
+57. **`L1621 UI_SHAPE_INVALID`** (error, at the field pointer): non-finite numbers; `radius ≤ 0`; `thickness ≤ 0` or `> radius`;
+    `inner_radius < 0` or `≥ radius`; `sweep_deg` outside `[0, 360]`; a negative `size` component or `corner_radius`; a stroke
+    `width ≤ 0`; a `fill` on, or no `stroke` for, `line`/`arc`. `sweep_deg = 0` and a zero-length butt line are valid and draw nothing.
+58. **Renderer data** (`ludion-renderer/src/scene.rs`, beside `UiRotation`): `UiShapeGeometry` in px relative to the origin, +Y down
+    — `Sector { radius_outer, radius_inner, start, sweep }` (clock radians; `sweep ≥ 2π` is a full annulus or disc),
+    `Segment { a, b, half_width, round }`, `RoundedBox { half_size, radius }` — with `local_bounds(stroke_width) -> [l, t, r, b]`
+    padded by `stroke_width/2`. `UiInstance::Shape { origin_px, geometry, fill, stroke: Option<UiShapeStroke { width_px, color }>,
+    clip, rotation }`; when rotated `rotation.pivot_px == origin_px`.
+59. **Coverage** (the shader and its Rust twin agree): fill `cf = clamp(0.5 − d, 0, 1)`; stroke `cs = clamp(0.5 − (|d| − w/2), 0, 1)`
+    behind `w > 0`; stroke over fill, premultiplied: `as = stroke.a·cs`, `af = fill.a·cf`, `rgb = stroke.rgb·as + fill.rgb·af·(1 − as)`,
+    `a = as + af·(1 − as)`; then multiplied by `clip_cov` (decision 28). The blend is `premultiplied_blend`, as in `ui_rect`.
+60. **Batching.** A run of consecutive `Shape` instances is one instanced draw (`UiBatch::Shapes`), no texture bind group; a kind
+    change closes the run (decision 4), so the order is unchanged.
+61. **Hit.** `ui_shape_hit(&UiShape, viewport, cursor)` is pure (ungrouped, untweened; the cursor is turned back about the
+    origin): true when `d < 0` with a fill, or `|d| < w/2` with a stroke; a stroke-only kind is true when `d < 0` on its band.
+    `ui_hit` tests a `UiShape` through `hud::post` the same way plus `clip_contains`. The SDF twin uses `ludion_core::math` only.
+
+**Proposed — owner ruling owed (W3b):** `type:` rather than `kind:`; the origin pivot for scale and rotation; the centred stroke;
+`rounded_rect` centred on the origin; `ring`/`wedge`/`arc` defaulting to a full sweep; `fill` on `line`/`arc` as an error; no
+`sweep_deg` tween field (a game writes `sweep_deg`; trigger: a request for one). Request differences: `type:`;
+`polyline`/`polygon`/`dash` are W3c; `ring` and `wedge` stay two kinds with different radius fields though they draw the same sector.
 
 ## Waves
 
@@ -284,7 +322,7 @@ and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 ## Out of scope (triggers recorded)
 
-`UiShape` (W3b/W3c), rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
+polygon, polyline and dashes (W3c), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
 when stretched), slicing `UiList`/`UiText`, text shadow (W5b), `UiRadial` wedge and stroke drawing (W6b), sub-wheels, item-level `ui_hit`,
 anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see

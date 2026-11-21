@@ -213,7 +213,7 @@ pub fn switch_skin_to_ragdoll(
             let Some(info) = registry.get(name) else {
                 continue;
             };
-            for field in info.entity_refs() {
+            for field in &info.entity_ref_sites(value) {
                 if field
                     .target(value)
                     .is_some_and(|id| id.index() as usize == last)

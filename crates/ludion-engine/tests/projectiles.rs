@@ -393,7 +393,7 @@ fn a_bad_config_is_refused_at_build() {
 fn an_unknown_ignore_layer_reports_once_and_freezes_the_pool() {
     let mut engine = engine_with(
         Some(ProjectileConfig {
-            ignore_layers: vec!["nope".to_string()],
+            ignore_layers: ludion_physics::LayerSet::from(vec!["nope".to_string()]),
             ..config()
         }),
         true,

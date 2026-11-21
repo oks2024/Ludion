@@ -214,15 +214,14 @@ like spawn ranks and refilled after a restore. Blasts filter through the same `S
 ### W5 — counts and migration (shipped)
 
 `check-scene --bounds` prints per-layer query-only member counts (` (N query-only)` in text, only when above
-zero; `query_only` on every `--json` entry). `NavConfig` / `ProjectileConfig` keep `ignore_layers: Vec<String>` and
-resolve to a `LayerSet` internally at their filter sites (`QueryFilter::ignore_set`). `ProjectileConfig` sits in the
-snapshot document, and a bare `LayerSet` field would emit a `$ref` that moves `replay_content_hash`; a guard test in
-`snapshot.rs` pins the schema as a plain list.
+zero; `query_only` on every `--json` entry). `NavConfig::ignore_layers` and `ProjectileConfig::ignore_layers` are
+`LayerSet` (shipped R13; they were `Vec<String>`), passed straight to `QueryFilter::ignore_set`. `ProjectileConfig` sits in the
+snapshot document, and a bare `LayerSet` field would emit a `$ref` that moves `replay_content_hash`, so both fields carry
+`#[schemars(with = "Vec<String>")]`; a guard test in `snapshot.rs` pins the schema as a plain list.
 
-- **Accepted 2026-11-19, scheduled (R13 API break round; the owner fixes the external games by hand, vigil in the same change):** change the two `ignore_layers` field types to `LayerSet` (breaking public API; would
-  need `#[schemars(with = "Vec<String>")]` on `ProjectileConfig`). The external caller that would adapt is Serious Isaac
-  `src/lib.rs:267` (`ignore_layers: vec![ENEMY_PHYSICS_LAYER.into()]` becomes
-  `LayerSet::from(vec![ENEMY_PHYSICS_LAYER.to_string()])`). Serialized bytes would be unchanged.
+- **Shipped R13 (accepted 2026-11-19):** the two `ignore_layers` field types are `LayerSet` (breaking public API; the owner
+  fixes the external games by hand, vigil needed no change). The external caller that adapts is an external game's
+  `ignore_layers: vec![..]` literal, which becomes `LayerSet::from(vec![..])`. Serialized bytes are unchanged.
 - **Out of scope:** the camera rig's `RigCollisionConfig::{include_layers, ignore_layers}` stay `Vec<String>`.
   Trigger: `LayerSet` moves below `ludion-physics`, or `ludion-camera` gains a physics dependency for another reason.
 
@@ -290,4 +289,4 @@ out the kinematic seat; nothing built, the joint-zero re-capture stays a known l
 `include_set` / `ignore_set`, codes `L1500` / `L1501`; blasts and sweeps share one `SweepFilter::drops`. No
 hash, trace, golden or replay moved.
 **W5 shipped** (Neon Shroud request 0002): query-only counts in `check-scene --bounds`; `ignore_layers`
-resolved through `LayerSet` internally, the public type change is proposed. No hash, schema, trace, golden or replay moved.
+resolved through `LayerSet` internally. **R13 shipped the public type change:** both `ignore_layers` fields are `LayerSet`. No hash, schema, trace, golden or replay moved.

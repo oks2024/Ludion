@@ -7,7 +7,7 @@ use ludion_core::audio::{Bus, MixLayer};
 use ludion_core::ids::EntityId;
 use ludion_engine::{
     AudioCategory, AudioDistance, AudioEvent, AudioLogEntry, AudioMessage, AudioPan, AudioQueue,
-    Engine, LoopId,
+    Engine, LoopId, VoiceFilter, VoiceSpatial,
 };
 
 const SCENE: &str = "format: 1\nentities:\n  - components:\n      Transform:\n        translation:\n          - 1.0\n          - 2.0\n          - 3.0\n";
@@ -122,6 +122,7 @@ fn loop_messages_drain_in_the_order_they_were_queued() {
         pan: 0.0,
         // A manual loop is an ambient bed by construction.
         category: AudioCategory::Ambient,
+        spatial: VoiceSpatial::default(),
     };
     let messages: Vec<&AudioMessage> = engine.audio_log().iter().map(|e| &e.message).collect();
     assert_eq!(
@@ -273,6 +274,7 @@ fn bell_sync(gain: f32) -> AudioMessage {
         gain,
         pan: 0.0,
         category: AudioCategory::Ambient,
+        spatial: VoiceSpatial::default(),
     }
 }
 
@@ -399,6 +401,7 @@ fn an_emitter_out_of_range_is_stopped_and_sends_nothing_further() {
                 gain: 0.6,
                 pan: 0.0,
                 category: AudioCategory::Ambient,
+                spatial: VoiceSpatial::default(),
             },
             AudioMessage::LoopStop {
                 id: LoopId::Entity(BELL)
@@ -1793,4 +1796,90 @@ fn ducking_is_reproducible_and_never_hashed() {
     assert_eq!(log_a, log_b);
     let (_, hashes_plain) = script(voice_engine("duck-repro-c", AudioPan::Centred));
     assert_eq!(hashes_a, hashes_plain);
+}
+
+fn radio() -> VoiceSpatial {
+    VoiceSpatial {
+        filter: VoiceFilter::band_pass(300.0, 3400.0),
+        send: 0.25,
+    }
+}
+
+/// `push_on` starts an attached voice with a filter, and every later sync carries the same one.
+#[test]
+fn push_on_carries_its_filter_on_the_start_and_every_sync() {
+    let mut engine = voice_engine("filtered", AudioPan::Stereo);
+    let event = AudioEvent {
+        category: AudioCategory::Voice,
+        spatial: radio(),
+        ..AudioEvent::new("long.wav", 1.0)
+    };
+    let id = queue(&mut engine).push_on(GUARD, event, 10.0);
+    engine.advance_live();
+    move_guard_to(&mut engine, 6.0);
+    engine.advance_live();
+
+    let messages = voice_messages(&engine);
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    let AudioMessage::VoiceStart {
+        id: started,
+        spatial: start,
+        ..
+    } = &messages[0].1
+    else {
+        panic!("a start: {messages:?}");
+    };
+    assert_eq!((*started, *start), (id, radio()));
+    let AudioMessage::VoiceSync { spatial: sync, .. } = &messages[1].1 else {
+        panic!("a sync: {messages:?}");
+    };
+    assert_eq!(*sync, radio());
+}
+
+/// A positional one-shot keeps its event's filter through the listener resolve.
+#[test]
+fn push_at_keeps_the_events_filter() {
+    let mut engine = bell_engine();
+    let event = AudioEvent {
+        spatial: radio(),
+        ..AudioEvent::new("radio.wav", 1.0)
+    };
+    queue(&mut engine).push_at(event, [4.0, 0.0, 0.0], 10.0);
+    engine.advance_live();
+
+    let shot = engine
+        .audio_log()
+        .iter()
+        .find_map(|entry| match &entry.message {
+            AudioMessage::OneShot(event) => Some(event.spatial),
+            _ => None,
+        });
+    assert_eq!(shot, Some(radio()));
+}
+
+/// Nothing that does not ask for a filter carries one: attached voices from `play_on`, plain
+/// one-shots and a manual loop all read the default.
+#[test]
+fn unfiltered_messages_carry_the_default_spatial() {
+    let mut engine = voice_engine("unfiltered", AudioPan::Stereo);
+    play_voice(&mut engine, GUARD, "long.wav");
+    queue(&mut engine).play("click.wav", 1.0);
+    queue(&mut engine).loop_start("bed.wav", 0.5);
+    engine.advance_live();
+    move_guard_to(&mut engine, 6.0);
+    engine.advance_live();
+
+    let spatials: Vec<VoiceSpatial> = engine
+        .audio_log()
+        .iter()
+        .filter_map(|entry| match &entry.message {
+            AudioMessage::OneShot(event) => Some(event.spatial),
+            AudioMessage::LoopSync { spatial, .. }
+            | AudioMessage::VoiceStart { spatial, .. }
+            | AudioMessage::VoiceSync { spatial, .. } => Some(*spatial),
+            _ => None,
+        })
+        .collect();
+    assert!(spatials.len() >= 4, "{spatials:?}");
+    assert!(spatials.iter().all(|s| *s == VoiceSpatial::default()));
 }

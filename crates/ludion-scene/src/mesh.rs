@@ -175,6 +175,10 @@ pub struct MeshDocument {
     /// Coarser levels of detail, finest first; empty for every mesh without a chain. The base is
     /// level 0.
     pub lods: Vec<MeshLodRef>,
+    /// Per-triangle surface tags (the `surfaces` and `triangle_surfaces` keys), matched to the
+    /// scene's `physics.surfaces` at load. `None` for an untagged mesh. Validated with the
+    /// document (`L1696`) and written by [`emit`] right before `indices`.
+    pub surfaces: Option<MeshSurfaces>,
     /// Triangle list: flat vertex indices, 3 per triangle.
     pub indices: Vec<u32>,
 }
@@ -402,7 +406,7 @@ impl MeshDocument {
 /// The most local surface names one mesh document may list.
 const MAX_MESH_SURFACES: usize = 256;
 
-/// Per-triangle surface tags that travel beside a [`MeshDocument`] (the `surfaces` and
+/// Per-triangle surface tags: the `surfaces` field of a [`MeshDocument`] (the `surfaces` and
 /// `triangle_surfaces` keys): local names, and `[count, local index]` runs in triangle order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshSurfaces {
@@ -426,13 +430,6 @@ impl MeshSurfaces {
 
 /// Parses strict-subset YAML into a [`MeshDocument`], checking structure/shape only (`L1110`).
 pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
-    parse_with_surfaces(source).map(|(doc, _)| doc)
-}
-
-/// [`parse`], also returning the `surfaces`/`triangle_surfaces` tags when the document has them.
-pub(crate) fn parse_with_surfaces(
-    source: &str,
-) -> Result<(MeshDocument, Option<MeshSurfaces>), Vec<Diagnostic>> {
     let root = yaml::parse_document(source).map_err(|diagnostic| vec![diagnostic])?;
     let Some(root) = root else {
         return Err(vec![
@@ -840,13 +837,13 @@ pub(crate) fn parse_with_surfaces(
             .with_help(format!("add `{absent}`, or remove `{present}`")),
         );
     }
-    let surfaces = match (surface_names, surface_runs) {
+    doc.surfaces = match (surface_names, surface_runs) {
         (Some(names), Some(runs)) => Some(MeshSurfaces { names, runs }),
         _ => None,
     };
 
     if diagnostics.is_empty() {
-        Ok((doc, surfaces))
+        Ok(doc)
     } else {
         Err(diagnostics)
     }
@@ -1964,6 +1961,10 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
         }
     }
 
+    if let Some(surfaces) = &doc.surfaces {
+        diagnostics.extend(validate_surfaces(doc, surfaces));
+    }
+
     diagnostics
 }
 
@@ -2475,11 +2476,6 @@ pub(crate) fn budget_warning(doc: &MeshDocument) -> Option<Diagnostic> {
 /// three together), `indices`, each flat list one entry per line, ryu
 /// shortest-round-trip floats — the mesh analog of [`crate::emit`].
 pub(crate) fn emit(doc: &MeshDocument) -> String {
-    emit_with_surfaces(doc, None)
-}
-
-/// [`emit`] with the `surfaces`/`triangle_surfaces` keys, written right before `indices`.
-pub(crate) fn emit_with_surfaces(doc: &MeshDocument, surfaces: Option<&MeshSurfaces>) -> String {
     let mut out = String::new();
     out.push_str("format: 1\n");
     out.push_str("kind: mesh\n");
@@ -2550,7 +2546,7 @@ pub(crate) fn emit_with_surfaces(doc: &MeshDocument, surfaces: Option<&MeshSurfa
             out.push('\n');
         }
     }
-    if let Some(surfaces) = surfaces {
+    if let Some(surfaces) = &doc.surfaces {
         out.push_str(if surfaces.names.is_empty() {
             "surfaces: []\n"
         } else {

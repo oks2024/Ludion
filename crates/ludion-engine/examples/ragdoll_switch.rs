@@ -4,7 +4,7 @@
 //! ticks — the part heights printed along the way.
 //!
 //! With `--limits-from-rest` the switch is `switch_to_ragdoll_with` and `LimitsFrom::Rest`: each
-//! joint also carries a `JointZero`, so its limits and any motor target count from the rig's rest
+//! joint also sets `Joint.zero`, so its limits and any motor target count from the rig's rest
 //! pose rather than the pose the puppet was in at the switch. The arm hinge angle is printed at the
 //! end of the run. With `--part-velocity` the switch also adds the drawn pose's own motion to each
 //! part's `Velocity` (`RagdollSwitch::part_velocity`), and the arm's spawn velocity is printed.

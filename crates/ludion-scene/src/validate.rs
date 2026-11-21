@@ -74,7 +74,7 @@ pub(crate) fn validate(scene: &Scene, registry: &Registry) -> Vec<Diagnostic> {
                     // (`index` must be a real document position). The check lives here — not in
                     // `ludion-ecs` — because "document position" is a scene concept; which fields
                     // are references is the registry's, read from their schema marker.
-                    for field in info.entity_refs() {
+                    for field in &info.entity_ref_sites(value) {
                         check_entity_ref(
                             value,
                             name,
@@ -196,7 +196,7 @@ fn check_overrides(
                     diagnostics.push(reserved_component(name, pointer))
                 }
                 Some(info) => {
-                    for field in info.entity_refs() {
+                    for field in &info.entity_ref_sites(value) {
                         check_entity_ref(
                             value,
                             name,
@@ -345,7 +345,11 @@ pub(crate) fn check_component_refs(
         return Vec::new();
     };
     let mut diagnostics = Vec::new();
-    for field in info.entity_refs().iter().filter(|field| !field.hierarchy) {
+    for field in info
+        .entity_ref_sites(value)
+        .iter()
+        .filter(|field| !field.hierarchy)
+    {
         let Some(target) = field.target(value) else {
             continue;
         };
@@ -514,7 +518,7 @@ pub(crate) fn presentation_refs(scene: &Scene, registry: &Registry) -> Vec<Diagn
             let Some(info) = registry.get(name) else {
                 continue;
             };
-            for field in info.entity_refs() {
+            for field in &info.entity_ref_sites(value) {
                 let reference = if field.suffix.is_empty() {
                     Some(value)
                 } else {
@@ -1081,6 +1085,41 @@ mod tests {
     struct TestTurret {
         #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
         target: Option<EntityId>,
+    }
+
+    /// A sanctioned list of element references: every element is checked at its own pointer.
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct TestSquad {
+        #[schemars(with = "ludion_ecs::EntityRefCollection<Vec<ludion_ecs::EntityRefSchema>>")]
+        refs: Vec<EntityId>,
+    }
+
+    #[test]
+    fn a_sanctioned_list_element_out_of_range_is_l1017_at_the_concrete_pointer() {
+        let mut registry = registry();
+        registry.register::<TestSquad>("Squad").unwrap();
+        let scene = crate::parse(
+            "format: 1\n\
+             entities:\n  \
+               - components:\n      \
+                   Squad:\n        \
+                     refs:\n          \
+                       - index: 1\n            \
+                         generation: 0\n          \
+                       - index: 9\n            \
+                         generation: 0\n  \
+               - components: {}\n",
+        )
+        .unwrap();
+        let found: Vec<_> = validate(&scene, &registry)
+            .into_iter()
+            .filter(|d| d.code.as_str() == "L1017")
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/Squad/refs/1/index")
+        );
     }
 
     fn registry() -> Registry {
