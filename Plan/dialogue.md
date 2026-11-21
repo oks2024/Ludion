@@ -1,6 +1,6 @@
 # Plan: Dialogue — string tables, a line queue, subtitles
 
-> **Waves 1 and 2a mechanized — text and voice ship; subtitles' built-in widget (W2b) and localization (W3) are laid out below.**
+> **Waves 1 and 2a mechanized — text and voice ship; subtitles' built-in widget (W2b) and localization's font side (W3b) are laid out below. W3a (localization, text side) is mechanized.**
 > Driven by Neon Shroud request 0024 (dialogue, subtitles, localization). Game-facing doc: `ludion docs dialogue`.
 
 ## Design decisions
@@ -10,7 +10,7 @@
    builtin, so `component_schemas.json`, the protocol schema, goldens, replays and every existing `WorldHash` are untouched.
 2. **State is entities, not a resource** (resources reset on restore/checkpoint, `docs/checkpoints.md`). One
    `DialogueLine` entity per said line (the handle is the entity, `LineHandle(EntityId)`); one lazily spawned
-   `DialogueControl` entity (locale, blocked channels, suspended, next sequence number). Spawned on the first API call,
+   `DialogueControl` entity (blocked channels, suspended, next sequence number; the locale left it for `LocaleState`, d27). Spawned on the first API call,
    so an opted-in game that never speaks is byte-identical. Both are hashed and snapshotted for free. This deviates
    from the request's `Dialogue` resource: same API as free functions over `&mut World`.
 3. **API calls only mark state; `dialogue_update` emits every event.** `say` spawns a `Queued` line; `interrupt` sets
@@ -39,7 +39,7 @@
     once per key). `{name}` placeholders, `{{`/`}}` escape literal braces; a missing arg leaves `{name}` and warns
     `L5134` once. No plurals or gender. Text re-resolves every tick, so `set_locale` changes live subtitles; a started
     line keeps its duration.
-14. **Locale** lives on `DialogueControl` (hashed). `kind: locales` is W3: `DialogueConfig.default_locale` stands in.
+14. **Locale** lives on `LocaleState` (d27). `kind: locales` replaced `DialogueConfig.default_locale`, which is removed (d26).
 15. **No `voice:` field in W1**: an unknown field is `L1120`, never silently ignored; W2a added it additively.
 16. **Voice path.** `voice:` on a line, `{locale}` substituted with the active locale; if that file does not read, the
     default locale's (`L5137` warning once per path); a path without `{locale}` is used as is.
@@ -58,9 +58,41 @@
 22. **Voice ids live in an unhashed resource** reset on rebuild; a restored mid-line plays on silently until W2b.
 23. **Ducking is the game's `DuckRule { when: Voice, .. }`** (0023); dialogue adds nothing.
 
+24. **Opt-in `EngineBuilder::localization()`.** It registers `kind: strings` (moved from `.dialogue()`) and `kind: locales`,
+    both `doc_kind_engine_owned`, plus the validators, the `LocaleState` component and the `localize_text` system. It is
+    idempotent (a builder flag), and `.dialogue()` calls it. The system is pushed like `.system(...)` at the point of the
+    first call, so it runs in the game's Sim order there.
+25. **`kind: locales`** (`locales.yaml`, at most one doc, else `L1722`): `default: <tag>` plus `locales: { <tag>: { name } }`.
+    `default` must be listed (`L1722`). When the doc exists, every `kind: strings` locale must be listed (`L1723`). Without
+    the doc the default is `en` and any locale tag is accepted. This relaxes the request's "every strings doc must be
+    `en`", which would have broken W1 content.
+26. **`DialogueConfig::default_locale` is removed** (BREAK; no external user). The default locale comes from `kind: locales`
+    everywhere (`localization::default_locale(world)`), which also fixes W1's build-time-config gap. `L1710` keeps only the
+    reading constants.
+27. **The active locale is a `LocaleState { locale: Option<String> }` component** on one lazily spawned entity, mirroring
+    `DialogueControl`. Hashed and snapshotted. `localization::set_locale` and `localization::locale` replace
+    `dialogue::set_locale` and `dialogue::locale` (removed), and `DialogueControl.locale` goes too. `scene.save` skips the
+    entity (`flatten_world`): the locale is a player setting, so a scene saved under `fr` equals one saved under `en`.
+28. **`UiText`/`Text` gain `key: Option<String>`, `args: BTreeMap<String, String>` and a runtime-only `resolved`.**
+    `key` is authorable (skip-if-none) and `args` skip-if-empty; both are sim state, hashed and snapshotted, so unkeyed content
+    is byte-identical. `resolved` is `#[serde(skip)]` and `#[schemars(skip)]`: never written, hashed or snapshotted, a pure
+    function of key, args, locale and docs. **`text` is never written by the engine**; it stays the authored fallback.
+    `shown()` returns `resolved` else `text`, and layout, wrap, measure, draw and hit tests read it. `localize_text` fills
+    `resolved` every tick in `EntityId` order (only when it differs): active locale, else default (`L5132`), else the key
+    (`L5133`). One resolve pass also runs at the end of every rebuild or restore, once the docs are committed, so the first
+    extract shows it. Clearing `key` clears `resolved`. Why not a writer that omits `text` when `key` is set: serde cannot skip
+    one field conditionally on another without a hand-written `Serialize`, and it would put locale-resolved text into
+    snapshots and the editor's write path. A derived runtime field keeps text the source of truth (Pillar 4).
+29. **A keyed text on an engine without `.localization()`** draws its authored `text`; `L5139` warns once per engine, from the
+    frame-boundary report. A `set_locale` to a tag with no strings table warns `L5140` once per tag and still applies.
+30. **Out of W3a:** keys on `UiList`/`UiRadial` (trigger: a menu that needs them); `check-scene` key checks and render-host
+    locales (W3b); text-size and language settings (request 0022 W3).
+
 Validation codes: `L1719` bad channel table or `dialogue_channels` without `dialogue` (build); `L1720` a line's voice does not
 read for the default locale (error); `L1721` it does not read for another locale with a `kind: strings` doc (warning).
 Runtime: `L5137` fell back, `L5138` unreadable.
+W3a adds `L1722` bad locales doc, `L1723` unlisted strings locale, `L5139` keyed text without the opt-in (warning), `L5140`
+locale without a strings table (warning).
 
 ## Waves
 
@@ -73,8 +105,13 @@ Runtime: `L5137` fell back, `L5138` unreadable.
   per the owner ruling); `subtitle_range` against `AudioListener` (else the lowest-id camera); a mid-line restore either
   re-starts the voice at a sample offset (needs a start offset on `push_voice`/`push_on` in `ludion-audio`) or ends it
   `Interrupted`; pause-aware tracking, so a voice held by `bus_pause` is still stoppable after resume.
-- **W3 localization:** `kind: locales` singleton, `UiText`/`Text` `key` + `set_text_args`, per-locale `fonts.yaml`
-  overrides, fallback chains, `L1256` over string tables, an `fr` gallery scene.
+- **W3a localization, text side (shipped):** `kind: locales`, the `LocaleState` locale, keyed `UiText`/`Text` with `args`
+  and `resolved`, `localization::*`, `L1722`, `L1723`, `L5139`, `L5140`, `ludion docs localization`. Engine-only, no golden.
+- **W3b localization, font side:** per-locale `fonts.yaml` overrides (a `locales:` section, the `ludion-scene` parser and
+  `FontLibrary::face(name, locale)`); `fallback: [..]` chains walked by layout, measurement, draw and `L1256` (multi-atlas
+  runs, so possibly a W3c); `check-scene` checks of `UiText.key` against the default locale, with `L1256` per locale over the
+  resolved text; a locale for render hosts (`ludion render --locale`, strings loaded in bare hosts); the `fr` gallery scene
+  and its golden.
 
 ## Out of scope (with triggers)
 
@@ -85,6 +122,8 @@ Runtime: `L5137` fell back, `L5138` unreadable.
 ## Owner rulings (2026-11-19)
 
 - Accepted. The reading-time constants (decision 11).
+- Taken (W3a). `kind: locales` relaxes the request's "every strings doc is `en`" (d25), and `DialogueConfig.default_locale` is
+  removed (d26, a break with no external user).
 - Accepted, scheduled (W3). Localization pulled forward from `Plan/font-assets.md` Deferred into W3 (request amendment 1), and fallback chains
   (amendment 2, W3). `Plan/font-assets.md` is not edited here; this is the record.
 - Accepted. Subtitles on by default (W2); band-pass values (W2).
@@ -101,3 +140,6 @@ Runtime: `L5137` fell back, `L5138` unreadable.
   `AudioQueue::push_voice` (a global tracked voice; `AttachedVoice.entity` is now optional), root-aware doc validators
   (`DocValidator` takes `&Path`), `tests/dialogue_voice.rs`, the example's voiced lines. Owed: a by-ear check of the radio
   band-pass on a real device.
+- W3a mechanized: `crates/ludion-engine/src/localization/` (strings moved from `dialogue/`, `LocalesDoc`, `LocaleState`,
+  `localize_text`), `UiText`/`Text` `key`/`args`/`resolved` + `shown()`, `tests/localization.rs`, `docs/localization.md`, the
+  example's keyed HUD label. The component schema snapshot is re-blessed; no protocol schema, golden or replay moved.

@@ -30,8 +30,8 @@ use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 
 use crate::audio::{AudioEvent, AudioQueue, VoiceSpatial};
+use crate::localization::{self, render};
 
-use super::strings::render;
 use super::voice::{DialogueChannels, DialogueVoices, resolve};
 use super::{
     Channel, DialogueConfig, DialogueControl, DialogueLine, EndReason, Interrupt, LineHandle,
@@ -338,10 +338,8 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
     let control: DialogueControl = control(world).unwrap_or_default();
     let suspended = control.suspended;
     let blocked = |channel: Channel| control.blocked.contains(&channel);
-    let active = control
-        .locale
-        .clone()
-        .unwrap_or_else(|| config.default_locale.clone());
+    let active = localization::locale(world);
+    let default_locale = localization::default_locale(world);
 
     let mut rows: Vec<Row> = world
         .query_ids::<(&DialogueLine,)>()
@@ -446,9 +444,11 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
                 .collect();
             let args: Vec<(&str, &str)> =
                 args.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
-            let voice = rows[head].line.voice.clone().and_then(|template| {
-                resolve(world, hz, &template, &active, &config.default_locale)
-            });
+            let voice = rows[head]
+                .line
+                .voice
+                .clone()
+                .and_then(|template| resolve(world, hz, &template, &active, &default_locale));
             let duration = match (rows[head].line.duration_ticks, &voice) {
                 (Some(ticks), _) => ticks,
                 (None, Some((_, clip))) => {

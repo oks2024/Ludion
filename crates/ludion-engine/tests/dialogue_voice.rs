@@ -13,6 +13,7 @@ use ludion_engine::dialogue::{
     self, ChannelAudio, DialogueChannels, DialogueControl, DialogueEvent, DialogueLine, EndReason,
     LineHandle,
 };
+use ludion_engine::localization;
 use ludion_engine::{
     Diagnostics, DialogueConfig, DialogueEvents, DuckRule, Engine, EngineBuilder, dialogue_update,
 };
@@ -290,7 +291,7 @@ fn a_voiced_line_lasts_the_clip_plus_the_tail_and_follows_the_locale() {
         ))
     );
 
-    dialogue::set_locale(engine.world_mut(), "fr");
+    localization::set_locale(engine.world_mut(), "fr");
     let fr = say(&mut engine, "radio");
     let second = run(&mut engine, 80);
     assert_eq!(
@@ -318,7 +319,7 @@ fn an_authored_tail_and_an_authored_duration_override_the_default() {
 fn two_runs_produce_identical_traces() {
     let trace = |name: &str| {
         let mut engine = boot(name);
-        dialogue::set_locale(engine.world_mut(), "fr");
+        localization::set_locale(engine.world_mut(), "fr");
         say(&mut engine, "radio");
         say(&mut engine, "world");
         let events = run(&mut engine, 100);
@@ -330,7 +331,7 @@ fn two_runs_produce_identical_traces() {
 #[test]
 fn a_missing_locale_file_falls_back_to_the_default_locale() {
     let mut engine = boot("fallback");
-    dialogue::set_locale(engine.world_mut(), "fr");
+    localization::set_locale(engine.world_mut(), "fr");
     let line = say(&mut engine, "only_en");
     let ran = run(&mut engine, 60);
     assert_eq!(
@@ -648,7 +649,7 @@ fn a_path_without_the_locale_placeholder_is_used_as_is() {
             .doc_text("dialogue/main.yaml", &bank),
     );
     assert!(engine.doc_validation_warnings().is_empty());
-    dialogue::set_locale(engine.world_mut(), "fr");
+    localization::set_locale(engine.world_mut(), "fr");
     let line = dialogue::say(engine.world_mut(), "fixed", None).unwrap();
     let ran = run(&mut engine, 60);
     assert_eq!(

@@ -77,6 +77,7 @@ mod light_exposure_agreement;
 mod lit_particles;
 mod live_record;
 mod local_shadow_fade;
+mod localization;
 mod map_spawn_wire;
 mod mesh_collider;
 mod mesh_grid;

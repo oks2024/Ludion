@@ -4,14 +4,14 @@ description: Dialogue lines, string tables and subtitles: kind strings/dialogue,
 
 # Dialogue (strings, a line queue, subtitles)
 
-**Scope:** `kind: strings` (one locale's key to text map), `kind: dialogue` (speakers and lines), the
+**Scope:** `kind: dialogue` (speakers and lines), the
 deterministic line queue, voice (a WAV per line, played through the channel's audio) and the `Subtitles` your UI draws.
-A drawn subtitle widget and `UiText` keys are not here yet. Holding gameplay time is `ludion docs game-clock`; the UI is `ludion docs screen-ui`. Playing lines on a timeline is `ludion docs sequences`.
+Strings, locales and keyed `UiText` are `ludion docs localization`. A drawn subtitle widget is not here. Holding gameplay time is `ludion docs game-clock`; the UI is `ludion docs screen-ui`. Playing lines on a timeline is `ludion docs sequences`.
 
 ## The loop
 
-1. `Engine::builder().dialogue(DialogueConfig::default())`: opts in. `default_locale` (`en`) is the locale every key must
-   exist in and the fallback for the rest; `base_s`, `per_char_s`, `min_s` are the reading-time rule; `tail_ticks` (12) is how long a voiced line outlasts its clip. `build` refuses a
+1. `Engine::builder().dialogue(DialogueConfig::default())`: opts in, and calls `.localization()` (`ludion docs
+   localization`: the default locale comes from `kind: locales`, else `en`). `base_s`, `per_char_s`, `min_s` are the reading-time rule; `tail_ticks` (12) is how long a voiced line outlasts its clip. `build` refuses a
    bad config with `L1710`.
 2. Write the docs under the content root (below).
 3. Schedule `.system("dialogue_update", dialogue_update)` **after the systems that call `say`**, and declare its queries:
@@ -31,7 +31,7 @@ strings:
   radio.hit: "Lost {count} drones."
 ```
 
-A key is defined once per locale (`L1711`). `{name}` is a placeholder; `{{` and `}}` are literal braces.
+The `kind: strings` doc and its rules (`L1711`, `L1716`, `L1718`) are in `ludion docs localization`.
 
 ```yaml
 format: 1
@@ -66,16 +66,15 @@ lines:
 A speaker has `name` (a string key), `channel` (`radio`, `world`, `ui`), optional `portrait` (a string for your UI)
 and `color` (RGBA). Ids are unique across all dialogue docs (`L1712`, `L1713`); a line names a defined speaker
 (`L1714`); every `text` and speaker `name` key exists in the default locale (`L1715`); a translation uses the
-same placeholders (`L1716`, warning); `duration_ticks` is not 0 and a cue is before the end (`L1717`); a strings doc
-has a `locale` (`L1718`); a `voice` reads for the default locale (`L1720`) and, with `{locale}`, for every other
+`duration_ticks` is not 0 and a cue is before the end (`L1717`); a `voice` reads for the default locale (`L1720`) and, with `{locale}`, for every other
 locale that has a strings doc (`L1721`, warning). An unknown field is `L1120`.
 
 ## The API
 
 `say(world, id, speaker)`, `say_with(world, id, speaker, &[("name", "value")])`, `say_sequence(world, &ids, &speakers)`,
 `interrupt(world, handle)`, `interrupt_speaker(world, entity)`, `block_channel(world, channel, bool)`,
-`suspend(world, bool)`, `set_locale(world, "fr")`, `locale`, `speaking(world, speaker_id)`, `holding`, `line_state`,
-`text(world, key)`, `format_text(world, key, args)`. Errors are `L5130` (unknown line), `L5131` (a `world` line with no
+`suspend(world, bool)`, `speaking(world, speaker_id)`, `holding`, `line_state`. The locale is
+`ludion::localization::set_locale`. Errors are `L5130` (unknown line), `L5131` (a `world` line with no
 live speaker), `L5135` (bad sequence), `L5136` (not opted in).
 
 **Gotcha:** the API only marks state; `dialogue_update` emits every event. A line said after the system in a tick
@@ -137,13 +136,12 @@ the game's job today (`UiText`).
 
 ## Strings
 
-Lookup is the active locale, then the default locale (`L5132`, once), then the key itself (`L5133`, once). A missing
-argument leaves `{name}` and warns `L5134` once. Text re-resolves every tick, so `set_locale` changes a live
-subtitle without changing its length.
+Lookup, fallbacks and `{name}` placeholders are `ludion docs localization`. A line's text re-resolves every tick, so
+`localization::set_locale` changes a live subtitle without changing its length.
 
 ## Gotchas
 
-- State is entities (`DialogueLine`, `DialogueControl`), so it rides snapshots, checkpoints and the `WorldHash`; the
+- State is entities (`DialogueLine`, `DialogueControl`; the locale is `LocaleState`), so it rides snapshots, checkpoints and the `WorldHash`; the
   events, subtitles and string index are derived resources. A game that never speaks hashes as if it had not opted in.
 - A district switch drops lines unless the game carries them.
 - Codes: `L1719` bad channel table, `L1720` voice missing for the default locale, `L1721` (warning) for another,

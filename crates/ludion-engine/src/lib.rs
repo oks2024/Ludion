@@ -81,6 +81,7 @@ mod lane;
 mod light_exposure;
 pub mod live;
 mod load_observer;
+pub mod localization;
 pub mod manifest;
 mod mesh_asset;
 mod mesh_check;

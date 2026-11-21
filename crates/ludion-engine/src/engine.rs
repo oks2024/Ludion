@@ -241,6 +241,7 @@ pub struct Engine {
     /// The game's dialogue config ([`EngineBuilder::dialogue`](crate::EngineBuilder::dialogue)),
     /// already validated at build; `None` installs nothing.
     pub(crate) dialogue_config: Option<crate::DialogueConfig>,
+    pub(crate) localization: bool,
     pub(crate) dialogue_channels: Option<crate::dialogue::DialogueChannels>,
     /// Whether the game opted into sequences ([`EngineBuilder::sequences`](crate::EngineBuilder::sequences)).
     pub(crate) sequences: bool,
@@ -947,6 +948,7 @@ impl Engine {
             nav_config: None,
             perception_config: None,
             dialogue_config: None,
+            localization: false,
             dialogue_channels: None,
             sequences: false,
             input_actions: false,
@@ -2212,6 +2214,7 @@ impl Engine {
         crate::patterns::report_unrun_patterns(self.driver.world_mut(), game_systems);
         crate::projectiles::report_unrun_step(self.driver.world_mut(), game_systems);
         crate::fonts::report_font_faults(self.driver.world_mut());
+        crate::localization::report_unopted_keys(self.driver.world_mut());
         scene_physics::report_rejections(self.driver.world_mut());
         crate::ai::report_faults(self.driver.world_mut());
         scene_physics::report_missing_joints(self.driver.world_mut());
@@ -4802,7 +4805,19 @@ impl Engine {
         world.insert_resource(crate::dialogue::DialogueVoices::default());
         world.insert_resource(crate::DialogueEvents::default());
         world.insert_resource(crate::Subtitles::default());
-        world.insert_resource(crate::dialogue::StringIndex::default());
+    }
+
+    /// Installs the localization marker and an empty string index into the current world. Called after
+    /// every world (re)build; the locale and the keys are components, so a restored world keeps them
+    /// (the rebuild's last step resolves them against the committed docs). A no-op for a game that
+    /// did not opt in.
+    pub(crate) fn install_localization(&mut self) {
+        if !self.localization {
+            return;
+        }
+        let world = self.driver.world_mut();
+        world.insert_resource(crate::localization::LocalizationEnabled);
+        world.insert_resource(crate::localization::StringIndex::default());
     }
 
     /// Installs empty [`SequenceEvents`](crate::SequenceEvents) into the current world. Called after
@@ -8370,9 +8385,12 @@ pub(crate) fn flatten_world(
 ) -> Result<(Vec<SceneEntity>, Vec<EntityId>), Diagnostic> {
     // Presentation entities are written after the sim ones, so document positions follow this
     // order; a sim entity can never reference one (`remap_entity_refs`).
+    // The active locale is a player setting, not scene content: a scene saved under `fr` is
+    // byte-identical to one saved under `en`.
     let live: Vec<EntityId> = world
         .entities()
         .chain(world.presentation_entities())
+        .filter(|&id| !world.has::<crate::localization::LocaleState>(id))
         .collect();
     let entities = flatten_ids(world, registry, &live, &|_| true)?;
     Ok((entities, live))
@@ -9060,6 +9078,7 @@ impl Engine {
         self.install_projectiles();
         self.install_nav();
         self.install_perception();
+        self.install_localization();
         self.install_dialogue();
         self.install_sequences();
         self.install_input_actions();
@@ -9223,6 +9242,9 @@ impl Engine {
         self.cook_resolved = false;
         self.revalidate_pending = true;
         self.arm_query_recording();
+        // The docs are committed: resolve keyed text so the first extract after a load or restore
+        // already shows it.
+        crate::localization::resolve_pass(self.driver.world_mut());
         // Last: the prime reads the finished world (collider meshes, prefab placements). A restore
         // carries its own `PhysicsWorld`.
         if matches!(kind, Rebuild::Load { .. } | Rebuild::Switch { .. }) {

@@ -7,6 +7,7 @@ use ludion_ecs::{SystemCtx, World};
 use ludion_engine::dialogue::{
     self, Channel, DialogueControl, DialogueEvent, DialogueLine, EndReason, LineHandle, LineState,
 };
+use ludion_engine::localization;
 use ludion_engine::{
     Diagnostics, DialogueConfig, DialogueEvents, Engine, EngineBuilder, Subtitles, dialogue_update,
 };
@@ -589,13 +590,13 @@ fn cues_fire_on_their_tick_and_suspend_freezes_the_line() {
 #[test]
 fn strings_fall_back_and_report_once() {
     let mut engine = boot("strings");
-    assert_eq!(dialogue::text(engine.world_mut(), "t.fr"), "Copy that");
-    dialogue::set_locale(engine.world_mut(), "fr");
-    assert_eq!(dialogue::locale(engine.world_mut()), "fr");
-    assert_eq!(dialogue::text(engine.world_mut(), "t.fr"), "Bien recu");
+    assert_eq!(localization::text(engine.world_mut(), "t.fr"), "Copy that");
+    localization::set_locale(engine.world_mut(), "fr");
+    assert_eq!(localization::locale(engine.world_mut()), "fr");
+    assert_eq!(localization::text(engine.world_mut(), "t.fr"), "Bien recu");
     for _ in 0..3 {
         assert_eq!(
-            dialogue::text(engine.world_mut(), "t.only_en"),
+            localization::text(engine.world_mut(), "t.only_en"),
             "English only"
         );
     }
@@ -604,7 +605,7 @@ fn strings_fall_back_and_report_once() {
         ["string_fell_back:fr/t.only_en"]
     );
     for _ in 0..3 {
-        assert_eq!(dialogue::text(engine.world_mut(), "no.such"), "no.such");
+        assert_eq!(localization::text(engine.world_mut(), "no.such"), "no.such");
     }
     assert_eq!(
         reported(&engine, code::STRING_MISSING),
@@ -617,23 +618,26 @@ fn placeholders_fill_escape_and_warn_once() {
     let mut engine = boot("placeholders");
     let world = engine.world_mut();
     assert_eq!(
-        dialogue::format_text(world, "t.greet", &[("name", "Neon")]),
+        localization::format_text(world, "t.greet", &[("name", "Neon")]),
         "Hello Neon"
     );
     assert_eq!(
-        dialogue::format_text(world, "t.esc", &[("name", "Neon")]),
+        localization::format_text(world, "t.esc", &[("name", "Neon")]),
         "Use {braces} Neon"
     );
     for _ in 0..3 {
-        assert_eq!(dialogue::format_text(world, "t.greet", &[]), "Hello {name}");
+        assert_eq!(
+            localization::format_text(world, "t.greet", &[]),
+            "Hello {name}"
+        );
     }
     assert_eq!(
         reported(&engine, code::STRING_ARG_MISSING),
         ["string_arg:t.greet/name"]
     );
-    dialogue::set_locale(engine.world_mut(), "fr");
+    localization::set_locale(engine.world_mut(), "fr");
     assert_eq!(
-        dialogue::format_text(engine.world_mut(), "t.greet", &[("name", "Neon")]),
+        localization::format_text(engine.world_mut(), "t.greet", &[("name", "Neon")]),
         "Bonjour Neon"
     );
 }
@@ -645,7 +649,7 @@ fn set_locale_re_resolves_a_live_subtitle_without_changing_its_length() {
     tick(&mut engine);
     let before = subtitles(&engine);
     assert_eq!(before[0].text, "Copy that");
-    dialogue::set_locale(engine.world_mut(), "fr");
+    localization::set_locale(engine.world_mut(), "fr");
     tick(&mut engine);
     let after = subtitles(&engine);
     assert_eq!(after[0].text, "Bien recu");
@@ -801,9 +805,25 @@ fn each_validator_code_fires_as_specified() {
             Engine::builder()
                 .project_root(fresh_dir("l1710"))
                 .dialogue(DialogueConfig {
-                    default_locale: String::new(),
+                    base_s: -1.0,
                     ..DialogueConfig::default()
                 }),
+        ),
+        (
+            "L1722",
+            bare("l1722")
+                .doc_text("strings/en.yaml", BASE_STRINGS)
+                .doc_text("dialogue/a.yaml", BASE_DIALOGUE)
+                .doc_text(
+                    "locales/locales.yaml",
+                    "format: 1
+kind: locales
+default: de
+locales:
+  en:
+    name: English
+",
+                ),
         ),
     ];
     for (code, builder) in cases {

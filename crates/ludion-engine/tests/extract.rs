@@ -1485,6 +1485,7 @@ fn ui_text_resolves_through_extract_exactly_like_the_measured_block() {
         group: None,
         outline: None,
         rotation: 0.0,
+        ..UiText::default()
     };
     world.insert(e, text.clone()).unwrap();
 
@@ -2942,6 +2943,7 @@ fn an_unwrapped_ui_text_lowers_exactly_as_before() {
         group: None,
         outline: None,
         rotation: 0.0,
+        ..UiText::default()
     };
     let viewport = (1920, 1080);
     let mut world = World::new();

@@ -4642,6 +4642,21 @@ pub struct Text {
     /// `default` entry, else the built-in 8×8 face.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The string-table key (`kind: strings`) the shown text comes from, resolved in the active locale
+    /// (default none). The engine never writes `text`: it stays the authored fallback, and the
+    /// resolved string is the runtime-only `resolved` (read it through `shown`). Needs
+    /// `.localization()`; see `ludion docs localization`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Values for the `{name}` placeholders of the keyed string (default none). Game code sets it
+    /// through `localization::set_text_args`; it is hashed and snapshotted.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub args: std::collections::BTreeMap<String, String>,
+    /// The resolved string, written by the engine's `localize_text` while `key` is set. Never
+    /// serialized, hashed or snapshotted — a pure function of `key`, `args`, the locale and the docs.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved: Option<String>,
 }
 
 impl Default for Text {
@@ -4651,7 +4666,27 @@ impl Default for Text {
             size: 1.0,
             color: [1.0; 4],
             font: None,
+            key: None,
+            args: std::collections::BTreeMap::new(),
+            resolved: None,
         }
+    }
+}
+
+impl Text {
+    /// The text to draw: the engine-resolved string of a keyed Text, else the authored `text`.
+    ///
+    /// ```
+    /// use ludion_components::Text;
+    ///
+    /// let mut label = Text { text: "Start".into(), ..Default::default() };
+    /// assert_eq!(label.shown(), "Start");
+    /// label.resolved = Some("Start!".into());
+    /// assert_eq!(label.shown(), "Start!");
+    /// ```
+    #[must_use]
+    pub fn shown(&self) -> &str {
+        self.resolved.as_deref().unwrap_or(&self.text)
     }
 }
 
@@ -5482,6 +5517,38 @@ pub struct UiText {
     /// Rotation about the centre of the glyph bounds, degrees, clockwise on screen (default `0`).
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub rotation: f32,
+    /// The string-table key (`kind: strings`) the shown text comes from, resolved in the active locale
+    /// (default none). The engine never writes `text`: it stays the authored fallback, and the
+    /// resolved string is the runtime-only `resolved` (read it through `shown`). Needs
+    /// `.localization()`; see `ludion docs localization`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Values for the `{name}` placeholders of the keyed string (default none). Game code sets it
+    /// through `localization::set_text_args`; it is hashed and snapshotted.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub args: std::collections::BTreeMap<String, String>,
+    /// The resolved string, written by the engine's `localize_text` while `key` is set. Never
+    /// serialized, hashed or snapshotted — a pure function of `key`, `args`, the locale and the docs.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved: Option<String>,
+}
+
+impl UiText {
+    /// The text to draw: the engine-resolved string of a keyed UiText, else the authored `text`.
+    ///
+    /// ```
+    /// use ludion_components::UiText;
+    ///
+    /// let mut label = UiText { text: "Start".into(), ..Default::default() };
+    /// assert_eq!(label.shown(), "Start");
+    /// label.resolved = Some("Start!".into());
+    /// assert_eq!(label.shown(), "Start!");
+    /// ```
+    #[must_use]
+    pub fn shown(&self) -> &str {
+        self.resolved.as_deref().unwrap_or(&self.text)
+    }
 }
 
 impl Default for UiText {
@@ -5499,6 +5566,9 @@ impl Default for UiText {
             group: None,
             outline: None,
             rotation: 0.0,
+            key: None,
+            args: std::collections::BTreeMap::new(),
+            resolved: None,
         }
     }
 }
@@ -9558,6 +9628,9 @@ mod tests {
                 color: [0.0, 0.0, 0.0, 1.0],
             }),
             rotation: -15.0,
+            key: Some("hud.over".to_string()),
+            args: [("score".to_string(), "12".to_string())].into(),
+            resolved: None,
         };
         let json = serde_json::to_value(&text).unwrap();
         assert_eq!(json["anchor"], serde_json::json!("center"));

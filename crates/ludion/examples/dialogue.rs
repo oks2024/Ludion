@@ -13,6 +13,7 @@
 //! ```
 
 use ludion::dialogue::{self, Channel, DialogueControl, DialogueEvent, DialogueLine};
+use ludion::localization;
 use ludion::prelude::*;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -38,7 +39,7 @@ fn script(world: &mut World, ctx: &SystemCtx) {
             let _ = dialogue::say(world, "bark", None);
         }
         // Switch language mid-run; a live subtitle re-resolves.
-        310 => dialogue::set_locale(world, "fr"),
+        310 => localization::set_locale(world, "fr"),
         // Said in French: the French clip is longer, so the line is too.
         330 => {
             let _ = dialogue::say(world, "call_1", None);
@@ -70,6 +71,7 @@ strings:
   bark: Heads up.
   guard.hello: Halt, {name}!
   guard.reply: Let them through.
+  hud.label: Comms online
 ";
 
 const STRINGS_FR: &str = "format: 1
@@ -79,6 +81,7 @@ strings:
   speaker.operator: Opératrice
   bark: Attention.
   guard.hello: Halte, {name} !
+  hud.label: Communications actives
 ";
 
 const BANK: &str = "format: 1
@@ -143,6 +146,27 @@ fn silence(seconds: f32) -> Vec<u8> {
     wav
 }
 
+/// A keyed HUD label: it shows `hud.label` in the active locale; `text` is only the fallback.
+const HUD_SCENE: &str = "format: 1
+seed: 1
+entities:
+  - name: hud_label
+    components:
+      UiText:
+        text: Comms
+        key: hud.label
+";
+
+/// The keyed label as the engine resolved it this tick.
+fn hud_label(engine: &mut Engine) -> String {
+    engine
+        .world_mut()
+        .query::<(&UiText,)>()
+        .next()
+        .map(|(label,)| label.shown().to_owned())
+        .unwrap_or_default()
+}
+
 // --- Headless demo `main` ------------------------------------------------------------------------
 
 fn write(root: &std::path::Path, name: &str, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
@@ -175,7 +199,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Err(diagnostics) = engine.load_inline_scene("format: 1\nseed: 1\nentities: []\n") {
+    if let Err(diagnostics) = engine.load_inline_scene(HUD_SCENE) {
         for diagnostic in diagnostics {
             eprintln!("{diagnostic}");
         }
@@ -191,6 +215,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         let frame = engine.frame().as_u64();
+        if frame == 300 || frame == 560 {
+            println!("frame {frame:>3}  hud     {}", hud_label(&mut engine));
+        }
         let world = engine.world();
         let Some(events) = world.resource::<DialogueEvents>() else {
             return ExitCode::FAILURE;

@@ -12,7 +12,6 @@
 
 mod docs;
 mod queue;
-mod strings;
 mod voice;
 
 use ludion_core::codes::code;
@@ -22,15 +21,11 @@ use ludion_ecs::World;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use docs::{
-    Channel, DialogueDoc, Interrupt, LineDef, Priority, Speaker, StringsDoc, WhenBlocked,
-};
+pub use docs::{Channel, DialogueDoc, Interrupt, LineDef, Priority, Speaker, WhenBlocked};
 pub use queue::{DialogueEvent, DialogueEvents, Subtitle, Subtitles, dialogue_update};
-pub use strings::{format_text, text};
 pub use voice::{ChannelAudio, DialogueChannels};
 
-pub(crate) use docs::{DIALOGUE_KIND, STRINGS_KIND, validate_dialogue_docs};
-pub(crate) use strings::StringIndex;
+pub(crate) use docs::{DIALOGUE_KIND, validate_dialogue_docs};
 pub(crate) use voice::{DialogueVoices, VoiceLibrary};
 
 /// The game's dialogue settings ([`EngineBuilder::dialogue`](crate::EngineBuilder::dialogue)).
@@ -42,13 +37,11 @@ pub(crate) use voice::{DialogueVoices, VoiceLibrary};
 /// use ludion_engine::DialogueConfig;
 ///
 /// let config = DialogueConfig::default();
-/// assert_eq!(config.default_locale, "en");
+/// assert_eq!(config.tail_ticks, 12);
 /// assert!(config.validate().is_ok());
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct DialogueConfig {
-    /// The locale every key must exist in, and the fallback for the others (default `en`).
-    pub default_locale: String,
     /// Reading time: seconds before the per-character part (default `1.0`).
     pub base_s: f32,
     /// Reading time: seconds per character (default `0.06`).
@@ -62,7 +55,6 @@ pub struct DialogueConfig {
 impl Default for DialogueConfig {
     fn default() -> Self {
         Self {
-            default_locale: "en".to_owned(),
             base_s: 1.0,
             per_char_s: 0.06,
             min_s: 1.5,
@@ -75,7 +67,7 @@ impl DialogueConfig {
     /// Checks the config.
     ///
     /// # Errors
-    /// `L1710` for an empty `default_locale`, or a reading constant that is negative or not finite.
+    /// `L1710` for a reading constant that is negative or not finite.
     pub fn validate(&self) -> Result<(), Diagnostic> {
         let bad_constant = [
             ("base_s", self.base_s),
@@ -84,13 +76,9 @@ impl DialogueConfig {
         ]
         .into_iter()
         .find(|(_, value)| !(value.is_finite() && *value >= 0.0));
-        let problem = if self.default_locale.trim().is_empty() {
-            Some("`default_locale` is empty".to_owned())
-        } else {
-            bad_constant.map(|(name, value)| {
-                format!("`{name}` is {value}; it must be finite and not negative")
-            })
-        };
+        let problem = bad_constant.map(|(name, value)| {
+            format!("`{name}` is {value}; it must be finite and not negative")
+        });
         match problem {
             Some(problem) => Err(Diagnostic::new(
                 code::DIALOGUE_CONFIG_INVALID,
@@ -235,8 +223,8 @@ pub struct DialogueLine {
     pub cancel: Option<EndReason>,
 }
 
-/// The dialogue's shared state, one lazily spawned entity: the locale override, blocked channels,
-/// the suspend flag and the next enqueue number.
+/// The dialogue's shared state, one lazily spawned entity: blocked channels, the suspend flag and
+/// the next enqueue number.
 ///
 /// ```
 /// use ludion_engine::dialogue::DialogueControl;
@@ -246,9 +234,6 @@ pub struct DialogueLine {
 /// ```
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
 pub struct DialogueControl {
-    /// The active locale; none means the config's default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub locale: Option<String>,
     /// Blocked channels, sorted and unique.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked: Vec<Channel>,
@@ -597,29 +582,6 @@ pub fn suspend(world: &mut World, suspended: bool) {
     if let Some(control) = control_mut(world) {
         control.suspended = suspended;
     }
-}
-
-/// Sets the active locale; live subtitles re-resolve the next tick.
-pub fn set_locale(world: &mut World, locale: &str) {
-    if world.resource::<DialogueConfig>().is_none() {
-        return;
-    }
-    if let Some(control) = control_mut(world) {
-        control.locale = Some(locale.to_owned());
-    }
-}
-
-/// The active locale: the one [`set_locale`] set, else the config's default (empty without
-/// `.dialogue()`).
-pub fn locale(world: &mut World) -> String {
-    control(world)
-        .and_then(|control| control.locale)
-        .or_else(|| {
-            world
-                .resource::<DialogueConfig>()
-                .map(|config| config.default_locale.clone())
-        })
-        .unwrap_or_default()
 }
 
 /// Whether the speaker with this id (`speakers:` key) has a line on air.

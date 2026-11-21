@@ -1144,7 +1144,7 @@ fn extract_inner(
                 id,
                 UiInstance::Text {
                     color: text.color,
-                    text: text.text.clone(),
+                    text: text.shown().to_owned(),
                     quads,
                     font,
                     clip: UiClip::NONE,
@@ -4261,8 +4261,12 @@ pub(crate) fn place_with<'w>(
         }
 
         if let Some(text) = cols.text.get(id) {
-            let laid =
-                ludion_font::layout(fonts.face(text.font.as_deref()), &text.text, text.size, 0.0);
+            let laid = ludion_font::layout(
+                fonts.face(text.font.as_deref()),
+                text.shown(),
+                text.size,
+                0.0,
+            );
             let quads = laid.quads(
                 [translation.x, translation.y],
                 text.size,
@@ -4274,7 +4278,7 @@ pub(crate) fn place_with<'w>(
                     position: translation,
                     size: text.size,
                     color: text.color,
-                    text: text.text.clone(),
+                    text: text.shown().to_owned(),
                     quads,
                     extent: laid.extent(),
                     font: None,

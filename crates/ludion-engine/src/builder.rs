@@ -145,6 +145,7 @@ pub struct EngineBuilder {
     nav_config: Option<crate::NavConfig>,
     perception_config: Option<crate::PerceptionConfig>,
     dialogue_config: Option<crate::DialogueConfig>,
+    localization: bool,
     dialogue_channels: Option<crate::dialogue::DialogueChannels>,
     sequences: bool,
     input_actions: bool,
@@ -199,6 +200,7 @@ impl EngineBuilder {
             nav_config: None,
             perception_config: None,
             dialogue_config: None,
+            localization: false,
             dialogue_channels: None,
             sequences: false,
             input_actions: false,
@@ -1184,9 +1186,9 @@ impl EngineBuilder {
         self
     }
 
-    /// Opts into dialogue (`ludion docs dialogue`): registers the `kind: strings` and
-    /// `kind: dialogue` documents, their validator, and the `DialogueLine` and `DialogueControl`
-    /// components, and installs `config` with empty [`DialogueEvents`](crate::DialogueEvents) and
+    /// Opts into dialogue (`ludion docs dialogue`): calls [`localization`](EngineBuilder::localization),
+    /// registers the `kind: dialogue` document, its validator, and the `DialogueLine` and
+    /// `DialogueControl` components, and installs `config` with empty [`DialogueEvents`](crate::DialogueEvents) and
     /// [`Subtitles`](crate::Subtitles) at every world build. Schedule
     /// [`dialogue_update`](crate::dialogue_update) after the systems that call
     /// [`dialogue::say`](crate::dialogue::say). The last call wins; [`build`](EngineBuilder::build)
@@ -1206,27 +1208,62 @@ impl EngineBuilder {
     ///     .unwrap();
     /// # let _ = engine;
     ///
-    /// let blank = DialogueConfig { default_locale: String::new(), ..DialogueConfig::default() };
+    /// let blank = DialogueConfig { base_s: -1.0, ..DialogueConfig::default() };
     /// assert!(Engine::builder().dialogue(blank).build().is_err());
     /// ```
     #[must_use]
     pub fn dialogue(mut self, config: crate::DialogueConfig) -> Self {
         use crate::dialogue::{
-            DIALOGUE_KIND, DialogueControl, DialogueDoc, DialogueLine, STRINGS_KIND, StringsDoc,
-            validate_dialogue_docs,
+            DIALOGUE_KIND, DialogueControl, DialogueDoc, DialogueLine, validate_dialogue_docs,
         };
-        let default_locale = config.default_locale.clone();
         self.dialogue_config = Some(config);
         let mut builder = self
+            .localization()
             .components(|registry| {
                 registry.register::<DialogueLine>("DialogueLine")?;
                 registry.register::<DialogueControl>("DialogueControl")
             })
-            .doc_kind_engine_owned::<StringsDoc>(STRINGS_KIND)
             .doc_kind_engine_owned::<DialogueDoc>(DIALOGUE_KIND);
-        builder.doc_validators.push(Box::new(move |world, root| {
-            validate_dialogue_docs(world, root, &default_locale)
-        }));
+        builder
+            .doc_validators
+            .push(Box::new(validate_dialogue_docs));
+        builder
+    }
+
+    /// Opts into localization (`ludion docs localization`): registers the `kind: strings` and
+    /// `kind: locales` documents, their validator, the `LocaleState` component and the `localize_text`
+    /// system, which writes the resolved string of every keyed `UiText` and `Text` into its runtime-only
+    /// `resolved` field each tick. The system is pushed where this is called, so it runs in the game's
+    /// system order there. Idempotent; [`dialogue`](EngineBuilder::dialogue) calls it.
+    ///
+    /// Nothing here is a built-in component, so a game with no keyed text hashes exactly as it did
+    /// before opting in.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::{Engine, localization};
+    ///
+    /// let mut engine = Engine::builder().localization().build().unwrap();
+    /// assert_eq!(localization::locale(engine.world_mut()), "en");
+    /// ```
+    #[must_use]
+    pub fn localization(mut self) -> Self {
+        use crate::localization::{
+            LOCALES_KIND, LocaleState, LocalesDoc, STRINGS_KIND, StringsDoc, localize_text,
+            validate_localization_docs,
+        };
+        if self.localization {
+            return self;
+        }
+        self.localization = true;
+        let mut builder = self
+            .components(|registry| registry.register::<LocaleState>("LocaleState"))
+            .doc_kind_engine_owned::<StringsDoc>(STRINGS_KIND)
+            .doc_kind_engine_owned::<LocalesDoc>(LOCALES_KIND)
+            .system("localize_text", localize_text);
+        builder
+            .doc_validators
+            .push(Box::new(|world, _root| validate_localization_docs(world)));
         builder
     }
 
@@ -1535,6 +1572,7 @@ impl EngineBuilder {
         engine.nav_config = self.nav_config;
         engine.perception_config = self.perception_config;
         engine.dialogue_config = self.dialogue_config;
+        engine.localization = self.localization;
         engine.dialogue_channels = self.dialogue_channels;
         engine.sequences = self.sequences;
         engine.input_actions = self.input_actions;
@@ -1544,6 +1582,7 @@ impl EngineBuilder {
         engine.install_projectiles();
         engine.install_nav();
         engine.install_perception();
+        engine.install_localization();
         engine.install_dialogue();
         engine.install_sequences();
         // Populate the data-doc stores into the initial (pre-scene-load) world so a game driven

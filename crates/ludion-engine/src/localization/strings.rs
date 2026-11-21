@@ -7,7 +7,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::World;
 
 use super::docs::StringsDoc;
-use super::{DialogueConfig, locale};
+use super::{default_locale, locale};
 use crate::diagnostics::report_full;
 use crate::docs::DocStore;
 
@@ -50,10 +50,7 @@ fn refresh(world: &mut World) {
 /// locale/key), else the key itself (`L5133`, once per key).
 pub(crate) fn resolve(world: &mut World, locale: &str, key: &str) -> String {
     refresh(world);
-    let default = world
-        .resource::<DialogueConfig>()
-        .map(|config| config.default_locale.clone())
-        .unwrap_or_default();
+    let default = default_locale(world);
     let Some(index) = world.resource::<StringIndex>() else {
         return key.to_owned();
     };
@@ -88,7 +85,7 @@ pub(crate) fn resolve(world: &mut World, locale: &str, key: &str) -> String {
             code::STRING_MISSING,
             format!("string `{key}` is in no locale; showing the key itself"),
         )
-        .with_help("add the key to a `kind: strings` doc; see `ludion docs dialogue`"),
+        .with_help("add the key to a `kind: strings` doc; see `ludion docs localization`"),
     );
     key.to_owned()
 }
@@ -195,12 +192,12 @@ pub(crate) fn render(world: &mut World, key: &str, args: &[(&str, &str)]) -> Str
 ///
 /// # Example
 /// ```
-/// use ludion_engine::dialogue;
+/// use ludion_engine::localization;
 /// use ludion_ecs::World;
 ///
 /// // Without a table the key itself comes back (and `L5133` is reported when diagnostics exist).
 /// let mut world = World::new();
-/// assert_eq!(dialogue::text(&mut world, "ui.start"), "ui.start");
+/// assert_eq!(localization::text(&mut world, "ui.start"), "ui.start");
 /// ```
 pub fn text(world: &mut World, key: &str) -> String {
     render(world, key, &[])
@@ -211,11 +208,11 @@ pub fn text(world: &mut World, key: &str) -> String {
 ///
 /// # Example
 /// ```
-/// use ludion_engine::dialogue;
+/// use ludion_engine::localization;
 /// use ludion_ecs::World;
 ///
 /// let mut world = World::new();
-/// assert_eq!(dialogue::format_text(&mut world, "Hello {{{name}}}", &[("name", "Neon")]), "Hello {Neon}");
+/// assert_eq!(localization::format_text(&mut world, "Hello {{{name}}}", &[("name", "Neon")]), "Hello {Neon}");
 /// ```
 pub fn format_text(world: &mut World, key: &str, args: &[(&str, &str)]) -> String {
     render(world, key, args)

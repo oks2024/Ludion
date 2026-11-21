@@ -9944,6 +9944,20 @@
           "string",
           "null"
         ]
+      },
+      "key": {
+        "description": "The string-table key (`kind: strings`) the shown text comes from, resolved in the active locale\n(default none). The engine never writes `text`: it stays the authored fallback, and the\nresolved string is the runtime-only `resolved` (read it through `shown`). Needs\n`.localization()`; see `ludion docs localization`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "args": {
+        "description": "Values for the `{name}` placeholders of the keyed string (default none). Game code sets it\nthrough `localization::set_text_args`; it is hashed and snapshotted.",
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
       }
     }
   },
@@ -11797,6 +11811,20 @@
         "description": "Rotation about the centre of the glyph bounds, degrees, clockwise on screen (default `0`).",
         "type": "number",
         "format": "float"
+      },
+      "key": {
+        "description": "The string-table key (`kind: strings`) the shown text comes from, resolved in the active locale\n(default none). The engine never writes `text`: it stays the authored fallback, and the\nresolved string is the runtime-only `resolved` (read it through `shown`). Needs\n`.localization()`; see `ludion docs localization`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "args": {
+        "description": "Values for the `{name}` placeholders of the keyed string (default none). Game code sets it\nthrough `localization::set_text_args`; it is hashed and snapshotted.",
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
       }
     },
     "$defs": {

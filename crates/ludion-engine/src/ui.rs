@@ -304,7 +304,7 @@ fn ui_text_block<'f>(
     text: &UiText,
     viewport: (u32, u32),
 ) -> (TextLayout<'f>, [f32; 4]) {
-    let laid = layout(face, &text.text, text.size, text.wrap_width);
+    let laid = layout(face, text.shown(), text.size, text.wrap_width);
     let rect = resolve_ui_rect(text.anchor, text.offset, laid.extent(), viewport);
     (laid, rect)
 }

@@ -630,7 +630,7 @@ pub mod code {
     /// `L1700` — a player settings file (`save/settings.yaml`) has a malformed `format`/`kind`
     /// envelope, so the engine backs it up and starts from defaults.
     pub const SETTINGS_ENVELOPE: DiagnosticCode = DiagnosticCode::new("L1700");
-    /// `L1710` — the `Engine::builder().dialogue` config is invalid: an empty `default_locale`, or a
+    /// `L1710` — the `Engine::builder().dialogue` config is invalid: a
     /// reading-time constant that is negative or not finite.
     pub const DIALOGUE_CONFIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1710");
     /// `L1711` — a string key is defined twice for one locale across the `kind: strings` docs.
@@ -657,6 +657,11 @@ pub mod code {
     /// `L1721` — a line's `voice:` file does not read for another locale that has a strings doc. A
     /// warning.
     pub const DIALOGUE_VOICE_LOCALE_MISSING: DiagnosticCode = DiagnosticCode::new("L1721");
+    /// `L1722` — a `kind: locales` doc is invalid: several are loaded, or its `default` is empty or
+    /// not one of the locales it lists.
+    pub const LOCALES_INVALID: DiagnosticCode = DiagnosticCode::new("L1722");
+    /// `L1723` — a `kind: strings` doc is written in a locale the `kind: locales` doc does not list.
+    pub const LOCALES_STRINGS_UNLISTED: DiagnosticCode = DiagnosticCode::new("L1723");
     /// `L1730` — a `kind: sequence` doc is structurally invalid: `length_ticks` 0, a key past the
     /// length or out of order, a camera key with neither or both of `rig`/`restore`, or a
     /// non-finite number.
@@ -3036,6 +3041,12 @@ pub mod code {
     /// `L5138` — a line's voice file did not read at all, so it is silent and lasts its reading
     /// time. A warning, once per path.
     pub const DIALOGUE_VOICE_UNREADABLE: DiagnosticCode = DiagnosticCode::new("L5138");
+    /// `L5139` — a `UiText` or `Text` has a `key`, but the engine did not opt in with `.localization()`,
+    /// so its authored `text` is drawn. A warning, once per engine.
+    pub const LOCALIZATION_NOT_ENABLED: DiagnosticCode = DiagnosticCode::new("L5139");
+    /// `L5140` — `localization::set_locale` named a locale with no `kind: strings` table; keys fall
+    /// back to the default locale. A warning, once per locale tag.
+    pub const LOCALE_WITHOUT_STRINGS: DiagnosticCode = DiagnosticCode::new("L5140");
 }
 
 /// One row of the diagnostic-code table: the code, its severity, a short title, and a long-form
@@ -13813,11 +13824,10 @@ to a declared name.",
         severity: Severity::Error,
         title: "the dialogue config is invalid",
         explanation: "\
-`Engine::builder().dialogue(config)` was given a config the engine cannot run: an empty
-`default_locale`, or a reading-time constant (`base_s`, `per_char_s`, `min_s`) that is negative or
+`Engine::builder().dialogue(config)` was given a config the engine cannot run: a reading-time constant (`base_s`, `per_char_s`, `min_s`) that is negative or
 not finite. `build` refuses it.
 
-Fix: give `default_locale` a locale tag such as `en`, and finite non-negative reading constants.",
+Fix: give finite non-negative reading constants.",
     },
     CodeEntry {
         code: code::STRINGS_DUPLICATE_KEY,
@@ -13870,7 +13880,7 @@ A dialogue line `text` or a speaker `name` is a string-table key, and the defaul
 text for it (pointer `dialogue/{doc path}/lines/{id}/text` or `.../speakers/{id}/name`). The default
 locale is the fallback for every other one, so it must hold every key.
 
-Fix: add the key to a `kind: strings` doc whose `locale` is the config's `default_locale`.",
+Fix: add the key to a `kind: strings` doc whose `locale` is the default locale (`kind: locales`, else `en`).",
     },
     CodeEntry {
         code: code::STRINGS_PLACEHOLDER_MISMATCH,
@@ -14030,6 +14040,50 @@ A line's voice file did not read for the active or the default locale, so the li
 lasts its reading time (or its authored `duration_ticks`). A warning, reported once per path.
 
 Fix: add the WAV under the content root, or correct the `voice:` path.",
+    },
+    CodeEntry {
+        code: code::LOCALES_INVALID,
+        severity: Severity::Error,
+        title: "a locales document is invalid",
+        explanation: "\
+`kind: locales` is a singleton: more than one doc is loaded, its `default` is empty, or its
+`default` is not one of the `locales:` it lists (pointer `locales/{doc path}/default`). The engine
+takes its default locale from this doc.
+
+Fix: keep one `locales.yaml`, and list the default under `locales:`.",
+    },
+    CodeEntry {
+        code: code::LOCALES_STRINGS_UNLISTED,
+        severity: Severity::Error,
+        title: "a strings locale is not listed in the locales document",
+        explanation: "\
+A `kind: locales` doc exists and a `kind: strings` doc is written in a locale it does not list
+(pointer `strings/{doc path}/locale`). Without a locales doc any tag is accepted.
+
+Fix: list the locale under `locales:` in the `kind: locales` doc, or correct the strings doc's
+`locale`.",
+    },
+    CodeEntry {
+        code: code::LOCALIZATION_NOT_ENABLED,
+        severity: Severity::Warning,
+        title: "keyed text on an engine without localization",
+        explanation: "\
+A `UiText` or `Text` has a `key`, but the engine did not opt in with `.localization()` (or
+`.dialogue()`), so nothing resolves it and the authored `text` is drawn. A warning, reported once
+per engine.
+
+Fix: add `.localization()` to the engine builder, or remove the `key`.",
+    },
+    CodeEntry {
+        code: code::LOCALE_WITHOUT_STRINGS,
+        severity: Severity::Warning,
+        title: "the active locale has no strings table",
+        explanation: "\
+`localization::set_locale` named a locale that no loaded `kind: strings` doc is written in. The
+locale still applies, and every key falls back to the default locale (`L5132`). A warning, reported
+once per locale tag.
+
+Fix: add a `kind: strings` doc for the locale, or set a locale that has one.",
     },
     CodeEntry {
         code: code::SEQUENCE_INVALID,
@@ -15045,6 +15099,10 @@ mod tests {
         code::DIALOGUE_NOT_ENABLED,
         code::DIALOGUE_VOICE_FELL_BACK,
         code::DIALOGUE_VOICE_UNREADABLE,
+        code::LOCALES_INVALID,
+        code::LOCALES_STRINGS_UNLISTED,
+        code::LOCALIZATION_NOT_ENABLED,
+        code::LOCALE_WITHOUT_STRINGS,
         code::SEQUENCE_INVALID,
         code::SEQUENCE_UNKNOWN_ROLE,
         code::SEQUENCE_EVENT_NAME,
@@ -15320,6 +15378,8 @@ mod tests {
             code::STRING_ARG_MISSING,
             code::DIALOGUE_VOICE_FELL_BACK,
             code::DIALOGUE_VOICE_UNREADABLE,
+            code::LOCALIZATION_NOT_ENABLED,
+            code::LOCALE_WITHOUT_STRINGS,
             code::SEQUENCE_ROLE_MISSING,
             code::SEQUENCE_KEY_DEGRADED,
             code::PAIRED_LOCKSTEP_BROKEN,

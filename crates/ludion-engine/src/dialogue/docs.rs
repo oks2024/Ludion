@@ -1,5 +1,5 @@
-//! The two data-doc kinds dialogue owns — `kind: strings` and `kind: dialogue` — and the
-//! validation pass over them (`L1711`–`L1718`).
+//! The data-doc kind dialogue owns — `kind: dialogue` — and the validation pass over it
+//! (`L1712`–`L1715`, `L1717`, `L1720`, `L1721`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -11,34 +11,12 @@ use ludion_ecs::World;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::strings::placeholders;
 use super::voice::locale_path;
 use crate::docs::DocStore;
+use crate::localization::{default_locale, key_tables};
 
-/// The `kind:` of a string table.
-pub(crate) const STRINGS_KIND: &str = "strings";
 /// The `kind:` of a speaker-and-line bank.
 pub(crate) const DIALOGUE_KIND: &str = "dialogue";
-
-/// One locale's flat key → text map (`kind: strings`). Several files may share a locale; a key
-/// appears once per locale (`L1711`).
-///
-/// ```yaml
-/// format: 1
-/// kind: strings
-/// locale: en
-/// strings:
-///   radio.intro: "Operator to Neon, do you copy?"
-/// ```
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
-#[serde(deny_unknown_fields)]
-pub struct StringsDoc {
-    /// The locale tag these strings are written in (`en`, `fr`, ...).
-    pub locale: String,
-    /// Key → text. `{name}` is a placeholder; `{{` and `}}` are literal braces.
-    #[serde(default)]
-    pub strings: BTreeMap<String, String>,
-}
 
 /// A speaker and line bank (`kind: dialogue`).
 ///
@@ -192,14 +170,12 @@ fn diagnostic(
         .with_help("see `ludion docs dialogue`")
 }
 
-/// `L1711`–`L1718` over every loaded `kind: strings` and `kind: dialogue` doc, in store order (a
-/// duplicate is reported at the later path). `default_locale` is the config's, which a line's text
-/// and a speaker's name must exist in.
-pub(crate) fn validate_dialogue_docs(
-    world: &World,
-    root: &Path,
-    default_locale: &str,
-) -> Vec<Diagnostic> {
+/// `L1712`–`L1715`, `L1717`, `L1720` and `L1721` over every loaded `kind: dialogue` doc, in store
+/// order (a duplicate is reported at the later path). A line's text and a speaker's name must exist
+/// in the default locale; the string tables themselves are validated by localization.
+pub(crate) fn validate_dialogue_docs(world: &World, root: &Path) -> Vec<Diagnostic> {
+    let default_locale = default_locale(world);
+    let default_locale = default_locale.as_str();
     let mut out = Vec::new();
     // Voice path -> whether it reads; one load per distinct path per pass.
     let mut reads: BTreeMap<String, bool> = BTreeMap::new();
@@ -208,39 +184,10 @@ pub(crate) fn validate_dialogue_docs(
             ludion_assets::load_wav(AssetRoot::content(root), path).is_ok()
         })
     };
-    let strings = world.resource::<DocStore<StringsDoc>>();
     let dialogue = world.resource::<DocStore<DialogueDoc>>();
-    // locale -> key -> (doc path, text); the first writer is kept, a later one is the duplicate.
-    let mut tables: BTreeMap<&str, BTreeMap<&str, (&str, &str)>> = BTreeMap::new();
-    if let Some(store) = strings {
-        for (path, doc) in store.iter() {
-            if doc.locale.trim().is_empty() {
-                out.push(diagnostic(
-                    code::STRINGS_LOCALE_INVALID,
-                    format!("`{path}` has an empty `locale`"),
-                    format!("strings/{path}/locale"),
-                ));
-                continue;
-            }
-            let table = tables.entry(doc.locale.as_str()).or_default();
-            for (key, text) in &doc.strings {
-                if table.contains_key(key.as_str()) {
-                    out.push(diagnostic(
-                        code::STRINGS_DUPLICATE_KEY,
-                        format!(
-                            "string key `{key}` is already defined for locale `{}` by an earlier `kind: strings` doc",
-                            doc.locale
-                        ),
-                        format!("strings/{path}/strings/{key}"),
-                    ));
-                } else {
-                    table.insert(key, (path, text));
-                }
-            }
-        }
-    }
+    let tables = key_tables(world);
     let default = tables.get(default_locale);
-    let has_default = |key: &str| default.is_some_and(|table| table.contains_key(key));
+    let has_default = |key: &str| default.is_some_and(|table| table.contains(key));
     if let Some(store) = dialogue {
         let mut speakers: BTreeSet<&str> = BTreeSet::new();
         for (_, doc) in store.iter() {
@@ -339,28 +286,6 @@ pub(crate) fn validate_dialogue_docs(
                             ));
                         }
                     }
-                }
-            }
-        }
-    }
-    // A translation whose placeholders differ from the default locale's drops or invents a value.
-    if let Some(default) = default {
-        for (locale, table) in &tables {
-            if *locale == default_locale {
-                continue;
-            }
-            for (key, (path, text)) in table {
-                let Some((_, base)) = default.get(key) else {
-                    continue;
-                };
-                if placeholders(text) != placeholders(base) {
-                    out.push(diagnostic(
-                        code::STRINGS_PLACEHOLDER_MISMATCH,
-                        format!(
-                            "string `{key}` in locale `{locale}` uses different `{{placeholders}}` than `{default_locale}`"
-                        ),
-                        format!("strings/{path}/strings/{key}"),
-                    ));
                 }
             }
         }

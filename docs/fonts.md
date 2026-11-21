@@ -6,7 +6,7 @@ description: Baked TrueType faces for Text/UiText/UiList: font-source, generate-
 
 **Scope:** drawing text with a real face instead of the embedded 8×8 bitmap — authoring and baking a
 face, naming it in the content root's `fonts.yaml`, and putting it on `Text`/`UiText`/`UiList`. The
-components' other fields are `ludion docs components-ui`; the canvas and wrapping are `ludion docs screen-ui`.
+components' other fields are `ludion docs components-ui`; the canvas and wrapping are `ludion docs screen-ui`. Which string a keyed text shows is `ludion docs localization`.
 
 ## The loop
 
