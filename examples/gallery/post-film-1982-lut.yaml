@@ -1,6 +1,6 @@
 # post-film-1982-lut - post-film-1982 with its colour grade carried by a baked .cube LUT instead of the analytic
 # grade fields (identity here). Regenerate the LUT from a scene that authors the grade:
-#   ludion lut bake --scene <scene with the grade> --out grades/film-1982.cube --size 33
+#   ludion lut bake --scene <scene with the grade> --out grades/film-1982.cube --size 17
 # post-film-1982 - the film-lens look for a 1982 neon-noir street: sodium-amber lamps and an emissive
 # neon strip under a red-orange halation (`halation_color`) with a faint cool anamorphic streak,
 # vignette and static grain. It exercises `halation_color` and the `anamorphic*` fields together.

@@ -57,25 +57,23 @@ fn copy_tree(src: &Path, dst: &Path) {
     }
 }
 
-/// Copies every `*.yaml`/`*.yml` scene and the `assets/` + `characters/` + `clips/` + `fonts/` + `meshes/` + `paths/` + `prefabs/` +
-/// `sculpts/` + `sprites/` + `voxels/` directories from the real gallery into `dir` — a
-/// throwaway project directory a test can freely bless without touching tracked files.
+/// Copies every `*.yaml`/`*.yml` scene and every asset subdirectory of the real gallery into
+/// `dir` — a throwaway project directory a test can freely bless without touching tracked files.
+/// `goldens/` (blessed output), `staged/` and the build `target/` stay behind, so a new asset
+/// directory needs no edit here.
 fn copy_gallery_into(dir: &Path) -> usize {
     std::fs::create_dir_all(dir).unwrap();
     let gallery = gallery_dir();
-    for sub in [
-        "assets",
-        "characters",
-        "clips",
-        "fonts",
-        "meshes",
-        "paths",
-        "prefabs",
-        "sculpts",
-        "sprites",
-        "voxels",
-    ] {
-        copy_tree(&gallery.join(sub), &dir.join(sub));
+    for entry in std::fs::read_dir(&gallery).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir()
+            && !matches!(
+                entry.file_name().to_str(),
+                Some("goldens" | "staged" | "target")
+            )
+        {
+            copy_tree(&entry.path(), &dir.join(entry.file_name()));
+        }
     }
     let mut scene_count = 0;
     for entry in std::fs::read_dir(&gallery).unwrap() {
