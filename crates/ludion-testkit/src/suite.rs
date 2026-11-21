@@ -80,10 +80,13 @@ pub struct DiscoveredTest {
     pub test: GoldenTest,
 }
 
-/// The `fonts.yaml` table (`kind: fonts`) sits at a content root beside its scenes but has no
-/// entities to render, so the directory walk leaves it out.
-fn is_fonts_table(path: &Path) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|text| text.lines().any(|line| line == "kind: fonts"))
+/// The `fonts.yaml` (`kind: fonts`) and `locales.yaml` (`kind: locales`) tables sit at a content root
+/// beside its scenes but have no entities to render, so the directory walk leaves them out.
+fn is_root_table(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|text| {
+        text.lines()
+            .any(|line| line == "kind: fonts" || line == "kind: locales")
+    })
 }
 
 /// Discovers every scene-vs-golden test in `dir`, in deterministic (filename) order, applying
@@ -117,7 +120,7 @@ pub fn discover(
                     path.extension().and_then(|e| e.to_str()),
                     Some("yaml") | Some("yml")
                 )
-                && !is_fonts_table(path)
+                && !is_root_table(path)
         })
         .collect();
     // `read_dir`'s order is platform-defined; sort by filename so suite order — and therefore

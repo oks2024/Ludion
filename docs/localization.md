@@ -75,6 +75,19 @@ once per tag.
 measures or hit-tests text asks `FontLibrary::face(name, locale)` with `localization::active_locale(world)`, so the
 layout, the atlas and the hit test agree per locale. A world with no `locales:` overrides resolves exactly as before.
 
+## Render hosts
+
+A bare render host (`ludion render`, a `GoldenTest`, a gallery discovery run) has no engine builder, so it loads the
+content root's `kind: strings` and `kind: locales` docs itself and resolves keyed text before it extracts. A scene
+with no keyed `UiText`/`Text` skips this, so a malformed strings file beside it cannot break its render.
+
+- `ludion render --scene <scene> --locale fr` renders in a locale; absent, the folder's default locale. It is refused
+  with `--sweep`, a multi-value `--frames` strip and the model, sprite, atlas, font and paired modes.
+- `GoldenTest::with_locale("fr")` is the same for a hand-written golden test.
+- Worked example: `examples/gallery/localization.yaml` (keys in `strings/en.yaml` and `strings/fr.yaml`; the gallery's
+  `fonts.yaml` swaps the `pixel` face to Inter under `fr`). Its discovered golden is `en`; `localization-fr` is a test
+  in `crates/ludion-testkit/tests/gallery.rs`.
+
 ## check-scene
 
 `ludion check-scene` loads the content root's `kind: strings` and `kind: locales` docs when the scene has a keyed `UiText`

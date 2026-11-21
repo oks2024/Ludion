@@ -84,8 +84,11 @@ fn copy_gallery_into(dir: &Path) -> usize {
             Some("yaml") | Some("yml")
         ) {
             std::fs::copy(&path, dir.join(entry.file_name())).unwrap();
-            // `fonts.yaml` is the content root's font table, not a scene.
-            if path.file_name().and_then(|n| n.to_str()) != Some("fonts.yaml") {
+            // `fonts.yaml` and `locales.yaml` are the content root's tables, not scenes.
+            if !matches!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some("fonts.yaml" | "locales.yaml")
+            ) {
                 scene_count += 1;
             }
         }

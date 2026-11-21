@@ -565,6 +565,67 @@ fn needs_gpu_ui_fonts_1080_matches_committed_golden_at_exactly_one() {
     }
 }
 
+/// The gallery's `localization.yaml` scene rendered in French at the discovery size. The discovered
+/// `localization.png` is the default locale (`en`); this golden is where the per-locale face swap
+/// (`pixel` → Inter) and the translated strings are pinned.
+fn localization_fr_test() -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery.join("localization.yaml"),
+        os_goldens().join("localization-fr.png"),
+    )
+    .with_locale("fr");
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// The `localization` scene in French compares clean against its committed golden at exactly SSIM
+/// 1.0. Under `LUDION_BLESS`, (re)writes the committed golden instead. Skips gracefully with no GPU
+/// adapter.
+#[test]
+fn needs_gpu_localization_fr_matches_committed_golden() {
+    let test = localization_fr_test();
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!(
+                    "SKIPPED localization_fr_matches_committed_golden (bless): {}",
+                    skip_note(&diagnostics)
+                );
+            }
+            Err(diagnostics) => {
+                panic!("blessing the localization-fr golden failed: {diagnostics:?}")
+            }
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir("localization_fr_out");
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => {
+            assert_eq!(
+                report.ssim,
+                Some(1.0),
+                "the localization-fr render must be byte-identical to its freshly-blessed golden"
+            );
+        }
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!("the localization-fr golden failed: {}", report.summary)
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!(
+                "SKIPPED localization_fr_matches_committed_golden: {}",
+                skip_note(&diagnostics)
+            );
+        }
+        Err(diagnostics) => panic!("the localization-fr render failed: {diagnostics:?}"),
+    }
+}
+
 /// The `character-cycle` scene driven by `common::cycle_builder` to the middle of the run → jump
 /// crossfade: the mannequin is half run, half jump, with its idle → run fade long finished. Tick
 /// `IDLE_TICKS + RUN_TICKS + 4` is the jump switch (`character_cycle.rs` pins it at tick index 140)

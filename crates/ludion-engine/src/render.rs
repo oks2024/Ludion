@@ -91,6 +91,7 @@ pub fn render_scene(
         &DebugCategories::None,
         None,
         AntiAliasing::Off,
+        None,
     )
 }
 
@@ -135,6 +136,7 @@ pub fn render_scene_with_registry(
     debug: &DebugCategories,
     view: Option<DebugView>,
     anti_aliasing: AntiAliasing,
+    locale: Option<&str>,
 ) -> Result<RenderOutcome, Vec<Diagnostic>> {
     let (mut render_scene, applied_overrides, debug_drawn) = extract_scene_file(
         registry,
@@ -144,6 +146,7 @@ pub fn render_scene_with_registry(
         frames,
         &quality.params,
         debug,
+        locale,
     )?;
     render_scene.debug_view = view;
 
@@ -339,6 +342,7 @@ pub fn dump_scene_graph_json(
         0,
         &QualityParams::FULL,
         &DebugCategories::None,
+        None,
     )?;
     ludion_renderer::dump_frame_graph_json(
         size,
@@ -445,6 +449,11 @@ pub(crate) fn scene_file_driver(
 /// `debug` picks the debug-draw categories the extracted scene carries; anything but
 /// [`DebugCategories::None`] installs the [`DebugDraw`] resource the bare host's systems draw into,
 /// and the third element names the categories that drew anything on the last tick (empty for `None`).
+///
+/// `locale` is the active locale of a bare render: the content root's string tables are loaded and
+/// keyed text resolved when it is `Some` or the scene has a keyed `UiText`/`Text`; every other scene
+/// takes no part in localization. `None` means the default locale.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn extract_scene_file(
     registry: &Registry,
     path: &Path,
@@ -453,9 +462,19 @@ pub(crate) fn extract_scene_file(
     frames: u64,
     quality: &QualityParams,
     debug: &DebugCategories,
+    locale: Option<&str>,
 ) -> Result<ExtractedScene, Vec<Diagnostic>> {
-    let (driver, applied_overrides) = scene_file_driver(registry, path, overrides, frames, debug)?;
+    let (mut driver, applied_overrides) =
+        scene_file_driver(registry, path, overrides, frames, debug)?;
     let project_root = path.parent().unwrap_or(Path::new("."));
+    if locale.is_some() || has_keyed_text(driver.world_mut()) {
+        let world = driver.world_mut();
+        crate::localization::install_content_docs(world, project_root);
+        if let Some(tag) = locale {
+            crate::localization::set_locale(world, tag);
+        }
+        crate::localization::resolve_pass(world);
+    }
     let mut render_scene = extract_at(
         driver.world(),
         size.output,
@@ -470,6 +489,17 @@ pub(crate) fn extract_scene_file(
     }
     let drawn = crate::debug_draw::drawn(driver.world());
     Ok((render_scene, applied_overrides, drawn))
+}
+
+/// Whether any `UiText` or `Text` carries a localization key: the only scenes a bare host resolves
+/// strings for without being asked to.
+fn has_keyed_text(world: &mut World) -> bool {
+    world
+        .query_ids::<(&ludion_components::UiText,)>()
+        .any(|(_, (t,))| t.key.is_some())
+        || world
+            .query_ids::<(&ludion_components::Text,)>()
+            .any(|(_, (t,))| t.key.is_some())
 }
 
 #[cfg(test)]
@@ -501,9 +531,80 @@ mod tests {
             0,
             &QualityParams::FULL,
             &DebugCategories::None,
+            None,
         )
         .expect("the instance entry expands");
         assert_eq!(extracted.lights.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn localized_root(tag: &str, keyed: bool, strings_doc_valid: bool) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ludion-render-locale-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("locales.yaml"),
+            "format: 1\nkind: locales\ndefault: en\nlocales:\n  en:\n    name: English\n  fr:\n    name: Français\n",
+        )
+        .unwrap();
+        let strings = |locale: &str, hello: &str| {
+            format!("format: 1\nkind: strings\nlocale: {locale}\nstrings:\n  hello: {hello}\n")
+        };
+        std::fs::write(root.join("en.yaml"), strings("en", "Hello")).unwrap();
+        let fr = if strings_doc_valid {
+            strings("fr", "Bonjour")
+        } else {
+            "format: 1\nkind: strings\nlocale: [broken\n".to_owned()
+        };
+        std::fs::write(root.join("fr.yaml"), fr).unwrap();
+        let text = if keyed {
+            "      UiText:\n        text: fallback\n        key: hello\n"
+        } else {
+            "      UiText:\n        text: plain\n"
+        };
+        std::fs::write(
+            root.join("scene.yaml"),
+            format!("format: 1\nseed: 0\nentities:\n  - name: label\n    components:\n{text}"),
+        )
+        .unwrap();
+        root
+    }
+
+    fn extracted_ui_text(root: &Path, locale: Option<&str>) -> String {
+        let (extracted, _, _) = extract_scene_file(
+            &builtin_registry(),
+            &root.join("scene.yaml"),
+            FrameSize::native(64, 64),
+            &[],
+            0,
+            &QualityParams::FULL,
+            &DebugCategories::None,
+            locale,
+        )
+        .expect("the scene extracts");
+        extracted
+            .ui
+            .iter()
+            .find_map(|instance| match instance {
+                ludion_renderer::UiInstance::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .expect("the scene draws one text")
+    }
+
+    #[test]
+    fn a_keyed_scene_resolves_its_text_in_the_requested_locale() {
+        let root = localized_root("keyed", true, true);
+        assert_eq!(extracted_ui_text(&root, None), "Hello");
+        assert_eq!(extracted_ui_text(&root, Some("fr")), "Bonjour");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_scene_without_a_key_ignores_a_malformed_strings_file() {
+        let root = localized_root("plain", false, false);
+        assert_eq!(extracted_ui_text(&root, None), "plain");
         let _ = std::fs::remove_dir_all(&root);
     }
 

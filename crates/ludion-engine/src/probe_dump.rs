@@ -82,6 +82,7 @@ pub fn render_probe_dump(
         0,
         &quality.params,
         &DebugCategories::None,
+        None,
     )?;
     let mut renderer = Renderer::new().map_err(|d| vec![d])?;
     renderer.set_quality(quality.quality, quality.params);

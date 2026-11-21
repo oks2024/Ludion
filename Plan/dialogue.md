@@ -174,3 +174,9 @@ locale without a strings table (warning).
   `tests/localization.rs`, `crates/ludion-cli/tests/check_scene_fonts.rs`, `docs/fonts.md`, `docs/localization.md`. External
   break: `face`/`table_face`/`paths` take a locale (an external game's HUD test: `fonts.face(Some("hud"), None)`). No protocol
   schema, component schema, golden or replay moved.
+- W3b-2 mechanized: bare render hosts load the content root's string tables and resolve keyed text (`extract_scene_file` takes
+  `locale`; scenes without a key skip it), `ludion render --locale`, `GoldenTest::with_locale`, the gallery `localization`
+  scene (`locales.yaml`, `strings/`, `fonts.yaml` `locales.fr`), `docs/localization.md`. New Windows goldens blessed on the
+  RTX 3090: `localization` (en, discovered) and `localization-fr` (hand-written test). External break:
+  `render_scene_with_registry` gains a trailing `locale: Option<&str>` (serious-isaac's `examples/probe_look.rs` passes `None`).
+  Owed: the macOS twins of both goldens. No protocol schema, component schema, replay or existing golden moved.

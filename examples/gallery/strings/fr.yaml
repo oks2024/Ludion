@@ -1,0 +1,9 @@
+# Feature: the gallery's French string table (`kind: strings`). No `œ`: `body` (Inter) is baked
+# ascii + latin-1, so every accent here has a glyph.
+format: 1
+kind: strings
+locale: fr
+strings:
+  menu.title: Paramètres
+  menu.subtitles: "Sous-titres : activés"
+  menu.volume: "Volume : {percent} %"

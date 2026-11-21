@@ -170,6 +170,7 @@ fn needs_gpu_the_irradiance_view_agrees_with_light_exposure() {
         &DebugCategories::None,
         Some(DebugView::Irradiance),
         AntiAliasing::Off,
+        None,
     ) {
         Ok(outcome) => outcome,
         Err(errors) if ludion_core::require_gpu::is_no_adapter(&errors) => {

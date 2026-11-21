@@ -157,6 +157,8 @@ pub struct Request<'a> {
     /// this `Request` is built) render a labelled time strip. Conflicts with `--sweep`/`--model` at
     /// the clap level.
     pub frames: &'a [u64],
+    /// `--locale` (scene mode): the locale keyed text renders in; `None` is the content root's default.
+    pub locale: Option<&'a str>,
     /// `--debug-draw` (scene mode), unparsed: `all` or a comma list of categories.
     pub debug_draw: Option<&'a str>,
     /// `--debug-view` (scene mode): a full-screen view of the SSR trace instead of the finished picture.
@@ -277,6 +279,7 @@ pub fn run(request: &Request) -> ExitCode {
                     &DebugCategories::parse(request.debug_draw.unwrap_or_default()),
                     request.debug_view,
                     request.anti_aliasing,
+                    request.locale,
                 ),
             }
         }
@@ -308,6 +311,7 @@ fn run_scene(
     debug: &DebugCategories,
     view: Option<ludion_engine::DebugView>,
     anti_aliasing: ludion_engine::AntiAliasing,
+    locale: Option<&str>,
 ) -> ExitCode {
     let overrides = match parse_overrides(set) {
         Ok(overrides) => overrides,
@@ -364,6 +368,7 @@ fn run_scene(
         debug,
         view,
         anti_aliasing,
+        locale,
     ) {
         Ok(outcome) => {
             for applied in &outcome.applied_overrides {

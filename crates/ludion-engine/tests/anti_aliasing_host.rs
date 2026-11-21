@@ -139,6 +139,7 @@ fn needs_gpu_the_harness_honours_the_builder_default() {
         &DebugCategories::None,
         None,
         ludion_engine::AntiAliasing::Off,
+        None,
     )
     .unwrap();
 

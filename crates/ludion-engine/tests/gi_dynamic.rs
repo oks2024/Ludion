@@ -80,6 +80,7 @@ fn render_or_skip(
         &ludion_engine::DebugCategories::None,
         None,
         ludion_engine::AntiAliasing::Off,
+        None,
     ) {
         Ok(outcome) => Some(outcome),
         Err(errors) if no_adapter(&errors) => {

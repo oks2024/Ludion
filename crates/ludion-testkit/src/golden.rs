@@ -110,6 +110,9 @@ pub struct GoldenTest {
     /// burst lands on a committed golden mid-clip instead of at rest. The schedule ticked is the
     /// built-in one, or the game's own when [`with_builder`](GoldenTest::with_builder) is set.
     pub frames: u64,
+    /// The locale a scene's keyed text renders in, exactly `ludion render --locale`. `None` (the
+    /// default) is the content root's default locale — every golden that existed before this field.
+    pub locale: Option<String>,
     /// The debug-draw categories drawn into the render, exactly `ludion render --debug-draw`. `None`
     /// (the default) draws nothing — every golden that existed before this field did. A category a
     /// system draws needs `frames` of at least 1; host-drawn ones (`colliders`, `hierarchy`) need the
@@ -230,6 +233,7 @@ impl GoldenTest {
             ik: Vec::new(),
             hold: None,
             frames: 0,
+            locale: None,
             debug_draw: ludion_engine::DebugCategories::None,
             debug_view: None,
             anti_aliasing: ludion_engine::AntiAliasing::Off,
@@ -339,6 +343,14 @@ impl GoldenTest {
     #[must_use]
     pub fn with_frames(mut self, frames: u64) -> Self {
         self.frames = frames;
+        self
+    }
+
+    /// Renders the scene in `tag`'s locale, resolving keyed text from the content root's string
+    /// tables. See [`GoldenTest::locale`].
+    #[must_use]
+    pub fn with_locale(mut self, tag: &str) -> Self {
+        self.locale = Some(tag.to_owned());
         self
     }
 
@@ -551,6 +563,7 @@ impl GoldenTest {
                     &self.debug_draw,
                     self.debug_view,
                     self.anti_aliasing,
+                    self.locale.as_deref(),
                 )?;
                 (outcome.image, outcome.adapter)
             }
@@ -1433,6 +1446,13 @@ mod tests {
         let test = GoldenTest::new("scene.yaml", "golden.png");
         assert_eq!(test.frames, 0, "an un-ticked golden extracts at rest");
         assert_eq!(test.with_frames(23).frames, 23);
+    }
+
+    #[test]
+    fn with_locale_sets_the_field_and_defaults_to_none() {
+        let test = GoldenTest::new("scene.yaml", "golden.png");
+        assert_eq!(test.locale, None, "a golden renders in the default locale");
+        assert_eq!(test.with_locale("fr").locale.as_deref(), Some("fr"));
     }
 
     #[test]

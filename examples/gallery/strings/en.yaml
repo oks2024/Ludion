@@ -1,0 +1,8 @@
+# Feature: the gallery's English string table (`kind: strings`), the keys of the `localization` scene.
+format: 1
+kind: strings
+locale: en
+strings:
+  menu.title: SETTINGS
+  menu.subtitles: "Subtitles: on"
+  menu.volume: "Volume: {percent}%"

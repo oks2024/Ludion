@@ -588,6 +588,16 @@ enum Command {
         /// requires `--out`, exactly like `--sweep`.
         #[arg(long, value_delimiter = ',', conflicts_with_all = ["model", "sweep"])]
         frames: Vec<u64>,
+        /// (scene only) Render the scene in this locale (`--locale fr`): keyed `UiText`/`Text` resolve
+        /// from the `kind: strings` docs under the scene's folder and draw in that locale's font
+        /// faces. Absent, a scene with keys renders in the folder's default locale. Not valid with
+        /// `--sweep` or a multi-value `--frames` strip. `ludion docs localization` has the detail.
+        #[arg(
+            long,
+            value_name = "TAG",
+            conflicts_with_all = ["model", "sprite", "atlas", "font", "paired", "sweep"]
+        )]
+        locale: Option<String>,
         /// (scene only) Draw world-space debug lines over the frame: `all` or a comma list of
         /// categories (`--debug-draw path`), 1 px wide, dimmed where geometry hides them. This host
         /// runs no game systems, so it shows the engine's own categories (`path`, a `PathFollower`'s
@@ -2365,6 +2375,7 @@ fn main() -> std::process::ExitCode {
             steps,
             frame,
             frames,
+            locale,
             debug_draw,
             debug_view,
             look_at,
@@ -2414,6 +2425,16 @@ fn main() -> std::process::ExitCode {
                                 .collect::<Vec<_>>()
                                 .join(",")
                         ),
+                    )
+                    .exit();
+            }
+            if locale.is_some() && frames.len() >= 2 {
+                <Cli as clap::CommandFactory>::command()
+                    .error(
+                        clap::error::ErrorKind::ArgumentConflict,
+                        "the argument '--locale' cannot be used with a multi-value '--frames' \
+                         strip: the strip renders through the contact-sheet machinery, which \
+                         resolves no strings — pass one '--frames N' to render a locale",
                     )
                     .exit();
             }
@@ -2488,6 +2509,7 @@ fn main() -> std::process::ExitCode {
                 steps,
                 frame: frame.as_deref(),
                 frames: &frames,
+                locale: locale.as_deref(),
                 debug_draw: debug_draw.as_deref(),
                 debug_view: debug_view.map(Into::into),
                 framing: framing::FramingArgs {

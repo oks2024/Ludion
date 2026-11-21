@@ -160,6 +160,7 @@ fn needs_gpu_the_bloom_pyramid_is_deterministic_and_reaches_the_image() {
             &ludion_engine::DebugCategories::None,
             None,
             ludion_engine::AntiAliasing::Off,
+            None,
         )
     };
 
@@ -950,6 +951,7 @@ fn needs_gpu_the_bare_render_path_applies_the_same_skin_bone_spawn_pose_as_an_en
         &ludion_engine::DebugCategories::None,
         None,
         ludion_engine::AntiAliasing::Off,
+        None,
     ) {
         Ok(outcome) => outcome,
         Err(errors) if no_adapter(&errors) => {

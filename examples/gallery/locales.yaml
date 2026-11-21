@@ -1,0 +1,10 @@
+# Feature: the gallery's shipped locales (`kind: locales`) — English and French, for the
+# `localization` scene. `en` is the default every key must exist in.
+format: 1
+kind: locales
+default: en
+locales:
+  en:
+    name: English
+  fr:
+    name: Français

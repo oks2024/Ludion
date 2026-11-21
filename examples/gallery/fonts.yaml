@@ -1,7 +1,12 @@
 # Feature: the gallery's font table (`kind: fonts`) — names the two baked test faces the
 # `ui-fonts` scene draws with. No `default` entry: it would swap the face of every other scene.
+# `locales.fr` swaps `pixel` for Inter: Silkscreen has no accented glyphs, so the `localization`
+# scene's French title would otherwise draw notdef boxes.
 format: 1
 kind: fonts
 fonts:
   body: fonts/inter.font.yaml
   pixel: fonts/silkscreen.font.yaml
+locales:
+  fr:
+    pixel: fonts/inter.font.yaml

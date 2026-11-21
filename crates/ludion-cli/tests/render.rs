@@ -2035,6 +2035,36 @@ fn dump_probes_is_refused_with_sweep() {
 }
 
 #[test]
+fn locale_is_refused_with_sweep_and_with_a_frames_strip() {
+    let scene = probe_scene("locale");
+    let out = out_path("cli_locale_refused.png");
+    for extra in [
+        &[
+            "--sweep",
+            "/entities/0/components/Transform/translation/0=1,2",
+        ][..],
+        &["--frames", "0,30"][..],
+    ] {
+        let mut args = vec![
+            "render",
+            "--scene",
+            scene.to_str().unwrap(),
+            "--locale",
+            "fr",
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        let output = run_ludion(&args);
+        assert!(!output.status.success(), "{extra:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
+            "{extra:?}: {output:?}"
+        );
+    }
+}
+
+#[test]
 fn needs_gpu_dump_probes_on_a_probeless_scene_prints_zero() {
     let dump = out_path("cli_dump_probes_none_out");
     let _ = std::fs::remove_dir_all(&dump);
