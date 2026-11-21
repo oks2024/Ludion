@@ -80,7 +80,7 @@ fn needs_gpu_baked_faces_draw_inside_their_resolved_rects() {
         let text = "Hamburg";
         let drawn = render("text.yaml", &scene_with(&[(font, text, offset, size)]))
             .unwrap_or_else(|e| panic!("{font}: render failed: {e:?}"));
-        let face = library.face(Some(font));
+        let face = library.face(Some(font), None);
         let block = resolve_ui_text(
             face,
             &ludion_engine::components::UiText {

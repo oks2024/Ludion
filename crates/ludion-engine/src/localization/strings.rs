@@ -145,6 +145,18 @@ pub(crate) fn placeholders(text: &str) -> BTreeSet<&str> {
         .collect()
 }
 
+/// The template with every `{name}` removed and `{{`/`}}` as one brace: the characters a face must
+/// carry whatever a placeholder fills in.
+pub(crate) fn literals(text: &str) -> String {
+    parse(text)
+        .into_iter()
+        .filter_map(|piece| match piece {
+            Piece::Text(literal) => Some(literal),
+            Piece::Placeholder(_) => None,
+        })
+        .collect()
+}
+
 /// `text` with each `{name}` replaced from `args`, and the names no arg supplied (left as
 /// `{name}` in the output).
 pub(crate) fn format(text: &str, args: &[(&str, &str)]) -> (String, Vec<String>) {

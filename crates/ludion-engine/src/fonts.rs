@@ -1,8 +1,9 @@
 //! The font library: the content root's `fonts.yaml` (`kind: fonts`) resolved into loaded faces
 //! (`Plan/font-assets.md` decisions 5, 8 and 10).
 //!
-//! [`FontLibrary::face`] maps a component's optional `font` name to a [`FontFace`]: `None` is the
-//! table's reserved `default` entry, and an unknown or failed name falls back to that entry too.
+//! [`FontLibrary::face`] maps a component's optional `font` name and the active locale to a
+//! [`FontFace`]: `None` is the table's reserved `default` entry, an unknown or failed name falls
+//! back to that entry too, and a `locales:` override replaces a name for one locale.
 //! Without a loadable `default` the answer is the embedded 8×8 face. The whole table loads when the library is built — extract holds only `&World`,
 //! and a table is a handful of small documents — so lookups never touch the disk. Like the other
 //! libraries it is never hashed or snapshotted; faults are kept for `report_font_faults`, which
@@ -81,7 +82,12 @@ impl FontLibrary {
         };
         match ludion_scene::check_fonts(&source) {
             Ok(table) => {
-                let mut paths: Vec<&str> = table.fonts.iter().map(|(_, p)| p.as_str()).collect();
+                let mut paths: Vec<&str> = table
+                    .fonts
+                    .iter()
+                    .chain(table.locales.iter().flat_map(|(_, faces)| faces))
+                    .map(|(_, p)| p.as_str())
+                    .collect();
                 paths.sort_unstable();
                 paths.dedup();
                 inner.faces = paths
@@ -104,23 +110,42 @@ impl FontLibrary {
         }
     }
 
-    /// The face for `name`; `None` is the table's `default` entry. An unknown name or a face that
-    /// failed to load falls back to `default`, and without one to the embedded face.
-    pub fn face(&self, name: Option<&str>) -> &FontFace {
-        self.table_face(name)
+    /// The face for `name` under `locale`; `None` is the table's `default` entry. Resolution order:
+    /// the locale's override of `name`, the base `name`, the locale's override of `default`, the
+    /// base `default`, then the embedded face. A face that failed to load counts as absent at each
+    /// stage.
+    ///
+    /// ```
+    /// use ludion_engine::FontLibrary;
+    ///
+    /// let library = FontLibrary::default();
+    /// // With no table every name and locale resolves to the embedded face.
+    /// let face = library.face(Some("body"), Some("fr"));
+    /// assert!(std::ptr::eq(face, library.face(None, None)));
+    /// ```
+    pub fn face(&self, name: Option<&str>, locale: Option<&str>) -> &FontFace {
+        self.table_face(name, locale)
             .unwrap_or_else(|| FontFace::embedded())
     }
 
-    /// The loaded table face `name` resolves to, `None` where [`face`](FontLibrary::face) would
-    /// fall back to the embedded one.
-    pub(crate) fn table_face(&self, name: Option<&str>) -> Option<&FontFace> {
-        self.resolved(name).map(|loaded| &loaded.face)
+    /// The loaded table face `name` resolves to under `locale`, `None` where
+    /// [`face`](FontLibrary::face) would fall back to the embedded one.
+    pub(crate) fn table_face(&self, name: Option<&str>, locale: Option<&str>) -> Option<&FontFace> {
+        self.resolved(name, locale).map(|loaded| &loaded.face)
     }
 
-    /// The root-relative paths of the document and atlas image `name` resolves to.
-    pub(crate) fn paths(&self, name: Option<&str>) -> Option<(&str, &str)> {
-        self.resolved(name)
+    /// The root-relative paths of the document and atlas image `name` resolves to under `locale`.
+    pub(crate) fn paths(&self, name: Option<&str>, locale: Option<&str>) -> Option<(&str, &str)> {
+        self.resolved(name, locale)
             .map(|loaded| (loaded.doc_path.as_str(), loaded.image_path.as_str()))
+    }
+
+    /// Whether any locale overrides a face, so a lookup needs the active locale at all.
+    pub fn has_locale_overrides(&self) -> bool {
+        self.inner
+            .table
+            .as_ref()
+            .is_some_and(|table| table.locales.iter().any(|(_, faces)| !faces.is_empty()))
     }
 
     /// Whether the content root has no table, a malformed one, or a usable one.
@@ -134,10 +159,14 @@ impl FontLibrary {
         }
     }
 
-    /// What `name` resolves to: its own loaded face, else the `default` entry's, else `None` (the
-    /// embedded face).
-    fn resolved(&self, name: Option<&str>) -> Option<&Loaded> {
-        self.loaded(name).or_else(|| self.loaded(None))
+    /// What `name` resolves to under `locale`: the locale's override, the base entry, then the same
+    /// two for `default`, else `None` (the embedded face).
+    fn resolved(&self, name: Option<&str>, locale: Option<&str>) -> Option<&Loaded> {
+        let over = |n: Option<&str>| locale.and_then(|l| self.overridden(l, n));
+        over(name)
+            .or_else(|| self.loaded(name))
+            .or_else(|| over(None))
+            .or_else(|| self.loaded(None))
     }
 
     /// Whether `key` (a normalized content-root-relative path) is the table or one of its faces,
@@ -158,7 +187,18 @@ impl FontLibrary {
             .fonts
             .binary_search_by(|(n, _)| n.as_str().cmp(name))
             .ok()?;
-        let path = table.fonts[i].1.as_str();
+        self.at_path(table.fonts[i].1.as_str())
+    }
+
+    fn overridden(&self, locale: &str, name: Option<&str>) -> Option<&Loaded> {
+        let table = self.inner.table.as_ref()?;
+        let name = name.unwrap_or(DEFAULT_NAME);
+        let (_, faces) = table.locales.iter().find(|(tag, _)| tag == locale)?;
+        let i = faces.binary_search_by(|(n, _)| n.as_str().cmp(name)).ok()?;
+        self.at_path(faces[i].1.as_str())
+    }
+
+    fn at_path(&self, path: &str) -> Option<&Loaded> {
         let j = self
             .inner
             .faces

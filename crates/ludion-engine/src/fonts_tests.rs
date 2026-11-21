@@ -37,8 +37,8 @@ fn same(a: &FontFace, b: &FontFace) -> bool {
 fn no_table_is_the_embedded_face_without_faults() {
     let dir = scratch("none");
     let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
-    assert!(same(library.face(None), FontFace::embedded()));
-    assert!(same(library.face(Some("body")), FontFace::embedded()));
+    assert!(same(library.face(None, None), FontFace::embedded()));
+    assert!(same(library.face(Some("body"), None), FontFace::embedded()));
     assert_eq!(library.faults().count(), 0);
     assert!(!library.contains("body"));
 }
@@ -49,9 +49,9 @@ fn a_default_entry_replaces_the_embedded_face_for_none() {
     copy_face(&dir, "inter");
     table(&dir, "  default: fonts/inter.font.yaml\n");
     let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
-    assert!(!same(library.face(None), FontFace::embedded()));
+    assert!(!same(library.face(None, None), FontFace::embedded()));
     assert_eq!(
-        library.face(None).document().mode,
+        library.face(None, None).document().mode,
         ludion_scene::FontMode::Sdf
     );
     assert_eq!(library.faults().count(), 0);
@@ -68,11 +68,11 @@ fn a_named_face_resolves_and_paths_are_root_relative() {
     );
     let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     assert_eq!(
-        library.face(Some("title")).document().mode,
+        library.face(Some("title"), None).document().mode,
         ludion_scene::FontMode::Bitmap
     );
     assert_eq!(
-        library.paths(Some("title")),
+        library.paths(Some("title"), None),
         Some(("fonts/silkscreen.font.yaml", "fonts/silkscreen.png"))
     );
     assert_eq!(library.names().collect::<Vec<_>>(), ["body", "title"]);
@@ -85,7 +85,7 @@ fn an_unknown_name_falls_back() {
     copy_face(&dir, "inter");
     table(&dir, "  body: fonts/inter.font.yaml\n");
     let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
-    assert!(same(library.face(Some("nope")), FontFace::embedded()));
+    assert!(same(library.face(Some("nope"), None), FontFace::embedded()));
     assert!(!library.contains("nope"));
 }
 
@@ -103,8 +103,11 @@ fn a_broken_entry_is_a_fault_with_the_fallback() {
     assert_eq!(faults[0].0, "fonts/missing.font.yaml");
     assert_eq!(faults[0].1.code, code::FONT_LOAD);
     assert!(library.contains("gone"));
-    assert!(same(library.face(Some("gone")), FontFace::embedded()));
-    assert!(!same(library.face(Some("body")), FontFace::embedded()));
+    assert!(same(library.face(Some("gone"), None), FontFace::embedded()));
+    assert!(!same(
+        library.face(Some("body"), None),
+        FontFace::embedded()
+    ));
 }
 
 #[test]
@@ -116,7 +119,7 @@ fn a_malformed_table_is_one_table_fault() {
     assert_eq!(faults.len(), 1);
     assert_eq!(faults[0].0, FONTS_FILE);
     assert_eq!(faults[0].1.code, code::FONTS_TABLE_STRUCTURE);
-    assert!(same(library.face(None), FontFace::embedded()));
+    assert!(same(library.face(None, None), FontFace::embedded()));
 }
 
 #[test]
@@ -129,7 +132,10 @@ fn two_names_on_one_path_load_once() {
     );
     let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     assert_eq!(library.inner.faces.len(), 1);
-    assert!(same(library.face(None), library.face(Some("body"))));
+    assert!(same(
+        library.face(None, None),
+        library.face(Some("body"), None)
+    ));
 }
 
 #[test]
@@ -171,11 +177,17 @@ fn an_unknown_name_falls_back_to_the_default_face() {
     copy_face(&dir, "silkscreen");
     table(&dir, WITH_DEFAULT);
     let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
-    assert!(same(library.face(Some("typo")), library.face(None)));
-    assert!(!same(library.face(Some("typo")), FontFace::embedded()));
-    assert_eq!(library.paths(Some("typo")), library.paths(None));
+    assert!(same(
+        library.face(Some("typo"), None),
+        library.face(None, None)
+    ));
+    assert!(!same(
+        library.face(Some("typo"), None),
+        FontFace::embedded()
+    ));
+    assert_eq!(library.paths(Some("typo"), None), library.paths(None, None));
     assert_eq!(
-        library.paths(None),
+        library.paths(None, None),
         Some(("fonts/inter.font.yaml", "fonts/inter.png"))
     );
 }
@@ -189,8 +201,11 @@ fn a_broken_entry_falls_back_to_the_default_face() {
         "  default: fonts/inter.font.yaml\n  gone: fonts/missing.font.yaml\n",
     );
     let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
-    assert!(same(library.face(Some("gone")), library.face(None)));
-    assert_eq!(library.paths(Some("gone")), library.paths(None));
+    assert!(same(
+        library.face(Some("gone"), None),
+        library.face(None, None)
+    ));
+    assert_eq!(library.paths(Some("gone"), None), library.paths(None, None));
 }
 
 #[test]
@@ -230,4 +245,87 @@ fn the_table_state_distinguishes_absent_faulted_and_loaded() {
         FontLibrary::load(ludion_assets::AssetRoot::content(&dir)).table_state(),
         TableState::Loaded
     );
+}
+
+fn localized_table(dir: &Path, locales: &str) {
+    std::fs::write(
+        dir.join("fonts.yaml"),
+        format!(
+            "format: 1\nkind: fonts\nfonts:\n  body: fonts/inter.font.yaml\n  default: \
+             fonts/inter.font.yaml\nlocales:\n{locales}"
+        ),
+    )
+    .expect("write table");
+}
+
+#[test]
+fn a_locale_override_wins_for_its_locale_only() {
+    let dir = scratch("locale-override");
+    copy_face(&dir, "inter");
+    copy_face(&dir, "silkscreen");
+    localized_table(&dir, "  fr:\n    body: fonts/silkscreen.font.yaml\n");
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
+    assert!(library.has_locale_overrides());
+    let base = library.face(Some("body"), None);
+    let fr = library.face(Some("body"), Some("fr"));
+    assert!(!same(base, fr));
+    assert_eq!(fr.document().mode, ludion_scene::FontMode::Bitmap);
+    assert!(same(library.face(Some("body"), Some("en")), base));
+    assert_eq!(
+        library.paths(Some("body"), Some("fr")),
+        Some(("fonts/silkscreen.font.yaml", "fonts/silkscreen.png"))
+    );
+}
+
+#[test]
+fn the_resolution_order_walks_override_base_override_default_base_default() {
+    let dir = scratch("locale-order");
+    copy_face(&dir, "inter");
+    copy_face(&dir, "silkscreen");
+    localized_table(&dir, "  fr:\n    default: fonts/silkscreen.font.yaml\n");
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
+    let silk = library.face(None, Some("fr"));
+    assert_eq!(silk.document().mode, ludion_scene::FontMode::Bitmap);
+    // `body` has no `fr` override but a base entry: base wins over the locale's default.
+    assert_eq!(
+        library.face(Some("body"), Some("fr")).document().mode,
+        ludion_scene::FontMode::Sdf
+    );
+    // An unknown name skips both `name` stages and takes the locale's default override.
+    assert!(same(library.face(Some("typo"), Some("fr")), silk));
+    assert!(!same(library.face(Some("typo"), None), silk));
+}
+
+#[test]
+fn a_failed_override_falls_through_to_the_base_face() {
+    let dir = scratch("locale-failed");
+    copy_face(&dir, "inter");
+    localized_table(&dir, "  fr:\n    body: fonts/missing.font.yaml\n");
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
+    assert!(same(
+        library.face(Some("body"), Some("fr")),
+        library.face(Some("body"), None)
+    ));
+    assert!(
+        library
+            .faults()
+            .any(|(path, d)| path == "fonts/missing.font.yaml" && d.code == code::FONT_LOAD)
+    );
+}
+
+#[test]
+fn holds_sees_an_override_path_and_a_table_without_overrides_reports_none() {
+    let dir = scratch("locale-holds");
+    copy_face(&dir, "inter");
+    copy_face(&dir, "silkscreen");
+    localized_table(&dir, "  fr:\n    body: fonts/silkscreen.font.yaml\n");
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
+    assert!(library.holds("fonts/silkscreen.font.yaml"));
+    assert!(!library.holds("fonts/other.font.yaml"));
+    assert!(library.contains("body") && !library.contains("silkscreen"));
+    let plain = scratch("locale-none");
+    copy_face(&plain, "inter");
+    table(&plain, "  body: fonts/inter.font.yaml\n");
+    let library = FontLibrary::load(ludion_assets::AssetRoot::content(&plain));
+    assert!(!library.has_locale_overrides());
 }

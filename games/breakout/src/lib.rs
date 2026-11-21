@@ -230,9 +230,12 @@ pub fn menu_input(world: &mut World, _ctx: &SystemCtx) {
         let mut activated = list.navigate(nav);
         if click {
             // The hit test answers what is under the cursor; whether a disabled row counts is ours.
-            if let Some(index) =
-                ludion::math::list_hit(fonts.face(list.font.as_deref()), list, viewport, cursor)
-                && list.items[index as usize].enabled
+            if let Some(index) = ludion::math::list_hit(
+                fonts.face(list.font.as_deref(), None),
+                list,
+                viewport,
+                cursor,
+            ) && list.items[index as usize].enabled
             {
                 list.selected = index;
                 activated = Some(index);

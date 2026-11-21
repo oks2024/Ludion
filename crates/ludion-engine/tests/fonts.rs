@@ -141,7 +141,7 @@ fn a_named_face_reaches_measurement() {
     let dir = root("measure", true);
     let lib = FontLibrary::load(ludion_assets::AssetRoot::content(&dir));
     let embedded = FontFace::embedded();
-    let body = lib.face(Some("body"));
+    let body = lib.face(Some("body"), None);
 
     let named = measure_ui_text(body, "Wave To", 24.0);
     let plain = measure_ui_text(embedded, "Wave To", 24.0);
@@ -199,7 +199,7 @@ fn list_hit_matches_the_drawn_rows_of_a_proportional_list() {
     let library = world
         .resource::<FontLibrary>()
         .expect("the world builds a FontLibrary");
-    let face = library.face(list.font.as_deref());
+    let face = library.face(list.font.as_deref(), None);
     assert_eq!(list.font.as_deref(), Some("body"));
 
     let viewport = (1920, 1080);
@@ -288,8 +288,18 @@ fn an_unknown_font_hits_like_the_default() {
         let typo = list(Some("typo"));
         let plain = list(None);
         assert_eq!(
-            list_hit(lib.face(typo.font.as_deref()), &typo, viewport, cursor),
-            list_hit(lib.face(plain.font.as_deref()), &plain, viewport, cursor),
+            list_hit(
+                lib.face(typo.font.as_deref(), None),
+                &typo,
+                viewport,
+                cursor
+            ),
+            list_hit(
+                lib.face(plain.font.as_deref(), None),
+                &plain,
+                viewport,
+                cursor
+            ),
             "x = {x}"
         );
     }

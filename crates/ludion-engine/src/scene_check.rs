@@ -1443,11 +1443,17 @@ pub fn scene_font_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnos
 
     let library = crate::FontLibrary::load(ludion_assets::AssetRoot::content(project_root));
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    // Built on the first keyed component: a scene with no keyed text never walks the content root.
+    let mut strings: Option<ludion_ecs::World> = None;
     for (index, entity) in scene.entities.iter().enumerate() {
         for (name, value) in &entity.components {
+            let key = match name.as_str() {
+                "Text" | "UiText" => value.get("key").and_then(serde_json::Value::as_str),
+                _ => None,
+            };
             let fields: Vec<(String, &str)> = match name.as_str() {
-                "Text" => text_field(value, "text", "text").into_iter().collect(),
-                "UiText" => text_field(value, "text", "text").into_iter().collect(),
+                "Text" | "UiText" if key.is_some() => Vec::new(),
+                "Text" | "UiText" => text_field(value, "text", "text").into_iter().collect(),
                 "UiList" => {
                     let mut fields: Vec<(String, &str)> =
                         text_field(value, "title", "title").into_iter().collect();
@@ -1472,6 +1478,24 @@ pub fn scene_font_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnos
             };
             let base = format!("/entities/{index}/components/{name}");
             let font = value.get("font").and_then(serde_json::Value::as_str);
+            if let Some(key) = key {
+                let strings = strings.get_or_insert_with(|| {
+                    let mut world = ludion_ecs::World::new();
+                    crate::localization::install_content_docs(&mut world, project_root);
+                    world
+                });
+                keyed_text_diagnostics(
+                    &library,
+                    strings,
+                    KeyedText {
+                        component: name,
+                        key,
+                        font,
+                        base: &base,
+                    },
+                    &mut diagnostics,
+                );
+            }
             if let Some(font) = font.filter(|f| !library.contains(f)) {
                 let help = match suggest::nearest(font, library.names()) {
                     Some(near) => format!("did you mean `{near}`?"),
@@ -1503,46 +1527,21 @@ pub fn scene_font_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnos
                 );
                 continue;
             }
-            let Some(face) = library.table_face(font) else {
+            let Some(face) = library.table_face(font, None) else {
                 continue;
             };
             for (field, text) in fields {
-                let mut missing: Vec<char> = text
-                    .chars()
-                    .map(|c| if c == '\t' { ' ' } else { c })
-                    .filter(|&c| c != '\n' && c != '\r' && face.glyph(c).is_none())
-                    .collect();
-                missing.sort_unstable();
-                missing.dedup();
-                if missing.is_empty() {
-                    continue;
-                }
-                let listed: String = missing.iter().collect();
-                let dir = library
-                    .paths(font)
-                    .and_then(|(doc, _)| doc.rsplit_once('/'))
-                    .map_or("", |(dir, _)| dir);
-                let help = match face.document().generated_from.as_deref() {
-                    Some(source) => {
-                        let source = if dir.is_empty() {
-                            source.to_string()
-                        } else {
-                            format!("{dir}/{source}")
-                        };
-                        format!(
-                            "add them to `charset.chars` in `{source}` and re-run `ludion generate-atlas {source}`"
-                        )
-                    }
-                    None => "add them to the face's `charset.chars` and re-bake it".to_string(),
-                };
-                diagnostics.push(
-                    Diagnostic::new(
-                        code::FONT_GLYPH_MISSING,
-                        format!("the text has characters the font lacks: {listed:?}"),
-                    )
-                    .with_path(format!("{base}/{field}"))
-                    .with_help(help),
-                );
+                diagnostics.extend(glyph_diagnostic(
+                    &library,
+                    GlyphCheck {
+                        face,
+                        font,
+                        locale: None,
+                    },
+                    text,
+                    "the text".to_string(),
+                    format!("{base}/{field}"),
+                ));
             }
         }
     }
@@ -1718,6 +1717,124 @@ fn scene_preload_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnost
         }
     }
     found
+}
+
+/// A keyed `UiText`/`Text` as `scene_font_diagnostics` sees it.
+struct KeyedText<'a> {
+    component: &'a str,
+    key: &'a str,
+    font: Option<&'a str>,
+    base: &'a str,
+}
+
+/// `L1715` when the default locale lacks the key, then `L1256` per locale whose string (else the
+/// default's) has characters that locale's face lacks. Placeholders are removed first: what fills
+/// them is runtime data.
+fn keyed_text_diagnostics(
+    library: &crate::FontLibrary,
+    strings: &ludion_ecs::World,
+    keyed: KeyedText<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    use crate::localization::{default_locale, key_tables, literals, string_in};
+
+    let KeyedText {
+        component,
+        key,
+        font,
+        base,
+    } = keyed;
+    let default = default_locale(strings);
+    let default_text = string_in(strings, &default, key);
+    if default_text.is_none() {
+        diagnostics.push(
+            Diagnostic::new(
+                code::STRING_KEY_MISSING_DEFAULT,
+                format!(
+                    "`{component}` shows the key `{key}`, which the default locale `{default}` has no string for"
+                ),
+            )
+            .with_path(format!("{base}/key"))
+            .with_help(format!(
+                "add `{key}` to a `kind: strings` doc written in `{default}`"
+            )),
+        );
+    }
+    let locales: Vec<&str> = key_tables(strings).into_keys().collect();
+    for locale in locales {
+        let Some(template) = string_in(strings, locale, key).or(default_text) else {
+            continue;
+        };
+        let Some(face) = library.table_face(font, Some(locale)) else {
+            continue;
+        };
+        diagnostics.extend(glyph_diagnostic(
+            library,
+            GlyphCheck {
+                face,
+                font,
+                locale: Some(locale),
+            },
+            &literals(template),
+            format!("in locale `{locale}`, the text of key `{key}`"),
+            format!("{base}/key"),
+        ));
+    }
+}
+
+/// The face a text is checked against.
+struct GlyphCheck<'a> {
+    face: &'a ludion_font::FontFace,
+    font: Option<&'a str>,
+    locale: Option<&'a str>,
+}
+
+/// An `L1256` warning at `pointer` when `text` has characters the face lacks; `what` names the
+/// text in the message.
+fn glyph_diagnostic(
+    library: &crate::FontLibrary,
+    check: GlyphCheck<'_>,
+    text: &str,
+    what: String,
+    pointer: String,
+) -> Option<Diagnostic> {
+    let GlyphCheck { face, font, locale } = check;
+    let mut missing: Vec<char> = text
+        .chars()
+        .map(|c| if c == '\t' { ' ' } else { c })
+        .filter(|&c| c != '\n' && c != '\r' && face.glyph(c).is_none())
+        .collect();
+    missing.sort_unstable();
+    missing.dedup();
+    if missing.is_empty() {
+        return None;
+    }
+    let listed: String = missing.iter().collect();
+    let dir = library
+        .paths(font, locale)
+        .and_then(|(doc, _)| doc.rsplit_once('/'))
+        .map_or("", |(dir, _)| dir);
+    let help = match face.document().generated_from.as_deref() {
+        Some(source) => {
+            let source = if dir.is_empty() {
+                source.to_string()
+            } else {
+                format!("{dir}/{source}")
+            };
+            format!(
+                "add them to `charset.chars` in `{source}` and re-run `ludion generate-atlas {source}`"
+            )
+        }
+        None => "add them to the face's `charset.chars` and re-bake it".to_string(),
+    };
+    Some(
+        Diagnostic::new(
+            code::FONT_GLYPH_MISSING,
+            format!("{what} has characters the font lacks: {listed:?}"),
+        )
+        .with_path(pointer)
+        .with_help(help),
+    )
 }
 
 /// A string field of a text component with the pointer suffix it reports under.

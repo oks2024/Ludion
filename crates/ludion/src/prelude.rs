@@ -90,7 +90,7 @@
 //!   pointer mapping takes — [`math::list_hit`], [`math::camera_ray`] — so a game never names an
 //!   extent of its own and a resized host maps a cursor correctly. Host state: never hashed, never
 //!   snapshotted.
-//! - **Fonts** — [`FontLibrary`], the resource resolving a component's `font` name to the face every
+//! - **Fonts** — [`FontLibrary`], the resource resolving a component's `font` name and the active locale to the face every
 //!   measurement helper takes (`world.resource::<FontLibrary>().cloned().unwrap_or_default()`).
 //! - **Aim math** — the [`math`] module: [`math::camera_ray`] turns a render-target pixel into a
 //!   world [`Ray`](crate::math::Ray), and [`math::ray_ground_plane`] intersects it with the `y = 0`

@@ -49,7 +49,13 @@ fn reload(
 
 fn advance_of(engine: &Engine, ch: char) -> f32 {
     let library = engine.world().resource::<FontLibrary>().unwrap();
-    ludion_font::layout(library.face(Some("body")), &ch.to_string(), 100.0, 0.0).extent()[0]
+    ludion_font::layout(
+        library.face(Some("body"), None),
+        &ch.to_string(),
+        100.0,
+        0.0,
+    )
+    .extent()[0]
 }
 
 #[test]

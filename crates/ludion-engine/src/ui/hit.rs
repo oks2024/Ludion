@@ -85,7 +85,10 @@ pub fn ui_hit(
         rate: now.rate(),
     };
     let fonts = world.resource::<FontLibrary>();
-    let face = |name: Option<&str>| face_of(fonts, name);
+    let locale = fonts
+        .filter(|library| library.has_locale_overrides())
+        .map(|_| crate::localization::active_locale(world));
+    let face = |name: Option<&str>| face_of(fonts, name, locale.as_deref());
     let mut probe = Probe {
         frame,
         entity,
@@ -223,9 +226,13 @@ pub fn ui_hit(
     false
 }
 
-fn face_of<'a>(fonts: Option<&'a FontLibrary>, name: Option<&str>) -> &'a FontFace {
+fn face_of<'a>(
+    fonts: Option<&'a FontLibrary>,
+    name: Option<&str>,
+    locale: Option<&str>,
+) -> &'a FontFace {
     match fonts {
-        Some(library) => library.face(name),
+        Some(library) => library.face(name, locale),
         None => FontFace::embedded(),
     }
 }

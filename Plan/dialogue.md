@@ -1,6 +1,6 @@
 # Plan: Dialogue — string tables, a line queue, subtitles
 
-> **Waves 1 and 2a mechanized — text and voice ship; subtitles' built-in widget (W2b) and localization's font side (W3b) are laid out below. W3a (localization, text side) is mechanized.**
+> **Waves 1 and 2a mechanized — text and voice ship; subtitles' built-in widget (W2b), localization's render hosts (W3b-2) and fallback chains (W3c) are laid out below. W3a (localization, text side) and W3b-1 (per-locale faces, check-scene keys) are mechanized.**
 > Driven by Neon Shroud request 0024 (dialogue, subtitles, localization). Game-facing doc: `ludion docs dialogue`.
 
 ## Design decisions
@@ -87,6 +87,24 @@
     frame-boundary report. A `set_locale` to a tag with no strings table warns `L5140` once per tag and still applies.
 30. **Out of W3a:** keys on `UiList`/`UiRadial` (trigger: a menu that needs them); `check-scene` key checks and render-host
     locales (W3b); text-size and language settings (request 0022 W3).
+31. **`fonts.yaml` `locales:` overrides.** An optional `locales: {tag: {name: path}}` section replaces a base `fonts:` name for
+    one locale. Each name must be one `fonts:` defines, each path follows the base path rules (`L1253`, pointer
+    `/locales/<tag>/<name>`). Resolution for `n = name or default`: the locale's override of `n`, the base `n`, the locale's
+    override of `default`, the base `default`, the embedded face; a face that failed to load counts as absent at each stage.
+    `emit` writes the section only when non-empty, so existing tables stay byte-identical. Every override path loads into the
+    library, so hot reload's `holds()` sees it.
+32. **`FontLibrary::face(name, locale)`** (a break, matching the request) is the one lookup; `table_face` and `paths` take the same
+    pair. `localization::active_locale(&World)` reads the active locale on a read-only world (extract and hit tests hold
+    `&World`); `locale(&mut World)` delegates to it. Extract and hit tests resolve the locale only when
+    `has_locale_overrides()`, so a world without overrides pays nothing and resolves as before. `placed_font` takes the
+    locale, so the atlas paths agree with the layout face.
+33. **check-scene keys.** A scene with a keyed `UiText`/`Text` loads the content root's strings docs into a scratch world
+    (`install_content_docs`, a `World` installer the render hosts reuse). A key the default locale lacks is `L1715` (error).
+    Each locale with a strings table is checked: its string, else the default's, with `{placeholders}` removed
+    (`literals`), against `table_face(font, Some(locale))`, as `L1256` (warning) at `.../key` naming the locale.
+34. **Unkeyed text** keeps its single `L1256` against the base face; a keyed component's authored `text` is not checked.
+35. **Bare render hosts** load string tables when a scene has keyed text or a locale is asked for;
+    `render_scene_with_registry(.., locale)` (a break) and `ludion render --locale` (W3b-2).
 
 Validation codes: `L1719` bad channel table or `dialogue_channels` without `dialogue` (build); `L1720` a line's voice does not
 read for the default locale (error); `L1721` it does not read for another locale with a `kind: strings` doc (warning).
@@ -107,11 +125,19 @@ locale without a strings table (warning).
   `Interrupted`; pause-aware tracking, so a voice held by `bus_pause` is still stoppable after resume.
 - **W3a localization, text side (shipped):** `kind: locales`, the `LocaleState` locale, keyed `UiText`/`Text` with `args`
   and `resolved`, `localization::*`, `L1722`, `L1723`, `L5139`, `L5140`, `ludion docs localization`. Engine-only, no golden.
-- **W3b localization, font side:** per-locale `fonts.yaml` overrides (a `locales:` section, the `ludion-scene` parser and
-  `FontLibrary::face(name, locale)`); `fallback: [..]` chains walked by layout, measurement, draw and `L1256` (multi-atlas
-  runs, so possibly a W3c); `check-scene` checks of `UiText.key` against the default locale, with `L1256` per locale over the
-  resolved text; a locale for render hosts (`ludion render --locale`, strings loaded in bare hosts); the `fr` gallery scene
-  and its golden.
+- **W3b-1 localization, font side (mechanized):** the `locales:` section (`ludion-scene` parser), `FontLibrary::face(name, locale)`,
+  `active_locale`, every engine face site passing the locale, `install_content_docs`, `check-scene` `L1715` and per-locale
+  `L1256`.
+- **W3b-2 localization, render hosts:** strings loaded in bare hosts, `render_scene_with_registry(.., locale)`,
+  `ludion render --locale`, and the `localization` gallery scene with `en` and `fr` goldens.
+- **W3c fallback chains:**
+  - A `fonts:` value may be `{ path, fallback: [name, ..] }`.
+  - `ludion-font` lays text out over a face chain with integer widths in a common unit (the lcm of the chain's `line_units`),
+    so a one-face chain is bit-identical. Kerning applies only within one face, and each glyph carries its face index.
+  - Quads are grouped per face, and extract emits one `UiInstance::Text` per face run, with an outline per face.
+  - Hit tests and measurement walk the chain.
+  - `L1256` walks the chain, plus whole-table coverage: every string of a locale against that locale's `default` chain.
+  - A fallback gallery golden.
 
 ## Out of scope (with triggers)
 
@@ -143,3 +169,8 @@ locale without a strings table (warning).
 - W3a mechanized: `crates/ludion-engine/src/localization/` (strings moved from `dialogue/`, `LocalesDoc`, `LocaleState`,
   `localize_text`), `UiText`/`Text` `key`/`args`/`resolved` + `shown()`, `tests/localization.rs`, `docs/localization.md`, the
   example's keyed HUD label. The component schema snapshot is re-blessed; no protocol schema, golden or replay moved.
+- W3b-1 mechanized: `locales:` in `ludion-scene/src/fonts.rs`, `FontLibrary::face(name, locale)` and `has_locale_overrides`,
+  `localization::active_locale`, `install_content_docs`/`string_in`/`literals`, `scene_font_diagnostics` keyed checks,
+  `tests/localization.rs`, `crates/ludion-cli/tests/check_scene_fonts.rs`, `docs/fonts.md`, `docs/localization.md`. External
+  break: `face`/`table_face`/`paths` take a locale (an external game's HUD test: `fonts.face(Some("hud"), None)`). No protocol
+  schema, component schema, golden or replay moved.

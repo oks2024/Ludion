@@ -441,3 +441,94 @@ fn two_runs_hash_alike() {
     let (mut b, _rb, _sb) = run_and_snapshot("det-b");
     assert_eq!(a.world_hash().unwrap(), b.world_hash().unwrap());
 }
+
+/// A root with the keyed `UiText` on the `body` face, whose `fr` override is the bitmap face.
+fn root_with_locale_faces(name: &str) -> PathBuf {
+    let root = root_with_tables(name);
+    let gallery = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/fonts");
+    for file in [
+        "inter.font.yaml",
+        "inter.png",
+        "silkscreen.font.yaml",
+        "silkscreen.png",
+    ] {
+        std::fs::create_dir_all(root.join("fonts")).unwrap();
+        std::fs::copy(gallery.join(file), root.join("fonts").join(file)).unwrap();
+    }
+    write(
+        &root,
+        "fonts.yaml",
+        "format: 1\nkind: fonts\nfonts:\n  body: fonts/inter.font.yaml\n  default: fonts/inter.font.yaml\n\
+         locales:\n  fr:\n    body: fonts/silkscreen.font.yaml\n",
+    );
+    root
+}
+
+const FACE_SCENE: &str = "format: 1
+seed: 1
+entities:
+  - name: start
+    components:
+      UiText:
+        text: Start (authored)
+        key: hud.start
+        font: body
+";
+
+/// What extract draws for the one keyed `UiText`: whether its face is SDF, and the right edge of
+/// its quads and their vertical middle.
+fn drawn_face(engine: &Engine, root: &Path) -> (bool, f32, f32) {
+    let scene = extract(
+        engine.world(),
+        (1920, 1080),
+        ludion_assets::AssetRoot::content(root),
+    )
+    .unwrap();
+    match &scene.ui[0] {
+        UiInstance::Text { font, quads, .. } => {
+            let top = quads.iter().map(|q| q.pos[1]).fold(f32::MAX, f32::min);
+            let bottom = quads.iter().map(|q| q.pos[3]).fold(f32::MIN, f32::max);
+            (
+                font.expect("a table face is placed").sdf,
+                quads.iter().map(|q| q.pos[2]).fold(f32::MIN, f32::max),
+                (top + bottom) / 2.0,
+            )
+        }
+        other => panic!("expected Text, got {other:?}"),
+    }
+}
+
+fn hits(engine: &Engine, cursor: [f32; 2]) -> bool {
+    let id = engine
+        .world()
+        .entities()
+        .find(|id| engine.world().get::<UiText>(*id).ok().flatten().is_some())
+        .unwrap();
+    ludion_engine::ui::ui_hit(
+        engine.world(),
+        id,
+        (1920, 1080),
+        cursor,
+        ludion_core::time::SimTime::from_ticks(0, ludion_core::time::TickRate::DEFAULT),
+    )
+}
+
+#[test]
+fn the_active_locale_picks_the_face_for_atlas_layout_and_hit_test() {
+    let root = root_with_locale_faces("face");
+    let mut engine = game(&root).build().expect("valid");
+    engine.load_inline_scene(FACE_SCENE).unwrap();
+    tick(&mut engine);
+
+    let (sdf_en, right_en, mid_en) = drawn_face(&engine, &root);
+    assert!(sdf_en, "en uses the base SDF face");
+    assert!(hits(&engine, [right_en - 1.0, mid_en]));
+    assert!(!hits(&engine, [right_en + 40.0, mid_en]));
+
+    localization::set_locale(engine.world_mut(), "fr");
+    tick(&mut engine);
+    let (sdf_fr, right_fr, mid_fr) = drawn_face(&engine, &root);
+    assert!(!sdf_fr, "fr uses the override's bitmap face");
+    assert!(hits(&engine, [right_fr - 1.0, mid_fr]));
+    assert!(!hits(&engine, [right_fr + 40.0, mid_fr]));
+}

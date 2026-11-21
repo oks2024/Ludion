@@ -12,8 +12,8 @@
 //!
 //! Every measurement helper takes the resolved [`FontFace`] first, matching `ludion_font::layout`.
 //! A game gets it from the `FontLibrary` resource —
-//! `world.resource::<FontLibrary>().cloned().unwrap_or_default()`, then `fonts.face(list.font.as_deref())`
-//! — so the block it measures is the block the component's named face lays out.
+//! `world.resource::<FontLibrary>().cloned().unwrap_or_default()`, then `fonts.face(list.font.as_deref(), None)` (the second argument is the
+//! active locale, `localization::active_locale`) — so the block it measures is the block the component's named face lays out.
 //!
 //! # Coordinate model
 //!

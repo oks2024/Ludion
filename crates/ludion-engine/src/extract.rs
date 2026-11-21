@@ -772,6 +772,10 @@ fn extract_inner(
     let viewmodel_frame = crate::viewmodel::FrameViewmodel::of(world, &ids);
     crate::viewmodel::report(world, &ids, &viewmodel_frame, view.is_some(), degraded);
     let fonts = font_library(world, project_root);
+    let locale = fonts
+        .has_locale_overrides()
+        .then(|| crate::localization::active_locale(world));
+    let locale = locale.as_deref();
 
     // One walk, one sizing computation: `place` produces every renderable's world geometry, and both
     // this function and `render.bounds` consume it — so a sprite's size, a mesh's transform, and a
@@ -1118,11 +1122,11 @@ fn extract_inner(
             let hud_start = ui_entries.len();
             let text_motion = ui::hud::pre_text(&hud, id, text, degraded);
             let text = &*text_motion;
-            let face = fonts.face(text.font.as_deref());
+            let face = fonts.face(text.font.as_deref(), locale);
             let quads = ui::ui_text_draw(face, text, viewport);
             let font = resolve_font(
                 project_root,
-                placed_font(&fonts, text.font.as_deref()).as_ref(),
+                placed_font(&fonts, text.font.as_deref(), locale).as_ref(),
                 TextureSite::Font(index, "UiText"),
                 assets,
                 &mut textures,
@@ -1179,11 +1183,11 @@ fn extract_inner(
             // An empty list draws nothing at all — panel included — independent of `visible`: the
             // emptiness check gates the background too, not just the lines.
             if !list.items.is_empty() {
-                let face = fonts.face(list.font.as_deref());
+                let face = fonts.face(list.font.as_deref(), locale);
                 let (layout, lines) = ui::ui_list_draw(face, list, viewport);
                 let font = resolve_font(
                     project_root,
-                    placed_font(&fonts, list.font.as_deref()).as_ref(),
+                    placed_font(&fonts, list.font.as_deref(), locale).as_ref(),
                     TextureSite::Font(index, "UiList"),
                     assets,
                     &mut textures,
@@ -1274,10 +1278,10 @@ fn extract_inner(
             ui::hud::pre_radial(&hud, id, degraded);
             // An empty wheel draws nothing, as an empty list does.
             if !radial.items.is_empty() {
-                let face = fonts.face(radial.font.as_deref());
+                let face = fonts.face(radial.font.as_deref(), locale);
                 let font = resolve_font(
                     project_root,
-                    placed_font(&fonts, radial.font.as_deref()).as_ref(),
+                    placed_font(&fonts, radial.font.as_deref(), locale).as_ref(),
                     TextureSite::Font(index, "UiRadial"),
                     assets,
                     &mut textures,
@@ -4086,6 +4090,10 @@ pub(crate) fn place_with<'w>(
         skin_followers,
     };
 
+    let locale = fonts
+        .has_locale_overrides()
+        .then(|| crate::localization::active_locale(world));
+    let locale = locale.as_deref();
     let cols = PlaceColumns::of(world);
     for (index, &id) in ids.iter().enumerate() {
         let pose = render_pose_with(&cols.transform, world, poses, id);
@@ -4262,7 +4270,7 @@ pub(crate) fn place_with<'w>(
 
         if let Some(text) = cols.text.get(id) {
             let laid = ludion_font::layout(
-                fonts.face(text.font.as_deref()),
+                fonts.face(text.font.as_deref(), locale),
                 text.shown(),
                 text.size,
                 0.0,
@@ -4283,7 +4291,7 @@ pub(crate) fn place_with<'w>(
                     extent: laid.extent(),
                     font: None,
                 },
-                placed_font(fonts, text.font.as_deref()),
+                placed_font(fonts, text.font.as_deref(), locale),
                 index,
             ));
         }
@@ -5950,9 +5958,13 @@ pub(crate) struct PlacedFont {
     spread_px: u32,
 }
 
-fn placed_font(fonts: &FontLibrary, name: Option<&str>) -> Option<PlacedFont> {
-    let face = fonts.table_face(name)?;
-    let (doc, image) = fonts.paths(name)?;
+fn placed_font(
+    fonts: &FontLibrary,
+    name: Option<&str>,
+    locale: Option<&str>,
+) -> Option<PlacedFont> {
+    let face = fonts.table_face(name, locale)?;
+    let (doc, image) = fonts.paths(name, locale)?;
     let atlas = &face.document().atlas;
     Some(PlacedFont {
         image: image.to_string(),

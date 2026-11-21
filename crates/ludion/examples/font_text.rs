@@ -22,12 +22,12 @@ use std::process::ExitCode;
 
 /// The width of `text` at `size` in the named face, in canvas units.
 fn text_width(library: &FontLibrary, font: Option<&str>, text: &str, size: f32) -> f32 {
-    measure_ui_text(library.face(font), text, size)[0]
+    measure_ui_text(library.face(font, None), text, size)[0]
 }
 
 /// Wraps `text` to `wrap_width` canvas units with the named face — the same wrap `UiText` draws.
 fn wrapped(library: &FontLibrary, font: &str, text: &str, size: f32, wrap_width: f32) -> String {
-    wrap_ui_text(library.face(Some(font)), text, size, wrap_width).into_owned()
+    wrap_ui_text(library.face(Some(font), None), text, size, wrap_width).into_owned()
 }
 
 /// The item under `cursor` (render-target pixels) in a list drawn with `font`, at `viewport`.
@@ -37,7 +37,7 @@ fn hovered_item(
     viewport: (u32, u32),
     cursor: [f32; 2],
 ) -> Option<u32> {
-    let face: &FontFace = library.face(list.font.as_deref());
+    let face: &FontFace = library.face(list.font.as_deref(), None);
     list_hit(face, list, viewport, cursor)
 }
 
@@ -95,7 +95,7 @@ fn main() -> ExitCode {
         width: 2.0,
         color: [0.0, 0.0, 0.0, 1.0],
     }));
-    let face = library.face(Some("body"));
+    let face = library.face(Some("body"), None);
     assert_eq!(
         resolve_ui_text(face, &label(None), viewport),
         resolve_ui_text(face, &outlined, viewport)

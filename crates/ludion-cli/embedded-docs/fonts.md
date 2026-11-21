@@ -55,6 +55,19 @@ fonts:
 with no `font` keeps drawing with the embedded 8×8 face, so adding the table moves no existing scene.
 `default` is reserved: setting it re-faces every unnamed text in the project.
 
+**Per-locale faces.** An optional `locales:` section replaces a name's face for one locale, so a language
+the base face lacks draws with a face that has it (`ludion docs localization`):
+
+```yaml
+locales:
+  ja:
+    body: fonts/noto-jp.font.yaml   # `body` only: names must be defined under `fonts:`
+```
+
+`FontLibrary::face(name, locale)` resolves, in order: the locale's override of `name`, the base `name`, the
+locale's override of `default`, the base `default`, the embedded face. A face that fails to load counts as
+absent at each step. Pass `None` for no locale (the base table), or `localization::active_locale(world)`.
+
 ## Rules
 
 - **`size` is the line height** (canvas units for UI, world units for `Text`), whatever the face, and must be
@@ -75,7 +88,7 @@ with no `font` keeps drawing with the embedded 8×8 face, so adding the table mo
 - **Small SDF text** (≈12 px on screen) loses thin strokes; keep body text at 14 px or more.
 - **Measure with the face you draw with.** Every helper — `measure_ui_text`, `wrap_ui_text`,
   `measure_ui_list`, `list_hit`, `resolve_ui_text`/`resolve_ui_list` — takes the resolved `&FontFace`
-  first: `let lib = world.resource::<FontLibrary>().cloned().unwrap_or_default(); lib.face(Some("body"))`.
+  first: `let lib = world.resource::<FontLibrary>().cloned().unwrap_or_default(); lib.face(Some("body"), None)`.
   A list's hit test then matches its drawn rows exactly, proportional or not (`cargo run -p ludion --example font_text`).
 - **The table loads once, when the world is built.** `asset.reload` of a face document rebuilds it,
   and is refused with `L1255` while a recording is armed — measurement is sim-visible, so a mid-recording
@@ -88,10 +101,10 @@ with no `font` keeps drawing with the embedded 8×8 face, so adding the table mo
 |---|---|
 | `L1251` | `font-source` malformed (`em_px` range, `spread_px` vs mode, bad charset range, non-positive `line_height`, a charset over 4096 characters) |
 | `L1252` | the `.ttf` cannot be read or baked (a glyph flattening past 16384 segments is refused) |
-| `L1253` | `fonts.yaml` malformed |
+| `L1253` | `fonts.yaml` malformed (including a `locales:` override of an undefined name) |
 | `L1254` | a `font` name is not in the table (a `check-scene` error; runtime reports once per name) |
 | `L1255` | a listed face fails to load, or a reload is refused while recording |
-| `L1256` | authored text has characters the face lacks (warning) |
+| `L1256` | authored text, or a keyed text's string in one locale, has characters the face lacks (warning) |
 
 ## Next
 

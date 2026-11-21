@@ -24,8 +24,15 @@ use serde::{Deserialize, Serialize};
 pub use docs::{LocaleInfo, LocalesDoc, StringsDoc};
 pub use strings::{format_text, text};
 
-pub(crate) use docs::{LOCALES_KIND, STRINGS_KIND, key_tables, validate_localization_docs};
-pub(crate) use strings::{StringIndex, render};
+pub(crate) use docs::{
+    LOCALES_KIND, STRINGS_KIND, install_content_docs, key_tables, string_in,
+    validate_localization_docs,
+};
+pub(crate) use strings::{StringIndex, literals, render};
+
+#[cfg(test)]
+#[path = "content_tests.rs"]
+mod content_tests;
 
 /// The locale a game without a `kind: locales` doc uses.
 const FALLBACK_LOCALE: &str = "en";
@@ -117,11 +124,24 @@ pub fn set_locale(world: &mut World, locale: &str) {
 
 /// The active locale: the one [`set_locale`] set, else the default locale.
 pub fn locale(world: &mut World) -> String {
+    active_locale(world)
+}
+
+/// [`locale`] for a read-only world: extract and hit tests hold `&World`.
+///
+/// ```
+/// use ludion_ecs::World;
+/// use ludion_engine::localization;
+///
+/// assert_eq!(localization::active_locale(&World::new()), "en");
+/// ```
+#[must_use]
+pub fn active_locale(world: &World) -> String {
     world
-        .query_ids::<(&LocaleState,)>()
-        .map(|(id, (state,))| (id, state.locale.clone()))
-        .min_by_key(|(id, _)| *id)
-        .and_then(|(_, locale)| locale)
+        .entity_indices_with(std::any::TypeId::of::<LocaleState>())
+        .find_map(|slot| world.live_id_at(slot))
+        .and_then(|id| world.get::<LocaleState>(id).ok().flatten())
+        .and_then(|state| state.locale.clone())
         .unwrap_or_else(|| default_locale(world))
 }
 

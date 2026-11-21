@@ -641,7 +641,8 @@ pub mod code {
     pub const DIALOGUE_DUPLICATE_SPEAKER: DiagnosticCode = DiagnosticCode::new("L1713");
     /// `L1714` — a dialogue line names a speaker no `kind: dialogue` doc defines.
     pub const DIALOGUE_UNKNOWN_SPEAKER: DiagnosticCode = DiagnosticCode::new("L1714");
-    /// `L1715` — a line `text` or speaker `name` key is missing from the default locale's strings.
+    /// `L1715` — a line `text` or speaker `name` key, or a `UiText`/`Text` `key`, is missing from the
+    /// default locale's strings.
     pub const STRING_KEY_MISSING_DEFAULT: DiagnosticCode = DiagnosticCode::new("L1715");
     /// `L1716` — a translation uses different `{placeholders}` than the default locale's text. A
     /// warning.
@@ -13876,9 +13877,10 @@ Fix: add the speaker under `speakers:`, or correct the id.",
         severity: Severity::Error,
         title: "a string key is missing from the default locale",
         explanation: "\
-A dialogue line `text` or a speaker `name` is a string-table key, and the default locale has no
-text for it (pointer `dialogue/{doc path}/lines/{id}/text` or `.../speakers/{id}/name`). The default
-locale is the fallback for every other one, so it must hold every key.
+A dialogue line `text`, a speaker `name` or a `UiText`/`Text` `key` is a string-table key, and the
+default locale has no text for it (pointer `dialogue/{doc path}/lines/{id}/text`, `.../speakers/{id}/name`
+or, in `check-scene`, `/entities/{n}/components/UiText/key`). The default locale is the fallback for
+every other one, so it must hold every key.
 
 Fix: add the key to a `kind: strings` doc whose `locale` is the default locale (`kind: locales`, else `en`).",
     },

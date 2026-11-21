@@ -170,3 +170,85 @@ fn line_breaks_and_tabs_are_not_uncovered_chars() {
         stderr(&output)
     );
 }
+
+/// A root whose `body` face is the ASCII-only bitmap Silkscreen, with English and French tables;
+/// `fr_override` is the `fonts.yaml` `locales:` entry for `fr`, if any.
+fn keyed_root(name: &str, fr_override: Option<&str>) -> PathBuf {
+    let dir = root(name);
+    let gallery = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/fonts");
+    for file in ["silkscreen.font.yaml", "silkscreen.png"] {
+        std::fs::copy(gallery.join(file), dir.join("fonts").join(file)).expect("copy face");
+    }
+    let locales = fr_override.map_or(String::new(), |path| {
+        format!("locales:\n  fr:\n    body: {path}\n")
+    });
+    std::fs::write(
+        dir.join("fonts.yaml"),
+        format!("format: 1\nkind: fonts\nfonts:\n  body: fonts/silkscreen.font.yaml\n{locales}"),
+    )
+    .expect("table");
+    std::fs::create_dir_all(dir.join("strings")).expect("strings dir");
+    std::fs::write(
+        dir.join("strings/en.yaml"),
+        "format: 1\nkind: strings\nlocale: en\nstrings:\n  hud.start: Start {count}\n",
+    )
+    .expect("en");
+    std::fs::write(
+        dir.join("strings/fr.yaml"),
+        "format: 1\nkind: strings\nlocale: fr\nstrings:\n  hud.start: \"D\u{e9}marrer {count}\"\n",
+    )
+    .expect("fr");
+    dir
+}
+
+const KEYED: &str =
+    "  - name: label\n    components:\n      UiText:\n        key: hud.start\n        font: body\n";
+
+#[test]
+fn a_key_missing_from_the_default_locale_is_l1715() {
+    let dir = keyed_root("keyed-missing", None);
+    let output = check(
+        &dir,
+        "  - name: label\n    components:\n      UiText:\n        key: hud.nope\n",
+    );
+    assert!(!output.status.success(), "stderr was: {}", stderr(&output));
+    let err = stderr(&output);
+    assert!(err.contains("L1715"), "stderr was: {err}");
+    assert!(err.contains("hud.nope"), "stderr was: {err}");
+    assert!(
+        err.contains("/entities/0/components/UiText/key"),
+        "stderr was: {err}"
+    );
+}
+
+#[test]
+fn a_locale_string_the_locales_face_lacks_warns_l1256_naming_the_locale() {
+    let dir = keyed_root("keyed-glyph", None);
+    let output = check(&dir, KEYED);
+    assert!(output.status.success(), "stderr was: {}", stderr(&output));
+    let err = stderr(&output);
+    assert!(err.contains("L1256"), "stderr was: {err}");
+    assert!(err.contains("in locale `fr`"), "stderr was: {err}");
+    assert!(!err.contains("in locale `en`"), "stderr was: {err}");
+    assert!(err.contains("\u{e9}"), "stderr was: {err}");
+}
+
+#[test]
+fn a_locale_face_override_with_the_glyph_clears_the_warning() {
+    let dir = keyed_root("keyed-override", Some("fonts/inter.font.yaml"));
+    let output = check(&dir, KEYED);
+    assert!(output.status.success(), "stderr was: {}", stderr(&output));
+    assert!(!stderr(&output).contains("L1256"), "{}", stderr(&output));
+}
+
+#[test]
+fn a_scene_without_keys_ignores_the_string_tables() {
+    let dir = keyed_root("keyed-none", None);
+    let output = check(
+        &dir,
+        "  - name: label\n    components:\n      UiText:\n        text: HI\n        font: body\n",
+    );
+    assert!(output.status.success(), "stderr was: {}", stderr(&output));
+    let err = stderr(&output);
+    assert!(!err.contains("L1715") && !err.contains("L1256"), "{err}");
+}

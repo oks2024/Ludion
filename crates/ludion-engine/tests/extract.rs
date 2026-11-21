@@ -3392,7 +3392,7 @@ fn world_text_carries_its_face_and_the_laid_out_extent() {
     assert!(font.texture < scene.textures.len());
     let library = ludion_engine::FontLibrary::load(ludion_assets::AssetRoot::content(&root));
     let expected =
-        ludion_font::layout(library.face(Some("body")), "Hello world", 2.0, 0.0).extent();
+        ludion_font::layout(library.face(Some("body"), None), "Hello world", 2.0, 0.0).extent();
     assert_eq!(run.extent, expected);
 }
 

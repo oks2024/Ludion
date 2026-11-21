@@ -2,6 +2,7 @@
 //! validation pass over them (`L1711`, `L1716`, `L1718`, `L1722`, `L1723`).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -9,8 +10,8 @@ use ludion_ecs::World;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::default_locale;
 use super::strings::placeholders;
+use super::{LocalizationEnabled, default_locale};
 use crate::docs::DocStore;
 
 /// The `kind:` of a string table.
@@ -96,6 +97,70 @@ pub(crate) fn key_tables(world: &World) -> BTreeMap<&str, BTreeSet<&str>> {
         }
     }
     tables
+}
+
+/// The text of `key` in `locale`'s tables, the first writer when several docs share the locale; no
+/// default-locale fallback.
+pub(crate) fn string_in<'w>(world: &'w World, locale: &str, key: &str) -> Option<&'w str> {
+    world
+        .resource::<DocStore<StringsDoc>>()?
+        .iter()
+        .filter(|(_, doc)| doc.locale == locale)
+        .find_map(|(_, doc)| doc.strings.get(key).map(String::as_str))
+}
+
+/// Reads every `kind: strings` and `kind: locales` doc under the content root `root` into `world`'s
+/// two `DocStore`s and marks the world localization-enabled: what the builder's doc walk does for an
+/// engine, for a host without one (check-scene, a bare render host). A file that fails its schema is
+/// skipped — the game's own boot reports it. Returns whether any strings doc was found.
+pub(crate) fn install_content_docs(world: &mut World, root: &Path) -> bool {
+    let schema = |schema: schemars::Schema| {
+        serde_json::to_value(schema).expect("a schemars JSON Schema always serializes")
+    };
+    let strings_schema = schema(schemars::schema_for!(StringsDoc));
+    let locales_schema = schema(schemars::schema_for!(LocalesDoc));
+    let mut strings: BTreeMap<String, StringsDoc> = BTreeMap::new();
+    let mut locales: BTreeMap<String, LocalesDoc> = BTreeMap::new();
+    for (key, path) in crate::content_root_yaml(root, None) {
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let kind = match ludion_scene::sniff_kind(&source) {
+            ludion_scene::KindSniff::Absent => continue,
+            ludion_scene::KindSniff::Kind(kind) => kind.to_owned(),
+            ludion_scene::KindSniff::Undecided => match ludion_scene::peek_kind_checked(&source) {
+                Ok(Some(kind)) => kind,
+                _ => continue,
+            },
+        };
+        match kind.as_str() {
+            STRINGS_KIND => {
+                if let Some(doc) = read_doc(&source, &kind, &strings_schema) {
+                    strings.insert(key, doc);
+                }
+            }
+            LOCALES_KIND => {
+                if let Some(doc) = read_doc(&source, &kind, &locales_schema) {
+                    locales.insert(key, doc);
+                }
+            }
+            _ => {}
+        }
+    }
+    let found = !strings.is_empty();
+    world.insert_resource(DocStore::new(strings));
+    world.insert_resource(DocStore::new(locales));
+    world.insert_resource(LocalizationEnabled);
+    found
+}
+
+fn read_doc<T: serde::de::DeserializeOwned>(
+    source: &str,
+    kind: &str,
+    schema: &serde_json::Value,
+) -> Option<T> {
+    let fields = ludion_scene::check_doc(source, kind, schema).ok()?;
+    ludion_scene::deserialize_doc::<T>(fields).ok()
 }
 
 /// `L1711`, `L1716`, `L1718`, `L1722` and `L1723` over every loaded `kind: strings` and

@@ -279,7 +279,7 @@ fn menu_face(d: &mut GameplayDriver) -> FontFace {
         .resource::<FontLibrary>()
         .cloned()
         .unwrap_or_default();
-    fonts.face(list.font.as_deref()).clone()
+    fonts.face(list.font.as_deref(), None).clone()
 }
 
 /// The first cursor `y` (scanning down the canvas at `x`) that lands on `item`, at `viewport`.

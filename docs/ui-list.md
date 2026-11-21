@@ -88,7 +88,7 @@ model and pivot rule; the canvas coordinate model, `UiRect` and `UiText` themsel
   error); an authored `selected` sitting on a disabled item draws in `disabled_color`, which
   outranks `selected_color`.
 - **Pointer hit-testing** is `ludion::math::list_hit(face, list, viewport, cursor) -> Option<u32>` —
-  `face` is the list's resolved `&FontFace` (`world.resource::<FontLibrary>().cloned().unwrap_or_default()`, then `.face(list.font.as_deref())`);
+  `face` is the list's resolved `&FontFace` (`world.resource::<FontLibrary>().cloned().unwrap_or_default()`, then `.face(list.font.as_deref(), None)`);
   `cursor` in render-target pixels (origin top-left, `+Y` down, what `mouse().position()` reports),
   `viewport` the extent the session renders at. Read that extent from the world —
   `world.resource::<RenderExtent>().copied().unwrap_or_default().size()` — never a constant: a host's

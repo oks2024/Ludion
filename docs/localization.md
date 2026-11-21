@@ -69,13 +69,26 @@ hot reload (`asset.reload`) shows on the next tick.
 reads it (the default when unset). `set_locale` to a tag with no `kind: strings` doc still applies and warns `L5140`
 once per tag.
 
+## Per-locale faces
+
+`fonts.yaml` may carry `locales: { fr: { body: fonts/other.font.yaml } }` (`ludion docs fonts`). Every site that draws,
+measures or hit-tests text asks `FontLibrary::face(name, locale)` with `localization::active_locale(world)`, so the
+layout, the atlas and the hit test agree per locale. A world with no `locales:` overrides resolves exactly as before.
+
+## check-scene
+
+`ludion check-scene` loads the content root's `kind: strings` and `kind: locales` docs when the scene has a keyed `UiText`
+or `Text`. A key the default locale lacks is `L1715` (error, at `.../key`). Each locale's string, with `{placeholders}`
+removed, is checked against that locale's face: characters it lacks are `L1256` (warning) naming the locale. A locale
+without the key is checked with the default's string. Unkeyed text is checked once, against the base face.
+
 ## Gotchas
 
 - A keyed text on an engine without `.localization()` draws its authored `text` and warns `L5139` once.
 - `localization::text` and `format_text` resolve a key for game code (a toast, a log line); they use the active locale.
 - Keys on `UiList` and `UiRadial` do not exist: resolve the string with `text` and write it to the item.
-- Every locale draws with the face the component names. Per-locale face overrides and fallback chains do not exist, so a
-  locale whose characters the face lacks draws `.notdef` glyphs (`L1256` reports them for authored text only).
+- A locale draws with the face the component names, or that locale's override (see Per-locale faces). Fallback chains
+  do not exist: a locale whose characters its face lacks draws `.notdef` glyphs.
 - Plurals, gender, right-to-left and CJK shaping are not handled.
 - Codes: `L1722` bad locales doc, `L1723` unlisted strings locale, `L5139`/`L5140` warnings.
 - Run the example: `cargo run -p ludion --example dialogue`.
