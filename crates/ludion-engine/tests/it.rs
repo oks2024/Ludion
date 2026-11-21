@@ -91,6 +91,7 @@ mod nav_blocker;
 mod nav_class;
 mod nav_link;
 mod nav_path;
+mod nav_trace;
 mod occluded_silhouette;
 mod paired_doc;
 mod paired_fit;

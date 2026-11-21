@@ -1,10 +1,11 @@
 //! The numeric trace: a per-tick JSON Lines record of a scene driven by an input script.
 //!
-//! Five channels. `motor` writes one line per [`CharacterMotor`] entity per tick — the tick, the
+//! Seven channels. `motor` writes one line per [`CharacterMotor`] entity per tick — the tick, the
 //! entity's name, its feet and the tick's [`MoveReport`]. `sensors` writes one line per
 //! [`SensorEvent`] the tick's physics step produced. `ai` writes one line per `ludion-ai` state
 //! transition and `ai_states` one per agent per tick (`ludion docs ai`). `perception` writes the sight, noise
-//! and memory changes of the engine's perception (`ludion docs perception`). One function, [`trace`], builds the records;
+//! and memory changes of the engine's perception (`ludion docs perception`). `nav` writes one line per route
+//! plan `nav_steer` attempts and `nav_states` one per `NavAgent` per tick (`ludion docs nav`). One function, [`trace`], builds the records;
 //! `ludion trace`, a game binary's `--trace` and a game's `cargo test` ([`trace_with`]) all call it,
 //! so they print the same lines. Two runs of the same scene, script and build are byte-identical:
 //! compare two runs, never a committed trace.
@@ -17,10 +18,13 @@ use std::path::Path;
 use std::str::FromStr;
 
 use ludion_ai::{AiCause, AiRecord, AiTrace};
+use ludion_components::nav_route::{NavGoal, NavRoute, NavRouteStatus};
+use ludion_components::{NavAgent, NavSteering};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_ecs::World;
+use ludion_nav::PathStatus;
 use ludion_physics::{
     CharacterMotor, ExitCause, GroundHit, MoveReport, PhysicsWorld, SensorEvent, SensorPhase,
     SurfaceHit,
@@ -33,6 +37,8 @@ use serde::Serialize;
 use crate::builder::EngineBuilder;
 use crate::components::{Name, Perceiver, Sense, StimulusRecord, Transform};
 use crate::engine::Engine;
+use crate::hierarchy::world_transform;
+use crate::nav::{NavPlanLog, NavTrace};
 use crate::perception::PerceptionResults;
 
 /// A trace channel.
@@ -48,16 +54,22 @@ pub enum TraceChannel {
     AiStates,
     /// One line per sight change, noise delivery and memory record appearing or vanishing.
     Perception,
+    /// One line per route plan `nav_steer` attempted, with why it planned and what came out.
+    Nav,
+    /// One line per `NavAgent` per tick: mode, goal, route status, position and velocity.
+    NavStates,
 }
 
 impl TraceChannel {
     /// Every channel, the default selection.
-    pub const ALL: [TraceChannel; 5] = [
+    pub const ALL: [TraceChannel; 7] = [
         TraceChannel::Motor,
         TraceChannel::Sensors,
         TraceChannel::Ai,
         TraceChannel::AiStates,
         TraceChannel::Perception,
+        TraceChannel::Nav,
+        TraceChannel::NavStates,
     ];
 }
 
@@ -71,8 +83,10 @@ impl FromStr for TraceChannel {
             "ai" => Ok(TraceChannel::Ai),
             "ai_states" => Ok(TraceChannel::AiStates),
             "perception" => Ok(TraceChannel::Perception),
+            "nav" => Ok(TraceChannel::Nav),
+            "nav_states" => Ok(TraceChannel::NavStates),
             other => Err(format!(
-                "unknown trace channel `{other}`; the channels are `motor`, `sensors`, `ai`, `ai_states` and `perception`"
+                "unknown trace channel `{other}`; the channels are `motor`, `sensors`, `ai`, `ai_states`, `perception`, `nav` and `nav_states`"
             )),
         }
     }
@@ -118,6 +132,10 @@ pub enum TraceRecord {
     AiStates(AiStatesRecord),
     /// A perception change; the `event` field names which.
     Perception(PerceptionRecord),
+    /// A route plan attempt.
+    Nav(NavPlanRecord),
+    /// A nav agent's state after a tick.
+    NavStates(NavStateRecord),
 }
 
 /// A perception line: the `event` field comes right after `channel`.
@@ -372,6 +390,76 @@ pub struct AiStatesRecord {
     pub path: Vec<String>,
 }
 
+/// One route plan `nav_steer` attempted: the `nav` channel.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct NavPlanRecord {
+    /// The frame index the tick ran as.
+    pub tick: u64,
+    /// The agent's `Name`, else its id.
+    pub entity: String,
+    /// The agent's nav class; omitted for the default class.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub class: String,
+    /// Why it planned: `new`, `retry`, `goal_moved`, `link_missing`, `blocker_closed` or `leg_blocked`.
+    pub reason: &'static str,
+    /// The agent's position when it planned.
+    pub from: [f32; 3],
+    /// The goal it planned to.
+    pub to: [f32; 3],
+    /// `complete`, `partial`, `unreachable`, or `deferred` when the per-tick request cap held it.
+    pub status: &'static str,
+    /// Nodes the search expanded; `0` when deferred.
+    pub expanded: u32,
+    /// Route length in metres; omitted when unreachable or deferred.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f32>,
+    /// Waypoints in the route; `0` when unreachable or deferred.
+    pub waypoints: u32,
+    /// Link traversals on the route.
+    pub links: u32,
+    /// Interact-blocker stops on the route.
+    pub blockers: u32,
+}
+
+/// One `NavAgent` after a tick: the `nav_states` channel.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct NavStateRecord {
+    /// The frame index the tick ran as.
+    pub tick: u64,
+    /// The agent's `Name`, else its id.
+    pub entity: String,
+    /// The agent's nav class; omitted for the default class.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub class: String,
+    /// `fly` for a flyer, `route` with a `NavGoal`, else `field`.
+    pub mode: &'static str,
+    /// The `NavGoal`'s point, else the agent's `target`.
+    pub goal: [f32; 3],
+    /// The stored route's status; omitted with no `NavRoute`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<NavRouteStatus>,
+    /// The waypoint index being walked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    /// Waypoints in the stored route.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waypoints: Option<u32>,
+    /// Whether the route only approaches the goal; omitted when it reaches it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
+    /// The `NavLink` being traversed or waited at, by `Name` else id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    /// The `NavBlocker` being waited at, by `Name` else id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<String>,
+    /// The agent's world position; omitted with no pose.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f32; 3]>,
+    /// The agent's `NavSteering.velocity`, zero before its first steer.
+    pub velocity: [f32; 3],
+}
+
 /// An entity's `Name`, else its id; a despawned id has no name and prints as its id.
 fn label(world: &World, entity: EntityId) -> String {
     match world.get::<Name>(entity) {
@@ -454,6 +542,85 @@ fn motor_records(world: &World, tick: u64, out: &mut Vec<TraceRecord>) {
             entity: label(world, entity),
             feet,
             report,
+        }));
+    }
+}
+
+fn nav_plan_records(world: &World, logs: Vec<NavPlanLog>, out: &mut Vec<TraceRecord>) {
+    for log in logs {
+        let (status, expanded, cost, waypoints, links, blockers) = match &log.outcome {
+            None => ("deferred", 0, None, 0, 0, 0),
+            Some(o) => (
+                match o.status {
+                    PathStatus::Complete => "complete",
+                    PathStatus::Partial => "partial",
+                    PathStatus::Unreachable => "unreachable",
+                },
+                o.expanded,
+                o.cost.is_finite().then_some(o.cost),
+                o.waypoints,
+                o.links,
+                o.blockers,
+            ),
+        };
+        out.push(TraceRecord::Nav(NavPlanRecord {
+            tick: log.tick,
+            entity: label(world, log.entity),
+            class: log.class,
+            reason: log.reason.as_str(),
+            from: log.from,
+            to: log.to,
+            status,
+            expanded,
+            cost,
+            waypoints,
+            links,
+            blockers,
+        }));
+    }
+}
+
+fn nav_state_records(world: &World, tick: u64, out: &mut Vec<TraceRecord>) {
+    let mut agents: Vec<EntityId> = world
+        .entities()
+        .filter(|entity| world.has::<NavAgent>(*entity))
+        .collect();
+    agents.sort();
+    for entity in agents {
+        let Ok(Some(agent)) = world.get::<NavAgent>(entity) else {
+            continue;
+        };
+        let goal = world.get::<NavGoal>(entity).ok().flatten();
+        let route = world.get::<NavRoute>(entity).ok().flatten();
+        let velocity = world
+            .get::<NavSteering>(entity)
+            .ok()
+            .flatten()
+            .map_or([0.0; 3], |steering| steering.velocity);
+        out.push(TraceRecord::NavStates(NavStateRecord {
+            tick,
+            entity: label(world, entity),
+            class: agent.class.clone(),
+            mode: if agent.flying {
+                "fly"
+            } else if goal.is_some() {
+                "route"
+            } else {
+                "field"
+            },
+            goal: goal.map_or(agent.target, |goal| goal.at),
+            status: route.map(|route| route.status),
+            index: route.map(|route| route.index),
+            waypoints: route.map(|route| route.waypoints.len() as u32),
+            partial: route.is_some_and(|route| route.partial),
+            link: route
+                .and_then(|route| route.link)
+                .map(|id| label(world, id)),
+            blocker: route
+                .and_then(|route| route.blocker)
+                .map(|id| label(world, id)),
+            position: world_transform(world, entity).map(|pose| pose.trs.translation),
+            velocity,
         }));
     }
 }
@@ -708,8 +875,9 @@ fn event_name(payload: &serde_json::Value) -> String {
 /// order, then the `ai` and `ai_states` lines as `ai_tick` recorded them (machines in schedule
 /// order, agents ascending; a tick the game held prints none), then the `perception` lines
 /// (`sight` changes by `(perceiver, zone, target)`, `noise` deliveries by `(listener, noise)` on a
-/// tick whose gameplay time advanced, then `forget` and `remember` lines by record entity), whatever
-/// order `channels` names them in. A motor line carries the `MoveReport` only when
+/// tick whose gameplay time advanced, then `forget` and `remember` lines by record entity), then the
+/// `nav` lines in plan order (ascending entity; only where `nav_steer` runs) and the `nav_states` lines
+/// by ascending entity, whatever order `channels` names them in. A motor line carries the `MoveReport` only when
 /// game code called `move_character` on that entity during the tick. A sensor line is the tick's own
 /// physics step. No physics world means no sensor lines.
 ///
@@ -787,6 +955,11 @@ pub fn trace(
             .world_mut()
             .insert_resource(AiTrace::new(ai, ai_states));
     }
+    let nav = channels.contains(&TraceChannel::Nav);
+    let nav_states = channels.contains(&TraceChannel::NavStates);
+    if nav {
+        engine.world_mut().insert_resource(NavTrace::default());
+    }
     let mut records = Vec::new();
     let mut perception = perception_on.then(PerceptionDiff::default);
     for _ in 0..frames {
@@ -809,6 +982,13 @@ pub fn trace(
         }
         if let Some(diff) = perception.as_mut() {
             diff.step(engine.world(), tick, &mut records);
+        }
+        if nav && let Some(sink) = engine.world_mut().resource_mut::<NavTrace>() {
+            let taken = sink.take();
+            nav_plan_records(engine.world(), taken, &mut records);
+        }
+        if nav_states {
+            nav_state_records(engine.world(), tick, &mut records);
         }
     }
     Ok(records)
@@ -844,8 +1024,37 @@ pub fn write_jsonl(records: &[TraceRecord], out: &mut impl Write) -> io::Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{NoiseTraceRecord, PerceptionRecord, TraceRecord, event_name};
+    use super::{NavPlanRecord, NoiseTraceRecord, PerceptionRecord, TraceRecord, event_name};
     use serde_json::json;
+
+    #[test]
+    fn a_nav_line_leads_with_channel_and_skips_a_missing_cost() {
+        let mut record = NavPlanRecord {
+            tick: 4,
+            entity: "guard".into(),
+            class: String::new(),
+            reason: "new",
+            from: [0.0, 0.0, 0.0],
+            to: [3.0, 0.0, 1.5],
+            status: "complete",
+            expanded: 12,
+            cost: Some(4.5),
+            waypoints: 3,
+            links: 0,
+            blockers: 0,
+        };
+        assert_eq!(
+            serde_json::to_string(&TraceRecord::Nav(record.clone())).unwrap(),
+            r#"{"channel":"nav","tick":4,"entity":"guard","reason":"new","from":[0.0,0.0,0.0],"to":[3.0,0.0,1.5],"status":"complete","expanded":12,"cost":4.5,"waypoints":3,"links":0,"blockers":0}"#
+        );
+        record.status = "unreachable";
+        record.cost = None;
+        record.class = "tall".into();
+        assert_eq!(
+            serde_json::to_string(&TraceRecord::Nav(record)).unwrap(),
+            r#"{"channel":"nav","tick":4,"entity":"guard","class":"tall","reason":"new","from":[0.0,0.0,0.0],"to":[3.0,0.0,1.5],"status":"unreachable","expanded":12,"waypoints":3,"links":0,"blockers":0}"#
+        );
+    }
 
     #[test]
     fn a_perception_line_leads_with_channel_then_event_then_tick() {

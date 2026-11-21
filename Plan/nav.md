@@ -137,6 +137,15 @@
     stays on the agent's class grid (`walkable_line`, which sees blocker overlays). Otherwise the agent takes its
     seek velocity. The default radius is the class radius.
 
+29. **Two trace channels, `nav` and `nav_states`.** `nav_states` is read from components after each step (every
+    `NavAgent` ascending entity, its `NavGoal`, `NavRoute`, `NavSteering` and pose). `nav` is fed by an opt-in
+    `NavTrace` sink filled in `nav_steer`'s serial plan phase; it is a plain resource, never hashed or snapshotted,
+    present only while traced, so tracing off costs one lookup per tick and moves no hash.
+30. **The plan reason vocabulary:** `new` (no route), `retry` (deferred by the cap last tick), `goal_moved`,
+    `link_missing`, `blocker_closed`, `leg_blocked`, checked in that order; a capped request logs status `deferred`.
+31. **Two channels, not one with an "on request" per-agent part.** The per-tick lines are their own channel, as
+    `ai_states` is (Pillar 6: no sub-channel syntax). Game `nav_path` queries are not traced.
+
 **Known second way (temporary):** vigil keeps its game-side 2D nav (`games/vigil/src/nav.rs`).
 Moving it to the layered grid moves its `WorldHash`; the exit is the owed migration, gated by
 `games/vigil/tests/nav_equivalence.rs`, owing a pinned replay re-record and a human sitting on enemy
@@ -216,6 +225,13 @@ yield with the state velocity pinned, a disabled obstacle that keeps tracking, 1
 identity for separation-only crowds with a far obstacle and the `L1528` cases. A world without `NavObstacle` is
 unchanged; only the component schema snapshot moved. The obstacle's velocity comes from its pose, not physics `Velocity`.
 
+Wave 2b (request 0004, trace), by commit subject: the `nav` and `nav_states` trace channels — `TraceChannel::{Nav,
+NavStates}`, the `NavPlanRecord` and `NavStateRecord` records, and the opt-in `NavTrace` sink behind `nav_steer`'s plan
+phase (`plan_route` now returns the attempt's log; `plan_reason` keeps its conditions byte for byte). `ludion docs nav`
+§Tracing and `verify-loop`. Tests (`nav_trace`) pin a walker's plan and per-tick states, the cap's `deferred` then
+`retry`, `goal_moved`, `blocker_closed`, `at_link`/`at_blocker` names, `unreachable` without a cost, field and fly
+modes, a nav-free world printing nothing, `WorldHash` identity and byte-identical runs. No pinned artifact moved.
+
 ## Waves (Neon Shroud request 0004)
 
 The request asks for paths, patrols, off-mesh links, dynamic blockers and avoidance. Each wave is
@@ -230,8 +246,8 @@ independently shippable; later ones add fields and components, never reshape ear
 - **2a — agent classes (shipped):** `NavConfig.classes`, `NavAgent.class`, `PathRequest.class`, `NavLink.classes`,
   `nav_raycast`, `nav_random_point`; `L4147`; `ludion docs nav` §Classes, example `nav_class` (decisions 8, 17–19).
   Amends decision 8 (one class per `Nav`); the trigger is met (walkers and forklifts) — **accepted 2026-11-19**.
-- **2b — the `nav` trace channel:** nav records on the trace surface; it touches the shared trace code, so it is
-  its own subtask after 2a.
+- **2b — the `nav` and `nav_states` trace channels (shipped):** route-plan and per-agent state lines on the trace
+  surface (decisions 29–31).
 - **3 — off-mesh links (shipped):** `NavLink`, `NavRouteStatus::AtLink`, `nav_link_done`; `L1526`, `L4145`, `L4146`
   (decisions 14–16).
 - **4 — dynamic blockers (shipped):** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics; `L1527`
@@ -242,10 +258,12 @@ independently shippable; later ones add fields and components, never reshape ear
 
 **Open questions, answered.** Planning is synchronous with a per-tick cap, not async (the cap bounds the
 cost and keeps the result a function of the tick). Waypoint entity references wait for wave 3: `NavRoute`
-keeps plain points. `nav_random_point` and `nav_raycast` shipped with wave 2a; the `nav` trace channel is wave 2b.
+keeps plain points. `nav_random_point` and `nav_raycast` shipped with wave 2a; the `nav` trace channels shipped
+with wave 2b.
 
 ## Explicitly out of scope (triggers recorded)
 
+- **Tracing `nav_path` queries** — trigger: a game debugging its own queries asks.
 - **A 3D flying field** — trigger: flyers stuck behind geometry in play.
 - **3D avoidance for flyers** — trigger: flyers colliding in play.
 - **Static-edge ORCA lines (walls as constraints)** — trigger: avoiding agents clip corners in corridors.

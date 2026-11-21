@@ -339,8 +339,9 @@ enum Command {
         /// How many fixed ticks to trace.
         #[arg(long)]
         frames: u64,
-        /// Comma-separated channels to print: `motor`, `sensors`, `ai`, `ai_states`, `perception` (the ai
-        /// and perception channels need a game's systems: a game's `--trace`). Default: `motor,sensors`.
+        /// Comma-separated channels to print: `motor`, `sensors`, `ai`, `ai_states`, `perception`, `nav`,
+        /// `nav_states` (the ai, perception and nav channels need a game's systems: a game's `--trace`).
+        /// Default: `motor,sensors`.
         #[arg(long, value_delimiter = ',', default_values = ["motor", "sensors"])]
         channels: Vec<ludion_engine::TraceChannel>,
     },

@@ -110,7 +110,7 @@ worst frame and p99 (`ludion docs running`).
 
 A per-tick JSON Lines record of a scene driven by an input script, for asserting on motion without a
 picture. Three entry points print the same lines: `ludion trace --scene <FILE> [--script <FILE>]
---frames <N> [--channels motor,sensors,ai,ai_states,perception]` (built-ins only, no game systems), `cargo run -p <game> --
+--frames <N> [--channels motor,sensors,ai,ai_states,perception,nav,nav_states]` (built-ins only, no game systems), `cargo run -p <game> --
 --trace <N> [--scene …] [--script …] [--channels …]` (the game's systems run, so its motors move), and
 `ludion_engine::trace_with(builder, scene, &script, frames, &channels)` in a `cargo test`, with
 `write_jsonl` to print. The script is `ludion sim-hash --script`'s format (`ludion docs systems`).
@@ -134,6 +134,8 @@ picture. Three entry points print the same lines: `ludion trace --scene <FILE> [
 - `perception` (one line per sight change, noise delivery and memory record appearing or vanishing) follows
   the ai lines; fields in `ludion docs perception`. It prints only where `perception_update` runs: a game's
   `--trace` or `trace_with`, not `ludion trace`.
+- `nav` (one line per route plan, with why it planned) and `nav_states` (one line per `NavAgent` per tick) come
+  last; fields in `ludion docs nav`. `nav` prints only where `nav_steer` runs: a game's `--trace` or `trace_with`.
 
 ## Gotchas
 

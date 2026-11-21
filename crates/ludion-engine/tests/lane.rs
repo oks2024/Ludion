@@ -1051,7 +1051,9 @@ fn the_motor_trace_carries_the_lane_fields() {
             TraceRecord::Sensors(_)
             | TraceRecord::Ai(_)
             | TraceRecord::AiStates(_)
-            | TraceRecord::Perception(_) => None,
+            | TraceRecord::Perception(_)
+            | TraceRecord::Nav(_)
+            | TraceRecord::NavStates(_) => None,
         })
         .collect();
     assert_eq!(

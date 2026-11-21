@@ -413,9 +413,9 @@ pub use sweep::{
 pub use tick_observer::TickObserver;
 pub use trace::{
     AiStatesRecord, AiTransitionRecord, ForgetTraceRecord, GroundRecord, LaneRecord, MotorRecord,
-    NoiseTraceRecord, PerceptionRecord, PlatformRecord, RememberTraceRecord, ReportRecord,
-    SensorRecord, SightTraceRecord, SurfaceRecord, TraceChannel, TraceRecord, load_input_script,
-    trace, trace_with, write_jsonl,
+    NavPlanRecord, NavStateRecord, NoiseTraceRecord, PerceptionRecord, PlatformRecord,
+    RememberTraceRecord, ReportRecord, SensorRecord, SightTraceRecord, SurfaceRecord, TraceChannel,
+    TraceRecord, load_input_script, trace, trace_with, write_jsonl,
 };
 pub use transition::{RESIDUE_MAX_RECORDS_PER_SCENE, RESIDUE_MAX_SCENES, SceneSwitch, SwitchTo};
 pub use voxel_mesh::{VoxelMeshStats, voxel_empty_lod_levels, voxel_mesh_stats};

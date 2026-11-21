@@ -1470,38 +1470,124 @@ fn pending_link_missing(grid: &NavGrid, table: &LinkTable, route: &NavRoute) -> 
     }
 }
 
+/// Why a routed walker plans again; `as_str` is the `nav` trace channel's `reason`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlanReason {
+    New,
+    Retry,
+    GoalMoved,
+    LinkMissing,
+    BlockerClosed,
+    LegBlocked,
+}
+
+impl PlanReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Retry => "retry",
+            Self::GoalMoved => "goal_moved",
+            Self::LinkMissing => "link_missing",
+            Self::BlockerClosed => "blocker_closed",
+            Self::LegBlocked => "leg_blocked",
+        }
+    }
+}
+
+/// What a planned route came out as, for the `nav` trace channel.
+pub(crate) struct PlanOutcome {
+    pub(crate) status: PathStatus,
+    pub(crate) expanded: u32,
+    pub(crate) cost: f32,
+    pub(crate) waypoints: u32,
+    pub(crate) links: u32,
+    pub(crate) blockers: u32,
+}
+
+/// One route plan `nav_steer` attempted; `outcome` is `None` when the per-tick cap deferred it.
+pub(crate) struct NavPlanLog {
+    pub(crate) tick: u64,
+    pub(crate) entity: EntityId,
+    pub(crate) class: String,
+    pub(crate) reason: PlanReason,
+    pub(crate) from: [f32; 3],
+    pub(crate) to: [f32; 3],
+    pub(crate) outcome: Option<PlanOutcome>,
+}
+
+/// The opt-in `nav` trace sink: a plain resource, never hashed or snapshotted, present only while traced.
+#[derive(Default)]
+pub(crate) struct NavTrace {
+    pub(crate) plans: Vec<NavPlanLog>,
+}
+
+impl NavTrace {
+    pub(crate) fn take(&mut self) -> Vec<NavPlanLog> {
+        std::mem::take(&mut self.plans)
+    }
+}
+
+/// Why `route` must be planned again for `goal`, `None` when it stands.
+fn plan_reason(
+    grid: &NavGrid,
+    table: &LinkTable,
+    route: Option<&NavRoute>,
+    goal: &NavGoal,
+) -> Option<PlanReason> {
+    let cell = |p| grid.cell_of(p);
+    let Some(route) = route else {
+        return Some(PlanReason::New);
+    };
+    match route.status {
+        // A walker stopped at a link waits for `nav_link_done`; nothing replans it.
+        NavRouteStatus::AtLink => None,
+        // A walker stopped at a blocker waits for the game to open it; only a blocked region (or a goal
+        // that moved on) plans again.
+        NavRouteStatus::AtBlocker => {
+            if cell(goal.at) != cell(route.goal) {
+                Some(PlanReason::GoalMoved)
+            } else if pending_blocker_blocked(grid, route) {
+                Some(PlanReason::BlockerClosed)
+            } else {
+                None
+            }
+        }
+        status => {
+            let following = status == NavRouteStatus::Following;
+            if status == NavRouteStatus::Planning {
+                Some(PlanReason::Retry)
+            } else if cell(goal.at) != cell(route.goal) {
+                Some(PlanReason::GoalMoved)
+            } else if following && pending_link_missing(grid, table, route) {
+                Some(PlanReason::LinkMissing)
+            } else if following && pending_blocker_blocked(grid, route) {
+                Some(PlanReason::BlockerClosed)
+            } else if goal.replan == NavReplan::OnChange
+                && following
+                && !route.partial
+                && !leg_walkable(grid, route)
+            {
+                Some(PlanReason::LegBlocked)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// The serial plan phase for one routed walker: decides from hashed state and the current grid whether
-/// the route needs planning, and plans it while the per-tick `budget` lasts.
+/// the route needs planning, and plans it while the per-tick `budget` lasts. Returns the attempt's log
+/// when a plan was needed and `tick` is `Some` (tracing).
 fn plan_route(
     grid: &NavGrid,
     table: &LinkTable,
     steer: &mut Steer,
     goal: NavGoal,
     budget: &mut u32,
-) {
-    let cell = |p| grid.cell_of(p);
-    let needs_plan = match &steer.route {
-        None => true,
-        // A walker stopped at a link waits for `nav_link_done`; nothing replans it.
-        Some(route) if route.status == NavRouteStatus::AtLink => false,
-        // A walker stopped at a blocker waits for the game to open it; only a blocked region (or a goal
-        // that moved on) plans again.
-        Some(route) if route.status == NavRouteStatus::AtBlocker => {
-            cell(goal.at) != cell(route.goal) || pending_blocker_blocked(grid, route)
-        }
-        Some(route) => {
-            route.status == NavRouteStatus::Planning
-                || cell(goal.at) != cell(route.goal)
-                || (route.status == NavRouteStatus::Following
-                    && (pending_link_missing(grid, table, route)
-                        || pending_blocker_blocked(grid, route)))
-                || (goal.replan == NavReplan::OnChange
-                    && route.status == NavRouteStatus::Following
-                    && !route.partial
-                    && !leg_walkable(grid, route))
-        }
-    };
-    if !needs_plan {
+    tick: Option<u64>,
+) -> Option<NavPlanLog> {
+    let reason = plan_reason(grid, table, steer.route.as_ref(), &goal);
+    let Some(reason) = reason else {
         if let Some(route) = steer.route.as_mut()
             && route.status != NavRouteStatus::AtLink
             && route.goal != goal.at
@@ -1520,15 +1606,26 @@ fn plan_route(
             }
             steer.route_write = RouteWrite::Store;
         }
-        return;
-    }
+        return None;
+    };
     let mut route = NavRoute {
         goal: goal.at,
         ..NavRoute::default()
     };
+    let mut outcome = None;
     if *budget > 0 {
         *budget -= 1;
         let path = plan(grid, table, &PathRequest::new(steer.pos, goal.at), false);
+        if tick.is_some() {
+            outcome = Some(PlanOutcome {
+                status: path.status,
+                expanded: path.expanded,
+                cost: path.cost,
+                waypoints: path.waypoints.len() as u32,
+                links: path.links.len() as u32,
+                blockers: path.blockers.len() as u32,
+            });
+        }
         if path.status != PathStatus::Unreachable {
             // A route that opens on a link start or a blocker must stop there, not walk past it.
             route.index = if path.links.first() == Some(&0) || path.blockers.first() == Some(&0) {
@@ -1548,6 +1645,15 @@ fn plan_route(
     }
     steer.route = Some(route);
     steer.route_write = RouteWrite::Store;
+    tick.map(|tick| NavPlanLog {
+        tick,
+        entity: steer.entity,
+        class: steer.agent.class.clone(),
+        reason,
+        from: steer.pos,
+        to: goal.at,
+        outcome,
+    })
 }
 
 /// Writes every [`NavAgent`]'s desired velocity into its [`NavSteering`], in ascending entity order.
@@ -1639,6 +1745,11 @@ pub fn nav_steer(world: &mut World, ctx: &SystemCtx) {
         steer.route_write = RouteWrite::Remove;
     }
 
+    let tick = world
+        .resource::<NavTrace>()
+        .is_some()
+        .then(|| ctx.frame.as_u64());
+    let mut plan_logs: Vec<NavPlanLog> = Vec::new();
     let mut nav = world.remove_resource::<Nav>();
     if let Some(nav) = nav.as_mut() {
         let mut budget = nav.config.max_path_requests_per_tick;
@@ -1651,7 +1762,7 @@ pub fn nav_steer(world: &mut World, ctx: &SystemCtx) {
                 continue;
             };
             if let Some(goal) = steer.goal {
-                plan_route(grid, table, steer, goal, &mut budget);
+                plan_logs.extend(plan_route(grid, table, steer, goal, &mut budget, tick));
                 continue;
             }
             steer.node = grid.node_at(steer.agent.target);
@@ -1659,6 +1770,11 @@ pub fn nav_steer(world: &mut World, ctx: &SystemCtx) {
                 cache.field(grid, node);
             }
         }
+    }
+    if tick.is_some()
+        && let Some(sink) = world.resource_mut::<NavTrace>()
+    {
+        sink.plans.append(&mut plan_logs);
     }
 
     let empty;

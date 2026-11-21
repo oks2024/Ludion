@@ -280,6 +280,27 @@ fn motor_mover(world: &mut World, ctx: &SystemCtx) {
 Put the motors on a layer that ignores itself, so they don't block each other. Nav needs no
 `ignore_layers` for them: kinematic and rigid bodies are never sampled.
 
+## Tracing
+
+Two trace channels answer "what was this agent's route doing on tick N, and why did it replan?"
+(`--channels nav,nav_states`; `ludion docs verify-loop`). Both print through a game's `--trace` or
+`trace_with`; `nav` needs `nav_steer` to run, so `ludion trace` (no game systems) prints only `nav_states`.
+
+```
+{"channel":"nav","tick":1,"entity":"a0","reason":"new","from":[3.0,0.0,12.5],"to":[20.5,0.0,12.5],"status":"complete","expanded":17,"cost":17.0,"waypoints":4,"links":0,"blockers":1}
+{"channel":"nav_states","tick":3,"entity":"a0","mode":"route","goal":[20.5,0.0,12.5],"status":"following","index":1,"waypoints":4,"position":[3.2999997,0.0,12.5],"velocity":[6.0,0.0,0.0]}
+```
+
+- `nav`: one line per route plan `nav_steer` attempts. `reason`: `new` (no route), `retry` (deferred last
+  tick by the request cap), `goal_moved`, `link_missing`, `blocker_closed`, `leg_blocked`. `status`:
+  `complete`, `partial`, `unreachable`, or `deferred` (the cap held it). `cost` is absent when
+  `unreachable` or `deferred`; `class` when the agent has none.
+- `nav_states`: one line per `NavAgent` per tick. `mode` is `route` (a `NavGoal`), `field` or `fly`. `status`,
+  `index`, `waypoints`, `partial`, `link` and `blocker` come from the stored `NavRoute` and are absent
+  without one; `link` and `blocker` print the entity's `Name`.
+- Within a tick, `nav` lines (ascending entity) precede `nav_states` lines (ascending entity). Tracing
+  is opt-in and moves no hash. `nav_path` queries from game code are not traced.
+
 ## Gotchas
 
 - A target whose cell has no node (within `agent_radius` of a wall, off the grid) gives walkers the
