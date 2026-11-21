@@ -19,7 +19,10 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   (`to_device_buffer`), `check_message` (shared with the testkit's `SoundTap`), tests.
 - `crates/ludion-audio/src/music.rs` — streamed Ogg Vorbis music (`lewton`): `MusicFeed` (sink thread:
   decoder, linear resampler, loop reopen, the failure table) filling a bounded ring of `MusicChunk`s,
-  and `MusicPlayer` (callback: generation check, gain ramp, sum). `Track::next_packet`'s granule clamp
+  and `MusicPlayer` (callback: generation check, gain ramp, sum). The feed and the mixer have two
+  music slots (`MUSIC_SLOTS`), each with its own ring, generation and player, so a crossfade runs the
+  outgoing and incoming sets side by side; the second ring is ~2 MB preallocated, and the idle
+  player's `mix_into` is only the stale-chunk drain. `Track::next_packet`'s granule clamp
   covers a one-page stream only (lewton trims the end-of-stream packet itself once it has a previous
   granule; mid-stream the granule tracks the decoded position, so nothing is cut). The Vorbis
   start-trim is closed, not fixed: a start-trimmed stream loses its excess from the tail of its first
@@ -47,7 +50,8 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   live engine.
 
 ## Rules
-- **Music streams through a bounded chunk ring.** Generations discard stale chunks (a newer one is
+- **Music streams through a bounded chunk ring per slot** (two slots; `music_crossfade` is the only
+  verb that uses both live, and its pair fades equal-power while plain fades stay linear). Generations discard stale chunks (a newer one is
   held until its command arrives, never dropped); the callback never decodes or allocates; fades and
   the loop seam are computed in the sink (`spawn` takes the tick length to time them).
 - **Playback never feeds back into the sim.** The channel from `Engine` to `AudioSink` is strictly

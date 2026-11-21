@@ -259,6 +259,7 @@ pub fn mix_state(messages: &[(u64, AudioMessage)], frame: u64) -> MixState {
             AudioMessage::OneShot(_)
             | AudioMessage::MusicPlay { .. }
             | AudioMessage::MusicSet { .. }
+            | AudioMessage::MusicCrossfade { .. }
             | AudioMessage::MusicStemGain { .. }
             | AudioMessage::MusicStop { .. } => {}
         }
@@ -304,7 +305,8 @@ impl SoundTap {
                 AudioMessage::OneShot(event) => (event.sound.clone(), false),
                 AudioMessage::LoopSync { sound, .. } => (sound.clone(), false),
                 AudioMessage::MusicPlay { track, .. } => (track.clone(), true),
-                AudioMessage::MusicSet { id, stems, .. } => {
+                AudioMessage::MusicSet { id, stems, .. }
+                | AudioMessage::MusicCrossfade { id, stems, .. } => {
                     let names: Vec<String> = stems.iter().map(|(stem, _)| stem.clone()).collect();
                     seen.extend(names.iter().map(|stem| (stem.clone(), true)));
                     if sets.insert((id.clone(), names))

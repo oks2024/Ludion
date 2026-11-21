@@ -89,6 +89,30 @@ fn layers_fold_in_order_and_stop_at_the_asked_frame() {
 }
 
 #[test]
+fn the_music_verbs_leave_the_mix_untouched() {
+    let bed = LoopId::ZoneBed(EntityId::new(4, 0), 1);
+    let base = vec![(0, zone_gain(Bus::Music, 0.3)), (0, loop_sync(bed, 0.5))];
+    let mut with_music = base.clone();
+    with_music.push((
+        1,
+        AudioMessage::MusicSet {
+            id: "a".to_string(),
+            stems: vec![("a.ogg".to_string(), 1.0)],
+            fade_frames: 0,
+        },
+    ));
+    with_music.push((
+        1,
+        AudioMessage::MusicCrossfade {
+            id: "b".to_string(),
+            stems: vec![("b.ogg".to_string(), 1.0)],
+            fade_frames: 30,
+        },
+    ));
+    assert_eq!(mix_state(&with_music, 1), mix_state(&base, 1));
+}
+
+#[test]
 fn a_stop_clears_everything_but_the_users_layer() {
     let bed = LoopId::ZoneBed(EntityId::new(4, 0), 1);
     let messages = vec![

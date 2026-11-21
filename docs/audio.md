@@ -177,8 +177,8 @@ queue.music_stop(90); // fade out over 90 ticks, then idle
 - **Streamed, not decoded up front.** The sink decodes a little ahead of the device from disk, so a
   long track costs no start-up stall and holds only a short ring (~0.7 s) in memory; a loop's seam is gapless (the encoder's tail padding is trimmed at the stream's last granule), a play-once track's tail always plays, a stereo track on a mono device is the mean of both channels, and a track re-exported in place at another rate or channel count is converted for its new format at the next wrap.
 - **One music at a time.** The track already playing (and not stopping) only takes the new gain, so resending
-  `music_play` every tick is harmless; a new gain slews in over 10 ms. Any other track or set hard-cuts the current one and fades in; there
-  is no crossfade.
+  `music_play` every tick is harmless; a new gain slews in over 10 ms. Any other track or set hard-cuts the current one and fades in
+  (`music_crossfade` blends: `ludion docs audio-mix` §Crossfade).
 - **Fades are in sim ticks**, converted with the engine's tick rate; `0` is instant.
 - **A world rebuild stops the music** with a 10 ms fade-out (`scene.load`, a district switch, a
   restore), so the game's own `music_play` after the rebuild restarts it.
@@ -208,7 +208,7 @@ queue.music_stem_gain("music/perc.ogg", 1.0, 120); // raise the percussion over 
 - **Resend freely.** `music_set` with the id already playing (and not stopping) is a no-op, so a
   system may send it every tick; its starting gains apply only when the set starts. Move a stem
   with `music_stem_gain`, which slews in ticks (`0` still slews ~10 ms, click-free) and is free to
-  resend. Another set or track hard-cuts; a set is not crossfaded.
+  resend. Another set or track hard-cuts; `music_crossfade` blends (`ludion docs audio-mix` §Crossfade).
 - **A plain track has one stem.** `music_stem_gain` on the path of the track `music_play` is
   playing addresses that single stem (a mix gain on top of the track's own); it is ignored when
   the path is not in the playing set.

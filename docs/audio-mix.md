@@ -87,6 +87,29 @@ Observe: `AudioMessage::Duck { bus, gain, fade_frames }` in `engine.audio_log()`
   (no tracked end); `duck` empty, or naming `Master` or `when` itself.
 - No rule and no manual duck: the stream is unchanged. Nothing here reaches `WorldHash`, snapshots or replays.
 
+## Crossfade
+
+`music_crossfade(id, &[(stem, gain)], ticks)` blends from the playing music to the set `id`: the new set
+fades in over `ticks` while the live one fades out over the same ticks, as an equal-power pair (the two
+gains satisfy `in² + out² = 1`, so the blend keeps its loudness). Plain `music_play`/`music_set` fade-ins and
+`music_stop` fade-outs stay linear.
+
+```rust,ignore
+queue.music_crossfade("combat", &[("music/combat.ogg", 1.0)], 120);
+```
+
+- **Two slots, at most two live sets.** A third set mid-crossfade hard-cuts the outgoing one; the
+  previous incoming set fades down from where it is, and the new one fades up.
+- **Resend is free.** The live `id` again (not stopping) is a no-op. Crossing back to the outgoing
+  set restarts it: it is cut, not resumed.
+- **Nothing playing, or `ticks == 0`:** a plain `music_set` start (a fade-in, or a hard cut).
+- **A set that cannot open** (`L5003`/`L5006`) keeps the old music playing and cuts nothing.
+- **`music_stem_gain` addresses the incoming set.** `music_stop` and a world rebuild stop both
+  slots; `music_set` and `music_play` hard-cut both and play one.
+- A `music_play` track is a one-stem set, so it can be crossfaded from.
+- Verify with `audio_messages`: the log carries a frame-stamped `MusicCrossfade`. The blend itself is
+  a device-side effect, checked by ear.
+
 ## Gotchas
 
 - Pause only the buses you mean: `Ui` stays live while `Sfx`/`Ambient`/`Music` hold, which is what a

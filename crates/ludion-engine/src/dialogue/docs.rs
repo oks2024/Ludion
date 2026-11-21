@@ -2,7 +2,9 @@
 //! validation pass over them (`L1711`–`L1718`).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
+use ludion_assets::AssetRoot;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::World;
@@ -10,6 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::strings::placeholders;
+use super::voice::locale_path;
 use crate::docs::DocStore;
 
 /// The `kind:` of a string table.
@@ -100,6 +103,13 @@ pub struct LineDef {
     /// Authored length in ticks; absent uses the reading-time rule (default absent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ticks: Option<u32>,
+    /// A WAV under the content root, `{locale}` replaced by the active locale; the line lasts the
+    /// clip plus `tail_ticks` (default silent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
+    /// Ticks the line outlasts its voice; absent uses the config's `tail_ticks` (default absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_ticks: Option<u32>,
     /// Named cues, each the tick after the start it fires on (default none).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub cues: BTreeMap<String, u32>,
@@ -185,8 +195,19 @@ fn diagnostic(
 /// `L1711`–`L1718` over every loaded `kind: strings` and `kind: dialogue` doc, in store order (a
 /// duplicate is reported at the later path). `default_locale` is the config's, which a line's text
 /// and a speaker's name must exist in.
-pub(crate) fn validate_dialogue_docs(world: &World, default_locale: &str) -> Vec<Diagnostic> {
+pub(crate) fn validate_dialogue_docs(
+    world: &World,
+    root: &Path,
+    default_locale: &str,
+) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    // Voice path -> whether it reads; one load per distinct path per pass.
+    let mut reads: BTreeMap<String, bool> = BTreeMap::new();
+    let mut readable = |path: String| {
+        *reads.entry(path).or_insert_with_key(|path| {
+            ludion_assets::load_wav(AssetRoot::content(root), path).is_ok()
+        })
+    };
     let strings = world.resource::<DocStore<StringsDoc>>();
     let dialogue = world.resource::<DocStore<DialogueDoc>>();
     // locale -> key -> (doc path, text); the first writer is kept, a later one is the duplicate.
@@ -281,6 +302,32 @@ pub(crate) fn validate_dialogue_docs(world: &World, default_locale: &str) -> Vec
                         ),
                         format!("dialogue/{path}/lines/{id}/duration_ticks"),
                     ));
+                }
+                if let Some(template) = &line.voice {
+                    let voice_path = format!("dialogue/{path}/lines/{id}/voice");
+                    if !readable(locale_path(template, default_locale)) {
+                        out.push(diagnostic(
+                            code::DIALOGUE_VOICE_MISSING,
+                            format!(
+                                "line `{id}` has voice `{}`, which does not read for the default locale `{default_locale}`",
+                                locale_path(template, default_locale)
+                            ),
+                            voice_path,
+                        ));
+                    } else if template.contains("{locale}") {
+                        for locale in tables.keys().filter(|locale| **locale != default_locale) {
+                            let file = locale_path(template, locale);
+                            if !readable(file.clone()) {
+                                out.push(diagnostic(
+                                    code::DIALOGUE_VOICE_LOCALE_MISSING,
+                                    format!(
+                                        "line `{id}` has no voice `{file}` for locale `{locale}`; the default locale's plays"
+                                    ),
+                                    voice_path.clone(),
+                                ));
+                            }
+                        }
+                    }
                 }
                 if let Some(duration) = line.duration_ticks {
                     for (name, at) in &line.cues {

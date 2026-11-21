@@ -650,6 +650,13 @@ pub mod code {
     pub const DIALOGUE_LINE_INVALID: DiagnosticCode = DiagnosticCode::new("L1717");
     /// `L1718` — a `kind: strings` doc has an empty `locale`.
     pub const STRINGS_LOCALE_INVALID: DiagnosticCode = DiagnosticCode::new("L1718");
+    /// `L1719` — `.dialogue_channels(...)` is invalid, or was given without `.dialogue(...)`.
+    pub const DIALOGUE_CHANNELS_INVALID: DiagnosticCode = DiagnosticCode::new("L1719");
+    /// `L1720` — a line's `voice:` file does not read for the default locale.
+    pub const DIALOGUE_VOICE_MISSING: DiagnosticCode = DiagnosticCode::new("L1720");
+    /// `L1721` — a line's `voice:` file does not read for another locale that has a strings doc. A
+    /// warning.
+    pub const DIALOGUE_VOICE_LOCALE_MISSING: DiagnosticCode = DiagnosticCode::new("L1721");
     /// `L1730` — a `kind: sequence` doc is structurally invalid: `length_ticks` 0, a key past the
     /// length or out of order, a camera key with neither or both of `rig`/`restore`, or a
     /// non-finite number.
@@ -3023,6 +3030,12 @@ pub mod code {
     pub const DIALOGUE_SEQUENCE_INVALID: DiagnosticCode = DiagnosticCode::new("L5135");
     /// `L5136` — a dialogue call was made on an engine that did not opt in with `.dialogue()`.
     pub const DIALOGUE_NOT_ENABLED: DiagnosticCode = DiagnosticCode::new("L5136");
+    /// `L5137` — a line's voice file did not read for the active locale and fell back to the
+    /// default locale's. A warning, once per path.
+    pub const DIALOGUE_VOICE_FELL_BACK: DiagnosticCode = DiagnosticCode::new("L5137");
+    /// `L5138` — a line's voice file did not read at all, so it is silent and lasts its reading
+    /// time. A warning, once per path.
+    pub const DIALOGUE_VOICE_UNREADABLE: DiagnosticCode = DiagnosticCode::new("L5138");
 }
 
 /// One row of the diagnostic-code table: the code, its severity, a short title, and a long-form
@@ -13893,6 +13906,39 @@ belong to no locale.
 Fix: set `locale:` to a tag such as `en` or `fr`.",
     },
     CodeEntry {
+        code: code::DIALOGUE_CHANNELS_INVALID,
+        severity: Severity::Error,
+        title: "the dialogue channel audio is invalid",
+        explanation: "\
+`.dialogue_channels(...)` was given a channel whose `gain` or `range` is negative or not finite, a
+filter outside 20 Hz..20 kHz or with the high-pass at or above the low-pass, a `suspend_buses` list
+naming `Master` (which would silence the whole game), or it was given without `.dialogue(...)`.
+
+Fix: correct the `ChannelAudio` value named in the message, or add `.dialogue(DialogueConfig::default())`.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_VOICE_MISSING,
+        severity: Severity::Error,
+        title: "a dialogue line's voice file does not read",
+        explanation: "\
+A line's `voice:` names a WAV that does not read for the default locale (pointer
+`dialogue/{doc path}/lines/{id}/voice`; `{locale}` is replaced by the default locale). The default
+locale's file is the fallback for every other one.
+
+Fix: add the WAV under the content root, or correct the path.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_VOICE_LOCALE_MISSING,
+        severity: Severity::Warning,
+        title: "a dialogue line's voice file is missing for a locale",
+        explanation: "\
+A line's `voice:` has a `{locale}` placeholder and the file does not read for another locale that
+has a `kind: strings` doc (pointer `dialogue/{doc path}/lines/{id}/voice`). The line plays the
+default locale's voice in that locale.
+
+Fix: record the line for that locale, or accept the fallback.",
+    },
+    CodeEntry {
         code: code::DIALOGUE_UNKNOWN_LINE,
         severity: Severity::Error,
         title: "a dialogue line is unknown",
@@ -13964,6 +14010,26 @@ A `dialogue::say` call (or `say_with`, `say_sequence`) reached an engine that di
 there is no config, no bank and no queue.
 
 Fix: add `.dialogue(DialogueConfig::default())` to `Engine::builder()`.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_VOICE_FELL_BACK,
+        severity: Severity::Warning,
+        title: "a dialogue voice fell back to the default locale",
+        explanation: "\
+A line's voice file did not read for the active locale, so the default locale's file played. A
+warning, reported once per path.
+
+Fix: add the WAV for that locale, or accept the fallback.",
+    },
+    CodeEntry {
+        code: code::DIALOGUE_VOICE_UNREADABLE,
+        severity: Severity::Warning,
+        title: "a dialogue voice file does not read",
+        explanation: "\
+A line's voice file did not read for the active or the default locale, so the line is silent and
+lasts its reading time (or its authored `duration_ticks`). A warning, reported once per path.
+
+Fix: add the WAV under the content root, or correct the `voice:` path.",
     },
     CodeEntry {
         code: code::SEQUENCE_INVALID,
@@ -14967,6 +15033,9 @@ mod tests {
         code::STRINGS_PLACEHOLDER_MISMATCH,
         code::DIALOGUE_LINE_INVALID,
         code::STRINGS_LOCALE_INVALID,
+        code::DIALOGUE_CHANNELS_INVALID,
+        code::DIALOGUE_VOICE_MISSING,
+        code::DIALOGUE_VOICE_LOCALE_MISSING,
         code::DIALOGUE_UNKNOWN_LINE,
         code::DIALOGUE_NO_SPEAKER,
         code::STRING_FELL_BACK,
@@ -14974,6 +15043,8 @@ mod tests {
         code::STRING_ARG_MISSING,
         code::DIALOGUE_SEQUENCE_INVALID,
         code::DIALOGUE_NOT_ENABLED,
+        code::DIALOGUE_VOICE_FELL_BACK,
+        code::DIALOGUE_VOICE_UNREADABLE,
         code::SEQUENCE_INVALID,
         code::SEQUENCE_UNKNOWN_ROLE,
         code::SEQUENCE_EVENT_NAME,
@@ -15243,9 +15314,12 @@ mod tests {
             code::MUSIC_STEM_MISMATCHED,
             code::AUDIO_OCCLUSION_QUERY_REJECTED,
             code::STRINGS_PLACEHOLDER_MISMATCH,
+            code::DIALOGUE_VOICE_LOCALE_MISSING,
             code::STRING_FELL_BACK,
             code::STRING_MISSING,
             code::STRING_ARG_MISSING,
+            code::DIALOGUE_VOICE_FELL_BACK,
+            code::DIALOGUE_VOICE_UNREADABLE,
             code::SEQUENCE_ROLE_MISSING,
             code::SEQUENCE_KEY_DEGRADED,
             code::PAIRED_LOCKSTEP_BROKEN,

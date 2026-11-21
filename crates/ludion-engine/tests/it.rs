@@ -40,6 +40,7 @@ mod cooked_textures;
 mod culling_bench;
 mod debug_draw;
 mod dialogue;
+mod dialogue_voice;
 mod dispatch;
 mod doc_text;
 mod docs;

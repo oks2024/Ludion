@@ -241,6 +241,7 @@ pub struct Engine {
     /// The game's dialogue config ([`EngineBuilder::dialogue`](crate::EngineBuilder::dialogue)),
     /// already validated at build; `None` installs nothing.
     pub(crate) dialogue_config: Option<crate::DialogueConfig>,
+    pub(crate) dialogue_channels: Option<crate::dialogue::DialogueChannels>,
     /// Whether the game opted into sequences ([`EngineBuilder::sequences`](crate::EngineBuilder::sequences)).
     pub(crate) sequences: bool,
     pub(crate) input_actions: bool,
@@ -946,6 +947,7 @@ impl Engine {
             nav_config: None,
             perception_config: None,
             dialogue_config: None,
+            dialogue_channels: None,
             sequences: false,
             input_actions: false,
             projectile_draw: crate::projectile_draw::ProjectileDraw::default(),
@@ -2475,6 +2477,37 @@ impl Engine {
                     event,
                     range,
                 } => {
+                    let Some(entity) = entity else {
+                        let ticks = self.clip_ticks(&event.sound).filter(|&ticks| ticks > 0);
+                        if let Some(ticks) = ticks {
+                            self.attached_voices.insert(
+                                id,
+                                AttachedVoice {
+                                    entity: None,
+                                    bus: Bus::from(event.category),
+                                    gain: event.gain,
+                                    range,
+                                    sent_gain: event.gain,
+                                    sent_pan: event.pan,
+                                    sent_low_pass_hz: event.spatial.filter.low_pass_hz,
+                                    ends: FrameIndex(frame.0 + ticks),
+                                    spatial: event.spatial,
+                                },
+                            );
+                        }
+                        self.emit_audio(
+                            frame,
+                            AudioMessage::VoiceStart {
+                                id,
+                                sound: event.sound,
+                                gain: event.gain,
+                                pan: event.pan,
+                                category: event.category,
+                                spatial: event.spatial,
+                            },
+                        );
+                        continue;
+                    };
                     if !self.driver.world().is_alive(entity) {
                         continue;
                     }
@@ -2507,7 +2540,7 @@ impl Engine {
                         self.attached_voices.insert(
                             id,
                             AttachedVoice {
-                                entity,
+                                entity: Some(entity),
                                 bus: Bus::from(event.category),
                                 gain: event.gain,
                                 range,
@@ -2640,9 +2673,11 @@ impl Engine {
             }
         }
         for (&id, voice) in self.attached_voices.iter() {
-            if world.is_alive(voice.entity) {
-                let at = self.entity_position(voice.entity);
-                candidates.push((OccluderKey::Voice(id), voice.entity, at));
+            if let Some(entity) = voice.entity
+                && world.is_alive(entity)
+            {
+                let at = self.entity_position(entity);
+                candidates.push((OccluderKey::Voice(id), entity, at));
             }
         }
         candidates.sort_by_key(|candidate| candidate.0);
@@ -2820,6 +2855,9 @@ impl Engine {
                 self.attached_voices.remove(&id);
                 continue;
             }
+            let Some(entity) = entity else {
+                continue;
+            };
             if !self.driver.world().is_alive(entity) {
                 self.attached_voices.remove(&id);
                 self.emit_audio(frame, AudioMessage::VoiceStop { id, fade_frames: 0 });
@@ -4754,8 +4792,14 @@ impl Engine {
         let Some(config) = &self.dialogue_config else {
             return;
         };
+        let config = config.clone();
+        let channels = self.dialogue_channels.clone().unwrap_or_default();
+        let library = crate::dialogue::VoiceLibrary::new(self.project_root.clone());
         let world = self.driver.world_mut();
-        world.insert_resource(config.clone());
+        world.insert_resource(config);
+        world.insert_resource(channels);
+        world.insert_resource(library);
+        world.insert_resource(crate::dialogue::DialogueVoices::default());
         world.insert_resource(crate::DialogueEvents::default());
         world.insert_resource(crate::Subtitles::default());
         world.insert_resource(crate::dialogue::StringIndex::default());

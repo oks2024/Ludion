@@ -5,13 +5,13 @@ description: Dialogue lines, string tables and subtitles: kind strings/dialogue,
 # Dialogue (strings, a line queue, subtitles)
 
 **Scope:** `kind: strings` (one locale's key to text map), `kind: dialogue` (speakers and lines), the
-deterministic line queue and the `Subtitles` your UI draws. Text only: voice, ducking, a drawn subtitle widget
-and `UiText` keys are not here yet. Holding gameplay time is `ludion docs game-clock`; the UI is `ludion docs screen-ui`. Playing lines on a timeline is `ludion docs sequences`.
+deterministic line queue, voice (a WAV per line, played through the channel's audio) and the `Subtitles` your UI draws.
+A drawn subtitle widget and `UiText` keys are not here yet. Holding gameplay time is `ludion docs game-clock`; the UI is `ludion docs screen-ui`. Playing lines on a timeline is `ludion docs sequences`.
 
 ## The loop
 
 1. `Engine::builder().dialogue(DialogueConfig::default())`: opts in. `default_locale` (`en`) is the locale every key must
-   exist in and the fallback for the rest; `base_s`, `per_char_s`, `min_s` are the reading-time rule. `build` refuses a
+   exist in and the fallback for the rest; `base_s`, `per_char_s`, `min_s` are the reading-time rule; `tail_ticks` (12) is how long a voiced line outlasts its clip. `build` refuses a
    bad config with `L1710`.
 2. Write the docs under the content root (below).
 3. Schedule `.system("dialogue_update", dialogue_update)` **after the systems that call `say`**, and declare its queries:
@@ -59,13 +59,16 @@ lines:
 | `when_blocked` | `wait` or `drop` on a blocked channel | `wait` |
 | `max_wait_ticks` | drop after waiting that many ticks | unbounded |
 | `duration_ticks` | authored length, at least 1 | the reading rule |
+| `voice` | a WAV under the content root; `{locale}` is the active locale | silent |
+| `tail_ticks` | ticks the line outlasts its voice | the config's |
 | `cues` | name to tick after the start | none |
 
 A speaker has `name` (a string key), `channel` (`radio`, `world`, `ui`), optional `portrait` (a string for your UI)
 and `color` (RGBA). Ids are unique across all dialogue docs (`L1712`, `L1713`); a line names a defined speaker
 (`L1714`); every `text` and speaker `name` key exists in the default locale (`L1715`); a translation uses the
 same placeholders (`L1716`, warning); `duration_ticks` is not 0 and a cue is before the end (`L1717`); a strings doc
-has a `locale` (`L1718`). An unknown field, such as a `voice:` before voice ships, is `L1120`.
+has a `locale` (`L1718`); a `voice` reads for the default locale (`L1720`) and, with `{locale}`, for every other
+locale that has a strings doc (`L1721`, warning). An unknown field is `L1120`.
 
 ## The API
 
@@ -99,6 +102,31 @@ A holding line calls `GameClock::hold()` on F..F+D-1, so `ctx.game_advanced()` i
 dialogue itself runs on the sim clock, so it advances through its own hold. While a hold is on, a queued line starts
 only if it is `critical` or holds itself. Physics is not frozen by it.
 
+## Voice
+
+A line with `voice: voice/{locale}/intro.wav` plays that WAV when it starts and lasts the clip plus a tail:
+`ceil(frames * tick_hz / sample_rate) + tail_ticks`, with `tail_ticks` the line's, else the config's (12). An authored
+`duration_ticks` still wins. `{locale}` becomes the active locale at the start; a file that does not read falls back
+to the default locale's (`L5137`, once per path), and one that reads nowhere leaves the line silent for its reading
+time (`L5138`, once). A path without `{locale}` is used as is. Lengths are read once per path.
+
+`.dialogue_channels(DialogueChannels { .. })` sets how each channel sounds (`ChannelAudio { category, filter, gain,
+range, cut_fade_ticks }`; `DialogueChannels::default()` is the table below). `build` refuses a bad table, or one
+without `.dialogue`, with `L1719`.
+
+| Channel | Bus | Filter | How it plays |
+| --- | --- | --- | --- |
+| `radio` | `Voice` | band-pass 300 Hz to 3.4 kHz | a global voice |
+| `world` | `Voice` | none | from the speaker entity, range 20 m, following it (`push_on`) |
+| `ui` | `Ui` | none | a global voice |
+
+- **A line that ends any way but `Completed` fades its voice** over the channel's `cut_fade_ticks` (6).
+- **`suspend(world, true)` pauses `suspend_buses`** (default `[Voice]`, faded over 6 ticks) once while a voiced line is
+  on air; `suspend(world, false)` resumes them. A pause menu's own `Ui` sounds stay live.
+- **Ducking is yours:** `.audio_duck(DuckRule { when: Bus::Voice, .. })` dips music under every voiced line
+  (`ludion docs audio-mix`); dialogue adds nothing.
+- **A restored mid-line plays on silently**: voice ids are not saved.
+
 ## Events and subtitles
 
 `DialogueEvents` (rewritten each tick): `Started { handle, line, speaker, channel }`, `Ended { reason }` (`Completed`, `Interrupted`, `Blocked`,
@@ -118,4 +146,6 @@ subtitle without changing its length.
 - State is entities (`DialogueLine`, `DialogueControl`), so it rides snapshots, checkpoints and the `WorldHash`; the
   events, subtitles and string index are derived resources. A game that never speaks hashes as if it had not opted in.
 - A district switch drops lines unless the game carries them.
+- Codes: `L1719` bad channel table, `L1720` voice missing for the default locale, `L1721` (warning) for another,
+  `L5137` (warning) fell back, `L5138` (warning) unreadable.
 - Run the example: `cargo run -p ludion --example dialogue`.

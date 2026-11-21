@@ -13,6 +13,7 @@
 mod docs;
 mod queue;
 mod strings;
+mod voice;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -26,9 +27,11 @@ pub use docs::{
 };
 pub use queue::{DialogueEvent, DialogueEvents, Subtitle, Subtitles, dialogue_update};
 pub use strings::{format_text, text};
+pub use voice::{ChannelAudio, DialogueChannels};
 
 pub(crate) use docs::{DIALOGUE_KIND, STRINGS_KIND, validate_dialogue_docs};
 pub(crate) use strings::StringIndex;
+pub(crate) use voice::{DialogueVoices, VoiceLibrary};
 
 /// The game's dialogue settings ([`EngineBuilder::dialogue`](crate::EngineBuilder::dialogue)).
 ///
@@ -52,6 +55,8 @@ pub struct DialogueConfig {
     pub per_char_s: f32,
     /// Reading time: the shortest a line lasts, in seconds (default `1.5`).
     pub min_s: f32,
+    /// Ticks a voiced line outlasts its clip when the line sets no `tail_ticks` (default `12`).
+    pub tail_ticks: u32,
 }
 
 impl Default for DialogueConfig {
@@ -61,6 +66,7 @@ impl Default for DialogueConfig {
             base_s: 1.0,
             per_char_s: 0.06,
             min_s: 1.5,
+            tail_ticks: 12,
         }
     }
 }
@@ -188,6 +194,12 @@ pub struct DialogueLine {
     /// Authored length in ticks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ticks: Option<u32>,
+    /// The voice WAV, `{locale}` unsubstituted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
+    /// Authored ticks past the voice clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_ticks: Option<u32>,
     /// Cues, by `at` then name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cues: Vec<LineCue>,
@@ -399,6 +411,8 @@ fn spawn_line(
         when_blocked: def.when_blocked,
         max_wait_ticks: def.max_wait_ticks,
         duration_ticks: def.duration_ticks,
+        voice: def.voice.clone(),
+        tail_ticks: def.tail_ticks,
         cues,
         args: args
             .iter()

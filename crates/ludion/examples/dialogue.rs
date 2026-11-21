@@ -1,10 +1,12 @@
 //! Dialogue: a held radio call, a bark that waits for it, a two-speaker world exchange, a jammed
-//! radio window, and a switch to French - the copyable pattern for `ludion docs dialogue`.
+//! radio window, voiced lines whose clip sets their length, and a switch to French - the copyable
+//! pattern for `ludion docs dialogue`.
 //!
 //! A game opts in with [`EngineBuilder::dialogue`], schedules [`dialogue_update`] after the systems
 //! that `say` a line, and reads [`DialogueEvents`] and [`Subtitles`]. Everything above the `main`
-//! divider is copyable into a real game. Run it headless (writes the string tables and the line bank
-//! to a temp content root and prints each event with its frame):
+//! divider is copyable into a real game. Run it headless (writes the string tables, the line bank and
+//! two voice clips per language to a temp content root, prints each event with its frame, then the
+//! voice starts and ducks the engine sent):
 //!
 //! ```text
 //! cargo run -p ludion --example dialogue
@@ -37,6 +39,10 @@ fn script(world: &mut World, ctx: &SystemCtx) {
         }
         // Switch language mid-run; a live subtitle re-resolves.
         310 => dialogue::set_locale(world, "fr"),
+        // Said in French: the French clip is longer, so the line is too.
+        330 => {
+            let _ = dialogue::say(world, "call_1", None);
+        }
         _ => {}
     }
 }
@@ -45,6 +51,8 @@ fn game(root: PathBuf) -> EngineBuilder {
     Engine::builder()
         .project_root(root)
         .dialogue(DialogueConfig::default())
+        // Music and ambience dip 9 dB while any `Voice`-bus line sounds.
+        .audio_duck(DuckRule::default())
         .system("script", script)
         .system("dialogue_update", dialogue_update)
         .query::<(&DialogueLine,)>()
@@ -96,27 +104,51 @@ lines:
     text: call.1
     priority: high
     holds_gameplay: true
+    voice: voice/{locale}/call_1.wav
   call_2:
     speaker: operator
     text: call.2
     priority: high
     holds_gameplay: true
+    voice: voice/{locale}/call_2.wav
     cues:
       ping: 20
   guard_hello:
     speaker: guard_a
     text: guard.hello
+    voice: voice/{locale}/guard_hello.wav
   guard_reply:
     speaker: guard_b
     text: guard.reply
 ";
 
+/// A mono 16-bit PCM WAV of `seconds` of silence at 44.1 kHz: a stand-in for a recorded line.
+fn silence(seconds: f32) -> Vec<u8> {
+    let frames = (seconds * 44_100.0) as usize;
+    let data = vec![0u8; frames * 2];
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&44_100u32.to_le_bytes());
+    wav.extend_from_slice(&88_200u32.to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&data);
+    wav
+}
+
 // --- Headless demo `main` ------------------------------------------------------------------------
 
-fn write(root: &std::path::Path, name: &str, text: &str) -> std::io::Result<()> {
+fn write(root: &std::path::Path, name: &str, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
     let path = root.join(name);
     std::fs::create_dir_all(path.parent().unwrap_or(root))?;
-    std::fs::write(path, text)
+    std::fs::write(path, bytes)
 }
 
 fn main() -> ExitCode {
@@ -124,7 +156,14 @@ fn main() -> ExitCode {
     let _ = std::fs::remove_dir_all(&root);
     let written = write(&root, "strings/en.yaml", STRINGS_EN)
         .and_then(|()| write(&root, "strings/fr.yaml", STRINGS_FR))
-        .and_then(|()| write(&root, "dialogue/main.yaml", BANK));
+        .and_then(|()| write(&root, "dialogue/main.yaml", BANK))
+        // English clips; the French call is longer than the English one.
+        .and_then(|()| write(&root, "voice/en/call_1.wav", silence(1.5)))
+        .and_then(|()| write(&root, "voice/en/call_2.wav", silence(1.0)))
+        .and_then(|()| write(&root, "voice/en/guard_hello.wav", silence(0.5)))
+        .and_then(|()| write(&root, "voice/fr/call_1.wav", silence(2.0)))
+        .and_then(|()| write(&root, "voice/fr/call_2.wav", silence(1.2)))
+        .and_then(|()| write(&root, "voice/fr/guard_hello.wav", silence(0.6)));
     if let Err(error) = written {
         eprintln!("could not write the demo docs: {error}");
         return ExitCode::FAILURE;
@@ -143,7 +182,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut printed = 0;
-    for _ in 0..400 {
+    for _ in 0..560 {
         if let Err(diagnostic) = engine.execute(Command::SimStep(command::SimStepParams {
             ticks: 1,
             hash: false,
@@ -179,6 +218,14 @@ fn main() -> ExitCode {
                     println!("frame {frame:>3}  cue     {line:<11} {name}");
                 }
             }
+        }
+    }
+    for entry in engine.audio_log() {
+        let message = format!("{:?}", entry.message);
+        if let Some(sound) = entry.sound().filter(|_| message.starts_with("VoiceStart")) {
+            println!("frame {:>3}  voice   {sound}", entry.frame.as_u64());
+        } else if message.starts_with("Duck") || message.starts_with("VoiceStop") {
+            println!("frame {:>3}  audio   {message}", entry.frame.as_u64());
         }
     }
     let _ = std::fs::remove_dir_all(&root);

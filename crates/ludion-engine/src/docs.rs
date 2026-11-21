@@ -143,8 +143,9 @@ impl<T> DocStore<T> {
 ///
 /// It sees the world *after* every registered kind's [`DocStore`] is installed, so a rule may read
 /// across kinds — the cross-reference checks schema validation cannot express, because a `district:`
-/// or an `enemy:` is a well-typed string and only the game knows what it must name.
-pub type DocValidator = Box<dyn Fn(&World) -> Vec<Diagnostic> + Send + Sync>;
+/// or an `enemy:` is a well-typed string and only the game knows what it must name. The path is the
+/// project root, for a rule that reads files.
+pub type DocValidator = Box<dyn Fn(&World, &Path) -> Vec<Diagnostic> + Send + Sync>;
 
 /// Runs the engine's singleton count, then every registered validator in registration order, and
 /// concatenates what they return, so a game may split its rules across several passes (one per kind)
@@ -158,7 +159,11 @@ pub(crate) fn run_validators(
 ) -> Vec<Diagnostic> {
     singleton_counts(doc_kinds, world)
         .into_iter()
-        .chain(validators.iter().flat_map(|validate| validate(world)))
+        .chain(
+            validators
+                .iter()
+                .flat_map(|validate| validate(world, project_root)),
+        )
         .chain(crate::patterns::validate_bullet_atlases(
             project_root,
             world,

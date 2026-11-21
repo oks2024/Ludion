@@ -16,8 +16,8 @@
 //! unaffected (the queue is a resource, excluded from the hash).
 //!
 //! Music is a few more messages ([`AudioQueue::music_play`], [`AudioQueue::music_set`],
-//! [`AudioQueue::music_stem_gain`], [`AudioQueue::music_stop`]); the sink streams the Ogg Vorbis
-//! track or stems and times its fades.
+//! [`AudioQueue::music_crossfade`], [`AudioQueue::music_stem_gain`], [`AudioQueue::music_stop`]); the
+//! sink streams the Ogg Vorbis track or stems and times its fades.
 //!
 //! A loop's *playback* state lives only in the sink — the engine holds no table of what is sounding,
 //! and a world rebuild sends [`AudioMessage::StopAllLoops`] rather than diffing against one.
@@ -60,7 +60,8 @@ pub(crate) enum Queued {
     },
     On {
         id: VoiceId,
-        entity: EntityId,
+        /// `None` is a global voice ([`AudioQueue::push_voice`]).
+        entity: Option<EntityId>,
         event: AudioEvent,
         range: f32,
     },
@@ -196,9 +197,43 @@ impl AudioQueue {
         event.gain = self.finite_gain(&event.sound, event.gain);
         self.pending.push(Queued::On {
             id,
-            entity,
+            entity: Some(entity),
             event,
             range,
+        });
+        id
+    }
+
+    /// Plays `event` once as a **global** voice — no position, no listener falloff — that
+    /// [`voice_stop`](Self::voice_stop) can fade out: the stoppable form of [`push`](Self::push).
+    /// It starts at the event's own gain and pan, is never resynced, ends when the clip does (the
+    /// engine reads the WAV's length), and counts for a [`DuckRule`] on its bus while it sounds.
+    /// Returns the id [`voice_stop`] takes; ids share [`push_on`](Self::push_on)'s counter.
+    ///
+    /// ```
+    /// # use ludion_engine::audio::{AudioEvent, AudioQueue, VoiceFilter, VoiceSpatial};
+    /// let mut queue = AudioQueue::default();
+    /// let radio = AudioEvent {
+    ///     spatial: VoiceSpatial {
+    ///         filter: VoiceFilter::band_pass(300.0, 3400.0),
+    ///         send: 0.0,
+    ///     },
+    ///     ..AudioEvent::new("voice/radio.wav", 1.0)
+    /// };
+    /// let id = queue.push_voice(radio);
+    /// queue.voice_stop(id, 6);
+    /// ```
+    ///
+    /// [`voice_stop`]: Self::voice_stop
+    pub fn push_voice(&mut self, mut event: AudioEvent) -> VoiceId {
+        let id = VoiceId(self.next_voice);
+        self.next_voice += 1;
+        event.gain = self.finite_gain(&event.sound, event.gain);
+        self.pending.push(Queued::On {
+            id,
+            entity: None,
+            event,
+            range: 0.0,
         });
         id
     }
@@ -257,7 +292,7 @@ impl AudioQueue {
     ///
     /// Music is one voice: this plays as a one-stem set. Playing the track already sounding (and
     /// not stopping) only updates its gain, so resending it every tick is harmless; any other track
-    /// or [set](Self::music_set) hard-cuts the current one — no crossfade — and fades the new one
+    /// or [set](Self::music_set) hard-cuts the current one (`music_crossfade` blends) and fades the new one
     /// in. It plays until [`music_stop`](Self::music_stop) or a
     /// world rebuild's blanket stop. The file streams from disk in the sink, never decoded up front;
     /// a missing or non-Vorbis file warns `L5003` and plays nothing.
@@ -292,7 +327,7 @@ impl AudioQueue {
     /// The same `id` while it plays (and not stopping) is a no-op, so resending it every tick is
     /// harmless — the initial stem gains apply only when the set starts. Move a stem afterwards with
     /// [`music_stem_gain`](Self::music_stem_gain). Any other set or [track](Self::music_play)
-    /// hard-cuts the current music — no crossfade.
+    /// hard-cuts the current music — [`music_crossfade`](Self::music_crossfade) blends instead.
     ///
     /// ```
     /// # use ludion_engine::AudioQueue;
@@ -315,9 +350,38 @@ impl AudioQueue {
         }));
     }
 
-    /// Slews one stem of the playing set to `gain` over `fade_frames` sim ticks (`0` still slews
-    /// about 10 ms, so it never clicks). A stem not in the set is ignored, and resending the same
-    /// gain every tick is free.
+    /// Blends from the playing music to the set `id` over `fade_frames` sim ticks: the new set
+    /// fades in as the live one fades out (equal power). Resending the live `id` is free; with
+    /// nothing playing it is a plain fade-in, and a third set mid-crossfade hard-cuts the outgoing
+    /// one. A set that cannot open keeps the old music. Stem gains are sanitized like
+    /// [`music_set`](Self::music_set).
+    ///
+    /// ```
+    /// # use ludion_engine::AudioQueue;
+    /// let mut queue = AudioQueue::default();
+    /// queue.music_crossfade("combat", &[("music/combat.ogg", 1.0)], 120);
+    /// ```
+    pub fn music_crossfade(
+        &mut self,
+        id: impl Into<String>,
+        stems: &[(&str, f32)],
+        fade_frames: u32,
+    ) {
+        let stems = stems
+            .iter()
+            .map(|&(stem, gain)| (stem.to_string(), self.finite_gain(stem, gain)))
+            .collect();
+        self.pending
+            .push(Queued::Message(AudioMessage::MusicCrossfade {
+                id: id.into(),
+                stems,
+                fade_frames,
+            }));
+    }
+
+    /// Slews one stem of the live set to `gain` over `fade_frames` sim ticks (`0` still slews
+    /// about 10 ms, so it never clicks). During a crossfade it addresses the incoming set. A stem
+    /// not in the set is ignored, and resending the same gain every tick is free.
     ///
     /// ```
     /// # use ludion_engine::AudioQueue;
@@ -587,7 +651,8 @@ pub(crate) fn resync_is_current(sent: (f32, f32, f32), now: (f32, f32, f32)) -> 
 /// An attached voice (`AudioQueue::play_on`) the engine keeps following: the entity it rides, what
 /// it was authored at, the last gain and pan sent, and the frame it ends.
 pub(crate) struct AttachedVoice {
-    pub(crate) entity: EntityId,
+    /// `None` for a global voice ([`AudioQueue::push_voice`]).
+    pub(crate) entity: Option<EntityId>,
     pub(crate) bus: Bus,
     pub(crate) gain: f32,
     pub(crate) range: f32,
@@ -820,7 +885,7 @@ impl AudioLogEntry {
             AudioMessage::OneShot(event) => Some(&event.sound),
             AudioMessage::LoopSync { sound, .. } => Some(sound),
             AudioMessage::MusicPlay { track, .. } => Some(track),
-            AudioMessage::MusicSet { id, .. } => Some(id),
+            AudioMessage::MusicSet { id, .. } | AudioMessage::MusicCrossfade { id, .. } => Some(id),
             AudioMessage::MusicStemGain { stem, .. } => Some(stem),
             AudioMessage::VoiceStart { sound, .. } => Some(sound),
             AudioMessage::LoopStop { .. }
@@ -853,6 +918,7 @@ impl AudioLogEntry {
             | AudioMessage::VoiceStop { .. }
             | AudioMessage::BusPause { .. }
             | AudioMessage::MusicSet { .. }
+            | AudioMessage::MusicCrossfade { .. }
             | AudioMessage::ReverbSet { .. }
             | AudioMessage::MusicStop { .. } => None,
         }
@@ -1013,6 +1079,25 @@ mod tests {
             &[("a.ogg".to_string(), 0.0), ("b.ogg".to_string(), 0.5)]
         );
         assert_eq!(*gain, 0.0);
+
+        queue.music_crossfade("c", &[("c.ogg", f32::NAN), ("d.ogg", 0.5)], 30);
+        assert_eq!(queue.take_non_finite(), ["c.ogg"]);
+        let messages = queue.take();
+        let [
+            Queued::Message(AudioMessage::MusicCrossfade {
+                id,
+                stems,
+                fade_frames,
+            }),
+        ] = messages.as_slice()
+        else {
+            panic!("one crossfade, got {messages:?}");
+        };
+        assert_eq!((id.as_str(), *fade_frames), ("c", 30));
+        assert_eq!(
+            stems,
+            &[("c.ogg".to_string(), 0.0), ("d.ogg".to_string(), 0.5)]
+        );
         let entry = |message| AudioLogEntry {
             frame: FrameIndex(0),
             message,
@@ -1023,6 +1108,12 @@ mod tests {
             fade_frames: 0,
         });
         assert_eq!((set.sound(), set.gain()), (Some("s"), None));
+        let crossfade = entry(AudioMessage::MusicCrossfade {
+            id: "c".into(),
+            stems: vec![],
+            fade_frames: 0,
+        });
+        assert_eq!((crossfade.sound(), crossfade.gain()), (Some("c"), None));
         let stem = entry(AudioMessage::MusicStemGain {
             stem: "b.ogg".into(),
             gain: 0.25,

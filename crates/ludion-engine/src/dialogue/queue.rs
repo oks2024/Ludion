@@ -13,8 +13,14 @@
 //!    on a blocked channel ends `Blocked`; a line with a dead speaker is `Dropped`; sequences cascade;
 //! 6. cues fire for lines that started or advanced this tick;
 //! 7. ended lines are despawned in ascending `seq`;
-//! 8. `GameClock::hold` is called if a playing line holds gameplay;
-//! 9. [`DialogueEvents`] and [`Subtitles`] are rewritten.
+//! 8. voices: a playing line cut any way but `Completed` stops its voice, a line that started
+//!    pushes its voice (`push_voice`, or `push_on` its speaker on `world`), and a change of the
+//!    suspend flag pauses or resumes the suspend buses;
+//! 9. `GameClock::hold` is called if a playing line holds gameplay;
+//! 10. [`DialogueEvents`] and [`Subtitles`] are rewritten.
+//!
+//! A line with a `voice:` starts with the file read for the active locale (else the default's) and
+//! lasts the clip plus its tail; the length is read once per path.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -23,7 +29,10 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 
+use crate::audio::{AudioEvent, AudioQueue, VoiceSpatial};
+
 use super::strings::render;
+use super::voice::{DialogueChannels, DialogueVoices, resolve};
 use super::{
     Channel, DialogueConfig, DialogueControl, DialogueLine, EndReason, Interrupt, LineHandle,
     LineState, Priority, WhenBlocked, control, find_speaker,
@@ -164,6 +173,8 @@ struct Row {
     before: DialogueLine,
     ended: Option<EndReason>,
     progressed: bool,
+    /// The resolved voice file, set on the tick the line starts.
+    voice_file: Option<String>,
 }
 
 impl Row {
@@ -241,6 +252,60 @@ fn resolve_sequences(rows: &mut [Row], events: &mut Vec<DialogueEvent>) {
     }
 }
 
+/// Stops the voice of every playing line that ended other than `Completed`, starts the voice of
+/// every line that started this tick, then pauses or resumes the suspend buses on a change of the
+/// suspend flag. All in ascending `seq`; a world with no voiced line pushes nothing.
+fn sync_voices(world: &mut World, rows: &[Row], suspended: bool) {
+    let Some(channels) = world.resource::<DialogueChannels>().cloned() else {
+        return;
+    };
+    let Some(mut voices) = world.resource_mut::<DialogueVoices>().map(std::mem::take) else {
+        return;
+    };
+    if let Some(queue) = world.resource_mut::<AudioQueue>() {
+        for row in rows {
+            if row.before.state != LineState::Playing {
+                continue;
+            }
+            let Some(reason) = row.ended else {
+                continue;
+            };
+            if let Some(id) = voices.by_line.remove(&row.id)
+                && reason != EndReason::Completed
+            {
+                queue.voice_stop(id, channels.of(row.line.channel).cut_fade_ticks);
+            }
+        }
+        for row in rows {
+            let Some(file) = &row.voice_file else {
+                continue;
+            };
+            let audio = channels.of(row.line.channel);
+            let event = AudioEvent {
+                category: audio.category,
+                spatial: VoiceSpatial {
+                    filter: audio.filter,
+                    send: 0.0,
+                },
+                ..AudioEvent::new(file.clone(), audio.gain)
+            };
+            let id = match (row.line.channel, row.line.speaker) {
+                (Channel::World, Some(speaker)) => queue.push_on(speaker, event, audio.range),
+                _ => queue.push_voice(event),
+            };
+            voices.by_line.insert(row.id, id);
+        }
+        if suspended && !voices.paused && !voices.by_line.is_empty() {
+            queue.bus_pause(&channels.suspend_buses, channels.suspend_fade_ticks);
+            voices.paused = true;
+        } else if !suspended && voices.paused {
+            queue.bus_resume(&channels.suspend_buses, channels.suspend_fade_ticks);
+            voices.paused = false;
+        }
+    }
+    world.insert_resource(voices);
+}
+
 /// Runs the queue for one tick (the order is in the module docs) and rewrites [`DialogueEvents`]
 /// and [`Subtitles`]. Register it after the systems that call `say`, and declare its queries:
 ///
@@ -273,6 +338,10 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
     let control: DialogueControl = control(world).unwrap_or_default();
     let suspended = control.suspended;
     let blocked = |channel: Channel| control.blocked.contains(&channel);
+    let active = control
+        .locale
+        .clone()
+        .unwrap_or_else(|| config.default_locale.clone());
 
     let mut rows: Vec<Row> = world
         .query_ids::<(&DialogueLine,)>()
@@ -282,6 +351,7 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
             before: line.clone(),
             ended: None,
             progressed: false,
+            voice_file: None,
         })
         .collect();
     rows.sort_by_key(|row| (row.line.seq, row.id));
@@ -376,14 +446,24 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
                 .collect();
             let args: Vec<(&str, &str)> =
                 args.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
-            let duration = match rows[head].line.duration_ticks {
-                Some(ticks) => ticks,
-                None => {
+            let voice = rows[head].line.voice.clone().and_then(|template| {
+                resolve(world, hz, &template, &active, &config.default_locale)
+            });
+            let duration = match (rows[head].line.duration_ticks, &voice) {
+                (Some(ticks), _) => ticks,
+                (None, Some((_, clip))) => {
+                    let tail = rows[head].line.tail_ticks.unwrap_or(config.tail_ticks);
+                    u32::try_from(clip + u64::from(tail))
+                        .unwrap_or(u32::MAX)
+                        .max(1)
+                }
+                (None, None) => {
                     let text = render(world, &rows[head].line.text, &args);
                     reading_ticks(&config, text.chars().count(), hz)
                 }
             };
             let row = &mut rows[head];
+            row.voice_file = voice.map(|(file, _)| file);
             row.line.state = LineState::Playing;
             row.line.elapsed = 0;
             row.line.duration = duration;
@@ -457,7 +537,10 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
     }
     let _ = world.despawn_many(&doomed);
 
-    // 8. Holds.
+    // 8. Voices.
+    sync_voices(world, &rows, suspended);
+
+    // 9. Holds.
     if rows
         .iter()
         .any(|row| row.playing() && row.line.holds_gameplay)
@@ -466,7 +549,7 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
         clock.hold();
     }
 
-    // 9. Subtitles and events.
+    // 10. Subtitles and events.
     let mut on_air: Vec<&Row> = rows.iter().filter(|row| row.playing()).collect();
     on_air.sort_by_key(|row| (row.line.started_frame, row.line.seq));
     let mut active = Vec::with_capacity(on_air.len());

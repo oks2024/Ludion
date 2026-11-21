@@ -669,6 +669,7 @@ fn music_messages(engine: &Engine) -> Vec<(u64, AudioMessage)> {
                 AudioMessage::MusicPlay { .. }
                     | AudioMessage::MusicStop { .. }
                     | AudioMessage::MusicSet { .. }
+                    | AudioMessage::MusicCrossfade { .. }
                     | AudioMessage::MusicStemGain { .. }
             )
         })
@@ -821,6 +822,41 @@ fn an_adaptive_music_system_logs_the_set_and_the_stem_moves_by_frame() {
     );
 }
 
+/// A game system that crossfades to the combat set from frame 2 on, resending it every tick.
+fn crossfading_music(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+    let queue = world.resource_mut::<AudioQueue>().expect("AudioQueue");
+    if ctx.frame.as_u64() >= 2 {
+        queue.music_crossfade("combat", &[("music/combat.ogg", f32::NAN)], 90);
+    }
+}
+
+/// `music_crossfade` logs a frame-stamped `MusicCrossfade` with its stem gains sanitized; the sink
+/// (not the log) makes the resend a no-op.
+#[test]
+fn a_crossfade_system_logs_the_message_at_its_frame() {
+    let mut engine = Engine::builder()
+        .system("crossfading_music", crossfading_music)
+        .build()
+        .expect("engine builds");
+    engine.load_inline_scene(SCENE).expect("scene loads");
+    for _ in 0..4 {
+        engine.advance_live();
+    }
+    let crossfade = |frame| {
+        (
+            frame,
+            AudioMessage::MusicCrossfade {
+                id: "combat".to_string(),
+                stems: vec![("music/combat.ogg".to_string(), 0.0)],
+                fade_frames: 90,
+            },
+        )
+    };
+    assert_eq!(music_messages(&engine), vec![crossfade(2), crossfade(3)]);
+    let log = engine.audio_log();
+    assert_eq!((log[0].sound(), log[0].gain()), (Some("combat"), None));
+}
+
 /// The set verbs never perturb the `WorldHash` either.
 #[test]
 fn music_sets_never_affect_the_world_hash() {
@@ -831,6 +867,7 @@ fn music_sets_never_affect_the_world_hash() {
             if push_audio {
                 queue(&mut engine).music_set("s", &[("a.ogg", 1.0), ("b.ogg", 0.0)], 10);
                 queue(&mut engine).music_stem_gain("b.ogg", 1.0, 5);
+                queue(&mut engine).music_crossfade("c", &[("c.ogg", 1.0)], 5);
             }
             engine.advance_live();
             hashes.push(engine.world_hash().unwrap().as_u64());

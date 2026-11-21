@@ -1,6 +1,6 @@
 # Plan: Dialogue — string tables, a line queue, subtitles
 
-> **Wave 1 mechanized — text-only dialogue ships; voice (W2) and localization (W3) are laid out below.**
+> **Waves 1 and 2a mechanized — text and voice ship; subtitles' built-in widget (W2b) and localization (W3) are laid out below.**
 > Driven by Neon Shroud request 0024 (dialogue, subtitles, localization). Game-facing doc: `ludion docs dialogue`.
 
 ## Design decisions
@@ -40,16 +40,39 @@
     `L5134` once. No plurals or gender. Text re-resolves every tick, so `set_locale` changes live subtitles; a started
     line keeps its duration.
 14. **Locale** lives on `DialogueControl` (hashed). `kind: locales` is W3: `DialogueConfig.default_locale` stands in.
-15. **No `voice:` field in W1**: an unknown field is `L1120`, never silently ignored; W2 adds it additively.
+15. **No `voice:` field in W1**: an unknown field is `L1120`, never silently ignored; W2a added it additively.
+16. **Voice path.** `voice:` on a line, `{locale}` substituted with the active locale; if that file does not read, the
+    default locale's (`L5137` warning once per path); a path without `{locale}` is used as is.
+17. **Voiced duration** = `clip_ticks + tail_ticks` (line `tail_ticks`, else `DialogueConfig::tail_ticks`, default **12**,
+    the request's proposal), computed at start from the resolved file. An authored `duration_ticks` still wins. An
+    unreadable voice falls back to the reading-time rule (`L5138` once per path).
+18. **Channel audio** is `DialogueChannels` (`.dialogue_channels(...)`): per channel `ChannelAudio { category, filter, gain,
+    range, cut_fade_ticks }`; defaults radio `Voice` + `band_pass(300, 3400)` (owner-accepted), world `Voice` unfiltered
+    `range 20.0`, ui `Ui` unfiltered; `cut_fade_ticks 6`; `suspend_buses [Voice]`, `suspend_fade_ticks 6`.
+19. **Radio and ui voices are non-positional stoppable voices** (`AudioQueue::push_voice`); world voices are `push_on` the
+    speaker entity with the channel range.
+20. **A playing line that ends any way but `Completed`** stops its voice with the channel's `cut_fade_ticks` (a `Completed`
+    line's voice has already ended within its tail).
+21. **Suspend** sends `bus_pause(suspend_buses)` once on the transition, resume `bus_resume`; only while a voiced line is on
+    air, so a text-only world's audio log is unchanged. The ui channel's `Ui` bus is not paused by default.
+22. **Voice ids live in an unhashed resource** reset on rebuild; a restored mid-line plays on silently until W2b.
+23. **Ducking is the game's `DuckRule { when: Voice, .. }`** (0023); dialogue adds nothing.
+
+Validation codes: `L1719` bad channel table or `dialogue_channels` without `dialogue` (build); `L1720` a line's voice does not
+read for the default locale (error); `L1721` it does not read for another locale with a `kind: strings` doc (warning).
+Runtime: `L5137` fell back, `L5138` unreadable.
 
 ## Waves
 
 - **W1 (shipped):** `kind: strings`, `kind: dialogue`, the queue, `DialogueEvents`, `Subtitles`, `L1710`-`L1718`,
   `L5130`-`L5136`, the example and `ludion docs dialogue`.
-- **W2 voice:** `voice: voice/{locale}/x.wav` with default-locale fallback, duration from 0023's sim-side WAV header
-  read plus `tail_ticks`, radio band-pass via `VoiceFilter`, world lines via `play_on`, ducking through the voice-bus
-  `DuckRule`, suspend to `bus_pause`, `subtitle_range` against `AudioListener`, a mid-line restore offset or
-  `Interrupted`, the built-in `SubtitleView` and its golden, `.dialogue_channels(...)`.
+- **W2a voice (shipped):** `voice:` with default-locale fallback, duration from the WAV length plus `tail_ticks`, radio
+  band-pass via `VoiceFilter`, world lines via `push_on`, `AudioQueue::push_voice`, ducking through the voice-bus
+  `DuckRule`, suspend to `bus_pause`, `.dialogue_channels(...)`, `L1719`-`L1721`, `L5137`-`L5138`.
+- **W2b subtitles:** the built-in `SubtitleView` component and its golden in a new gallery scene (subtitles on by default,
+  per the owner ruling); `subtitle_range` against `AudioListener` (else the lowest-id camera); a mid-line restore either
+  re-starts the voice at a sample offset (needs a start offset on `push_voice`/`push_on` in `ludion-audio`) or ends it
+  `Interrupted`; pause-aware tracking, so a voice held by `bus_pause` is still stoppable after resume.
 - **W3 localization:** `kind: locales` singleton, `UiText`/`Text` `key` + `set_text_args`, per-locale `fonts.yaml`
   overrides, fallback chains, `L1256` over string tables, an `fr` gallery scene.
 
@@ -74,3 +97,7 @@
 - W1 mechanized: `crates/ludion-engine/src/dialogue/`, `tests/dialogue.rs`, `crates/ludion/examples/dialogue.rs`.
   The validator takes the default locale from the builder's config (the build-time world has no config resource yet).
 - W1 API follow-up: `say(world, id, speaker)` takes the speaker; `DialogueEvent::Started` carries `speaker` and `channel`.
+- W2a mechanized: `dialogue/voice.rs` (`DialogueChannels`, the WAV-length cache, locale resolution),
+  `AudioQueue::push_voice` (a global tracked voice; `AttachedVoice.entity` is now optional), root-aware doc validators
+  (`DocValidator` takes `&Path`), `tests/dialogue_voice.rs`, the example's voiced lines. Owed: a by-ear check of the radio
+  band-pass on a real device.

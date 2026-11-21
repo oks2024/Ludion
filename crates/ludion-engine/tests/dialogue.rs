@@ -789,11 +789,11 @@ fn each_validator_code_fires_as_specified() {
         ),
         (
             "L1120",
-            bare("voice")
+            bare("unknown-field")
                 .doc_text("strings/en.yaml", BASE_STRINGS)
                 .doc_text(
                     "dialogue/a.yaml",
-                    &format!("{BASE_DIALOGUE}    voice: voice/en/intro.wav\n"),
+                    &format!("{BASE_DIALOGUE}    loudness: 3\n"),
                 ),
         ),
         (

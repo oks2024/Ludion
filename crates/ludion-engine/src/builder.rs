@@ -145,6 +145,7 @@ pub struct EngineBuilder {
     nav_config: Option<crate::NavConfig>,
     perception_config: Option<crate::PerceptionConfig>,
     dialogue_config: Option<crate::DialogueConfig>,
+    dialogue_channels: Option<crate::dialogue::DialogueChannels>,
     sequences: bool,
     input_actions: bool,
     projectile_visuals: Option<crate::ProjectileVisuals>,
@@ -198,6 +199,7 @@ impl EngineBuilder {
             nav_config: None,
             perception_config: None,
             dialogue_config: None,
+            dialogue_channels: None,
             sequences: false,
             input_actions: false,
             projectile_visuals: None,
@@ -997,7 +999,8 @@ impl EngineBuilder {
         mut self,
         validate: impl Fn(&ludion_ecs::World) -> Vec<Diagnostic> + Send + Sync + 'static,
     ) -> Self {
-        self.doc_validators.push(Box::new(validate));
+        self.doc_validators
+            .push(Box::new(move |world, _| validate(world)));
         self
     }
 
@@ -1214,13 +1217,47 @@ impl EngineBuilder {
         };
         let default_locale = config.default_locale.clone();
         self.dialogue_config = Some(config);
-        self.components(|registry| {
-            registry.register::<DialogueLine>("DialogueLine")?;
-            registry.register::<DialogueControl>("DialogueControl")
-        })
-        .doc_kind_engine_owned::<StringsDoc>(STRINGS_KIND)
-        .doc_kind_engine_owned::<DialogueDoc>(DIALOGUE_KIND)
-        .validate_docs(move |world| validate_dialogue_docs(world, &default_locale))
+        let mut builder = self
+            .components(|registry| {
+                registry.register::<DialogueLine>("DialogueLine")?;
+                registry.register::<DialogueControl>("DialogueControl")
+            })
+            .doc_kind_engine_owned::<StringsDoc>(STRINGS_KIND)
+            .doc_kind_engine_owned::<DialogueDoc>(DIALOGUE_KIND);
+        builder.doc_validators.push(Box::new(move |world, root| {
+            validate_dialogue_docs(world, root, &default_locale)
+        }));
+        builder
+    }
+
+    /// Sets how dialogue sounds ([`DialogueChannels`](crate::dialogue::DialogueChannels)): per
+    /// channel the bus, filter, gain and range, the fade a cut line's voice takes, and the buses
+    /// [`dialogue::suspend`](crate::dialogue::suspend) pauses. The default is a band-passed radio on
+    /// the `Voice` bus, world lines from their speaker on `Voice`, and ui lines on `Ui`. The last
+    /// call wins; [`build`](EngineBuilder::build) refuses an invalid table, or one given without
+    /// [`dialogue`](EngineBuilder::dialogue), with `L1719`.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_engine::dialogue::DialogueChannels;
+    /// use ludion_engine::{DialogueConfig, Engine};
+    ///
+    /// let mut channels = DialogueChannels::default();
+    /// channels.radio.gain = 0.8;
+    /// let engine = Engine::builder()
+    ///     .dialogue(DialogueConfig::default())
+    ///     .dialogue_channels(channels)
+    ///     .build()
+    ///     .unwrap();
+    /// # let _ = engine;
+    ///
+    /// // Without `.dialogue(...)` there is nothing to voice.
+    /// assert!(Engine::builder().dialogue_channels(DialogueChannels::default()).build().is_err());
+    /// ```
+    #[must_use]
+    pub fn dialogue_channels(mut self, channels: crate::dialogue::DialogueChannels) -> Self {
+        self.dialogue_channels = Some(channels);
+        self
     }
 
     /// Opts into sequences (`ludion docs sequences`): registers the `kind: sequence` document, its
@@ -1428,6 +1465,16 @@ impl EngineBuilder {
         if let Some(config) = &self.dialogue_config {
             config.validate()?;
         }
+        if let Some(channels) = &self.dialogue_channels {
+            if self.dialogue_config.is_none() {
+                return Err(Diagnostic::new(
+                    code::DIALOGUE_CHANNELS_INVALID,
+                    "`dialogue_channels` was set, but the game did not opt in to dialogue",
+                )
+                .with_help("add `.dialogue(DialogueConfig::default())` to the engine builder"));
+            }
+            channels.validate()?;
+        }
         if let Some(visuals) = &self.projectile_visuals {
             visuals.validate()?;
             visuals.check_assets(&project_root)?;
@@ -1488,6 +1535,7 @@ impl EngineBuilder {
         engine.nav_config = self.nav_config;
         engine.perception_config = self.perception_config;
         engine.dialogue_config = self.dialogue_config;
+        engine.dialogue_channels = self.dialogue_channels;
         engine.sequences = self.sequences;
         engine.input_actions = self.input_actions;
         if let Some(visuals) = self.projectile_visuals {

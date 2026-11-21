@@ -71,7 +71,7 @@ pub use ludion_core::audio::{CategoryGains, VoiceCaps};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
-use music::{Converter, MUSIC_REFILL, MUSIC_RING_CHUNKS, MusicChunk, MusicFeed, MusicPlayer};
+use music::{Converter, MUSIC_REFILL, MUSIC_SLOTS, MusicChunk, MusicFeed, MusicPlayer};
 use reverb::Reverb;
 
 /// The summed level the mixdown's soft knee starts at: below it the mix is passed through untouched.
@@ -505,6 +505,10 @@ enum VoiceCommand {
     StopAllLoops,
     /// Begin a music play: chunks of this generation are the ones to mix.
     MusicStart {
+        /// The slot (ring and player) the play runs in.
+        slot: usize,
+        /// Whether it blends in over the other slot's music instead of cutting it.
+        crossfade: bool,
         generation: u32,
         gain: f32,
         /// Each stem's starting gain; the first `count` are live.
@@ -514,14 +518,15 @@ enum VoiceCommand {
         fade_in: usize,
     },
     /// Re-gain the music already playing: the gain slews to the new one over the ramp.
-    MusicGain(f32),
+    MusicGain { slot: usize, gain: f32 },
     /// Slew one stem of the playing set to a new gain over `frames` device frames.
     MusicStemGain {
+        slot: usize,
         index: usize,
         gain: f32,
         frames: usize,
     },
-    /// Fade the music out over this many device frames (`0` stops it now).
+    /// Fade the music out, both slots, over this many device frames (`0` stops it now).
     MusicStop { fade_out: usize },
     /// Slew one layer of a bus's runtime gain (`bus` indexes [`Bus::ALL`]) over `frames` device
     /// frames; `0` settles now.
@@ -711,15 +716,15 @@ struct Live<S> {
     rendering_since: Option<Instant>,
 }
 
-/// A freshly started stream, the format it opened at and the sender of its music ring.
+/// A freshly started stream, the format it opened at and the senders of its music rings.
 struct Connected<S> {
     live: Live<S>,
     format: DeviceFormat,
-    music: Sender<MusicChunk>,
+    music: [Sender<MusicChunk>; MUSIC_SLOTS],
 }
 
 /// Opens the device and starts a stream on it: a fresh mixer over a fresh command queue and music
-/// ring.
+/// rings.
 fn connect<O: Output>(
     output: &mut O,
     gains: CategoryGains,
@@ -728,7 +733,7 @@ fn connect<O: Output>(
 ) -> Result<Connected<O::Stream>, Diagnostic> {
     let format = output.open()?;
     let (commands, command_rx) = crossbeam_channel::bounded(COMMAND_CAPACITY);
-    let (music_tx, music_rx) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+    let (music_tx, music_rx) = music::rings();
     let mixer = Mixer::new(
         command_rx,
         music_rx,
@@ -814,7 +819,7 @@ impl<O: Output> Playback<O> {
             },
             Err(diagnostic) => {
                 // `route` never sends on this ring, and `retarget` swaps in the reopened stream's.
-                let (music, _) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+                let (music, _) = music::rings();
                 Playback {
                     output,
                     router: Router::new(
@@ -1066,7 +1071,7 @@ impl Router {
         out_channels: u16,
         seconds_per_tick: f64,
         voice_total: usize,
-        music: Sender<MusicChunk>,
+        music: [Sender<MusicChunk>; MUSIC_SLOTS],
     ) -> Router {
         let feed = MusicFeed::new(
             content_root.clone(),
@@ -1360,6 +1365,11 @@ impl Router {
                 stems,
                 fade_frames,
             } => self.feed.set(&id, &stems, fade_frames)?,
+            AudioMessage::MusicCrossfade {
+                id,
+                stems,
+                fade_frames,
+            } => self.feed.crossfade(&id, &stems, fade_frames)?,
             AudioMessage::MusicStemGain {
                 stem,
                 gain,
@@ -1554,7 +1564,7 @@ impl Router {
 
     /// Adopts a reopened device: another format drops the buffers decoded for the old one, and the
     /// music feed moves to the new ring.
-    fn retarget(&mut self, format: DeviceFormat, music: Sender<MusicChunk>) {
+    fn retarget(&mut self, format: DeviceFormat, music: [Sender<MusicChunk>; MUSIC_SLOTS]) {
         if (format.rate, format.channels) != (self.out_rate, self.out_channels) {
             self.out_rate = format.rate;
             self.out_channels = format.channels;
@@ -1731,7 +1741,10 @@ pub fn check_message(content_root: &Path, message: &AudioMessage) -> Result<(), 
             load_wav(ludion_assets::AssetRoot::content(content_root), sound).map(drop)
         }
         AudioMessage::MusicPlay { track, .. } => music::check_track(content_root, track),
-        AudioMessage::MusicSet { id, stems, .. } => music::check_set(content_root, id, stems),
+        AudioMessage::MusicSet { id, stems, .. }
+        | AudioMessage::MusicCrossfade { id, stems, .. } => {
+            music::check_set(content_root, id, stems)
+        }
         _ => Ok(()),
     }
 }
@@ -1823,7 +1836,8 @@ struct Mixer {
     /// The mono reverb input for the block being mixed.
     send: Vec<f32>,
     reverb: Reverb,
-    music: MusicPlayer,
+    /// One player per music slot; a crossfade runs both.
+    music: [MusicPlayer; MUSIC_SLOTS],
     channels: usize,
     ramp_frames: usize,
     limits: VoiceLimits,
@@ -1833,7 +1847,7 @@ struct Mixer {
 impl Mixer {
     fn new(
         commands: Receiver<VoiceCommand>,
-        music: Receiver<MusicChunk>,
+        music: [Receiver<MusicChunk>; MUSIC_SLOTS],
         channels: u16,
         rate: u32,
         gains: CategoryGains,
@@ -1859,7 +1873,7 @@ impl Mixer {
             scratch: Vec::with_capacity(MIX_BLOCK_FRAMES * channels),
             send: Vec::with_capacity(MIX_BLOCK_FRAMES),
             reverb: Reverb::new(rate),
-            music: MusicPlayer::new(music, channels, ramp_frames(rate)),
+            music: music.map(|ring| MusicPlayer::new(ring, channels, ramp_frames(rate))),
             channels,
             ramp_frames: ramp_frames(rate),
             limits,
@@ -1925,9 +1939,11 @@ impl Mixer {
                         retire(&mut self.voices, room, self.ramp_frames, voice);
                     }
                 }
-                self.music.apply(VoiceCommand::MusicStop {
-                    fade_out: self.ramp_frames,
-                });
+                for player in &mut self.music {
+                    player.apply(VoiceCommand::MusicStop {
+                        fade_out: self.ramp_frames,
+                    });
+                }
                 for bus in &mut self.buses {
                     bus.game.slew_to(1.0, self.ramp_frames);
                     bus.duck.slew_to(1.0, self.ramp_frames);
@@ -1964,7 +1980,32 @@ impl Mixer {
                     }
                 }
             }
-            music_command => self.music.apply(music_command),
+            VoiceCommand::MusicStart {
+                slot,
+                crossfade,
+                fade_in,
+                ..
+            } => {
+                let other = 1 - slot;
+                if crossfade {
+                    // The outgoing player joins the equal-power pair, then fades out as long as
+                    // the incoming one fades in.
+                    self.music[slot].stop_now();
+                    self.music[other].make_equal_power();
+                    self.music[other].apply(VoiceCommand::MusicStop { fade_out: fade_in });
+                } else {
+                    self.music[other].stop_now();
+                }
+                self.music[slot].apply(command);
+            }
+            VoiceCommand::MusicGain { slot, .. } | VoiceCommand::MusicStemGain { slot, .. } => {
+                self.music[slot].apply(command);
+            }
+            VoiceCommand::MusicStop { fade_out } => {
+                for player in &mut self.music {
+                    player.apply(VoiceCommand::MusicStop { fade_out });
+                }
+            }
         }
     }
 
@@ -2144,8 +2185,9 @@ impl Mixer {
             let music = Bus::Music as usize;
             if !held[music] {
                 let start = music * MIX_BLOCK_FRAMES;
-                self.music
-                    .mix_into(&mut self.scratch, &self.bus_levels[start..start + frames]);
+                for player in &mut self.music {
+                    player.mix_into(&mut self.scratch, &self.bus_levels[start..start + frames]);
+                }
             }
             for (slot, &mixed) in block.iter_mut().zip(self.scratch.iter()) {
                 *slot = T::from_sample(device_sample(mixed));
@@ -2368,6 +2410,7 @@ fn stream_failed(detail: &str) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
+    use super::music::MUSIC_RING_CHUNKS;
     use super::*;
     use ludion_core::audio::{AudioEvent, HIGH_PASS_OPEN_HZ, LOW_PASS_OPEN_HZ};
 
@@ -2768,7 +2811,7 @@ mod tests {
     /// A mixer at rate 400 (a 4-frame ramp) with no device and a dummy music ring.
     fn test_mixer(channels: u16, gains: CategoryGains, limits: VoiceLimits) -> Mixer {
         let (_commands, command_rx) = crossbeam_channel::unbounded();
-        let (_music_tx, music_rx) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+        let (_music_tx, music_rx) = music::rings();
         Mixer::new(command_rx, music_rx, channels, 400, gains, limits)
     }
 
@@ -3982,7 +4025,7 @@ mod tests {
         // The player went inactive, so its next callback drains the old generation's chunks.
         rig.mixer.render(&mut out);
         assert!(out.iter().all(|&s| s == 0.0));
-        assert!(rig.ring.is_empty());
+        assert!(rig.rings[0].is_empty());
     }
 
     /// The scene-switch shape: loop, blanket stop, loop the same bed again. The table holds exactly
@@ -4167,12 +4210,12 @@ mod tests {
         router: Router,
         mixer: Mixer,
         commands: Sender<VoiceCommand>,
-        ring: Receiver<MusicChunk>,
+        rings: [Receiver<MusicChunk>; MUSIC_SLOTS],
     }
 
     fn rig(root: PathBuf) -> Rig {
         let (commands, command_rx) = crossbeam_channel::unbounded();
-        let (music_tx, ring) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+        let (music_tx, rings) = music::rings();
         Rig {
             router: Router::new(
                 root,
@@ -4184,14 +4227,14 @@ mod tests {
             ),
             mixer: Mixer::new(
                 command_rx,
-                ring.clone(),
+                rings.clone(),
                 2,
                 44100,
                 CategoryGains::default(),
                 default_limits(),
             ),
             commands,
-            ring,
+            rings,
         }
     }
 
@@ -4205,7 +4248,7 @@ mod tests {
     /// A mixer on its own, with a dummy music ring.
     fn mixer(gains: CategoryGains) -> (Mixer, Sender<VoiceCommand>) {
         let (commands, command_rx) = crossbeam_channel::unbounded();
-        let (_music_tx, music_rx) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+        let (_music_tx, music_rx) = music::rings();
         (
             Mixer::new(command_rx, music_rx, 2, 44100, gains, default_limits()),
             commands,
@@ -4394,12 +4437,158 @@ mod tests {
         std::fs::copy(tone(), root.join("tone.ogg")).unwrap();
         let mut rig = rig(root);
         rig.step(music_play("tone.ogg"));
-        assert_eq!(rig.ring.len(), MUSIC_RING_CHUNKS);
+        assert_eq!(rig.rings[0].len(), MUSIC_RING_CHUNKS);
         for _ in 0..10 {
-            rig.ring.try_recv().unwrap();
+            rig.rings[0].try_recv().unwrap();
         }
         rig.step(music_play("missing.ogg"));
-        assert_eq!(rig.ring.len(), MUSIC_RING_CHUNKS);
+        assert_eq!(rig.rings[0].len(), MUSIC_RING_CHUNKS);
+    }
+
+    fn music_crossfade(id: &str, stems: &[&str], fade_frames: u32) -> AudioMessage {
+        AudioMessage::MusicCrossfade {
+            id: id.to_string(),
+            stems: stems.iter().map(|stem| (stem.to_string(), 1.0)).collect(),
+            fade_frames,
+        }
+    }
+
+    /// A rig with `tone.ogg` playing and `sweep.ogg` beside it, after a first block.
+    fn music_rig(name: &str) -> Rig {
+        let root = scratch_root(name);
+        std::fs::copy(tone(), root.join("tone.ogg")).unwrap();
+        std::fs::copy(
+            tone().with_file_name("sweep-stereo-44k.ogg"),
+            root.join("sweep.ogg"),
+        )
+        .unwrap();
+        let mut rig = rig(root);
+        rig.step(music_play("tone.ogg"));
+        render_frames(&mut rig, 256);
+        rig
+    }
+
+    fn render_frames(rig: &mut Rig, frames: usize) -> Vec<f32> {
+        let mut out = vec![0.0f32; frames * 2];
+        rig.mixer.render(&mut out);
+        out
+    }
+
+    /// Each music player's applied fade gain, `None` while it is inactive.
+    fn music_levels(rig: &Rig) -> [Option<f32>; MUSIC_SLOTS] {
+        [
+            rig.mixer.music[0].fade_level(),
+            rig.mixer.music[1].fade_level(),
+        ]
+    }
+
+    #[test]
+    fn a_crossfade_blends_two_players_at_constant_power_then_leaves_the_incoming_one() {
+        let mut rig = music_rig("crossfade-blend");
+        // 6 ticks at 60 Hz, 44.1 kHz: 4410 frames.
+        rig.step(music_crossfade("next", &["sweep.ogg"], 6));
+        render_frames(&mut rig, 2000);
+        let out = render_frames(&mut rig, 205);
+        let [Some(outgoing), Some(incoming)] = music_levels(&rig) else {
+            panic!("both players sound mid-fade");
+        };
+        assert!(outgoing > 0.0 && outgoing < 1.0 && incoming > 0.0 && incoming < 1.0);
+        assert!(
+            (outgoing * outgoing + incoming * incoming - 1.0).abs() < 1e-3,
+            "{outgoing}² + {incoming}²"
+        );
+        assert!(out.iter().any(|s| s.abs() > 1e-3), "the blend sounds");
+
+        render_frames(&mut rig, 2500);
+        let [gone, Some(now)] = music_levels(&rig) else {
+            panic!("the incoming player stays");
+        };
+        assert!(gone.is_none(), "the outgoing player stopped");
+        assert!((now - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_third_set_mid_fade_cuts_the_outgoing_player_and_fades_the_previous_incoming_down() {
+        let mut rig = music_rig("crossfade-third");
+        rig.step(music_crossfade("next", &["sweep.ogg"], 6));
+        render_frames(&mut rig, 2000);
+        let [_, Some(before)] = music_levels(&rig) else {
+            panic!("the incoming player sounds");
+        };
+        rig.step(music_crossfade("third", &["tone.ogg"], 6));
+        render_frames(&mut rig, 1);
+        let [Some(fresh), Some(falling)] = music_levels(&rig) else {
+            panic!("both players sound");
+        };
+        assert!(fresh < 0.05, "the freed slot starts from silence: {fresh}");
+        assert!(
+            (falling - before).abs() < 5e-3,
+            "no jump: {before} -> {falling}"
+        );
+        render_frames(&mut rig, 1000);
+        let [Some(rising), Some(lower)] = music_levels(&rig) else {
+            panic!("both players still sound");
+        };
+        assert!(rising > fresh && lower < falling);
+    }
+
+    #[test]
+    fn a_hard_cut_a_stop_and_a_rebuild_each_end_both_players() {
+        let mut rig = music_rig("crossfade-stops");
+        rig.step(music_crossfade("next", &["sweep.ogg"], 6));
+        render_frames(&mut rig, 1000);
+        let set = AudioMessage::MusicSet {
+            id: "hard".to_string(),
+            stems: vec![("sweep.ogg".to_string(), 1.0)],
+            fade_frames: 0,
+        };
+        rig.step(set);
+        render_frames(&mut rig, 64);
+        let [outgoing, Some(live)] = music_levels(&rig) else {
+            panic!("one player plays");
+        };
+        assert!(outgoing.is_none() && (live - 1.0).abs() < 1e-6);
+
+        let mut rig = music_rig("crossfade-music-stop");
+        rig.step(music_crossfade("next", &["sweep.ogg"], 6));
+        render_frames(&mut rig, 1000);
+        rig.step(AudioMessage::MusicStop { fade_frames: 0 });
+        render_frames(&mut rig, 64);
+        assert_eq!(music_levels(&rig), [None, None]);
+
+        let mut rig = music_rig("crossfade-rebuild");
+        rig.step(music_crossfade("next", &["sweep.ogg"], 6));
+        render_frames(&mut rig, 1000);
+        rig.step(AudioMessage::StopAllLoops);
+        render_frames(&mut rig, 1000);
+        assert_eq!(music_levels(&rig), [None, None]);
+    }
+
+    #[test]
+    fn a_device_reopen_mid_crossfade_resumes_only_the_incoming_set() {
+        let root = scratch_root("crossfade-reopen");
+        std::fs::copy(tone(), root.join("tone.ogg")).unwrap();
+        std::fs::copy(
+            tone().with_file_name("sweep-stereo-44k.ogg"),
+            root.join("sweep.ogg"),
+        )
+        .unwrap();
+        let (mut playback, mixers, t0) = playback(root, vec![Some(STEREO_44K), Some(STEREO_44K)]);
+        let first = mixers.try_recv().unwrap();
+        playback.wake(Some(music_play("tone.ogg")), t0);
+        playback.wake(Some(music_crossfade("next", &["sweep.ogg"], 6)), t0);
+        let mut now = t0;
+        let second = reopen(&mut playback, &mixers, &first, &mut now);
+        let starts: Vec<(usize, bool)> = queued(&second)
+            .into_iter()
+            .filter_map(|command| match command {
+                VoiceCommand::MusicStart {
+                    slot, crossfade, ..
+                } => Some((slot, crossfade)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts, vec![(1, false)]);
     }
 
     const STEREO_44K: DeviceFormat = DeviceFormat {
@@ -5329,7 +5518,7 @@ mod tests {
     /// A mixer at 48 kHz, where a filter's cutoffs mean what they say.
     fn filter_mixer(channels: u16, gains: CategoryGains) -> Mixer {
         let (_commands, command_rx) = crossbeam_channel::unbounded();
-        let (_music_tx, music_rx) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+        let (_music_tx, music_rx) = music::rings();
         Mixer::new(
             command_rx,
             music_rx,

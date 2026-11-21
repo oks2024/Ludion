@@ -462,7 +462,8 @@ pub enum AudioMessage {
     StopAllLoops,
     /// Stream `track` as the music, or update the gain of the track already playing. Music is one
     /// voice: the same track again (not stopping) only takes the new `gain`, so resending it every
-    /// tick is harmless; any other track hard-cuts the current one and fades the new one in.
+    /// tick is harmless; any other track hard-cuts the current one and fades the new one in
+    /// ([`MusicCrossfade`](AudioMessage::MusicCrossfade) blends instead).
     MusicPlay {
         /// The Ogg Vorbis track, as a content-root-relative path.
         track: String,
@@ -483,7 +484,8 @@ pub enum AudioMessage {
     /// at its own gain. The same `id` again while it plays (not stopping) is a no-op, so resending
     /// it every tick is harmless — the initial stem gains apply only when the set starts, and later
     /// ones move through [`MusicStemGain`](AudioMessage::MusicStemGain). Any other set or track
-    /// hard-cuts the current music and fades the new one in.
+    /// hard-cuts the current music and fades the new one in — [`MusicCrossfade`](AudioMessage::MusicCrossfade)
+    /// blends instead.
     MusicSet {
         /// The set's identity: what makes a resend a no-op.
         id: String,
@@ -492,8 +494,33 @@ pub enum AudioMessage {
         /// The fade-in length in sim ticks (`0` starts at full level).
         fade_frames: u32,
     },
-    /// Slew one stem of the playing set to `gain` over `fade_frames` sim ticks (`0` still slews
-    /// about 10 ms, click-free). A stem not in the set is ignored; resending the same gain is free.
+    /// Blend from the playing music to a **set** of up to [`MUSIC_STEMS_MAX`] Ogg stems: the new set
+    /// fades in over `fade_frames` sim ticks while the live one fades out over the same ticks, as an
+    /// equal-power pair. The same `id` again while it is the live set (not stopping) is a no-op, so
+    /// resending it every tick is harmless. With nothing playing it is a plain fade-in; a third set
+    /// mid-crossfade hard-cuts the outgoing one. A set that cannot open keeps the old music playing.
+    ///
+    /// ```
+    /// use ludion_core::audio::AudioMessage;
+    ///
+    /// let message = AudioMessage::MusicCrossfade {
+    ///     id: "combat".into(),
+    ///     stems: vec![("audio/combat.ogg".into(), 1.0)],
+    ///     fade_frames: 120,
+    /// };
+    /// assert!(matches!(message, AudioMessage::MusicCrossfade { fade_frames: 120, .. }));
+    /// ```
+    MusicCrossfade {
+        /// The set's identity: what makes a resend a no-op.
+        id: String,
+        /// Each stem's content-root-relative Ogg Vorbis path and its starting gain.
+        stems: Vec<(String, f32)>,
+        /// The crossfade length in sim ticks (`0` hard-cuts).
+        fade_frames: u32,
+    },
+    /// Slew one stem of the live (incoming) set to `gain` over `fade_frames` sim ticks (`0` still
+    /// slews about 10 ms, click-free). A stem not in the set is ignored; resending the same gain is
+    /// free.
     MusicStemGain {
         /// The stem's path, as named in the set.
         stem: String,

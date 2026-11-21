@@ -63,6 +63,9 @@ queue.voice_stop(id, 6); // optional: fade it out over 6 ticks
 - **A despawned entity stops it** with the sink's ~10 ms fade; `voice_stop` on an ended or unknown id is ignored.
 - **Ids count up from `0` per queue** and restart when the world rebuilds (`scene.load`, restore).
 - A device reopen drops attached voices, as it drops one-shots; only loops come back.
+- **`push_voice(event)` is the global form:** a stoppable one-shot with no entity and no falloff. It starts at the
+  event's own gain and pan, ends with its clip, counts for ducking, and is never resynced; `voice_stop` fades it.
+  A radio or UI line is one (`ludion docs dialogue`).
 
 ## Filters
 

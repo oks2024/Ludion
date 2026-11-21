@@ -31,6 +31,22 @@ use super::{Envelope, STAMP_RECHECK, Stamped, VoiceCommand};
 pub(crate) const MUSIC_CHUNK: usize = 1024;
 /// Chunks the ring holds — about 0.7 s at 48 kHz stereo, headroom for a slow decode.
 pub(crate) const MUSIC_RING_CHUNKS: usize = 64;
+/// Music slots: a crossfade runs the outgoing and the incoming set side by side, each with its own
+/// ring and player (a second ring is about 2 MB, preallocated).
+pub(crate) const MUSIC_SLOTS: usize = 2;
+/// A fresh ring per slot.
+pub(crate) fn rings() -> (
+    [Sender<MusicChunk>; MUSIC_SLOTS],
+    [Receiver<MusicChunk>; MUSIC_SLOTS],
+) {
+    let pairs: [_; MUSIC_SLOTS] =
+        std::array::from_fn(|_| crossbeam_channel::bounded(MUSIC_RING_CHUNKS));
+    let (txs, rxs): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+    (
+        txs.try_into().unwrap_or_else(|_| unreachable!()),
+        rxs.try_into().unwrap_or_else(|_| unreachable!()),
+    )
+}
 /// How often the sink thread tops the ring up while a track is feeding.
 pub(crate) const MUSIC_REFILL: std::time::Duration = std::time::Duration::from_millis(10);
 
@@ -385,25 +401,58 @@ struct Current {
     period: Option<u64>,
 }
 
-/// The sink-thread side: owns the decoder, keeps the ring full, and turns messages into the
-/// commands the callback's [`MusicPlayer`] applies. Each method returns the command to forward, so
+/// One of the two music slots: its own ring, generation and feed state. A crossfade runs the
+/// outgoing set in one and the incoming set in the other.
+struct Slot {
+    generation: u32,
+    current: Option<Current>,
+    /// Samples left to feed while a fade-out runs; at 0 the track is dropped.
+    stop_after: Option<usize>,
+    tx: Sender<MusicChunk>,
+}
+
+impl Slot {
+    fn new(tx: Sender<MusicChunk>) -> Slot {
+        Slot {
+            generation: 0,
+            current: None,
+            stop_after: None,
+            tx,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.current = None;
+        self.stop_after = None;
+    }
+
+    /// Whether set `id` is playing here and not stopping.
+    fn is_live_set(&self, id: &str) -> bool {
+        self.stop_after.is_none()
+            && self
+                .current
+                .as_ref()
+                .is_some_and(|current| current.is_set && current.id == id)
+    }
+}
+
+/// The sink-thread side: owns the decoders, keeps the rings full, and turns messages into the
+/// commands the callback's [`MusicPlayer`]s apply. Each method returns the command to forward, so
 /// each is testable without a device.
 pub(crate) struct MusicFeed {
     content_root: PathBuf,
     out_rate: u32,
     out_channels: usize,
     seconds_per_tick: f64,
-    generation: u32,
-    current: Option<Current>,
-    /// Samples left to feed while a fade-out runs; at 0 the track is dropped.
-    stop_after: Option<usize>,
+    slots: [Slot; MUSIC_SLOTS],
+    /// The slot holding the live (incoming) music: where plays, stem gains and resumes land.
+    live: usize,
     /// Files that failed, by the stamp they failed at: one warning per file version.
     failed: HashMap<String, Stamped>,
     /// The `L5006` texts already printed per set id, so a set resent every tick warns once.
     mismatch_shown: HashMap<String, Vec<String>>,
     /// How long a failure's stamp is trusted before it is read again.
     recheck: Duration,
-    tx: Sender<MusicChunk>,
 }
 
 impl MusicFeed {
@@ -412,20 +461,18 @@ impl MusicFeed {
         out_rate: u32,
         out_channels: u16,
         seconds_per_tick: f64,
-        tx: Sender<MusicChunk>,
+        txs: [Sender<MusicChunk>; MUSIC_SLOTS],
     ) -> MusicFeed {
         MusicFeed {
             content_root,
             out_rate,
             out_channels: usize::from(out_channels.max(1)),
             seconds_per_tick,
-            generation: 0,
-            current: None,
-            stop_after: None,
+            slots: txs.map(Slot::new),
+            live: 0,
             failed: HashMap::new(),
             mismatch_shown: HashMap::new(),
             recheck: STAMP_RECHECK,
-            tx,
         }
     }
 
@@ -435,7 +482,7 @@ impl MusicFeed {
     }
 
     pub(crate) fn is_feeding(&self) -> bool {
-        self.current.is_some()
+        self.slots.iter().any(|slot| slot.current.is_some())
     }
 
     /// A stem's decoder and converter for the device format.
@@ -455,21 +502,43 @@ impl MusicFeed {
         }
     }
 
-    /// Makes `current` the music: a new generation, nothing staged, no fade-out pending. Returns
-    /// the command that starts the player on it.
-    fn start(&mut self, current: Current, fade_frames: u32) -> VoiceCommand {
-        self.generation = self.generation.wrapping_add(1);
-        self.stop_after = None;
+    /// Makes `current` the music of slot `ix`: a new generation there, nothing staged, no fade-out
+    /// pending. A hard start also clears the other slot. Returns the command that starts the
+    /// player on it.
+    fn start(
+        &mut self,
+        ix: usize,
+        current: Current,
+        fade_frames: u32,
+        crossfade: bool,
+    ) -> VoiceCommand {
+        if !crossfade {
+            self.slots[1 - ix].clear();
+        }
+        self.live = ix;
+        let slot = &mut self.slots[ix];
+        slot.generation = slot.generation.wrapping_add(1);
+        slot.stop_after = None;
         let (gain, stem_gains) = (current.gain, current.stem_gains.clone());
-        self.current = Some(current);
-        self.start_command(gain, &stem_gains, self.device_frames(fade_frames))
+        slot.current = Some(current);
+        let fade_in = self.device_frames(fade_frames);
+        self.start_command(ix, crossfade, gain, &stem_gains, fade_in)
     }
 
-    fn start_command(&self, gain: f32, stem_gains: &[f32], fade_in: usize) -> VoiceCommand {
+    fn start_command(
+        &self,
+        slot: usize,
+        crossfade: bool,
+        gain: f32,
+        stem_gains: &[f32],
+        fade_in: usize,
+    ) -> VoiceCommand {
         let mut gains = [0.0; MUSIC_STEMS_MAX];
         gains[..stem_gains.len()].copy_from_slice(stem_gains);
         VoiceCommand::MusicStart {
-            generation: self.generation,
+            slot,
+            crossfade,
+            generation: self.slots[slot].generation,
             gain,
             stem_gains: gains,
             count: stem_gains.len(),
@@ -499,14 +568,16 @@ impl MusicFeed {
         looping: bool,
         fade_frames: u32,
     ) -> Option<VoiceCommand> {
-        if self.stop_after.is_none()
-            && let Some(current) = &mut self.current
+        let live = self.live;
+        let slot = &mut self.slots[live];
+        if slot.stop_after.is_none()
+            && let Some(current) = &mut slot.current
             && !current.is_set
             && current.id == name
         {
             current.looping = looping;
             current.gain = gain;
-            return Some(VoiceCommand::MusicGain(gain));
+            return Some(VoiceCommand::MusicGain { slot: live, gain });
         }
         if let Some(failed) = self.failed.get_mut(name)
             && failed.is_current(&self.content_root, name, self.recheck)
@@ -531,27 +602,13 @@ impl MusicFeed {
             position: 0.0,
             period: None,
         };
-        Some(self.start(current, fade_frames))
+        Some(self.start(live, current, fade_frames, false))
     }
 
-    /// Starts the set `id` of `stems` (path, starting gain), or does nothing when that set already
-    /// plays and is not stopping — the initial gains apply only at a set's start. A stem that fails
-    /// to open warns `L5003`; one that does not match the first playable stem's rate and length, or
-    /// lies past the eighth, warns `L5006`. Both are left out, and `None` means none could play.
-    pub(crate) fn set(
-        &mut self,
-        id: &str,
-        stems: &[(String, f32)],
-        fade_frames: u32,
-    ) -> Option<VoiceCommand> {
-        if self.stop_after.is_none()
-            && self
-                .current
-                .as_ref()
-                .is_some_and(|current| current.is_set && current.id == id)
-        {
-            return None;
-        }
+    /// Opens set `id` of `stems` (path, starting gain) for playing. A stem that fails to open warns
+    /// `L5003`; one that does not match the first playable stem's rate and length, or lies past the
+    /// eighth, warns `L5006`. Both are left out, and `None` means none could play.
+    fn open(&mut self, id: &str, stems: &[(String, f32)]) -> Option<Current> {
         let (root, recheck) = (self.content_root.clone(), self.recheck);
         let failed = &mut self.failed;
         let opened = open_set(&root, id, stems, |name| {
@@ -580,7 +637,7 @@ impl MusicFeed {
             stem_gains.push(stem.gain);
             playing.push(self.stem(stem.name, stem.track));
         }
-        let current = Current {
+        Some(Current {
             id: id.to_string(),
             is_set: true,
             stems: playing,
@@ -589,11 +646,57 @@ impl MusicFeed {
             stem_gains,
             position: 0.0,
             period: None,
-        };
-        Some(self.start(current, fade_frames))
+        })
     }
 
-    /// Slews stem `name` of the playing set to `gain`. `None` when it is not in the set.
+    /// Starts the set `id`, hard-cutting the current music, or does nothing when that set already
+    /// plays and is not stopping — the initial gains apply only at a set's start. `None` also means
+    /// no stem could play (see [`MusicFeed::open`]).
+    pub(crate) fn set(
+        &mut self,
+        id: &str,
+        stems: &[(String, f32)],
+        fade_frames: u32,
+    ) -> Option<VoiceCommand> {
+        if self.slots[self.live].is_live_set(id) {
+            return None;
+        }
+        let current = self.open(id, stems)?;
+        Some(self.start(self.live, current, fade_frames, false))
+    }
+
+    /// Blends from the live music to set `id` over `fade_frames`: the new set starts in the idle
+    /// slot, the live one is given a fade-out of the same length. The live set again is a no-op;
+    /// a set that cannot open changes nothing. A third set mid-crossfade hard-cuts the outgoing
+    /// slot. With nothing playing, or a zero fade, it is a plain [`MusicFeed::set`] start.
+    pub(crate) fn crossfade(
+        &mut self,
+        id: &str,
+        stems: &[(String, f32)],
+        fade_frames: u32,
+    ) -> Option<VoiceCommand> {
+        if self.slots[self.live].is_live_set(id) {
+            return None;
+        }
+        let current = self.open(id, stems)?;
+        let fade = self.device_frames(fade_frames);
+        let live = self.live;
+        if fade == 0 || self.slots[live].current.is_none() {
+            return Some(self.start(live, current, fade_frames, false));
+        }
+        let samples = fade * self.out_channels;
+        let outgoing = &mut self.slots[live];
+        outgoing.stop_after = Some(
+            outgoing
+                .stop_after
+                .map_or(samples, |left| left.min(samples)),
+        );
+        let idle = 1 - live;
+        self.slots[idle].clear();
+        Some(self.start(idle, current, fade_frames, true))
+    }
+
+    /// Slews stem `name` of the live set to `gain`. `None` when it is not in the set.
     pub(crate) fn stem_gain(
         &mut self,
         name: &str,
@@ -601,150 +704,169 @@ impl MusicFeed {
         fade_frames: u32,
     ) -> Option<VoiceCommand> {
         let frames = self.device_frames(fade_frames);
-        let current = self.current.as_mut()?;
+        let slot = self.live;
+        let current = self.slots[slot].current.as_mut()?;
         let index = current.stems.iter().position(|stem| stem.name == name)?;
         current.stem_gains[index] = gain;
         Some(VoiceCommand::MusicStemGain {
+            slot,
             index,
             gain,
             frames,
         })
     }
 
-    /// Moves the feed onto a reopened device: another format and a new ring. Every stem is
-    /// repositioned at the set's common source frame, so the stems stay locked however their
+    /// Moves the feed onto a reopened device: another format and new rings. Every stem is
+    /// repositioned at its set's common source frame, so the stems stay locked however their
     /// encodes were packetized; the converted audio staged for the dead ring is skipped. A fade-out
-    /// in progress when the device died ends as a stop.
-    pub(crate) fn retarget(&mut self, out_rate: u32, out_channels: u16, tx: Sender<MusicChunk>) {
+    /// in progress when the device died ends as a stop, so an outgoing slot is dropped.
+    pub(crate) fn retarget(
+        &mut self,
+        out_rate: u32,
+        out_channels: u16,
+        txs: [Sender<MusicChunk>; MUSIC_SLOTS],
+    ) {
         self.out_rate = out_rate;
         self.out_channels = usize::from(out_channels.max(1));
-        self.tx = tx;
-        if self.stop_after.take().is_some() {
-            self.current = None;
-        }
-        let Some(current) = &mut self.current else {
-            return;
-        };
-        if let Some(period) = current.period {
-            current.position %= period as f64;
-        }
-        let mut failure = None;
-        for stem in &mut current.stems {
-            if let Err(diagnostic) = stem.seek(current.position, out_rate, self.out_channels) {
-                failure = Some((stem.name.clone(), diagnostic));
-                break;
+        let mut failures = Vec::new();
+        for (slot, tx) in self.slots.iter_mut().zip(txs) {
+            slot.tx = tx;
+            if slot.stop_after.take().is_some() {
+                slot.current = None;
+            }
+            let Some(current) = &mut slot.current else {
+                continue;
+            };
+            if let Some(period) = current.period {
+                current.position %= period as f64;
+            }
+            let mut failure = None;
+            for stem in &mut current.stems {
+                if let Err(diagnostic) = stem.seek(current.position, out_rate, self.out_channels) {
+                    failure = Some((stem.name.clone(), diagnostic));
+                    break;
+                }
+            }
+            if let Some(failure) = failure {
+                slot.current = None;
+                failures.push(failure);
             }
         }
-        if let Some((name, diagnostic)) = failure {
-            self.current = None;
+        for (name, diagnostic) in failures {
             self.note_failure(&name, &diagnostic);
         }
     }
 
-    /// The command that starts the new device's player on the track still feeding, under a new
-    /// generation so the chunks sent since [`MusicFeed::retarget`] are the ones it mixes. `None`
-    /// when no track is playing.
+    /// The command that starts the new device's player on the live music still feeding, under a
+    /// new generation so the chunks sent since [`MusicFeed::retarget`] are the ones it mixes.
+    /// `None` when nothing is playing.
     pub(crate) fn resume(&mut self, fade_in: usize) -> Option<VoiceCommand> {
-        let current = self.current.as_ref()?;
+        let live = self.live;
+        let slot = &mut self.slots[live];
+        let current = slot.current.as_ref()?;
         let (gain, stem_gains) = (current.gain, current.stem_gains.clone());
-        self.generation = self.generation.wrapping_add(1);
-        Some(self.start_command(gain, &stem_gains, fade_in))
+        slot.generation = slot.generation.wrapping_add(1);
+        Some(self.start_command(live, false, gain, &stem_gains, fade_in))
     }
 
+    /// Stops both slots, fading out over `fade_frames` (`0` stops now). A slot already fading
+    /// keeps the shorter remaining fade.
     pub(crate) fn stop(&mut self, fade_frames: u32) -> VoiceCommand {
         let fade_out = self.device_frames(fade_frames);
-        if fade_out == 0 {
-            self.current = None;
-            self.stop_after = None;
-        } else if self.current.is_some() {
-            self.stop_after = Some(fade_out * self.out_channels);
+        let samples = fade_out * self.out_channels;
+        for slot in &mut self.slots {
+            if fade_out == 0 {
+                slot.clear();
+            } else if slot.current.is_some() {
+                slot.stop_after = Some(slot.stop_after.map_or(samples, |left| left.min(samples)));
+            }
         }
         VoiceCommand::MusicStop { fade_out }
     }
 
-    /// Decodes each stem until its staging holds a chunk's worth, or it ends. A looping stem
-    /// reopens at its end; a once stem is marked ended. A decode error or an empty looping file
-    /// drops the whole set.
-    fn stage(&mut self) {
-        let Some(current) = &mut self.current else {
-            return;
-        };
-        let looping = current.looping;
-        let mut failure = None;
-        'stems: for stem in &mut current.stems {
-            while stem.staging.len() < MUSIC_CHUNK && !stem.ended {
-                match stem.track.next_packet() {
-                    Ok(Some(packet)) => stem.converter.convert(&packet, &mut stem.staging),
-                    Ok(None) if looping && stem.track.produced => {
-                        current.period.get_or_insert(stem.track.frames);
-                        let reopened = stem.track.reopen().inspect(|()| {
-                            let (rate, channels) = (stem.track.rate(), stem.track.channels());
-                            stem.converter.retarget(rate, channels);
-                        });
-                        if let Err(diagnostic) = reopened {
-                            failure = Some((stem.name.clone(), diagnostic));
-                            break 'stems;
-                        }
-                    }
-                    // A once stem, or a looping file with no samples at all, ends here.
-                    Ok(None) => stem.ended = true,
-                    Err(diagnostic) => {
-                        failure = Some((stem.name.clone(), diagnostic));
-                        break 'stems;
-                    }
-                }
-            }
-        }
-        if let Some((name, diagnostic)) = failure {
-            self.current = None;
-            self.note_failure(&name, &diagnostic);
+    /// Tops both rings up with chunks until each is full or its music ends.
+    pub(crate) fn refill(&mut self) {
+        for ix in 0..MUSIC_SLOTS {
+            self.refill_slot(ix);
         }
     }
 
-    /// Tops the ring up with chunks until it is full or the music ends.
-    pub(crate) fn refill(&mut self) {
+    fn refill_slot(&mut self, ix: usize) {
         let max = (MUSIC_CHUNK / self.out_channels) * self.out_channels;
-        // The feed is the ring's only producer, so `!is_full` guarantees the send finds room.
-        while self.current.is_some() {
-            if self.tx.is_full() {
+        let channels = self.out_channels;
+        // The feed is each ring's only producer, so `!is_full` guarantees the send finds room.
+        while self.slots[ix].current.is_some() {
+            if self.slots[ix].tx.is_full() {
                 return;
             }
-            self.stage();
-            let Some(current) = &mut self.current else {
+            if let Some((name, diagnostic)) = stage(&mut self.slots[ix]) {
+                self.slots[ix].clear();
+                self.note_failure(&name, &diagnostic);
+                return;
+            }
+            let slot = &mut self.slots[ix];
+            let Some(current) = &mut slot.current else {
                 return;
             };
             // Every stem contributes the same frames, so the shortest staging sets the chunk.
             let shortest = current.stems.iter().map(|s| s.staging.len()).min();
             let mut len = shortest.unwrap_or(0).min(max);
-            len -= len % self.out_channels;
-            if let Some(left) = self.stop_after.as_mut() {
+            len -= len % channels;
+            if let Some(left) = slot.stop_after.as_mut() {
                 len = len.min(*left);
                 *left -= len;
             }
             if len > 0 {
                 let mut chunk = MusicChunk {
-                    generation: self.generation,
+                    generation: slot.generation,
                     len,
                     count: current.stems.len(),
                     samples: [[0.0; MUSIC_CHUNK]; MUSIC_STEMS_MAX],
                 };
-                current.position +=
-                    (len / self.out_channels) as f64 * current.stems[0].converter.step;
-                for (slot, stem) in chunk.samples.iter_mut().zip(&mut current.stems) {
-                    slot[..len].copy_from_slice(&stem.staging[..len]);
+                current.position += (len / channels) as f64 * current.stems[0].converter.step;
+                for (dst, stem) in chunk.samples.iter_mut().zip(&mut current.stems) {
+                    dst[..len].copy_from_slice(&stem.staging[..len]);
                     stem.staging.drain(..len);
                 }
-                if self.tx.try_send(chunk).is_err() {
+                if slot.tx.try_send(chunk).is_err() {
                     return;
                 }
             }
             // Nothing left to send: the fade-out is spent, or a stem ended with nothing staged.
-            if len == 0 || self.stop_after == Some(0) {
-                self.current = None;
-                self.stop_after = None;
+            if len == 0 || slot.stop_after == Some(0) {
+                slot.clear();
             }
         }
     }
+}
+
+/// Decodes each stem of `slot`'s music until its staging holds a chunk's worth, or it ends. A
+/// looping stem reopens at its end; a once stem is marked ended. A decode error or an empty
+/// looping file fails the whole set: the stem's name and diagnostic.
+fn stage(slot: &mut Slot) -> Option<(String, Diagnostic)> {
+    let current = slot.current.as_mut()?;
+    let looping = current.looping;
+    for stem in &mut current.stems {
+        while stem.staging.len() < MUSIC_CHUNK && !stem.ended {
+            match stem.track.next_packet() {
+                Ok(Some(packet)) => stem.converter.convert(&packet, &mut stem.staging),
+                Ok(None) if looping && stem.track.produced => {
+                    current.period.get_or_insert(stem.track.frames);
+                    let reopened = stem.track.reopen().inspect(|()| {
+                        let (rate, channels) = (stem.track.rate(), stem.track.channels());
+                        stem.converter.retarget(rate, channels);
+                    });
+                    if let Err(diagnostic) = reopened {
+                        return Some((stem.name.clone(), diagnostic));
+                    }
+                }
+                // A once stem, or a looping file with no samples at all, ends here.
+                Ok(None) => stem.ended = true,
+                Err(diagnostic) => return Some((stem.name.clone(), diagnostic)),
+            }
+        }
+    }
+    None
 }
 
 /// The real-time side: pulls chunks, ramps the gain and sums into the callback's scratch buffer.
@@ -760,9 +882,13 @@ pub(crate) struct MusicPlayer {
     stems: [Envelope; MUSIC_STEMS_MAX],
     count: usize,
     ramp_frames: usize,
+    /// The fade's linear progress, `0..=1`.
     level: f32,
     target: f32,
     step: f32,
+    /// Whether the fade applies `sin(level · π/2)` rather than `level`: a crossfade pair keeps
+    /// constant power (`in² + out² = 1`), a plain fade stays linear.
+    equal_power: bool,
     chunk: Option<MusicChunk>,
     pos: usize,
 }
@@ -785,20 +911,47 @@ impl MusicPlayer {
             level: 0.0,
             target: 0.0,
             step: 0.0,
+            equal_power: false,
             chunk: None,
             pos: 0,
         }
     }
 
+    /// The gain the fade applies now.
+    fn fade_gain(&self) -> f32 {
+        if self.equal_power {
+            (self.level * std::f32::consts::FRAC_PI_2).sin()
+        } else {
+            self.level
+        }
+    }
+
+    /// Joins a crossfade pair: the fade turns equal-power without a jump in the gain it applies.
+    pub(crate) fn make_equal_power(&mut self) {
+        if !self.equal_power {
+            self.equal_power = true;
+            self.level = self.level.clamp(0.0, 1.0).asin() * std::f32::consts::FRAC_2_PI;
+        }
+    }
+
+    /// The gain the fade applies while the player is active (tests).
+    #[cfg(test)]
+    pub(crate) fn fade_level(&self) -> Option<f32> {
+        self.active.then(|| self.fade_gain())
+    }
+
     pub(crate) fn apply(&mut self, command: VoiceCommand) {
         match command {
             VoiceCommand::MusicStart {
+                crossfade,
                 generation,
                 gain,
                 stem_gains,
                 count,
                 fade_in,
+                ..
             } => {
+                self.equal_power = crossfade;
                 self.generation = generation;
                 self.active = true;
                 self.gain = Envelope::at(gain);
@@ -813,11 +966,12 @@ impl MusicPlayer {
                 };
                 self.pos = 0;
             }
-            VoiceCommand::MusicGain(gain) => self.gain.slew_to(gain, self.ramp_frames),
+            VoiceCommand::MusicGain { gain, .. } => self.gain.slew_to(gain, self.ramp_frames),
             VoiceCommand::MusicStemGain {
                 index,
                 gain,
                 frames,
+                ..
             } => {
                 if let Some(stem) = self.stems.get_mut(index) {
                     stem.slew_to(gain, frames.max(self.ramp_frames));
@@ -827,8 +981,14 @@ impl MusicPlayer {
                 if fade_out == 0 || self.level <= 0.0 {
                     self.stop_now();
                 } else {
+                    let step = self.level / fade_out as f32;
+                    // A fade-out already running keeps the faster of the two.
+                    self.step = if self.target == 0.0 {
+                        self.step.max(step)
+                    } else {
+                        step
+                    };
                     self.target = 0.0;
-                    self.step = self.level / fade_out as f32;
                 }
             }
             _ => {}
@@ -890,7 +1050,7 @@ impl MusicPlayer {
                     break;
                 }
             }
-            let scale = self.level * self.gain.next() * master[index];
+            let scale = self.fade_gain() * self.gain.next() * master[index];
             let mut stem_gain = [0.0; MUSIC_STEMS_MAX];
             for (gain, stem) in stem_gain.iter_mut().zip(&mut self.stems[..self.count]) {
                 *gain = stem.next();
@@ -949,10 +1109,20 @@ mod tests {
 
     /// A feed over `root` at `out_rate`/`out_channels`, 60 ticks a second, and its ring's receiver.
     fn feed(root: PathBuf, out_rate: u32, out_channels: u16) -> (MusicFeed, Receiver<MusicChunk>) {
-        let (tx, rx) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
+        let (feed, [rx, _]) = feed2(root, out_rate, out_channels);
+        (feed, rx)
+    }
+
+    /// A feed with both slots' rings.
+    fn feed2(
+        root: PathBuf,
+        out_rate: u32,
+        out_channels: u16,
+    ) -> (MusicFeed, [Receiver<MusicChunk>; MUSIC_SLOTS]) {
+        let (txs, rxs) = rings();
         (
-            MusicFeed::new(root, out_rate, out_channels, 1.0 / 60.0, tx),
-            rx,
+            MusicFeed::new(root, out_rate, out_channels, 1.0 / 60.0, txs),
+            rxs,
         )
     }
 
@@ -1032,7 +1202,8 @@ mod tests {
         let expected = collect(&mut whole, &rx, usize::MAX).len();
 
         let (tx, rx) = crossbeam_channel::bounded(1);
-        let mut feed = MusicFeed::new(testdata(), 44100, 2, 1.0 / 60.0, tx);
+        let (spare, _) = crossbeam_channel::bounded(1);
+        let mut feed = MusicFeed::new(testdata(), 44100, 2, 1.0 / 60.0, [tx, spare]);
         feed.play(TONE, 1.0, false, 0).unwrap();
         let mut got = 0;
         while feed.is_feeding() {
@@ -1215,7 +1386,7 @@ mod tests {
         };
         assert!(matches!(
             feed.play("a.ogg", 0.5, true, 0),
-            Some(VoiceCommand::MusicGain(g)) if g == 0.5
+            Some(VoiceCommand::MusicGain { gain: g, .. }) if g == 0.5
         ));
         let Some(VoiceCommand::MusicStart {
             generation: second, ..
@@ -1256,8 +1427,8 @@ mod tests {
         };
         feed.refill();
         let held = old_ring.len();
-        let (tx, new_ring) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
-        feed.retarget(48000, 1, tx);
+        let (txs, [new_ring, _]) = rings();
+        feed.retarget(48000, 1, txs);
         assert_eq!((feed.out_rate, feed.out_channels), (48000, 1));
         let Some(VoiceCommand::MusicStart {
             generation,
@@ -1282,8 +1453,8 @@ mod tests {
 
         // A fade-out running when the device died ends as a stop.
         feed.stop(30);
-        let (tx, _ring) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
-        feed.retarget(44100, 2, tx);
+        let (txs, _rings) = rings();
+        feed.retarget(44100, 2, txs);
         assert!(feed.resume(0).is_none());
         assert!(!feed.is_feeding());
     }
@@ -1309,6 +1480,8 @@ mod tests {
 
     fn start(player: &mut MusicPlayer, generation: u32, gain: f32, fade_in: usize) {
         player.apply(VoiceCommand::MusicStart {
+            slot: 0,
+            crossfade: false,
             generation,
             gain,
             stem_gains: [1.0; MUSIC_STEMS_MAX],
@@ -1340,7 +1513,7 @@ mod tests {
         player.mix_into(&mut out, &UNITY);
         assert_eq!(left(&out), [0.5, 0.5]);
 
-        player.apply(VoiceCommand::MusicGain(0.5));
+        player.apply(VoiceCommand::MusicGain { slot: 0, gain: 0.5 });
         let mut out = vec![0.0; 10];
         player.mix_into(&mut out, &UNITY);
         assert_eq!(left(&out), [0.4375, 0.375, 0.3125, 0.25, 0.25]);
@@ -1544,9 +1717,9 @@ mod tests {
         // Retarget in the second pass, at a block that leaves each stem mid-packet.
         for block in [frames / 256 + 7, frames / 256 + 12] {
             let _ = render(&mut feed, &mut player, block, |_, _, _| {});
-            let at = feed.current.as_ref().unwrap().position;
-            let (tx, rx) = crossbeam_channel::bounded(MUSIC_RING_CHUNKS);
-            feed.retarget(44100, 2, tx);
+            let at = feed.slots[0].current.as_ref().unwrap().position;
+            let (txs, [rx, _]) = rings();
+            feed.retarget(44100, 2, txs);
             player = MusicPlayer::new(rx, 2, 4);
             player.apply(feed.resume(0).unwrap());
 
@@ -1683,7 +1856,7 @@ mod tests {
         assert!(feed.stem_gain("c.ogg", 1.0, 0).is_none(), "not in the set");
         assert!(matches!(
             feed.stem_gain("b.ogg", 0.7, 30),
-            Some(VoiceCommand::MusicStemGain { index: 1, gain, frames: 22050 }) if gain == 0.7
+            Some(VoiceCommand::MusicStemGain { slot: 0, index: 1, gain, frames: 22050 }) if gain == 0.7
         ));
         // A resume carries the moved gain, not the initial one.
         let Some(VoiceCommand::MusicStart {
@@ -1721,5 +1894,257 @@ mod tests {
             feed.set("pair", &pair, 0),
             Some(VoiceCommand::MusicStart { .. })
         ));
+    }
+    /// A feed mid-crossfade from `TONE` (a track) to the one-stem set `"next"` of `SWEEP`, over 6
+    /// ticks, before anything was fed.
+    fn crossfading() -> (MusicFeed, [Receiver<MusicChunk>; MUSIC_SLOTS]) {
+        let (mut feed, rings) = feed2(testdata(), 44100, 2);
+        feed.play(TONE, 1.0, true, 0).unwrap();
+        feed.crossfade("next", &set_of(&[SWEEP]), 6).unwrap();
+        (feed, rings)
+    }
+
+    #[test]
+    fn a_crossfade_starts_the_new_set_in_the_idle_slot_and_the_old_one_feeds_only_its_fade() {
+        let (mut feed, rings) = feed2(testdata(), 44100, 2);
+        feed.play(TONE, 1.0, true, 0).unwrap();
+        let fade = feed.device_frames(6);
+        let Some(VoiceCommand::MusicStart {
+            slot,
+            crossfade,
+            generation,
+            fade_in,
+            ..
+        }) = feed.crossfade("next", &set_of(&[SWEEP]), 6)
+        else {
+            panic!("a crossfade starts the new set");
+        };
+        assert_eq!(
+            (slot, crossfade, generation, fade_in, feed.live),
+            (1, true, 1, fade, 1)
+        );
+        let mut fed = [0usize; MUSIC_SLOTS];
+        for _ in 0..20 {
+            feed.refill();
+            for (total, ring) in fed.iter_mut().zip(&rings) {
+                while let Ok(chunk) = ring.try_recv() {
+                    *total += chunk.len;
+                }
+            }
+        }
+        assert_eq!(fed[0], fade * 2, "the outgoing slot feeds only its fade");
+        assert!(feed.slots[0].current.is_none());
+        assert!(fed[1] > fade * 2, "the incoming slot keeps feeding");
+        assert!(feed.slots[1].current.is_some());
+    }
+
+    #[test]
+    fn both_slots_fill_their_own_rings_under_their_own_generations() {
+        let (mut feed, rings) = crossfading();
+        feed.refill();
+        assert_eq!(rings[0].try_recv().unwrap().generation, 1);
+        assert_eq!(rings[1].try_recv().unwrap().generation, 1);
+        // A hard cut now restarts the live slot only: slot 1's generation moves, slot 0's does not.
+        feed.set("again", &set_of(&[TONE]), 0).unwrap();
+        assert_eq!((feed.slots[0].generation, feed.slots[1].generation), (1, 2));
+    }
+
+    #[test]
+    fn resending_the_live_set_is_free_and_an_unopenable_set_cuts_nothing() {
+        let (mut feed, _rings) = crossfading();
+        assert!(feed.crossfade("next", &set_of(&[SWEEP]), 6).is_none());
+        let stopping = feed.slots[0].stop_after;
+        assert!(stopping.is_some());
+        assert!(
+            feed.crossfade("broken", &set_of(&["missing.ogg"]), 6)
+                .is_none()
+        );
+        assert_eq!(feed.live, 1);
+        assert_eq!(
+            feed.slots[0].stop_after, stopping,
+            "the outgoing fade is untouched"
+        );
+        assert!(feed.slots[0].current.is_some() && feed.slots[1].current.is_some());
+        assert!(feed.slots[1].stop_after.is_none());
+    }
+
+    #[test]
+    fn a_third_set_mid_crossfade_hard_cuts_the_outgoing_slot() {
+        let (mut feed, _rings) = crossfading();
+        let Some(VoiceCommand::MusicStart {
+            slot,
+            crossfade,
+            generation,
+            ..
+        }) = feed.crossfade("third", &set_of(&[TONE]), 6)
+        else {
+            panic!("a third set starts");
+        };
+        assert_eq!((slot, crossfade, generation, feed.live), (0, true, 2, 0));
+        assert!(
+            feed.slots[0].stop_after.is_none(),
+            "the new set is not fading out"
+        );
+        assert!(
+            feed.slots[1].stop_after.is_some(),
+            "the previous incoming fades down"
+        );
+        assert_eq!(feed.slots[0].current.as_ref().unwrap().id, "third");
+    }
+
+    #[test]
+    fn a_crossfade_with_nothing_playing_or_no_fade_is_a_plain_start() {
+        let (mut feed, _rings) = feed2(testdata(), 44100, 2);
+        let fade = feed.device_frames(6);
+        assert!(matches!(
+            feed.crossfade("first", &set_of(&[SWEEP]), 6),
+            Some(VoiceCommand::MusicStart { slot: 0, crossfade: false, fade_in, .. }) if fade_in == fade
+        ));
+        assert!(feed.slots[1].current.is_none());
+        // A zero-tick crossfade is a hard cut of the live set.
+        assert!(matches!(
+            feed.crossfade("second", &set_of(&[TONE]), 0),
+            Some(VoiceCommand::MusicStart {
+                slot: 0,
+                crossfade: false,
+                fade_in: 0,
+                ..
+            })
+        ));
+        assert!(feed.slots[1].current.is_none() && feed.slots[0].stop_after.is_none());
+    }
+
+    #[test]
+    fn a_hard_cut_mid_crossfade_clears_both_and_plays_one() {
+        let (mut feed, _rings) = crossfading();
+        assert!(matches!(
+            feed.set("hard", &set_of(&[TONE]), 0),
+            Some(VoiceCommand::MusicStart {
+                slot: 1,
+                crossfade: false,
+                ..
+            })
+        ));
+        assert!(feed.slots[0].current.is_none());
+        assert_eq!(feed.slots[1].current.as_ref().unwrap().id, "hard");
+
+        let (mut feed, _rings) = crossfading();
+        assert!(matches!(
+            feed.play(TONE, 1.0, true, 0),
+            Some(VoiceCommand::MusicStart {
+                slot: 1,
+                crossfade: false,
+                ..
+            })
+        ));
+        assert!(feed.slots[0].current.is_none());
+    }
+
+    #[test]
+    fn stop_and_stem_gain_address_the_right_slots() {
+        let (mut feed, _rings) = feed2(testdata(), 44100, 2);
+        feed.play(TONE, 1.0, true, 0).unwrap();
+        feed.crossfade("pair", &set_of(&[TONE, SWEEP]), 6).unwrap();
+        assert!(matches!(
+            feed.stem_gain(SWEEP, 0.5, 0),
+            Some(VoiceCommand::MusicStemGain {
+                slot: 1,
+                index: 1,
+                ..
+            })
+        ));
+        // A stop with a fade gives both slots a fade-out; the shorter remaining one is kept.
+        let before = feed.slots[0].stop_after.unwrap();
+        feed.stop(60);
+        assert_eq!(
+            feed.slots[0].stop_after,
+            Some(before),
+            "the shorter fade wins"
+        );
+        assert!(feed.slots[1].stop_after.is_some());
+        feed.stop(0);
+        assert!(!feed.is_feeding(), "an immediate stop clears both slots");
+    }
+
+    #[test]
+    fn a_retarget_mid_crossfade_drops_the_outgoing_slot_and_resumes_the_incoming() {
+        let (mut feed, _rings) = crossfading();
+        let (txs, new_rings) = rings();
+        feed.retarget(44100, 2, txs);
+        assert!(feed.slots[0].current.is_none(), "a fade-out ends as a stop");
+        assert!(matches!(
+            feed.resume(0),
+            Some(VoiceCommand::MusicStart {
+                slot: 1,
+                crossfade: false,
+                generation: 2,
+                ..
+            })
+        ));
+        feed.refill();
+        assert!(new_rings[0].is_empty() && !new_rings[1].is_empty());
+    }
+
+    /// A player over constant chunks (generation 1), started with `fade_in` frames of fade.
+    fn pair_player(fade_in: usize, crossfade: bool) -> MusicPlayer {
+        let (mut player, _tx) = player(1, 2, 1.0);
+        player.apply(VoiceCommand::MusicStart {
+            slot: 0,
+            crossfade,
+            generation: 1,
+            gain: 1.0,
+            stem_gains: [1.0; MUSIC_STEMS_MAX],
+            count: 1,
+            fade_in,
+        });
+        player
+    }
+
+    #[test]
+    fn a_crossfade_pair_keeps_constant_power_and_a_plain_fade_stays_linear() {
+        let mut outgoing = pair_player(0, false);
+        let mut incoming = pair_player(8, true);
+        outgoing.make_equal_power();
+        outgoing.apply(VoiceCommand::MusicStop { fade_out: 8 });
+        for _ in 0..7 {
+            let mut scratch = [0.0; 2];
+            outgoing.mix_into(&mut scratch, &UNITY);
+            incoming.mix_into(&mut scratch, &UNITY);
+            let out = outgoing.fade_level().unwrap();
+            let inc = incoming.fade_level().unwrap();
+            assert!(
+                out > 0.0 && out < 1.0 && inc > 0.0 && inc < 1.0,
+                "{out} {inc}"
+            );
+            assert!(
+                (out * out + inc * inc - 1.0).abs() < 1e-3,
+                "{out}² + {inc}²"
+            );
+        }
+        let mut scratch = [0.0; 2];
+        outgoing.mix_into(&mut scratch, &UNITY);
+        incoming.mix_into(&mut scratch, &UNITY);
+        assert!(
+            outgoing.fade_level().is_none(),
+            "the outgoing player ends silent"
+        );
+        assert!((incoming.fade_level().unwrap() - 1.0).abs() < 1e-6);
+
+        // A plain start is linear: halfway through its fade the gain is the level.
+        let mut plain = pair_player(8, false);
+        let mut scratch = [0.0; 8];
+        plain.mix_into(&mut scratch, &UNITY);
+        assert!((plain.fade_level().unwrap() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_outgoing_player_mid_linear_fade_in_does_not_jump_when_the_crossfade_starts() {
+        let mut outgoing = pair_player(8, false);
+        let mut scratch = [0.0; 6];
+        outgoing.mix_into(&mut scratch, &UNITY);
+        let before = outgoing.fade_level().unwrap();
+        assert!((before - 0.375).abs() < 1e-6);
+        outgoing.make_equal_power();
+        assert!((outgoing.fade_level().unwrap() - before).abs() < 1e-5);
     }
 }
