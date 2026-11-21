@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 //! `ludion-window` — the native attach viewer for a running Ludion server (`ludion dev --window`).
@@ -80,6 +80,10 @@ pub mod host_input;
 pub mod keymap;
 pub mod mouse;
 mod reconnect;
+// The one platform cfg in `crates/`: objc2 refuses non-Apple targets, and the Windows `--all-features`
+// clippy gate must stay green (`Plan/input-actions.md` decision 33).
+#[cfg(all(feature = "apple-rumble", target_vendor = "apple"))]
+mod apple_rumble;
 mod rumble;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -552,7 +556,7 @@ pub fn spawn_gamepad_thread(
         let start = std::time::Instant::now();
         let mut mix = rumble::RumbleMix::default();
         let mut applied = (0.0_f32, 0.0_f32);
-        let mut _effect: Option<gilrs::ff::Effect> = None;
+        let mut output = rumble::PadRumble::default();
         while running.load(Ordering::Relaxed) {
             let now = start.elapsed();
             for command in rumble.try_iter() {
@@ -564,11 +568,9 @@ pub fn spawn_gamepad_thread(
             let motors = mix.motors(now);
             if motors != applied {
                 applied = motors;
-                _effect = None; // dropping an effect stops it
-                if let (Some(id), true) = (primary, motors != (0.0, 0.0)) {
-                    _effect = play_rumble(&mut gilrs, id, motors);
-                }
+                output.set(&mut gilrs, primary, motors, now);
             }
+            output.refresh(now);
             let timeout = Duration::from_millis(if primary.is_some() { 8 } else { 100 });
             let Some(event) = gilrs.next_event_blocking(Some(timeout)) else {
                 continue; // timed out with no event: loop back and re-check `running`
@@ -584,7 +586,7 @@ pub fn spawn_gamepad_thread(
                     if primary == Some(event.id) {
                         mix.clear();
                         applied = (0.0, 0.0);
-                        _effect = None;
+                        output.release();
                     }
                     let connected = gilrs.gamepads().map(|(id, _)| id);
                     for value in
@@ -604,47 +606,6 @@ pub fn spawn_gamepad_thread(
             }
         }
     })
-}
-
-/// Starts a force-feedback effect on `pad` with the mixed motor strengths (`low` drives the strong
-/// motor, `high` the weak one). The mix owns every stop (it drops the effect on a change, a clear or a
-/// disconnect), so the effect is built to play far longer than any mix lifetime: a constant mix that
-/// outlasts one request must not die with the backend. A pad without force feedback or a backend error
-/// is silent: this is host feel, not sim.
-fn play_rumble(
-    gilrs: &mut Gilrs,
-    pad: GamepadId,
-    (low, high): (f32, f32),
-) -> Option<gilrs::ff::Effect> {
-    use gilrs::ff::{BaseEffect, BaseEffectType, EffectBuilder, Replay, Ticks};
-    if !gilrs.gamepad(pad).is_ff_supported() {
-        return None;
-    }
-    let magnitude = |v: f32| (v * f32::from(u16::MAX)) as u16;
-    let replay = Replay {
-        play_for: Ticks::from_ms(u32::MAX),
-        ..Default::default()
-    };
-    let effect = EffectBuilder::new()
-        .add_effect(BaseEffect {
-            kind: BaseEffectType::Strong {
-                magnitude: magnitude(low),
-            },
-            scheduling: replay,
-            ..Default::default()
-        })
-        .add_effect(BaseEffect {
-            kind: BaseEffectType::Weak {
-                magnitude: magnitude(high),
-            },
-            scheduling: replay,
-            ..Default::default()
-        })
-        .gamepads(&[pad])
-        .finish(gilrs)
-        .ok()?;
-    effect.play().ok()?;
-    Some(effect)
 }
 
 /// The waiter thread: forward the caller's `stop` to the loop as a clean shutdown, or exit quietly

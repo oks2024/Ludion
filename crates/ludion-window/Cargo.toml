@@ -27,3 +27,15 @@ crossbeam-channel.workspace = true
 pollster.workspace = true
 serde_json.workspace = true
 gilrs.workspace = true
+
+# Apple-only: objc2 hard-errors on other targets, so the deps sit in a target table to keep the
+# Windows `--all-features` clippy gate green (`Plan/input-actions.md` decision 33).
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = { workspace = true, features = ["std"], optional = true }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSError", "NSSet", "NSString"], optional = true }
+objc2-game-controller = { workspace = true, features = ["std", "GCController", "GCDevice", "GCDeviceHaptics"], optional = true }
+objc2-core-haptics = { workspace = true, features = ["std", "block2", "CHHapticEngine", "CHHapticEvent", "CHHapticParameter", "CHHapticPattern", "CHHapticPatternPlayer"], optional = true }
+
+[features]
+# Rumble on Apple pads through GameController haptics (`src/apple_rumble.rs`). Inert off Apple.
+apple-rumble = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-game-controller", "dep:objc2-core-haptics"]

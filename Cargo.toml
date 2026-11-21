@@ -113,6 +113,12 @@ winit = "0.30"
 # OS gamepad API, so `gilrs`'s cross-OS/driver variance is a capture-UX concern, never a
 # determinism one (Plan/phase-13-input.md decisions 5-6).
 gilrs = "0.11"
+# Apple haptics for `ludion-window`'s opt-in `apple-rumble` feature (gilrs's macOS force feedback is
+# a stub). Apple targets only; objc2 refuses to compile elsewhere. Same objc2 0.6 family as winit.
+objc2 = { version = "0.6", default-features = false }
+objc2-foundation = { version = "0.3", default-features = false }
+objc2-game-controller = { version = "0.3", default-features = false }
+objc2-core-haptics = { version = "0.3", default-features = false }
 # Cross-platform audio output for the playback sink (`ludion-audio`, Phase 8 Wave 4). Chosen over
 # rodio, which stacks a mixer + symphonia decoder on top of cpal — our mixer is ~100 lines of
 # gain-and-sum over decoded PCM, and WAV is the only committed format, so cpal alone is the lean

@@ -6,6 +6,13 @@
 //! focus loss or disconnect. Headless (and in the out-of-process viewer) nothing is listening and the
 //! request is a silent no-op, so a game never branches on whether a pad exists.
 //!
+//! On macOS a pad only rumbles with the `apple-rumble` feature, which drives GameController haptics
+//! (without it the pad is silent; on Windows the feature is inert):
+//!
+//! ```toml
+//! ludion = { version = "0.1", features = ["apple-rumble"] }
+//! ```
+//!
 //! The headless `main` wires its own receiver in place of the pad thread, presses `Space`, advances
 //! one tick and prints the command that arrived. A real game's `main` is `ludion::run(game())`.
 //!

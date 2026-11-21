@@ -22,6 +22,9 @@ wire = ["dep:ludion-server", "dep:clap", "dep:ludion-assets"]
 # binds (`L0018`). Independent of `wire`: with both, the window hosts the listener alongside itself;
 # `window` alone is the desktop player shape, where `launch` opens the window with no listener.
 window = ["dep:ludion-window", "dep:winit"]
+# Pad rumble on macOS through Apple's GameController haptics (off by default; implies `window`).
+# Inert on other targets, where gilrs force feedback plays as before.
+apple-rumble = ["window", "ludion-window/apple-rumble"]
 # Measurement only: forwards `ludion-engine`'s `physics-profiler`, enabling `PhysicsWorld::step_breakdown`'s rapier stage timers. Never feeds the sim.
 physics-profiler = ["ludion-engine/physics-profiler"]
 

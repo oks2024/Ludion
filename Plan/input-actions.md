@@ -125,9 +125,30 @@
 29. **Intensity.** `Engine::set_rumble_intensity(0..=1)` scales every request and 0 drops every `Play`; a
     non-finite value is 1. Settings W3 binds the player setting to it.
 30. **Backend.** gilrs force feedback on Windows (WGI), strong motor for `low`, weak for `high`. gilrs's
-    macOS force feedback is a no-op stub, so rumble is silent on macOS.
+    macOS force feedback is a no-op stub, so macOS rumbles only through the Apple backend of decision 32
+    and is silent without it.
 31. **Stops.** Rumble stops when the window loses focus (the host sends `StopAll` itself, without the sim)
     and when the primary pad disconnects; with no primary pad commands are discarded.
+32. **Apple backend (W4b).** Cargo feature `apple-rumble` on `ludion-window` and the `ludion` facade, off by
+    default; module `ludion-window/src/apple_rumble.rs`, no new crate. It drives GameController haptics
+    through `objc2` 0.6 (`objc2-game-controller`, `objc2-core-haptics`: generated from Apple's headers,
+    the same objc2 family winit already pulls in, so no second objc2). `low` plays on
+    `GCHapticsLocalityLeftHandle`, `high` on the right handle (Xbox, DualShock and DualSense put the heavy
+    motor left, as XInput and gilrs do); a pad lacking either handle gets one `Default` engine playing
+    `max(low, high)`. Each play is one 30 s continuous event at the motor's intensity, replayed at 25 s
+    while the mix holds. Single pad: the first controller with haptics, acquired on the first non-zero
+    mix, released on disconnect or any error (the mix then falls back to gilrs). On Windows the feature is
+    inert: it compiles, the Apple backend is absent and gilrs plays as before, so
+    `cargo clippy --all-features` stays green. No L-codes (the pad thread has no diagnostics sink).
+    Deviations from the first reading of the API: `objc2-game-controller` 0.3.2 gates
+    `createEngineWithLocality:` to iOS/tvOS/visionOS though Apple ships it on macOS 11+, so it is sent
+    with `msg_send!`; the crate's `forbid(unsafe_code)` became `deny(unsafe_code)` with an `allow` in
+    `apple_rumble.rs` only.
+33. **The one platform cfg (owner condition).** `target_vendor = "apple"` (the Cargo target table for the
+    objc2 deps, the `apple_rumble` module declaration and the gated `PadRumble` field and calls) is the
+    single sanctioned platform site in `crates/`. A cargo feature alone cannot carry it: objc2
+    `compile_error!`s off Apple, and `check.mjs` and `ci.yml` run `clippy --workspace --all-features` on
+    Windows. Any other platform code needs a fresh owner ruling.
 
 ## Waves
 
@@ -147,7 +168,8 @@
 - **W3 — devices, glyphs and the full key set:** the whole keyboard appended after `Alt` plus `Back`/`Forward` (one corpus re-record), the window keymap and mouse mapping for them, recorded `gamepad_connected{family}` / `gamepad_disconnected`,
   `last_device` / `device_changed`, `Actions::source`, a glyph table (`glyph_name`), a focus event
   (accepted 2026-11-19, scheduled (W3)).
-- **W4 — rumble (shipped):** the outbox, the validator, the pad-thread mixer and the gilrs backend on Windows (decisions 27–31); macOS is silent.
+- **W4 — rumble (shipped):** the outbox, the validator, the pad-thread mixer and the gilrs backend on Windows (decisions 27–31); macOS is silent without W4b.
+- **W4b — Apple rumble backend (shipped):** the `apple-rumble` feature, GameController haptics on macOS (decisions 32–33).
 
 ## Status
 
@@ -185,14 +207,21 @@ facade's pad thread, a pure per-motor mixer in `ludion-window` and the gilrs bac
 intensity, no sender, restore and rebuild leaving an empty outbox, and an identical `WorldHash` trace with
 and without the playing system; the mixer is unit-tested. The pad thread polls every 8 ms while a primary
 pad is connected and every 100 ms otherwise. No `WorldHash`, trace, replay, golden or schema moved.
-**Owed:** rumble felt on a real pad on the Windows box, and the silence confirmed on the M4.
+**Owed:** rumble felt on a real pad on the Windows box.
+
+**W4b**: the Apple backend. `PadRumble` (`rumble.rs`) now owns the output side of the pad thread (the gilrs
+effect moved there unchanged) and prefers `apple_rumble::AppleRumble` when the feature is on; a declined
+play falls back to gilrs. Pure tests cover the handle mapping, the single-engine max and the 25 s refresh;
+a headless test shows no controller declines and release is a no-op. No `WorldHash`, trace, replay, golden
+or schema moved. **Owed:** a real pad felt on the M4 with `--features apple-rumble` (both grips, the 2 s
+cap, the focus-loss stop, the unplug stop), gilrs input still arriving with the backend active, and a
+Windows `clippy --workspace --all-features` run to prove the feature inert there.
 
 **R13:** `UiNav.back` ships (`Escape`/`East`, `ui_back`); no pinned artifact moved.
 
 ## Owner rulings (2026-11-19)
 
-- Accepted, scheduled (behind a cargo feature). **A macOS rumble backend** (GameController / CHHaptics). It is platform-shaped code in `crates/`, which
-  needs the owner's ruling (a cargo feature). Trigger: the game needs rumble on Mac.
+- Shipped (W4b). **A macOS rumble backend** (GameController / CHHaptics) behind the `apple-rumble` cargo feature.
 - Accepted. **The 8 ms pad poll.** A rumble command waits at most one poll, so the thread wakes every 8 ms while a
   primary pad is connected and every 100 ms without one. A pad event channel would remove the polling.
 

@@ -286,8 +286,11 @@ the systems. Headless and in the out-of-process viewer nothing listens, so a gam
 when the window loses focus and when the primary pad disconnects. `Engine::set_rumble_intensity(0..=1)`
 scales every request (0 drops them); the settings menu binds the player's choice to it.
 
-**Backends.** Windows plays through gilrs force feedback. macOS is silent: gilrs's macOS force feedback is
-a stub. The example `cargo run -p ludion --example rumble` presses a key headless and prints the command.
+**Backends.** Windows plays through gilrs force feedback. macOS rumbles with the `apple-rumble` cargo
+feature (`ludion = { ..., features = ["apple-rumble"] }`): GameController haptics, the left grip plays
+`low` and the right plays `high`, and a pad with one locality takes the louder of the two. Without the
+feature macOS is silent (gilrs's macOS force feedback is a stub), and on Windows the feature is inert.
+The example `cargo run -p ludion --example rumble` presses a key headless and prints the command.
 
 ## Aim recipe — cursor/stick to the ground plane
 

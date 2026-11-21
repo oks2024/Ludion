@@ -28,8 +28,8 @@ hello-paddle           → ludion  [schemars, serde]
     dev: assets, client, core, engine, protocol, testkit  [serde_json]
 ludion                 → ai, assets{watch}(wire), audio, core, ecs, engine, nav, physics,
       projectiles, protocol, render-graph, scene, server(wire), sim, spatial,
-      window(window)  [clap(wire), crossbeam-channel, ctrlc, schemars, serde, serde_json, wgpu,
-      winit(window)]
+      window(apple-rumble|window)  [clap(wire), crossbeam-channel, ctrlc, schemars, serde,
+      serde_json, wgpu, winit(window)]
 ludion-ai              → core, ecs  [schemars, serde, serde_json]
 ludion-assets          → core  [crossbeam-channel(watch), ktx2, notify(watch), png, serde,
       xxhash-rust]
@@ -93,7 +93,11 @@ ludion-testkit         → assets, audio, core, ecs, engine, protocol, scene, si
 ludion-texgen          → core, scene  [png, serde_json]
     dev: assets
 ludion-window          → client, core, protocol, render-graph  [crossbeam-channel, gilrs, lz4_flex,
-      pollster, qoi, serde_json, wgpu, winit]
+      objc2(apple-rumble)<cfg(target_vendor = "apple")>,
+      objc2-core-haptics(apple-rumble)<cfg(target_vendor = "apple")>,
+      objc2-foundation(apple-rumble)<cfg(target_vendor = "apple")>,
+      objc2-game-controller(apple-rumble)<cfg(target_vendor = "apple")>, pollster, qoi, serde_json,
+      wgpu, winit]
 shmup-stress           → ludion  [schemars, serde]
     dev: engine, testkit  [serde_json]
 sokoban                → ludion  [schemars, serde]
