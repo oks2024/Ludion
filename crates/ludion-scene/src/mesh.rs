@@ -5,8 +5,8 @@
 //! normals at load, a pure function of `positions` + `indices`; this crate only stores/validates),
 //! optional `uvs` (2 floats per vertex, stored losslessly), optional `tangents` (4 floats per
 //! vertex, geometry a normal map needs), optional per-vertex material lists
-//! `emissive`, `metallic`, `roughness` (1 float per vertex each — `roughness`/`metallic` are
-//! perceptual values in `[0, 1]`, `emissive` is an HDR intensity multiplier on the vertex color,
+//! `emissive`, `metallic`, `porosity`, `roughness` (1 float per vertex each — `roughness`/`metallic`
+//! are perceptual values and `porosity` a wet-surface factor, all in `[0, 1]`; `emissive` is an HDR intensity multiplier on the vertex color,
 //! `>= 0`), up to five optional texture references ([`MeshTextures`]), the optional skin keys
 //! `joints`/`weights`/`bone_indices` ([`MeshSkin`], all three or none), and a required `indices`
 //! triangle list. A generated mesh also carries an optional
@@ -83,7 +83,7 @@ pub enum AlphaMode {
     },
 }
 
-const MESH_KEYS: [&str; 28] = [
+const MESH_KEYS: [&str; 29] = [
     "format",
     "kind",
     "name",
@@ -95,6 +95,7 @@ const MESH_KEYS: [&str; 28] = [
     "tangents",
     "emissive",
     "metallic",
+    "porosity",
     "roughness",
     "base_color_texture",
     "metallic_roughness_texture",
@@ -155,6 +156,9 @@ pub struct MeshDocument {
     /// Flat per-vertex metallic, 1 float per vertex, perceptual `[0, 1]`. `None` means "no
     /// authored metallic" — the default material value (`0.0`) applies.
     pub metallic: Option<Vec<f64>>,
+    /// Flat per-vertex wet-surface porosity, 1 float per vertex, `[0, 1]`. `None` means "no
+    /// authored porosity" — `0.5` applies.
+    pub porosity: Option<Vec<f64>>,
     /// Flat per-vertex roughness, 1 float per vertex, perceptual `[0, 1]`. `None` means "no
     /// authored roughness" — the default material value (`1.0`) applies.
     pub roughness: Option<Vec<f64>>,
@@ -586,6 +590,15 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
                     &entry.node,
                     "/metallic",
                     "metallic",
+                    code::MESH_DOCUMENT_STRUCTURE,
+                    &mut diagnostics,
+                );
+            }
+            "porosity" => {
+                doc.porosity = expect_float_list(
+                    &entry.node,
+                    "/porosity",
+                    "porosity",
                     code::MESH_DOCUMENT_STRUCTURE,
                     &mut diagnostics,
                 );
@@ -1911,6 +1924,12 @@ pub(crate) fn validate(doc: &MeshDocument) -> Vec<Diagnostic> {
         &mut diagnostics,
     );
     check_material_list(
+        doc.porosity.as_deref(),
+        "porosity",
+        vertex_count,
+        &mut diagnostics,
+    );
+    check_material_list(
         doc.roughness.as_deref(),
         "roughness",
         vertex_count,
@@ -2469,7 +2488,7 @@ pub(crate) fn budget_warning(doc: &MeshDocument) -> Option<Diagnostic> {
 /// provenance block, written where a diff shows it rather than below the bulk float lists),
 /// `positions`, `normals`
 /// (optional), `uvs` (optional), `tangents` (optional — geometry, so it sits with the other vertex
-/// lists), `emissive`/`metallic`/`roughness` (each optional, alphabetical
+/// lists), `emissive`/`metallic`/`porosity`/`roughness` (each optional, alphabetical
 /// order, emitted only when authored), the five texture references (optional, in
 /// [`MeshTextures::slots`] order), `alpha_mode: mask` (with `alpha_cutoff` unless it is 0.5) and
 /// `double_sided: true` (each only when set), the skin (`joints`, `weights`, `bone_indices` — optional, all
@@ -2508,6 +2527,9 @@ pub(crate) fn emit(doc: &MeshDocument) -> String {
     }
     if let Some(metallic) = &doc.metallic {
         write_float_list(&mut out, "metallic", metallic);
+    }
+    if let Some(porosity) = &doc.porosity {
+        write_float_list(&mut out, "porosity", porosity);
     }
     if let Some(roughness) = &doc.roughness {
         write_float_list(&mut out, "roughness", roughness);

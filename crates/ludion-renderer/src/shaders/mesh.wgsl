@@ -20,7 +20,7 @@ struct VsIn {
     @location(2) vertex_color: vec4<f32>,
     // Per-vertex material (roughness, metallic, emissive) — authored per palette entry / mesh-doc
     // vertex, default (1, 0, 0) otherwise.
-    @location(3) vertex_material: vec3<f32>,
+    @location(3) vertex_material: vec4<f32>,
     // Per-vertex texture coordinates: they address the five material maps.
     @location(4) uv: vec2<f32>,
     // Per-vertex tangent frame (xyz along +U, w the bitangent's handedness): the normal map's TBN
@@ -57,8 +57,10 @@ struct VsIn {
     @location(19) bones: vec4<u32>,
     // Per-instance rim (color·strength rgb, power); all-zero rgb is no rim.
     @location(20) rim: vec4<f32>,
-    // Per-instance scale on the medium's optical depth to this mesh (1.0 = today's frame).
-    @location(21) medium: f32,
+    // Per-instance `(medium scale, cull scatter slot, porosity)`: `.x` scales the medium's optical depth
+    // to this mesh (1.0 = today's frame), `.y` is written by the cull pass and never read here, `.z` is
+    // the wet-surface porosity.
+    @location(21) medium: vec3<f32>,
 };
 
 struct VsOut {
@@ -66,7 +68,8 @@ struct VsOut {
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) color: vec4<f32>,
-    @location(3) material: vec3<f32>,
+    // `(roughness, metallic, emissive, porosity)`, the selected vertex or instance material.
+    @location(3) material: vec4<f32>,
     // Per-instance occlusion fade `(fade, height_min, bone_offset)`, flat (a per-instance constant — no
     // interpolation) so the fragment stage sees the exact authored values for the Bayer discard; the
     // bone offset is nonzero for a skinned instance (`fs_main` flags the surface with it).
@@ -127,13 +130,16 @@ fn vs_main(in: VsIn) -> VsOut {
     // Per-vertex color modulates the per-instance color; white vertices leave the instance color exact.
     out.color = in.vertex_color * in.color;
     // Selection is per-instance (flag in w), so mixing here then interpolating is exact.
-    out.material = mix(in.instance_material.xyz, in.vertex_material, in.instance_material.w);
+    out.material = vec4<f32>(
+        mix(in.instance_material.xyz, in.vertex_material.xyz, in.instance_material.w),
+        mix(in.medium.z, in.vertex_material.w, in.instance_material.w),
+    );
     // Carry the fade lane (fade, height_min) to the fragment stage for the screen-door discard.
     out.fade = in.fade.xyz;
     // Carry the hit-flash lane to the fragment stage.
     out.flash = in.flash;
     out.rim = in.rim;
-    out.medium = in.medium;
+    out.medium = in.medium.x;
     let wrap = wrap_lanes(in);
     out.wrap = wrap.wrap;
     out.wrap_extent = wrap.extent;
@@ -337,10 +343,9 @@ fn surface_wetness(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
 }
 
 // The wet look (`Plan/rain-and-wet.md` decision 14): the albedo multiplier at full wetness and porosity,
-// the roughness of a water film, and the porosity every surface takes until a document authors one.
+// and the roughness of a water film. Porosity is authored per vertex or per instance (`in.material.w`).
 const WET_ALBEDO_DARKEN: f32 = 0.6;
 const WET_ROUGHNESS: f32 = 0.08;
-const WET_POROSITY_DEFAULT: f32 = 0.5;
 
 fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
     // Screen-door occlusion fade (opaque pipeline — no blend, no depth-write change; discard is the
@@ -388,7 +393,7 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
 
     // glTF packs roughness in `g` and metallic in `b`; both are factors on what the vertex/instance
     // material authored, so a map over a `(1, 0, …)` default reads as the map's own values.
-    var surface = in.material;
+    var surface = in.material.xyz;
     if ((material.flags & MATERIAL_METALLIC_ROUGHNESS) != 0u) {
         let mr = textureSample(metallic_roughness_tex, material_samp, in.uv);
         surface = vec3<f32>(surface.x * mr.g, surface.y * mr.b, surface.z);
@@ -425,7 +430,7 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
             geometric = -geometric;
         }
         let wet = surface_wetness(in.world_pos, geometric);
-        albedo = albedo * mix(1.0, WET_ALBEDO_DARKEN, wet * WET_POROSITY_DEFAULT);
+        albedo = albedo * mix(1.0, WET_ALBEDO_DARKEN, wet * in.material.w);
         surface.x = mix(surface.x, WET_ROUGHNESS, wet * (1.0 - surface.y));
     }
 

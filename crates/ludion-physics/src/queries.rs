@@ -225,7 +225,7 @@ pub struct QueryFilter {
     pub(crate) include_sensors: bool,
     pub(crate) only_fixed: bool,
     pub(crate) body_layers_only: bool,
-    pub(crate) partner: Option<EntityId>,
+    pub(crate) partners: Vec<EntityId>,
 }
 
 impl QueryFilter {
@@ -240,7 +240,8 @@ impl QueryFilter {
         self
     }
 
-    /// Drops `entity`'s hit too; independent of [`exclude`](QueryFilter::exclude).
+    /// Drops `entity`'s hit too; independent of [`exclude`](QueryFilter::exclude). Repeatable: each
+    /// call adds one more entity.
     ///
     /// # Example
     /// ```
@@ -251,7 +252,7 @@ impl QueryFilter {
     /// assert_ne!(filter, QueryFilter::new());
     /// ```
     pub fn ignore_partner(mut self, entity: EntityId) -> Self {
-        self.partner = Some(entity);
+        self.partners.push(entity);
         self
     }
 

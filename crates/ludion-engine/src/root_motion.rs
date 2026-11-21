@@ -82,6 +82,18 @@ pub fn root_motion_delta(world: &World, entity: EntityId, ctx: &SystemCtx) -> Op
         return None;
     };
     let transform = world.get::<Transform>(entity).ok().flatten()?;
+    root_motion_of(world, animation, rel, transform, ctx)
+}
+
+/// [`root_motion_delta`]'s arithmetic on already-read components, so a caller that reads unrecorded
+/// (a paired entity's driver) shares it bit for bit.
+pub(crate) fn root_motion_of(
+    world: &World,
+    animation: &Animation,
+    rel: &str,
+    transform: &Transform,
+    ctx: &SystemCtx,
+) -> Option<RootMotion> {
     let roots = world.resource::<AnimationLibrary>()?.root_clips(rel);
 
     let now = ctx.game_instant;

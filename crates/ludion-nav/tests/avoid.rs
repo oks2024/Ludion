@@ -35,7 +35,7 @@ fn no_neighbors_returns_preferred_clamped() {
 fn head_on_pair_swaps_sides_without_overlap() {
     let mut lines = Vec::new();
     let dt = 0.1;
-    let goals = [[5.0, 0.05], [-5.0, -0.05]];
+    let goals = [[5.0, 0.0], [-5.0, 0.0]];
     let mut pos = [[-5.0f32, 0.0], [5.0, 0.0]];
     let mut vel = [[0.0f32; 2]; 2];
     let mut min_dist = f32::MAX;
@@ -81,7 +81,7 @@ fn full_responsibility_passes_a_static_neighbor() {
     let obstacle = [0.0f32, 0.0];
     let mut min_dist = f32::MAX;
     for _ in 0..200 {
-        let to_goal = [5.0 - pos[0], 0.05 - pos[1]];
+        let to_goal = [5.0 - pos[0], -pos[1]];
         let l = len(to_goal).max(1e-4);
         let preferred = [to_goal[0] / l * l.min(1.0), to_goal[1] / l * l.min(1.0)];
         let a = agent(pos, vel, preferred);

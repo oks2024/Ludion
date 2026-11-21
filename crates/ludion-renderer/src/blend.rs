@@ -585,6 +585,7 @@ mod tests {
 
     fn mesh(model: Mat4) -> MeshInstance {
         MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape: MeshShape::Cube,
             model,

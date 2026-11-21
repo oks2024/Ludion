@@ -699,7 +699,8 @@ pub mod code {
     pub const PAIRED_CAST_INVALID: DiagnosticCode = DiagnosticCode::new("L4371");
     /// `L4372` — a cast entity's scale is not uniform or differs from its role's `scale`.
     pub const PAIRED_SCALE_MISMATCH: DiagnosticCode = DiagnosticCode::new("L4372");
-    /// `L4373` — a paired document has a shape the runtime does not play yet: more than two roles.
+    /// `L4373` — a paired document has more roles than a motor has partners to look through (more
+    /// than five).
     pub const PAIRED_UNSUPPORTED: DiagnosticCode = DiagnosticCode::new("L4373");
     /// `L4374` — warning: a game write to a playing paired role's `Animation` (`clip`, `started` or
     /// `speed`) broke lockstep, so the whole action was aborted.
@@ -1340,6 +1341,13 @@ pub mod code {
     /// `L1755` — warning: a paired contact's measured gap exceeds its `max_gap`.
     pub const PAIRED_CONTACT_GAP: DiagnosticCode = DiagnosticCode::new("L1755");
 
+    /// `L1756` — `ludion render --paired` was asked for phases it cannot draw: a `--strip` outside
+    /// 2..=16, a `--time` that is not a finite instant inside the document, or both together.
+    pub const PAIRED_RENDER_INPUT: DiagnosticCode = DiagnosticCode::new("L1756");
+
+    /// `L1759` — an `IgnoreCollisions` lists more entities than a motor looks through at once.
+    pub const IGNORE_COLLISIONS_TOO_MANY: DiagnosticCode = DiagnosticCode::new("L1759");
+
     /// `L1189` — a `Collider` whose shape is a `compound` is structurally invalid: `parts` is
     /// missing or empty, a part's `shape` is a `compound`, `heightfield`, `circle` or `aabb`, or a
     /// part `translation`/`rotation` element is beyond `f32` range. The JSON Pointer names the
@@ -1417,9 +1425,9 @@ pub mod code {
     /// parts, so layers have nothing to compose over. Raised once per skin.
     pub const ANIMATION_LAYERS_ON_SKIN_BONE_SKIN: DiagnosticCode = DiagnosticCode::new("L1672");
 
-    /// `L1673` — an `IkTargets` target is invalid: not exactly one of `point` or
-    /// `direction`, a `weight` or `from_weight` outside `[0, 1]`, a negative or non-finite `fade`, or
-    /// a non-finite number. Pointed at `/targets/<name>/<field>`.
+    /// `L1673` — an `IkTargets` target is invalid: more than one of `point`,
+    /// `entity` and `direction`, a `weight` or `from_weight` outside `[0, 1]`, a negative or non-finite `fade`, or
+    /// a non-finite number (including an `offset` entry). Pointed at `/targets/<name>/<field>`.
     pub const IK_TARGET_INVALID: DiagnosticCode = DiagnosticCode::new("L1673");
 
     /// `L1201` — a glTF input could not be read or parsed: the file is unreadable, or its bytes are
@@ -7732,6 +7740,29 @@ Fix: move the target's `align.offsets` entry closer, change the event time, or r
 `ludion docs paired-actions`.",
     },
     CodeEntry {
+        code: code::PAIRED_RENDER_INPUT,
+        severity: Severity::Error,
+        title: "a paired render was asked for phases it cannot draw",
+        explanation: "\
+`ludion render --paired` draws one cell per phase. `--strip N` takes 2 to 16 evenly spaced phases over
+`[0, end]`; `--time T` takes one finite instant from 0 to the document's end (the longest clip, or the
+align's duration when no role has a clip); the two cannot be combined. Without either, the phases are
+the document's events, or t 0 when it has none.
+
+Fix: pass one of `--strip 6`, `--time 0.5`, or neither; see `ludion docs paired-actions`.",
+    },
+    CodeEntry {
+        code: code::IGNORE_COLLISIONS_TOO_MANY,
+        severity: Severity::Error,
+        title: "an IgnoreCollisions lists too many entities",
+        explanation: "\
+A motor looks through at most 4 entities (`MAX_PARTNERS`), so an `IgnoreCollisions` `with` list of more
+than 4 would silently ignore the rest at runtime. The pointer is `/with`.
+
+Fix: list at most 4 entities; a paired action of up to 5 roles lists the other 4 on each participant;
+see `ludion docs motor`.",
+    },
+    CodeEntry {
         code: code::COLLIDER_COMPOUND_INVALID,
         severity: Severity::Error,
         title: "compound collider is structurally invalid",
@@ -8028,14 +8059,14 @@ Fix: remove `AnimationLayers` from the skin, or remove every `SkinBone` part tha
         explanation: "\
 One target of an `IkTargets` component holds a value the IK pass cannot use. One of:
 
-  - it sets none, or both, of `point` and `direction`;
+  - it sets two or more of `point`, `entity` and `direction`;
   - `weight` or `from_weight` is outside `[0, 1]` or not finite;
   - `fade` is negative or not finite;
-  - a `point` or `direction` number is not finite.
+  - a `point`, `offset` or `direction` number is not finite.
 
 Pointed at `/targets/<name>/<field>`.
 
-Fix: set exactly one of `point` or `direction`, keep weights in `[0, 1]`, and keep `fade`
+Fix: set at most one of `point`, `entity` or `direction`, keep weights in `[0, 1]`, and keep `fade`
 finite and non-negative.",
     },
     CodeEntry {
@@ -14090,12 +14121,13 @@ Fix: set the entity's uniform scale to the role's `scale`, or change the role's 
     CodeEntry {
         code: code::PAIRED_UNSUPPORTED,
         severity: Severity::Error,
-        title: "a paired document is not playable yet",
+        title: "a paired document has more roles than the runtime plays",
         explanation: "\
-The runtime fits and plays paired documents of exactly two roles. A document with more roles checks fine
-with `ludion check-scene`, but `paired_fit` refuses it.
+The runtime fits and plays paired documents of up to 5 roles: each participant's motor looks through
+the other roles, and a motor looks through at most 4 entities. A document with more roles checks fine
+with `ludion check-scene`, but `paired_fit` and `start_paired` refuse it.
 
-Fix: split the action into pairs of roles; see `ludion docs paired-actions`.",
+Fix: split the action into smaller ones; see `ludion docs paired-actions`.",
     },
     CodeEntry {
         code: code::PAIRED_LOCKSTEP_BROKEN,
@@ -14533,6 +14565,8 @@ mod tests {
         code::PAIRED_DATA_CONSISTENCY,
         code::PAIRED_ROLE_MISMATCH,
         code::PAIRED_CONTACT_GAP,
+        code::PAIRED_RENDER_INPUT,
+        code::IGNORE_COLLISIONS_TOO_MANY,
         code::COLLIDER_COMPOUND_INVALID,
         code::MESH_SKIN_STRUCTURE,
         code::MESH_SKIN_DATA,

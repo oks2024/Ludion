@@ -1,6 +1,6 @@
 # Plan: Paired animations and a posed ragdoll — rest-relative zeros, part velocity, the way back, `kind: paired`
 
-> Status: **W1–W4 mechanized; W5a in progress (fit: 0008-05; run: 0008-06); W5b, W6 not started.** Driver: Neon Shroud request 0008
+> Status: **W1–W4 mechanized; W5a mechanized (fit: 0008-05; run: 0008-06); W5b, W6 not started.** Driver: Neon Shroud request 0008
 > (`engine-requests/0008-paired-animations-and-posed-ragdoll.md`). A takedown aligns two voxel assemblies,
 > plays one clip on both, and ends with the target ragdolled at the pose it died in; the way back
 > (get-up) re-poses an assembly from a ragdoll. The design below was written from the tree on 2026-11-18,
@@ -88,6 +88,20 @@ golden moved; nothing was blessed.
 | `docs/paired-actions.md`, `docs/motor.md` (+ mirrors) | §Can it start?, the `IgnoreCollisions` paragraph |
 
 No `WorldHash`, replay, protocol schema, `PHYSICS_BLOB_VERSION` or golden moved. Only `component_schemas.json` re-blessed. The M4 cross-arch twin of the aligned-pose test is owed.
+
+### W5a run — `PairedAction`, `start_paired`, `paired_motion`, `paired_update`, `abort_paired`, L4374–L4375
+
+| file | role |
+|---|---|
+| `crates/ludion-components/src/paired_action.rs`, `lib.rs` | `PairedAction` (hashed, registered last, not sim-only) |
+| `crates/ludion-engine/src/paired.rs`, `animation_events.rs`, `lib.rs` | `resolve`, `start_paired`, `paired_motion`, `paired_update`, `abort_paired`, `PairedMotion`; `AnimationEvents::push` |
+| `crates/ludion-scene/src/paired.rs` | `end` reserved (`L1753`) |
+| `crates/ludion-core/src/codes.rs` | `L4374` (warning), `L4375` |
+| `crates/ludion-engine/tests/paired_run.rs`, `examples/paired_action.rs` | the run proofs; the headless example |
+| `docs/paired-actions.md` (+ mirror) | §Playing it |
+| `ludion-testkit/src/drift.rs`, `registry_serialized_default.rs`, the prelude | seed, fixture, exports |
+
+`paired_update` is game-registered (decision 32). No `WorldHash` of a scene that never starts an action, replay, protocol schema, `PHYSICS_BLOB_VERSION` or golden moved. Only `component_schemas.json` re-blessed. The M4 cross-arch twin of the warp test is owed.
 
 ## Trigger
 
@@ -202,6 +216,32 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
     yaw change against `max_warp`. Every motor role is fit-tested at its target pose and role `posture`,
     ignoring its partner; a role without a motor is not fit-tested. Nothing is mutated.
 26. **Differences from the request.** `Warp { distance, yaw_deg }`; `PairedFit` adds `over_warp` and `roles`.
+
+27. **`PairedAction { document, action, role, reference, started, fired }`.** One ref per participant; the
+    partners are the entities with the same `(document, reference, started)`. `fired` counts the document
+    events this participant has fired.
+28. **`start_paired(world, paired, cast, fade, game_time) -> Result<(), Vec<Diagnostic>>`.** It takes
+    `game_time` rather than `ctx` (decision 6) and does not re-test the fit: call `paired_fit` first. Order:
+    validate everything; set postures, rolling back if one is blocked; end any earlier role of a cast entity
+    (chaining); insert `IgnoreCollisions` both ways and `PairedAction`; crossfade each clip role to its clip
+    at speed 1. An `align_only` role's `Animation` is left alone.
+29. **`paired_motion(world, entity, ctx) -> Option<PairedMotion { displacement, yaw, warping }>`.** A
+    closed-loop smoothstep warp toward the aligned pose recomputed each tick, held after the warp (`f = 1`
+    once complete; `f = 0` only on a held tick). `None` off the action; a zero step for a non-mover or a gone partner.
+30. **`paired_update`.** Events fire once per participant as `ClipEvent { clip: "paired:<action>" }` in
+    ascending entity order after the clip events, by the `fired` index: never lost, never twice. A `t: 0`
+    event fires on the start tick when `start_paired` runs before the system, else one tick later. The end is
+    the longest clip role's duration (`ticks` for `align_only`-only documents): the remaining events and an
+    implicit `end` fire and every `PairedAction` and `IgnoreCollisions` go on that tick. `end` is reserved
+    (`L1753`). A participant whose `Animation` or assembly `Mesh` is gone ends its own role only. A changed
+    `clip`, `started` or `speed` aborts the whole action and warns `L4374` once per entity; the guard does
+    not name the writer (W5b).
+31. **`abort_paired(world, entity) -> Result<Vec<(String, EntityId)>, Diagnostic>`.** Ends every
+    participant now and returns the cast so the game crossfades; no `fade` or `clip_for` (W5b). `L4375` for
+    an entity not in an action.
+32. **`paired_update` is game-registered, not engine-scheduled.** It must run after `animation_events`,
+    which rewrites `AnimationEvents`, and before any reader. A default system would change every game's
+    schedule and traces, including games that never pair (the `animation_events` and `play_patterns` precedent).
 
 ## Waves
 

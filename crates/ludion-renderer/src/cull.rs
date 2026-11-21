@@ -797,6 +797,7 @@ mod tests {
 
     fn instance(shape: MeshShape, model: Mat4) -> MeshInstance {
         MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape,
             model,
@@ -1071,6 +1072,7 @@ mod tests {
             normals: [0.0, 0.0, 1.0].repeat(n),
             colors: vec![1.0; n * 4],
             materials: [1.0, 0.0, 0.0].repeat(n),
+            porosity: [crate::DEFAULT_POROSITY].repeat(n),
             uvs: vec![0.0; n * 2],
             tangents: [1.0, 0.0, 0.0, 1.0].repeat(n),
             weights,

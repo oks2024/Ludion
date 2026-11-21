@@ -79,10 +79,29 @@ Ranges: `decay_s` 0.1 to 20, `pre_delay_ms` 0 to 200, `damping`, `size`, `wet` 0
 
 ## Gotchas
 
-- **The playback sink plays the beds but does not yet mix the reverb or the zone gains**: `ReverbSet` and `ZoneGain`
-  reach the audio log and the sink's channel, and the sink routes both to nothing. Assert on the log.
+- **The sink hears all of it.** Beds play; `ZoneGain` multiplies the bus (a sink-private layer: `authored x user x game x
+  duck x zone x pause`); `ReverbSet` drives one algorithmic stereo reverb on a send bus. A voice's send is
+  `clamp(bus default + spatial.send, 0, 1)`, taken **after** its fader, filter and pan, so a ducked or paused bus sends
+  less. Defaults: `sfx`, `ambient` and `voice` send `1.0`; `ui` and `music` send `0.0` (music stays dry). A scene load
+  returns the reverb to dry and the zone layer to `1.0`. A world with no wet reverb mixes bit-identically to before.
 - Priority decides who is heard, weight decides how much: two overlapping zones of equal priority never blend — the
   lowest `EntityId` wins whole.
+
+## Asserting on the mix
+
+`ludion_testkit::audio::audio_mix_at(&engine, frame)` folds the audio log up to `frame` into a `MixState`: `bus(Bus)`
+(`user`, `game`, `duck`, `zone`, `paused`), `reverb`, `loops`, `voices` and `bed(zone, i)`. It records **targets**, not
+mid-fade levels. Limits: a voice's natural end is not in the stream, so it stays until `VoiceStop` or `StopAllLoops`;
+the log keeps its last 4096 entries, so a long drive folds a `SoundTap`'s messages with `mix_state(&messages, frame)`.
+
+```rust
+let mix = ludion_testkit::audio::audio_mix_at(&engine, frame);
+assert!(mix.bed(dock, 0).is_some_and(|bed| bed.gain >= 0.495));
+assert!(mix.reverb.near(&hall_medium));
+assert!((mix.bus(Bus::Ambient).zone - 0.9).abs() < 0.01);
+```
+
+Runnable: `crates/ludion-testkit/tests/audio_mix.rs`, and the gallery scene `examples/gallery/audio-zones.yaml`.
 
 ## Next
 

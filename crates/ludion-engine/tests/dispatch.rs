@@ -1284,6 +1284,89 @@ fn collection_refs_follow_their_entities_through_save_and_snapshot() {
     );
 }
 
+/// `IkTargets` is a sanctioned collection: its entity targets follow their entities through save,
+/// reload and snapshot, and a despawned one saves as `entity: null`, which reloads.
+#[test]
+fn ik_target_entities_follow_their_entities_through_save_and_snapshot() {
+    let root = temp_project();
+    let mut engine = collection_engine(&root);
+    let a = spawn_named(&mut engine, "A");
+    let b = spawn_named(&mut engine, "B");
+    let c = spawn_named(&mut engine, "C");
+    let target = |id: EntityId| {
+        json!({
+            "entity": { "index": id.index, "generation": id.generation },
+            "offset": [0.0, 0.125, 0.0],
+            "weight": 1.0,
+        })
+    };
+    spawn_with(
+        &mut engine,
+        "rig",
+        "IkTargets",
+        json!({ "targets": { "hand_l": target(b), "hand_r": target(c) } }),
+    );
+
+    let snapshot = match ok(&mut engine, Command::EngineSnapshot) {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("{other:?}"),
+    };
+    let mut restored = Engine::builder().build().unwrap();
+    match ok(
+        &mut restored,
+        Command::EngineRestore(EngineRestoreParams { snapshot }),
+    ) {
+        ResponseBody::Restored { report } => assert!(report.is_clean(), "{report:?}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(engine.world_hash().unwrap(), restored.world_hash().unwrap());
+
+    // Destroying A shifts B down; destroying C leaves `hand_r` dangling.
+    for entity in [a, c] {
+        ok(
+            &mut engine,
+            Command::EntityDestroy(EntityDestroyParams { entity }),
+        );
+    }
+    ok(
+        &mut engine,
+        Command::SceneSave(SceneSaveParams {
+            path: "out.yaml".into(),
+            force: false,
+        }),
+    );
+    let saved = std::fs::read_to_string(root.join("out.yaml")).unwrap();
+    let mut reloaded = collection_engine(&root);
+    reloaded
+        .load_inline_scene(&saved)
+        .expect("a nulled target validates (no L1673)");
+    let ids: Vec<EntityId> = reloaded.world().entities().collect();
+    assert_eq!(ids.len(), 2, "B and the rig");
+    let targets = component_value(&mut reloaded, ids[1], "IkTargets")["targets"].clone();
+    assert_eq!(
+        targets["hand_l"]["entity"],
+        json!({ "index": 0, "generation": 0 }),
+        "B follows to position 0"
+    );
+    assert_eq!(targets["hand_l"]["offset"], json!([0.0, 0.125, 0.0]));
+    assert_eq!(
+        targets["hand_r"].get("entity").unwrap_or(&Value::Null),
+        &Value::Null,
+        "the dead C is none"
+    );
+
+    // The nulled target saves again and reloads again.
+    ok(
+        &mut reloaded,
+        Command::SceneSave(SceneSaveParams {
+            path: "again.yaml".into(),
+            force: true,
+        }),
+    );
+    let again = std::fs::read_to_string(root.join("again.yaml")).unwrap();
+    collection_engine(&root).load_inline_scene(&again).unwrap();
+}
+
 /// A required element reference whose target is gone refuses the save like a single required field.
 #[test]
 fn a_required_collection_ref_naming_a_despawned_entity_is_l1018_on_save() {

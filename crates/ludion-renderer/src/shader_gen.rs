@@ -5226,7 +5226,7 @@ pub const DECAL_RECEIVER_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (0, wgpu::VertexFormat::Float32x3),
     (1, wgpu::VertexFormat::Float32x3),
     (2, wgpu::VertexFormat::Float32x4),
-    (3, wgpu::VertexFormat::Float32x3),
+    (3, wgpu::VertexFormat::Float32x4),
     (4, wgpu::VertexFormat::Float32x2),
     (5, wgpu::VertexFormat::Float32x4),
     (6, wgpu::VertexFormat::Float32x4),
@@ -5244,7 +5244,7 @@ pub const DECAL_RECEIVER_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (18, wgpu::VertexFormat::Float32x4),
     (19, wgpu::VertexFormat::Uint32x4),
     (20, wgpu::VertexFormat::Float32x4),
-    (21, wgpu::VertexFormat::Float32),
+    (21, wgpu::VertexFormat::Float32x3),
 ];
 
 /// `ground_marker.wgsl`'s `vs_main` `@location` inputs, in location order.
@@ -5268,7 +5268,7 @@ pub const MESH_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (0, wgpu::VertexFormat::Float32x3),
     (1, wgpu::VertexFormat::Float32x3),
     (2, wgpu::VertexFormat::Float32x4),
-    (3, wgpu::VertexFormat::Float32x3),
+    (3, wgpu::VertexFormat::Float32x4),
     (4, wgpu::VertexFormat::Float32x2),
     (5, wgpu::VertexFormat::Float32x4),
     (6, wgpu::VertexFormat::Float32x4),
@@ -5286,7 +5286,7 @@ pub const MESH_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (18, wgpu::VertexFormat::Float32x4),
     (19, wgpu::VertexFormat::Uint32x4),
     (20, wgpu::VertexFormat::Float32x4),
-    (21, wgpu::VertexFormat::Float32),
+    (21, wgpu::VertexFormat::Float32x3),
 ];
 
 /// `particle.wgsl`'s `vs_depth` `@location` inputs, in location order.
@@ -5314,7 +5314,7 @@ pub const PREPASS_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (0, wgpu::VertexFormat::Float32x3),
     (1, wgpu::VertexFormat::Float32x3),
     (2, wgpu::VertexFormat::Float32x4),
-    (3, wgpu::VertexFormat::Float32x3),
+    (3, wgpu::VertexFormat::Float32x4),
     (4, wgpu::VertexFormat::Float32x2),
     (5, wgpu::VertexFormat::Float32x4),
     (6, wgpu::VertexFormat::Float32x4),
@@ -5332,7 +5332,7 @@ pub const PREPASS_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (18, wgpu::VertexFormat::Float32x4),
     (19, wgpu::VertexFormat::Uint32x4),
     (20, wgpu::VertexFormat::Float32x4),
-    (21, wgpu::VertexFormat::Float32),
+    (21, wgpu::VertexFormat::Float32x3),
 ];
 
 /// `shadow.wgsl`'s `vs_main` `@location` inputs, in location order.
@@ -5352,7 +5352,7 @@ pub const SHADOW_CUTOUT_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (0, wgpu::VertexFormat::Float32x3),
     (1, wgpu::VertexFormat::Float32x3),
     (2, wgpu::VertexFormat::Float32x4),
-    (3, wgpu::VertexFormat::Float32x3),
+    (3, wgpu::VertexFormat::Float32x4),
     (4, wgpu::VertexFormat::Float32x2),
     (5, wgpu::VertexFormat::Float32x4),
     (6, wgpu::VertexFormat::Float32x4),
@@ -5370,7 +5370,7 @@ pub const SHADOW_CUTOUT_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (18, wgpu::VertexFormat::Float32x4),
     (19, wgpu::VertexFormat::Uint32x4),
     (20, wgpu::VertexFormat::Float32x4),
-    (21, wgpu::VertexFormat::Float32),
+    (21, wgpu::VertexFormat::Float32x3),
 ];
 
 /// `silhouette_mask.wgsl`'s `vs_main` `@location` inputs, in location order.
@@ -5378,7 +5378,7 @@ pub const SILHOUETTE_MASK_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (0, wgpu::VertexFormat::Float32x3),
     (1, wgpu::VertexFormat::Float32x3),
     (2, wgpu::VertexFormat::Float32x4),
-    (3, wgpu::VertexFormat::Float32x3),
+    (3, wgpu::VertexFormat::Float32x4),
     (4, wgpu::VertexFormat::Float32x2),
     (5, wgpu::VertexFormat::Float32x4),
     (6, wgpu::VertexFormat::Float32x4),
@@ -5396,7 +5396,7 @@ pub const SILHOUETTE_MASK_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (18, wgpu::VertexFormat::Float32x4),
     (19, wgpu::VertexFormat::Uint32x4),
     (20, wgpu::VertexFormat::Float32x4),
-    (21, wgpu::VertexFormat::Float32),
+    (21, wgpu::VertexFormat::Float32x3),
 ];
 
 /// `sprite.wgsl`'s `vs_main` `@location` inputs, in location order.

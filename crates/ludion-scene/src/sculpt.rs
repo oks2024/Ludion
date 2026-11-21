@@ -114,7 +114,7 @@ const SHAPE_FIELD_KEYS: [&str; 9] = [
 
 /// The domain of the numeric override pointers, spelled out in every `L4008` this module raises.
 const SCULPT_POINTER_SHAPES: &str = "a sculpt override addresses one numeric field: `/resolution`, \
-     `/triangles`, `/palette/<glyph>/color/<0..3>`, `/palette/<glyph>/emissive|metallic|roughness`, \
+     `/triangles`, `/palette/<glyph>/color/<0..3>`, `/palette/<glyph>/emissive|metallic|porosity|roughness`, \
      `/parts/<i>/blend`, `/parts/<i>/at/<0..2>`, `/parts/<i>/rotation/<0..2>`, \
      `/parts/<i>/repeat/count`, `/parts/<i>/repeat/step/<0..2>`, or one of the part shape's own \
      fields (`radius`, `tube`, `height`, `round`, `radii/<0..2>`, `size/<0..2>`, `from/<0..2>`, \
@@ -3317,9 +3317,11 @@ parts:
         set(&mut doc, "/parts/5/repeat/step/1=0.1").unwrap();
         set(&mut doc, "/triangles=12000").unwrap();
         set(&mut doc, "/palette/S/roughness=0.5").unwrap();
+        set(&mut doc, "/palette/S/porosity=0.2").unwrap();
         assert_eq!(doc.parts[5].repeat.as_ref().unwrap().count, 7);
         assert_eq!(doc.triangles, 12000);
         assert_eq!(doc.palette_entry("S").unwrap().roughness, Some(0.5));
+        assert_eq!(doc.palette_entry("S").unwrap().porosity, Some(0.2));
 
         let applied = set(&mut doc, "/parts/3/rotation/2=45").unwrap();
         assert_eq!(applied[0].from, None, "an unset rotation is created");

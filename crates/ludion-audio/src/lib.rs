@@ -48,6 +48,7 @@
 
 mod dsp;
 mod music;
+mod reverb;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -61,8 +62,8 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use dsp::VoiceDsp;
 use ludion_assets::{AudioPcm, load_wav};
 use ludion_core::audio::{
-    AudioCategory, AudioEvent, AudioMessage, Bus, LoopId, MUSIC_STEMS_MAX, MixLayer, VoiceFilter,
-    VoiceSpatial,
+    AudioCategory, AudioEvent, AudioMessage, Bus, LoopId, MUSIC_STEMS_MAX, MixLayer, ReverbParams,
+    VoiceFilter, VoiceSpatial,
 };
 // The mixdown the sink applies. It lives in the shared core because the game authors it on the
 // engine builder and this crate consumes it; re-exported so a host names one type, not two.
@@ -71,6 +72,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use music::{Converter, MUSIC_REFILL, MUSIC_RING_CHUNKS, MusicChunk, MusicFeed, MusicPlayer};
+use reverb::Reverb;
 
 /// The summed level the mixdown's soft knee starts at: below it the mix is passed through untouched.
 const LIMITER_KNEE: f32 = 0.8;
@@ -357,6 +359,8 @@ struct Voice {
     looping: bool,
     /// The voice's low-pass and high-pass, run on each raw sample before gain.
     dsp: VoiceDsp,
+    /// The post-fader level sent to the reverb bus, stepped per frame while the reverb is active.
+    send: Envelope,
 }
 
 impl Voice {
@@ -377,7 +381,13 @@ impl Voice {
     /// On a two-channel device a frame whose pan level is off centre takes the constant-power
     /// path; every other frame (centre, mono, more than two channels) adds the sample unpanned, so a
     /// centred voice is bit-identical to a voice with no pan at all.
-    fn advance_into(&mut self, scratch: &mut [f32], channels: usize, master: &[f32]) -> bool {
+    fn advance_into(
+        &mut self,
+        scratch: &mut [f32],
+        channels: usize,
+        master: &[f32],
+        mut send: Option<&mut [f32]>,
+    ) -> bool {
         if self.samples.is_empty() {
             return false;
         }
@@ -391,6 +401,7 @@ impl Voice {
                 return false;
             }
             let gain = level * master[index];
+            let mut added = 0.0;
             let pan = if channels == 2 {
                 self.pan.envelope.next()
             } else {
@@ -410,8 +421,16 @@ impl Voice {
                 let gains = self.pan.gains_at(pan);
                 let narrow = (pan.abs() / PAN_FULL_MONO).min(1.0);
                 let mid = (a + b) * 0.5;
-                *left += (a + (mid - a) * narrow) * gain * gains[0];
-                *right += (b + (mid - b) * narrow) * gain * gains[1];
+                let (l, r) = (
+                    (a + (mid - a) * narrow) * gain * gains[0],
+                    (b + (mid - b) * narrow) * gain * gains[1],
+                );
+                *left += l;
+                *right += r;
+                added = l + r;
+                if let Some(send) = send.as_deref_mut() {
+                    send[index] += added / 2.0 * self.send.next();
+                }
                 continue;
             }
             for (channel, slot) in frame.iter_mut().enumerate() {
@@ -424,6 +443,10 @@ impl Voice {
                     sample
                 };
                 *slot += sample * gain;
+                added += sample * gain;
+            }
+            if let Some(send) = send.as_deref_mut() {
+                send[index] += added / channels.max(1) as f32 * self.send.next();
             }
         }
         self.looping || self.pos < self.samples.len()
@@ -474,6 +497,7 @@ enum VoiceCommand {
         gain: f32,
         pan: f32,
         filter: VoiceFilter,
+        send: f32,
     },
     /// Fade the keyed voice out over `frames` device frames, then drop it.
     VoiceStop { id: LoopKey, frames: usize },
@@ -514,6 +538,15 @@ enum VoiceCommand {
         gain: f32,
         frames: usize,
     },
+    /// Slew a bus's sink-private zone layer (`bus` indexes [`Bus::ALL`]) over `frames` device
+    /// frames; `0` settles now.
+    Zone {
+        bus: usize,
+        gain: f32,
+        frames: usize,
+    },
+    /// Move the reverb to `params` (clamped); its return level slews over `frames` device frames.
+    Reverb { params: ReverbParams, frames: usize },
     /// Hold or release the buses whose bit (`1 << index`) is set in `mask`; `0` frames settles now.
     BusPause {
         mask: u8,
@@ -941,6 +974,8 @@ struct Router {
     playing: usize,
     /// Each bus's runtime state, indexed like [`Bus::ALL`], replayed into a reopened stream.
     buses: [RouterBus; BUS_COUNT],
+    /// The reverb last asked for, replayed into a reopened stream while it is not dry.
+    reverb: ReverbParams,
 }
 
 /// The runtime mix the router remembers for one bus.
@@ -949,6 +984,7 @@ struct RouterBus {
     user: f32,
     game: f32,
     duck: f32,
+    zone: f32,
     paused: bool,
 }
 
@@ -957,6 +993,7 @@ impl RouterBus {
         user: 1.0,
         game: 1.0,
         duck: 1.0,
+        zone: 1.0,
         paused: false,
     };
 }
@@ -975,7 +1012,7 @@ struct Declared {
 }
 
 /// A loop voice on `samples`, ready to play from the top and rising to `gain` over `fade_in`
-/// frames (`0` starts at `gain`), settled at `pan` and at `dsp`'s filter.
+/// frames (`0` starts at `gain`), settled at `pan`, at `dsp`'s filter and at `send`.
 fn looping_voice(
     samples: Arc<Vec<f32>>,
     gain: f32,
@@ -983,6 +1020,7 @@ fn looping_voice(
     category: AudioCategory,
     fade_in: usize,
     dsp: VoiceDsp,
+    send: f32,
 ) -> Voice {
     Voice {
         samples,
@@ -992,7 +1030,19 @@ fn looping_voice(
         category,
         looping: true,
         dsp,
+        send: Envelope::at(send),
     }
+}
+
+/// The post-fader reverb send of a voice on `category` carrying `spatial_send`: the bus's default
+/// plus the voice's own, in `[0, 1]`; a non-finite own send counts as `0`.
+fn send_level(category: AudioCategory, spatial_send: f32) -> f32 {
+    let own = if spatial_send.is_finite() {
+        spatial_send
+    } else {
+        0.0
+    };
+    (Bus::from(category).default_send() + own).clamp(0.0, 1.0)
 }
 
 /// A pan the mixer can use: non-finite is centre, anything else clamps to `[-1, 1]`.
@@ -1040,6 +1090,7 @@ impl Router {
             backlog: VecDeque::new(),
             playing: 0,
             buses: [RouterBus::DEFAULT; BUS_COUNT],
+            reverb: ReverbParams::DRY,
         }
     }
 
@@ -1101,6 +1152,7 @@ impl Router {
             declared.category,
             fade_in,
             dsp,
+            send_level(declared.category, declared.spatial.send),
         ))
     }
 
@@ -1180,6 +1232,7 @@ impl Router {
                         self.out_rate,
                         ramp_frames(self.out_rate),
                     ),
+                    send: Envelope::at(send_level(event.category, event.spatial.send)),
                 })
             }
             AudioMessage::LoopSync {
@@ -1256,6 +1309,7 @@ impl Router {
                             self.out_rate,
                             ramp_frames(self.out_rate),
                         ),
+                        send: Envelope::at(send_level(category, spatial.send)),
                     },
                 }
             }
@@ -1269,6 +1323,7 @@ impl Router {
                 gain,
                 pan: sane_pan(pan),
                 filter: spatial.filter,
+                send: spatial.send,
             },
             AudioMessage::VoiceStop { id, fade_frames } => VoiceCommand::VoiceStop {
                 id: LoopKey::Voice(id.0),
@@ -1288,8 +1343,10 @@ impl Router {
                 for bus in &mut self.buses {
                     bus.game = 1.0;
                     bus.duck = 1.0;
+                    bus.zone = 1.0;
                     bus.paused = false;
                 }
+                self.reverb = ReverbParams::DRY;
                 VoiceCommand::StopAllLoops
             }
             AudioMessage::MusicPlay {
@@ -1345,8 +1402,29 @@ impl Router {
                     frames: self.mix_frames(fade_frames),
                 }
             }
-            // The sink has no reverb bus or zone layer yet.
-            AudioMessage::ReverbSet { .. } | AudioMessage::ZoneGain { .. } => return None,
+            AudioMessage::ZoneGain {
+                bus,
+                gain,
+                fade_frames,
+            } => {
+                let gain = if gain.is_finite() { gain.max(0.0) } else { 1.0 };
+                self.buses[bus as usize].zone = gain;
+                VoiceCommand::Zone {
+                    bus: bus as usize,
+                    gain,
+                    frames: self.mix_frames(fade_frames),
+                }
+            }
+            AudioMessage::ReverbSet {
+                params,
+                fade_frames,
+            } => {
+                self.reverb = params.clamped();
+                VoiceCommand::Reverb {
+                    params: self.reverb,
+                    frames: self.mix_frames(fade_frames),
+                }
+            }
             AudioMessage::BusPause {
                 buses,
                 paused,
@@ -1378,7 +1456,8 @@ impl Router {
             .max(ramp_frames(self.out_rate))
     }
 
-    /// Sends every non-default bus state, settled, so a reopened device keeps the player's volume.
+    /// Sends every non-default bus state and a non-dry reverb, settled, so a reopened device keeps
+    /// the player's volume.
     /// False only when the callback is gone.
     fn replay_buses(&mut self, commands: &Sender<VoiceCommand>) -> bool {
         let mut sent = true;
@@ -1413,6 +1492,14 @@ impl Router {
                         frames: 0,
                     },
                 ),
+                (
+                    record.zone,
+                    VoiceCommand::Zone {
+                        bus: index,
+                        gain: record.zone,
+                        frames: 0,
+                    },
+                ),
             ];
             for (gain, command) in layers {
                 if gain != 1.0 {
@@ -1427,6 +1514,13 @@ impl Router {
                 };
                 sent &= self.forward(commands, command);
             }
+        }
+        if self.reverb != ReverbParams::DRY {
+            let command = VoiceCommand::Reverb {
+                params: self.reverb,
+                frames: 0,
+            };
+            sent &= self.forward(commands, command);
         }
         sent
     }
@@ -1669,13 +1763,14 @@ fn open_output() -> Result<(cpal::Device, cpal::SupportedStreamConfig), Diagnost
 const BUS_COUNT: usize = Bus::ALL.len();
 
 /// One bus on the callback side: the authored master and the runtime layers that multiply it.
-/// `duck` is the engine-owned layer, never written through [`MixLayer`]. `pause` is `1.0` running
+/// `duck` and `zone` are engine-owned layers, never written through [`MixLayer`]. `pause` is `1.0` running
 /// and `0.0` held; the bus is *held* only once it has reached `0.0`, so a pause fades.
 struct BusState {
     authored: f32,
     user: Envelope,
     game: Envelope,
     duck: Envelope,
+    zone: Envelope,
     pause: Envelope,
     paused: bool,
 }
@@ -1687,6 +1782,7 @@ impl BusState {
             user: Envelope::at(1.0),
             game: Envelope::at(1.0),
             duck: Envelope::at(1.0),
+            zone: Envelope::at(1.0),
             pause: Envelope::at(1.0),
             paused: false,
         }
@@ -1724,6 +1820,9 @@ struct Mixer {
     arriving: Vec<Voice>,
     loops: HashMap<LoopKey, Voice>,
     scratch: Vec<f32>,
+    /// The mono reverb input for the block being mixed.
+    send: Vec<f32>,
+    reverb: Reverb,
     music: MusicPlayer,
     channels: usize,
     ramp_frames: usize,
@@ -1758,6 +1857,8 @@ impl Mixer {
             // rehashes in place instead of reallocating.
             loops: HashMap::with_capacity(2 * limits.total),
             scratch: Vec::with_capacity(MIX_BLOCK_FRAMES * channels),
+            send: Vec::with_capacity(MIX_BLOCK_FRAMES),
+            reverb: Reverb::new(rate),
             music: MusicPlayer::new(music, channels, ramp_frames(rate)),
             channels,
             ramp_frames: ramp_frames(rate),
@@ -1794,11 +1895,15 @@ impl Mixer {
                 gain,
                 pan,
                 filter,
+                send,
             } => {
                 if let Some(voice) = self.loops.get_mut(&id) {
                     voice.envelope.slew_to(gain, self.ramp_frames);
                     voice.pan.envelope.slew_to(pan, self.ramp_frames);
                     voice.dsp.retarget(filter);
+                    voice
+                        .send
+                        .slew_to(send_level(voice.category, send), self.ramp_frames);
                 }
             }
             VoiceCommand::VoiceStop { id, frames } => {
@@ -1826,9 +1931,11 @@ impl Mixer {
                 for bus in &mut self.buses {
                     bus.game.slew_to(1.0, self.ramp_frames);
                     bus.duck.slew_to(1.0, self.ramp_frames);
+                    bus.zone.slew_to(1.0, self.ramp_frames);
                     bus.paused = false;
                     bus.pause.slew_to(1.0, self.ramp_frames);
                 }
+                self.reverb.release(self.ramp_frames);
             }
             VoiceCommand::BusGain {
                 bus,
@@ -1843,6 +1950,8 @@ impl Mixer {
                 }
             }
             VoiceCommand::Duck { bus, gain, frames } => self.buses[bus].duck.steer(gain, frames),
+            VoiceCommand::Zone { bus, gain, frames } => self.buses[bus].zone.steer(gain, frames),
+            VoiceCommand::Reverb { params, frames } => self.reverb.set(params, frames),
             VoiceCommand::BusPause {
                 mask,
                 paused,
@@ -1870,7 +1979,7 @@ impl Mixer {
     }
 
     /// Steps every bus's envelopes one device frame at a time into `bus_levels`:
-    /// `authored x user x game x duck x pause`, then each non-master bus times the master's.
+    /// `authored x user x game x duck x zone x pause`, then each non-master bus times the master's.
     fn step_buses(&mut self, frames: usize) {
         for frame in 0..frames {
             for (index, state) in self.buses.iter_mut().enumerate() {
@@ -1878,6 +1987,7 @@ impl Mixer {
                     * state.user.next()
                     * state.game.next()
                     * state.duck.next()
+                    * state.zone.next()
                     * state.pause.next();
             }
             let master = self.bus_levels[frame];
@@ -1906,8 +2016,10 @@ impl Mixer {
                 let target = voice.envelope.target;
                 let pan_target = voice.pan.envelope.target;
                 let filter = voice.dsp.filter();
+                let send = voice.send.target;
                 if running.category == voice.category {
                     running.envelope.slew_to(target, self.ramp_frames);
+                    running.send.slew_to(send, self.ramp_frames);
                     running.pan.envelope.slew_to(pan_target, self.ramp_frames);
                     running.dsp.retarget(filter);
                     return;
@@ -1920,8 +2032,10 @@ impl Mixer {
                     category: running.category,
                     looping: true,
                     dsp: running.dsp,
+                    send: running.send,
                 };
                 running.category = voice.category;
+                running.send.slew_to(send, self.ramp_frames);
                 running.envelope = Envelope::rising(target, self.ramp_frames);
                 running.pan.envelope.slew_to(pan_target, self.ramp_frames);
                 running.dsp.retarget(filter);
@@ -2006,6 +2120,11 @@ impl Mixer {
             let frames = block.len().div_ceil(self.channels);
             let held = self.held_buses();
             self.step_buses(frames);
+            let reverberating = self.reverb.is_active() && !held[Bus::Master as usize];
+            if reverberating {
+                self.send.clear();
+                self.send.resize(frames, 0.0);
+            }
             mix_into(
                 &mut self.voices,
                 &mut self.loops,
@@ -2014,7 +2133,12 @@ impl Mixer {
                 self.channels,
                 &self.bus_levels,
                 &held,
+                reverberating.then_some(&mut self.send[..]),
             );
+            if reverberating {
+                self.reverb
+                    .process(&self.send, &mut self.scratch, self.channels);
+            }
             // A held music bus skips the player entirely: its stale-chunk drain would discard the
             // position the pause is holding.
             let music = Bus::Music as usize;
@@ -2147,6 +2271,7 @@ fn collapse_simultaneous(arriving: &mut Vec<Voice>, voice: Voice, limit: usize) 
 /// differ in its last bits between runs; audio is outside every gate. The table is a `HashMap`
 /// because the callback may neither allocate nor free, which a `BTreeMap` would. A sample-exact test
 /// uses at most two loops.
+#[allow(clippy::too_many_arguments)]
 fn mix_into(
     voices: &mut Vec<Voice>,
     loops: &mut HashMap<LoopKey, Voice>,
@@ -2155,6 +2280,7 @@ fn mix_into(
     channels: usize,
     levels: &[f32],
     held: &[bool; BUS_COUNT],
+    mut send: Option<&mut [f32]>,
 ) {
     let frames = samples.div_ceil(channels.max(1));
     scratch.clear();
@@ -2163,11 +2289,21 @@ fn mix_into(
         if is_held(held, voice) {
             return true;
         }
-        voice.advance_into(scratch, channels, bus_levels(levels, voice, frames))
+        voice.advance_into(
+            scratch,
+            channels,
+            bus_levels(levels, voice, frames),
+            send.as_deref_mut(),
+        )
     });
     loops.retain(|_, voice| {
         is_held(held, voice)
-            || voice.advance_into(scratch, channels, bus_levels(levels, voice, frames))
+            || voice.advance_into(
+                scratch,
+                channels,
+                bus_levels(levels, voice, frames),
+                send.as_deref_mut(),
+            )
     });
 }
 
@@ -2261,6 +2397,7 @@ mod tests {
             channels,
             &levels,
             &[false; BUS_COUNT],
+            None,
         );
     }
 
@@ -2294,6 +2431,7 @@ mod tests {
             category,
             looping: false,
             dsp: open_dsp(),
+            send: Envelope::at(0.0),
         }
     }
 
@@ -2611,7 +2749,7 @@ mod tests {
     fn a_looping_voice_on_an_empty_buffer_plays_silence() {
         let mut voice = looping(&Arc::new(Vec::new()), 1.0, AudioCategory::Sfx);
         let mut scratch = vec![0.0; 4];
-        assert!(!voice.advance_into(&mut scratch, 1, &UNITY));
+        assert!(!voice.advance_into(&mut scratch, 1, &UNITY, None));
         assert_eq!(scratch, vec![0.0; 4]);
     }
 
@@ -2707,7 +2845,7 @@ mod tests {
         let samples = Arc::new(vec![0.1, 0.7, 0.3, -0.2, 0.9, 0.05, -0.4, 0.6]);
         let mut voice = panned(&samples, 0.0);
         let mut out = vec![0.0; 8];
-        assert!(voice.advance_into(&mut out, 2, &UNITY));
+        assert!(voice.advance_into(&mut out, 2, &UNITY, None));
         for (got, want) in out.iter().zip(samples.iter()) {
             assert_eq!(got.to_bits(), (want * 1.0).to_bits());
         }
@@ -2716,13 +2854,13 @@ mod tests {
         let mut voice = panned(&samples, 0.0);
         voice.pan.envelope.slew_to(0.5, 2);
         let mut away = vec![0.0; 4];
-        voice.advance_into(&mut away, 2, &UNITY);
+        voice.advance_into(&mut away, 2, &UNITY, None);
         assert_ne!(away[1].to_bits(), samples[1].to_bits());
         voice.pan.envelope.slew_to(0.0, 2);
         let mut back = vec![0.0; 4];
-        voice.advance_into(&mut back, 2, &UNITY);
+        voice.advance_into(&mut back, 2, &UNITY, None);
         let mut settled = vec![0.0; 8];
-        voice.advance_into(&mut settled, 2, &UNITY);
+        voice.advance_into(&mut settled, 2, &UNITY, None);
         let wanted: Vec<f32> = (0..8).map(|i| samples[(8 + i) % 8]).collect();
         for (got, want) in settled.iter().zip(&wanted) {
             assert_eq!(got.to_bits(), want.to_bits());
@@ -2734,9 +2872,9 @@ mod tests {
         let samples = constant(0.25, 16);
         let root2 = std::f32::consts::SQRT_2;
         let mut left = vec![0.0; 4];
-        panned(&samples, -1.0).advance_into(&mut left, 2, &UNITY);
+        panned(&samples, -1.0).advance_into(&mut left, 2, &UNITY, None);
         let mut right = vec![0.0; 4];
-        panned(&samples, 1.0).advance_into(&mut right, 2, &UNITY);
+        panned(&samples, 1.0).advance_into(&mut right, 2, &UNITY, None);
         for frame in left.chunks(2) {
             assert!((frame[0] - 0.25 * root2).abs() < 1e-6, "{frame:?}");
             assert_eq!(frame[1], 0.0);
@@ -2751,11 +2889,11 @@ mod tests {
     fn a_stereo_clip_at_a_hard_pan_plays_its_channel_mean() {
         let samples = Arc::new(vec![0.1, 0.3, 0.1, 0.3]);
         let mut out = vec![0.0; 4];
-        panned(&samples, -1.0).advance_into(&mut out, 2, &UNITY);
+        panned(&samples, -1.0).advance_into(&mut out, 2, &UNITY, None);
         assert!((out[0] - 0.2 * std::f32::consts::SQRT_2).abs() < 1e-6);
         assert_eq!(out[1], 0.0);
         let mut centre = vec![0.0; 4];
-        panned(&samples, 0.0).advance_into(&mut centre, 2, &UNITY);
+        panned(&samples, 0.0).advance_into(&mut centre, 2, &UNITY, None);
         assert_eq!(
             centre,
             [0.1, 0.3, 0.1, 0.3],
@@ -2870,7 +3008,7 @@ mod tests {
         let samples = Arc::new(vec![0.1, 0.3, 0.1, 0.3]);
         let mut voice = panned(&samples, PAN_FULL_MONO / 2.0);
         let mut out = vec![0.0; 2];
-        voice.advance_into(&mut out, 2, &UNITY);
+        voice.advance_into(&mut out, 2, &UNITY, None);
         let gains = voice.pan.gains_at(PAN_FULL_MONO / 2.0);
         let (a, b) = (0.1f32, 0.3f32);
         let mid = (a + b) * 0.5;
@@ -2957,6 +3095,7 @@ mod tests {
             gain: 0.5,
             pan: 0.0,
             filter: VoiceFilter::BYPASS,
+            send: 0.0,
         });
         let out = render(&mut mixer, 8);
         assert!(out[0] < 0.5, "the level starts to slew: {out:?}");
@@ -2972,6 +3111,7 @@ mod tests {
             gain: 0.5,
             pan: 0.0,
             filter: VoiceFilter::BYPASS,
+            send: 0.0,
         });
         assert!(mixer.loops.is_empty());
     }
@@ -3476,6 +3616,225 @@ mod tests {
         assert_eq!((*bus, *gain), (Bus::Music as usize, 0.25));
     }
 
+    fn zone(bus: Bus, gain: f32, frames: usize) -> VoiceCommand {
+        VoiceCommand::Zone {
+            bus: bus as usize,
+            gain,
+            frames,
+        }
+    }
+
+    const HALL: ReverbParams = ReverbParams {
+        decay_s: 1.0,
+        pre_delay_ms: 0.0,
+        damping: 0.5,
+        size: 0.5,
+        wet: 0.5,
+    };
+
+    /// With no reverb asked for, a mix of sending voices equals the same mix with every send at 0,
+    /// sample for sample.
+    #[test]
+    fn a_dry_reverb_leaves_the_mix_bit_identical() {
+        let mix = |send: f32| {
+            let mut mixer = test_mixer(2, CategoryGains::default(), default_limits());
+            for (gain, category) in [(0.3, AudioCategory::Sfx), (0.2, AudioCategory::Ambient)] {
+                let voice = Voice {
+                    send: Envelope::at(send),
+                    pan: Panner::at(0.4),
+                    ..looping(&constant(gain, 128), gain, category)
+                };
+                mixer.apply(VoiceCommand::LoopSync {
+                    id: LoopKey::Sound(category as u32),
+                    voice,
+                });
+            }
+            render(&mut mixer, 600)
+        };
+        let (sending, silent) = (mix(1.0), mix(0.0));
+        assert!(
+            sending
+                .iter()
+                .zip(&silent)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
+        assert!(sending.iter().any(|&s| s != 0.0));
+    }
+
+    /// A wet reverb outlasts the voice that fed it on both channels, and a rebuild's stop brings the
+    /// output back to silence after the ramp.
+    #[test]
+    fn a_reverb_tail_outlasts_its_voice_and_a_stop_ends_it() {
+        let mut mixer = test_mixer(2, CategoryGains::default(), default_limits());
+        mixer.apply(VoiceCommand::Reverb {
+            params: HALL,
+            frames: 0,
+        });
+        let voice = Voice {
+            send: Envelope::at(1.0),
+            ..one_shot(&constant(0.5, 128), 1.0, AudioCategory::Sfx)
+        };
+        mixer.apply(VoiceCommand::OneShot(voice));
+        let out = render(&mut mixer, 2 * 400);
+        let tail = &out[2 * 64..];
+        assert!(tail.iter().step_by(2).any(|&s| s != 0.0), "left tail");
+        assert!(
+            tail.iter().skip(1).step_by(2).any(|&s| s != 0.0),
+            "right tail"
+        );
+        mixer.apply(VoiceCommand::StopAllLoops);
+        let out = render(&mut mixer, 2 * 32);
+        assert!(out[2 * 16..].iter().all(|&s| s == 0.0), "{out:?}");
+        assert!(!mixer.reverb.is_active());
+    }
+
+    /// A voice with a zero send adds nothing to the reverb input; a sending one does.
+    #[test]
+    fn only_a_sending_voice_feeds_the_reverb_input() {
+        let levels = vec![1.0f32; BUS_COUNT * MIX_BLOCK_FRAMES];
+        let input = |category: AudioCategory, send: f32| {
+            let mut voices = vec![Voice {
+                send: Envelope::at(send),
+                ..one_shot(&constant(0.5, 16), 1.0, category)
+            }];
+            let (mut loops, mut scratch, mut feed) = (HashMap::new(), Vec::new(), vec![0.0; 8]);
+            mix_into(
+                &mut voices,
+                &mut loops,
+                &mut scratch,
+                8,
+                1,
+                &levels,
+                &[false; BUS_COUNT],
+                Some(&mut feed),
+            );
+            feed
+        };
+        assert!(input(AudioCategory::Ui, 0.0).iter().all(|&s| s == 0.0));
+        assert!(input(AudioCategory::Sfx, 1.0).iter().all(|&s| s == 0.5));
+        assert!(input(AudioCategory::Sfx, 0.5).iter().all(|&s| s == 0.25));
+    }
+
+    /// A voice's send is the bus's default plus its own, in range; a non-finite one adds nothing.
+    #[test]
+    fn the_send_level_is_the_bus_default_plus_the_voices_own() {
+        assert_eq!(send_level(AudioCategory::Sfx, 0.0), 1.0);
+        assert_eq!(send_level(AudioCategory::Ui, 0.0), 0.0);
+        assert_eq!(send_level(AudioCategory::Ui, 0.4), 0.4);
+        assert_eq!(send_level(AudioCategory::Ambient, -0.25), 0.75);
+        assert_eq!(send_level(AudioCategory::Voice, 5.0), 1.0);
+        assert_eq!(send_level(AudioCategory::Ui, f32::NAN), 0.0);
+    }
+
+    /// The zone layer multiplies the user layer and fades onto its target.
+    #[test]
+    fn the_zone_layer_multiplies_and_fades() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(VoiceCommand::LoopSync {
+            id: bed(),
+            voice: looping(&constant(1.0, 64), 1.0, AudioCategory::Sfx),
+        });
+        mixer.apply(bus_gain(Bus::Sfx, MixLayer::User, 0.5));
+        mixer.apply(zone(Bus::Sfx, 0.5, 0));
+        assert_eq!(render(&mut mixer, 2), [0.25, 0.25]);
+        mixer.apply(zone(Bus::Sfx, 0.0, 4));
+        assert_eq!(render(&mut mixer, 5), [0.1875, 0.125, 0.0625, 0.0, 0.0]);
+    }
+
+    /// A rebuild returns the zone layer to unity and keeps the player's volume.
+    #[test]
+    fn stop_all_loops_releases_the_zone_layer_and_keeps_the_user_layer() {
+        let mut mixer = test_mixer(1, CategoryGains::default(), default_limits());
+        mixer.apply(bus_gain(Bus::Ambient, MixLayer::User, 0.5));
+        mixer.apply(zone(Bus::Ambient, 0.25, 0));
+        mixer.apply(VoiceCommand::StopAllLoops);
+        render(&mut mixer, 8);
+        let ambient = &mixer.buses[Bus::Ambient as usize];
+        assert_eq!(ambient.zone.level, 1.0);
+        assert_eq!(ambient.user.level, 0.5);
+    }
+
+    /// The router floors a zone gain at 0, sends a non-finite one as unity, and keeps a ramp.
+    #[test]
+    fn the_router_routes_zone_gains_and_reverb() {
+        let mut rig = rig(scratch_root("zone-route"));
+        for (gain, expect) in [(-1.0, 0.0), (f32::NAN, 1.0), (3.0, 3.0), (0.5, 0.5)] {
+            let command = rig.router.route(AudioMessage::ZoneGain {
+                bus: Bus::Ambient,
+                gain,
+                fade_frames: 0,
+            });
+            match command {
+                Some(VoiceCommand::Zone { bus, gain, frames }) => {
+                    assert_eq!((bus, gain), (Bus::Ambient as usize, expect));
+                    assert_eq!(frames, ramp_frames(44100));
+                }
+                _ => panic!("a zone gain routes to its command"),
+            }
+        }
+        let wild = ReverbParams {
+            decay_s: 99.0,
+            pre_delay_ms: f32::NAN,
+            damping: -1.0,
+            size: 0.5,
+            wet: 0.5,
+        };
+        match rig.router.route(AudioMessage::ReverbSet {
+            params: wild,
+            fade_frames: 0,
+        }) {
+            Some(VoiceCommand::Reverb { params, .. }) => assert_eq!(params, wild.clamped()),
+            _ => panic!("a reverb routes to its command"),
+        }
+    }
+
+    /// A reopened stream is told a non-unit zone layer and a non-dry reverb, settled; a rebuild's
+    /// reset is not replayed.
+    #[test]
+    fn a_replay_resends_the_zone_layer_and_reverb_settled() {
+        let mut rig = rig(scratch_root("zone-replay"));
+        rig.step(AudioMessage::ZoneGain {
+            bus: Bus::Music,
+            gain: 0.25,
+            fade_frames: 6,
+        });
+        rig.step(AudioMessage::ReverbSet {
+            params: HALL,
+            fade_frames: 6,
+        });
+        rig.step(AudioMessage::StopAllLoops);
+        rig.step(AudioMessage::ZoneGain {
+            bus: Bus::Ambient,
+            gain: 0.9,
+            fade_frames: 0,
+        });
+        while rig.mixer.commands.try_recv().is_ok() {}
+        assert!(rig.router.replay(&rig.commands));
+        let replayed: Vec<VoiceCommand> = rig.mixer.commands.try_iter().collect();
+        let [
+            VoiceCommand::Zone {
+                bus,
+                gain,
+                frames: 0,
+            },
+        ] = replayed.as_slice()
+        else {
+            panic!("only the ambient zone layer replays");
+        };
+        assert_eq!((*bus, *gain), (Bus::Ambient as usize, 0.9));
+        rig.step(AudioMessage::ReverbSet {
+            params: HALL,
+            fade_frames: 0,
+        });
+        while rig.mixer.commands.try_recv().is_ok() {}
+        assert!(rig.router.replay(&rig.commands));
+        let replayed: Vec<VoiceCommand> = rig.mixer.commands.try_iter().collect();
+        assert!(matches!(
+            replayed.last(),
+            Some(VoiceCommand::Reverb { params, frames: 0 }) if *params == HALL
+        ));
+    }
+
     /// A paused music bus never touches the player: the position holds across more renders than the
     /// ring holds, and the music resumes where it stopped.
     #[test]
@@ -3522,6 +3881,8 @@ mod tests {
                 m.loops.capacity(),
                 m.scratch.capacity(),
                 m.bus_levels.capacity(),
+                m.send.capacity(),
+                m.reverb.capacities(),
             )
         };
         let before = capacities(&mixer);
@@ -3554,6 +3915,7 @@ mod tests {
                 gain: 0.1,
                 pan: 0.0,
                 filter: VoiceFilter::BYPASS,
+                send: 0.0,
             });
             mixer.apply(VoiceCommand::BusGain {
                 bus: round % BUS_COUNT,
@@ -3565,6 +3927,21 @@ mod tests {
                 mask: 1 << (round % BUS_COUNT),
                 paused: round % 2 == 0,
                 frames: round % 5,
+            });
+            mixer.apply(VoiceCommand::Reverb {
+                params: ReverbParams {
+                    decay_s: 0.2 + round as f32 * 0.1,
+                    pre_delay_ms: (round % 7) as f32 * 30.0,
+                    damping: (round % 4) as f32 / 3.0,
+                    size: (round % 5) as f32 / 4.0,
+                    wet: 0.5,
+                },
+                frames: round % 6,
+            });
+            mixer.apply(VoiceCommand::Zone {
+                bus: round % BUS_COUNT,
+                gain: 0.5,
+                frames: round % 4,
             });
             if round % 5 == 0 {
                 mixer.apply(VoiceCommand::StopAllLoops);
@@ -3947,9 +4324,9 @@ mod tests {
         assert!(!loops.contains_key(&stopped_waiting));
     }
 
-    /// A zone bed is a loop like an emitter's; the zone messages the sink cannot mix route to nothing.
+    /// A zone bed is a loop like an emitter's; the zone messages route to their commands.
     #[test]
-    fn a_zone_bed_loops_and_stops_and_zone_messages_route_to_nothing() {
+    fn a_zone_bed_loops_and_stops() {
         let root = scratch_root("zone-bed");
         std::fs::write(root.join("bed.wav"), wav_bytes(&[8192, 16384])).unwrap();
         let mut rig = rig(root);
@@ -3968,13 +4345,19 @@ mod tests {
             params: ludion_core::audio::ReverbParams::DRY,
             fade_frames: 0,
         };
-        assert!(rig.router.route(reverb).is_none());
+        assert!(matches!(
+            rig.router.route(reverb),
+            Some(VoiceCommand::Reverb { .. })
+        ));
         let zone = AudioMessage::ZoneGain {
             bus: Bus::Ambient,
             gain: 0.5,
             fade_frames: 0,
         };
-        assert!(rig.router.route(zone).is_none());
+        assert!(matches!(
+            rig.router.route(zone),
+            Some(VoiceCommand::Zone { .. })
+        ));
     }
 
     /// The callback frees nothing: a buffer the cache let go of while a voice held it is kept by
@@ -5009,6 +5392,7 @@ mod tests {
             gain: 1.0,
             pan: 0.0,
             filter: VoiceFilter::BYPASS,
+            send: 0.0,
         });
         render(&mut plain, 5 * MIX_BLOCK_FRAMES);
         render(&mut moved, 5 * MIX_BLOCK_FRAMES);
@@ -5050,6 +5434,7 @@ mod tests {
             gain: 1.0,
             pan: 0.0,
             filter: VoiceFilter::band_pass(0.0, 1000.0),
+            send: 0.0,
         });
         let planned = (1000.0f32.log2() - 8000.0f32.log2()) / 4.0;
         let mut last = 8000.0f32.log2();

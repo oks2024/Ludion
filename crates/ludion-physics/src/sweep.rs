@@ -87,10 +87,53 @@ pub struct SweepFilter {
     only_fixed: bool,
     exclude: Option<EntityId>,
     exclude_also: Option<EntityId>,
-    partner: Option<EntityId>,
+    partners: Partners,
+}
+
+/// The most entities a motor looks through at once: an [`IgnoreCollisions`](crate::IgnoreCollisions)
+/// list longer than this uses its first `MAX_PARTNERS` entries.
+pub const MAX_PARTNERS: usize = 4;
+
+/// Up to [`MAX_PARTNERS`] entities a query looks through, inline so the filter stays `Copy` and the
+/// motor path never allocates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Partners {
+    ids: [EntityId; MAX_PARTNERS],
+    len: u8,
+}
+
+impl Partners {
+    pub(crate) const NONE: Partners = Partners {
+        ids: [EntityId::new(0, 0); MAX_PARTNERS],
+        len: 0,
+    };
+
+    /// The first `MAX_PARTNERS` of `ids`.
+    pub(crate) fn from_slice(ids: &[EntityId]) -> Self {
+        let mut partners = Self::NONE;
+        for (slot, id) in partners.ids.iter_mut().zip(ids) {
+            *slot = *id;
+            partners.len += 1;
+        }
+        partners
+    }
+
+    pub(crate) fn as_slice(&self) -> &[EntityId] {
+        &self.ids[..usize::from(self.len)]
+    }
+
+    pub(crate) fn contains(&self, entity: EntityId) -> bool {
+        self.as_slice().contains(&entity)
+    }
 }
 
 impl SweepFilter {
+    /// `self` looking through `partners` instead of the ones its query named.
+    pub(crate) fn with_partners(mut self, partners: Partners) -> Self {
+        self.partners = partners;
+        self
+    }
+
     /// Drops `entity` the second time `self` names it, as well as the first.
     pub(crate) fn exclude_also(mut self, entity: EntityId) -> Self {
         self.exclude_also = Some(entity);
@@ -112,7 +155,7 @@ impl SweepFilter {
         }
         Some(entity) == self.exclude
             || Some(entity) == self.exclude_also
-            || Some(entity) == self.partner
+            || self.partners.contains(entity)
             || (!self.include_sensors && collider.is_sensor())
             || (self.included != 0 && member & self.included == 0)
             || member & self.ignored != 0
@@ -186,7 +229,7 @@ impl PhysicsWorld {
             only_fixed: filter.only_fixed,
             exclude: filter.exclude,
             exclude_also: None,
-            partner: filter.partner,
+            partners: Partners::from_slice(&filter.partners),
         })
     }
 
@@ -423,5 +466,26 @@ impl PhysicsWorld {
                 *slot = self.first_hit(&sweeps[chunk * SWEEP_CHUNK + offset], filter);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_filter_stays_copy_without_a_lifetime() {
+        fn is_copy<T: Copy>() {}
+        is_copy::<SweepFilter>();
+    }
+
+    #[test]
+    fn partners_keep_the_first_four_and_find_them() {
+        let ids: Vec<EntityId> = (1..=5).map(|i| EntityId::new(i, 0)).collect();
+        let partners = Partners::from_slice(&ids);
+        assert_eq!(partners.as_slice(), &ids[..MAX_PARTNERS]);
+        assert!(partners.contains(ids[3]));
+        assert!(!partners.contains(ids[4]), "the fifth is past the cap");
+        assert!(!Partners::NONE.contains(EntityId::new(0, 0)));
     }
 }

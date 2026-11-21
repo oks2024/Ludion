@@ -2584,6 +2584,7 @@ mod tests {
     fn cull_mesh(viewmodel: bool) -> crate::scene::MeshInstance {
         use ludion_core::math::glam::{Mat3, Mat4};
         crate::scene::MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             rim: [0.0; 4],
             shape: crate::scene::MeshShape::Cube,

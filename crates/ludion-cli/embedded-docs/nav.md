@@ -220,6 +220,31 @@ interact beats cost.
 
 `cargo run -p ludion --example nav_blocker` opens a door when the guard has waited.
 
+## Avoidance
+
+`NavAgent.avoidance` (walkers only) replaces the separation push with an ORCA velocity (reciprocal velocity
+obstacles in the xz plane), capped at `speed`:
+
+```yaml
+NavAgent:
+  speed: 5
+  avoidance: { horizon_s: 1.5, max_neighbors: 6, priority: 0 }   # radius: absent = the class radius
+```
+
+- **Inputs** are start-of-tick state: the `max_neighbors` nearest walking agents on `neighbor_layers`, each at its
+  previous `NavSteering.velocity`. An agent with no `avoidance` is dodged fully; separation still applies to it.
+- **Priority:** equal `priority` shares the avoidance (half each); the higher one keeps its course and the lower
+  takes it all. `radius` defaults to the agent's class radius, so a forklift keeps its larger berth.
+- **Grid and blockers:** an avoided velocity is kept only if a one-cell walk along it stays on the class grid (a
+  `block` blocker included); otherwise the agent takes its seek. An agent `at_link` or `at_blocker` stands still.
+- **Right-hand bias:** with neighbours in range the preferred velocity is nudged 1% to the agent's right, so an
+  exactly head-on pair (guards walking the same cell-centre line) parts to opposite sides instead of deadlocking.
+- **Limits:** no wall constraints (a crowd can graze a corner) and no flyers (`flying` with `avoidance` is `L1528`).
+- A `radius` or `horizon_s` not above 0, or `max_neighbors` outside 1 to 16, is `L1528`. An agent without the field
+  steers, and hashes, as before.
+
+`cargo run -p ludion --example nav_avoidance` crosses two crowds.
+
 ## Feeding the motor
 
 `NavSteering` is a velocity: multiply by `dt`, move before physics, and let the moveset own gravity.

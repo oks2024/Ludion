@@ -551,3 +551,158 @@ fn needs_gpu_bench_wetness_gpu_ms() {
         best[0], best[1]
     );
 }
+
+// --- Porosity ------------------------------------------------------------------------------------
+
+/// A 30 m wall quad facing +Z, four metres in front of a camera at the origin, whose every vertex
+/// carries `porosity` and the default material. The rain has no streaks and no occlusion, so only
+/// porosity and the wall's facing (0.5) decide how far it darkens.
+fn porous_wall(
+    vertex_porosity: f32,
+    instance_porosity: f32,
+    authored: bool,
+    wetness: f32,
+) -> RenderScene {
+    let mut scene = RenderScene::empty((PX, PX));
+    scene.camera = origin_camera(PX, PX);
+    scene.ambient = [0.5; 3];
+    scene.post = Some(exact_post());
+    let mut mesh = triangle(0xA11C ^ u64::from(vertex_porosity.to_bits()));
+    mesh.positions = vec![
+        -15.0, -15.0, 0.0, 15.0, -15.0, 0.0, 15.0, 15.0, 0.0, -15.0, 15.0, 0.0,
+    ];
+    mesh.normals = [0.0, 0.0, 1.0].repeat(4);
+    mesh.colors = vec![1.0; 16];
+    mesh.materials = [0.8, 0.0, 0.0].repeat(4);
+    mesh.porosity = vec![vertex_porosity; 4];
+    mesh.uvs = vec![0.0; 8];
+    mesh.tangents = [1.0, 0.0, 0.0, 1.0].repeat(4);
+    mesh.weights = [1.0, 0.0, 0.0, 0.0].repeat(4);
+    mesh.bone_indices = vec![0; 16];
+    mesh.indices = vec![0, 1, 2, 0, 2, 3];
+    mesh.authored_material = authored;
+    scene.mesh_assets.push(Arc::new(mesh));
+    let mut wall = slab(Vec3::new(0.0, 0.0, -4.0), 1.0, [0.5; 3]);
+    wall.shape = MeshShape::Asset(0);
+    wall.material = [0.8, 0.0, 0.0];
+    wall.use_vertex_material = authored;
+    wall.porosity = instance_porosity;
+    scene.meshes.push(wall);
+    scene.rain = Some(RainData {
+        occlusion: false,
+        ..wet_rain(wetness)
+    });
+    scene
+}
+
+/// The wet-to-dry albedo ratio at the wall's centre.
+fn wall_ratio(renderer: &Renderer, vertex: f32, instance: f32, authored: bool) -> f32 {
+    let dry = renderer
+        .render(&porous_wall(vertex, instance, authored, 0.0), size())
+        .expect("dry");
+    let wet = renderer
+        .render(&porous_wall(vertex, instance, authored, 1.0), size())
+        .expect("wet");
+    linear(centre(&wet)) / linear(centre(&dry))
+}
+
+/// A vertex that authors porosity 0 keeps its albedo in the rain, 1 darkens more than 0.5, and the
+/// selected value is the vertex's, whatever the instance lane holds. Skips with no GPU.
+#[test]
+fn needs_gpu_vertex_porosity_sets_how_far_rain_darkens() {
+    let Some(renderer) = skip_or_renderer("vertex_porosity_sets_how_far_rain_darkens") else {
+        return;
+    };
+    let dense = wall_ratio(&renderer, 0.0, 0.5, true);
+    let half = wall_ratio(&renderer, 0.5, 0.5, true);
+    let full = wall_ratio(&renderer, 1.0, 0.5, true);
+    assert!(
+        (dense - 1.0).abs() < 0.01,
+        "porosity 0 stays dry-coloured, got {dense}"
+    );
+    assert!(
+        (half - 0.9).abs() < 0.03,
+        "porosity 0.5 darkens to 0.9, got {half}"
+    );
+    assert!(
+        full < half - 0.05,
+        "porosity 1 is darker than 0.5: {full} vs {half}"
+    );
+
+    let wet = |vertex: f32| {
+        renderer
+            .render(&porous_wall(vertex, 0.5, true, 1.0), size())
+            .expect("wet")
+    };
+    let dry = |vertex: f32| {
+        renderer
+            .render(&porous_wall(vertex, 0.5, true, 0.0), size())
+            .expect("dry")
+    };
+    assert_ne!(wet(0.0).rgba, wet(1.0).rgba, "differs under rain");
+    assert_eq!(dry(0.0).rgba, dry(1.0).rgba, "equal with no wetness");
+}
+
+/// The instance lane governs geometry that authors no material, and is inert where the vertices
+/// author one. Skips with no GPU.
+#[test]
+fn needs_gpu_instance_porosity_is_inert_on_authored_geometry() {
+    let Some(renderer) = skip_or_renderer("instance_porosity_is_inert_on_authored_geometry") else {
+        return;
+    };
+    let plain = wall_ratio(&renderer, 0.5, 1.0, false);
+    let plain_default = wall_ratio(&renderer, 0.5, 0.5, false);
+    assert!(
+        plain < plain_default - 0.05,
+        "the instance lane darkens: {plain} vs {plain_default}"
+    );
+    let a = wall_ratio(&renderer, 0.5, 1.0, true);
+    let b = wall_ratio(&renderer, 0.5, 0.0, true);
+    assert_eq!(a, b, "authored geometry ignores the instance lane");
+}
+
+/// Porosity 0 keeps the albedo but the roughness still drops: a rough plane's highlight peaks higher
+/// wet than dry at porosity 0. Skips with no GPU.
+#[test]
+fn needs_gpu_porosity_zero_still_glosses() {
+    let Some(renderer) = skip_or_renderer("porosity_zero_still_glosses") else {
+        return;
+    };
+    let (w, h) = (64u32, 64u32);
+    let frame = FrameSize::native(w, h);
+    let peak = |wetness: f32| {
+        let mut scene = RenderScene::empty((w, h));
+        scene.post = Some(exact_post());
+        scene.ambient = [0.0; 3];
+        let eye = Vec3::new(0.0, 3.0, -5.196);
+        scene.camera = crate::scene::RenderCamera {
+            view: Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y),
+            projection: Mat4::perspective_rh(40.0_f32.to_radians(), 1.0, 0.1, 100.0),
+            position: eye,
+        };
+        let mut floor = ground(20.0);
+        floor.color = [1.0; 4];
+        floor.material = [0.7, 0.0, 0.0];
+        floor.porosity = 0.0;
+        scene.meshes = vec![floor];
+        scene.sun = Some(test_sun(
+            Vec3::new(0.0, -0.5, -0.866),
+            Vec3::splat(0.4),
+            0.002,
+        ));
+        scene.rain = Some(RainData {
+            occlusion: false,
+            ..wet_rain(wetness)
+        });
+        let img = renderer.render(&scene, frame).expect("render");
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| luma(&img, x, y))
+            .max()
+            .unwrap_or(0)
+    };
+    assert!(
+        peak(1.0) > peak(0.0),
+        "the film still glosses at porosity 0"
+    );
+}

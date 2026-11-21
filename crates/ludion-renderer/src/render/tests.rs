@@ -402,6 +402,7 @@ fn triangle(hash: u64) -> MeshData {
         normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
         colors: vec![1.0; 12],
         materials: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        porosity: vec![crate::DEFAULT_POROSITY; 3],
         uvs: vec![0.0; 6],
         tangents: vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0],
         weights: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
@@ -421,13 +422,13 @@ fn triangle(hash: u64) -> MeshData {
 /// The interleaved [`MeshVertex`] stream from `upload_mesh_asset`'s zip has the documented
 /// layout: position, then faceted normal, then per-vertex color, then per-vertex material, then
 /// UV, then tangent, then skin weights, then bone indices, contiguous per vertex, and the stride
-/// is exactly `3 + 3 + 4 + 3 + 2 + 4 + 4 + 4` lanes (the last two `u32`, the rest `f32`, same
+/// is exactly `3 + 3 + 4 + 4 + 2 + 4 + 4 + 4` lanes (the last two `u32`, the rest `f32`, same
 /// size). Every lane rides through in vertex order.
 #[test]
 fn mesh_vertex_layout_is_position_normal_color_material_uv_tangent() {
     assert_eq!(
         std::mem::size_of::<MeshVertex>(),
-        (3 + 3 + 4 + 3 + 2 + 4 + 4 + 4) * std::mem::size_of::<f32>(),
+        (3 + 3 + 4 + 4 + 2 + 4 + 4 + 4) * std::mem::size_of::<f32>(),
         "MeshVertex is a tightly packed position+normal+color+material+uv+tangent+weights+bones",
     );
 
@@ -444,6 +445,7 @@ fn mesh_vertex_layout_is_position_normal_color_material_uv_tangent() {
             1.0, 0.0, 2.0, // v1
             0.125, 0.375, 0.625, // v2
         ],
+        porosity: vec![0.2, 0.4, 0.6],
         uvs: vec![
             0.0, 0.0, // v0
             1.0, 0.0, // v1
@@ -497,6 +499,7 @@ fn mesh_vertex_layout_is_position_normal_color_material_uv_tangent() {
                 mesh.materials[v * 3],
                 mesh.materials[v * 3 + 1],
                 mesh.materials[v * 3 + 2],
+                mesh.porosity[v],
             ],
             uv: [mesh.uvs[v * 2], mesh.uvs[v * 2 + 1]],
             tangent: [
@@ -523,11 +526,11 @@ fn mesh_vertex_layout_is_position_normal_color_material_uv_tangent() {
     assert_eq!(vertices[0].position, [0.0, 0.0, 0.0]);
     assert_eq!(vertices[0].normal, [0.0, 0.0, 1.0]);
     assert_eq!(vertices[0].color, [0.1, 0.2, 0.3, 0.4]);
-    assert_eq!(vertices[0].material, [0.25, 0.5, 0.75]);
+    assert_eq!(vertices[0].material, [0.25, 0.5, 0.75, 0.2]);
     assert_eq!(vertices[1].color, [0.5, 0.6, 0.7, 0.8]);
-    assert_eq!(vertices[1].material, [1.0, 0.0, 2.0]);
+    assert_eq!(vertices[1].material, [1.0, 0.0, 2.0, 0.4]);
     assert_eq!(vertices[2].color, [0.9, 1.0, 0.0, 1.0]);
-    assert_eq!(vertices[2].material, [0.125, 0.375, 0.625]);
+    assert_eq!(vertices[2].material, [0.125, 0.375, 0.625, 0.6]);
     assert_eq!(vertices[0].uv, [0.0, 0.0]);
     assert_eq!(vertices[0].tangent, [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(vertices[1].uv, [1.0, 0.0]);
@@ -555,7 +558,7 @@ fn bucket_asset_instances_by_refiltering(
                 .iter()
                 .filter(|m| m.shape == MeshShape::Asset(index))
                 .map(|m| MeshInstanceRaw {
-                    medium: [1.0, 0.0, 0.0, 0.0],
+                    medium: [1.0, 0.0, m.porosity, 0.0],
                     model: m.model.to_cols_array_2d(),
                     color: m.color,
                     material: instance_material(m),
@@ -579,6 +582,7 @@ fn bucket_asset_instances_by_refiltering(
 #[test]
 fn bucketing_asset_instances_preserves_the_refiltered_draw_order() {
     let asset = |index: usize, x: f32| MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Asset(index),
         model: Mat4::from_translation(Vec3::new(x, 0.0, 0.0)),
@@ -663,6 +667,7 @@ fn instance_layout_carries_material_and_selection_flag() {
     assert_eq!(std::mem::offset_of!(MeshInstanceRaw, medium), 208);
 
     let base = MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Cube,
         model: Mat4::IDENTITY,
@@ -712,6 +717,7 @@ fn instance_layout_carries_material_and_selection_flag() {
 
 fn wrap_probe(wrap: f32, scatter: [f32; 3]) -> MeshInstance {
     MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Cube,
         model: Mat4::from_scale(Vec3::new(2.0, 4.0, 6.0)),
@@ -1198,6 +1204,7 @@ fn needs_gpu_same_asset_mesh_referenced_twice_uploads_once() {
     // Two instances of the same asset (index 0) at different transforms.
     for tx in [-1.0_f32, 1.0] {
         scene.meshes.push(MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape: MeshShape::Asset(0),
             model: Mat4::from_translation(Vec3::new(tx, 0.0, 0.0)),
@@ -1367,6 +1374,7 @@ fn needs_gpu_an_empty_asset_mesh_is_skipped_and_the_rest_still_draws() {
         Err(d) => panic!("renderer init failed: {d:?}"),
     };
     let instance = |index: usize| MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Asset(index),
         model: Mat4::IDENTITY,
@@ -1390,6 +1398,7 @@ fn needs_gpu_an_empty_asset_mesh_is_skipped_and_the_rest_still_draws() {
         normals: vec![],
         colors: vec![],
         materials: vec![],
+        porosity: vec![],
         uvs: vec![],
         tangents: vec![],
         weights: vec![],
@@ -1470,6 +1479,7 @@ fn test_sun_framed(
 /// A large ground plane (`scale` × 1 × `scale`) at the origin, mid-grey, facing +Y.
 fn ground(scale: f32) -> MeshInstance {
     MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Plane,
         model: Mat4::from_scale(Vec3::new(scale, 1.0, scale)),
@@ -1493,6 +1503,7 @@ fn ground(scale: f32) -> MeshInstance {
 /// A unit cube scaled `size` at `pos`.
 fn cube(pos: Vec3, size: Vec3, color: [f32; 4]) -> MeshInstance {
     MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Cube,
         model: Mat4::from_translation(pos) * Mat4::from_scale(size),
@@ -2158,6 +2169,7 @@ fn needs_gpu_environment_ibl_changes_pixels_and_prefilter_is_deterministic() {
         ground(20.0),
         // A near-mirror metal sphere — the surface IBL affects most (it reflects the sky).
         MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape: MeshShape::Sphere,
             model: Mat4::from_translation(Vec3::new(0.0, 1.2, 0.0)),
@@ -2202,6 +2214,7 @@ fn needs_gpu_environment_ibl_changes_pixels_and_prefilter_is_deterministic() {
 /// A unit-radius sphere at the origin with the given material and hit-flash amount.
 fn reflective_sphere(material: [f32; 3], flash: f32) -> MeshInstance {
     MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Sphere,
         model: Mat4::from_scale(Vec3::splat(2.0)),
@@ -2325,6 +2338,7 @@ fn wrap_mesh(
     cast: bool,
 ) -> MeshInstance {
     MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape,
         model,
@@ -2965,6 +2979,7 @@ fn needs_gpu_fade_dithers_deterministically_and_gates_by_height() {
     // An emissive cube spanning y ∈ [−1, 1] at the origin — bright regardless of lighting, so its
     // pixels are unambiguously distinct from the clear color and the Bayer holes read clearly.
     let make = |fade: f32, height_min: f32| MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Cube,
         model: Mat4::from_scale(Vec3::splat(2.0)),
@@ -3059,6 +3074,7 @@ fn skin_quad(weights: [f32; 4], bones: [u32; 4], hash: u64) -> MeshData {
         normals: [0.0, 0.0, 1.0].repeat(4),
         colors: vec![1.0; 16],
         materials: [1.0, 0.0, 0.0].repeat(4),
+        porosity: vec![crate::DEFAULT_POROSITY; 4],
         uvs: vec![0.0; 8],
         tangents: [1.0, 0.0, 0.0, 1.0].repeat(4),
         weights: weights.repeat(4),
@@ -3079,6 +3095,7 @@ fn skin_quad(weights: [f32; 4], bones: [u32; 4], hash: u64) -> MeshData {
 /// `bone_offset`, referencing asset index 0.
 fn skin_instance(model: Mat4, bone_offset: u32) -> MeshInstance {
     MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Asset(0),
         model,
@@ -3348,6 +3365,7 @@ fn needs_gpu_skinned_normals_survive_a_mirroring_joint() {
 fn flat_diamond_scene(w: u32, h: u32) -> RenderScene {
     let mut scene = RenderScene::empty((w, h));
     scene.meshes = vec![MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Cube,
         model: Mat4::from_rotation_z(std::f32::consts::FRAC_PI_4)
@@ -3631,6 +3649,7 @@ fn known_hdr_scene(w: u32, h: u32, color: [f32; 3]) -> RenderScene {
     let mut scene = RenderScene::empty((w, h));
     scene.ambient = [0.0, 0.0, 0.0];
     scene.meshes = vec![MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Cube,
         model: Mat4::from_scale(Vec3::splat(4.0)),
@@ -4618,6 +4637,7 @@ fn origin_camera(w: u32, h: u32) -> crate::scene::RenderCamera {
 /// `color`, so any difference between two of them is what the composite did and nothing else.
 fn slab(center: Vec3, size: f32, color: [f32; 3]) -> MeshInstance {
     MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Cube,
         model: Mat4::from_translation(center) * Mat4::from_scale(Vec3::splat(size)),
@@ -5095,6 +5115,7 @@ fn normal_mapped_quad(hash: u64) -> MeshData {
         normals: [0.0, 0.0, 1.0].repeat(4),
         colors: vec![1.0; 16],
         materials: [1.0, 0.0, 0.0].repeat(4),
+        porosity: vec![crate::DEFAULT_POROSITY; 4],
         uvs: vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
         tangents: [1.0, 0.0, 0.0, 1.0].repeat(4),
         weights: [1.0, 0.0, 0.0, 0.0].repeat(4),
@@ -5226,6 +5247,7 @@ fn cooked_map_scene(quad: MeshData) -> RenderScene {
     scene.ambient = [0.8, 0.8, 0.8];
     scene.mesh_assets.push(Arc::new(quad));
     scene.meshes.push(MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Asset(0),
         model: Mat4::IDENTITY,
@@ -6267,6 +6289,7 @@ fn box_asset(hash: u64, double_sided: bool) -> MeshData {
         normals: Vec::new(),
         colors: Vec::new(),
         materials: Vec::new(),
+        porosity: Vec::new(),
         uvs: Vec::new(),
         tangents: Vec::new(),
         weights: Vec::new(),
@@ -6294,6 +6317,7 @@ fn box_asset(hash: u64, double_sided: bool) -> MeshData {
             mesh.normals.extend(n.to_array());
             mesh.colors.extend([1.0; 4]);
             mesh.materials.extend([1.0, 0.0, 0.0]);
+            mesh.porosity.push(crate::DEFAULT_POROSITY);
             mesh.uvs.extend(uv);
             mesh.tangents.extend([u.x, u.y, u.z, 1.0]);
             mesh.weights.extend([1.0, 0.0, 0.0, 0.0]);
@@ -10578,6 +10602,7 @@ fn needs_gpu_a_height_free_medium_ignores_fog_height_in_both_terms() {
 /// fixture built out of these measures the medium and nothing else.
 fn dark_box(center: Vec3, size: Vec3) -> MeshInstance {
     MeshInstance {
+        porosity: crate::DEFAULT_POROSITY,
         medium: 1.0,
         shape: MeshShape::Cube,
         model: Mat4::from_translation(center) * Mat4::from_scale(size),

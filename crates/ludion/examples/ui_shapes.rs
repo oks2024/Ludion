@@ -34,4 +34,25 @@ fn main() {
     }
     assert!(ui_shape_hit(&gauge, viewport, [975.0, 540.0 - 72.0]));
     assert!(!ui_shape_hit(&gauge, viewport, [960.0 - 73.0, 540.0]));
+
+    // A concave "U" polygon: its arms hit, the notch between them does not.
+    let bracket = UiShape {
+        shape: UiShapeType::Polygon {
+            points: vec![
+                [0.0, 0.0],
+                [100.0, 0.0],
+                [100.0, 200.0],
+                [70.0, 200.0],
+                [70.0, 50.0],
+                [30.0, 50.0],
+                [30.0, 200.0],
+                [0.0, 200.0],
+            ],
+        },
+        fill: Some([0.2, 0.9, 0.5, 1.0]),
+        ..UiShape::default()
+    };
+    assert!(ui_shape_hit(&bracket, viewport, [10.0, 100.0]));
+    assert!(!ui_shape_hit(&bracket, viewport, [50.0, 120.0]));
+    println!("polygon: arm hit, notch miss");
 }

@@ -8,10 +8,10 @@
 use bytemuck::{Pod, Zeroable};
 use ludion_core::math::glam::Vec3;
 
-use crate::scene::MeshShape;
+use crate::scene::{DEFAULT_POROSITY, MeshShape};
 
 /// One mesh vertex, six lanes: object-space position, faceted normal, per-vertex RGBA color,
-/// material, texture coordinates, and tangent frame. `#[repr(C)]` + `Pod` so a slice casts straight
+/// material (with porosity in `w`), texture coordinates, and tangent frame. `#[repr(C)]` + `Pod` so a slice casts straight
 /// to GPU bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -23,9 +23,10 @@ pub(crate) struct MeshVertex {
     /// Per-vertex RGBA color (linear); the shader multiplies it by the per-instance color. The
     /// procedural primitives are opaque white, so the product is exactly the instance color.
     pub color: [f32; 4],
-    /// Per-vertex material `(roughness, metallic, emissive)`. The procedural primitives carry the
-    /// default material `(1, 0, 0)`, so the per-instance material governs them.
-    pub material: [f32; 3],
+    /// Per-vertex material `(roughness, metallic, emissive, porosity)`. The procedural primitives
+    /// carry the default material `(1, 0, 0)` and [`DEFAULT_POROSITY`], so the per-instance material
+    /// and porosity govern them.
+    pub material: [f32; 4],
     /// Texture coordinates. The procedural primitives are unmapped and carry `(0, 0)`.
     pub uv: [f32; 2],
     /// Tangent frame `(x, y, z, handedness)`: the tangent along +U, `w` the bitangent's sign. The
@@ -40,9 +41,9 @@ pub(crate) struct MeshVertex {
     pub bones: [u32; 4],
 }
 
-/// The default material `(roughness 1, metallic 0, emissive 0)` — matte non-metal, worn by every
-/// vertex that authors none.
-pub(crate) const DEFAULT_MATERIAL: [f32; 3] = [1.0, 0.0, 0.0];
+/// The default material `(roughness 1, metallic 0, emissive 0, porosity 0.5)` — matte non-metal,
+/// worn by every vertex that authors none.
+pub(crate) const DEFAULT_MATERIAL: [f32; 4] = [1.0, 0.0, 0.0, DEFAULT_POROSITY];
 
 /// The default tangent frame `(+X, handedness +1)` — worn by every vertex whose source authors
 /// none. A placeholder, not a derived frame: geometry with no UVs has no tangent to derive.

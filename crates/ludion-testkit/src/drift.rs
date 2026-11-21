@@ -73,7 +73,7 @@ fn probe_seed(name: &str) -> Value {
         "SightTarget" => json!({ "class": "c" }),
         "RenderView" => json!({ "name": "v" }),
         "RenderLayers" => json!({ "layers": ["l"] }),
-        "IgnoreCollisions" => json!({ "with": { "index": 0, "generation": 0 } }),
+        "IgnoreCollisions" => json!({ "with": [{ "index": 0, "generation": 0 }] }),
         "StimulusRecord" => json!({
             "perceiver": { "index": 0, "generation": 0 },
             "sense": "sight",

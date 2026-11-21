@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, pointer_token};
+use ludion_core::ids::EntityId;
 use ludion_core::time::{FrameIndex, GameTime, SimTime};
 use ludion_ecs::SemanticValidate;
 use schemars::JsonSchema;
@@ -13,21 +14,32 @@ use serde_json::Value;
 
 use crate::perception::Look;
 
-/// One target of an [`IkTargets`]: exactly one of a world point or a direction, and a weight that
-/// ramps.
+/// One target of an [`IkTargets`]: at most one of a world point, an entity or a direction, and a
+/// weight that ramps.
 ///
 /// The weight is `weight` once `fade` seconds have passed since `changed`; before that it lerps from
 /// `from_weight`. Use [`fade_ik_target`] to change it without a jump.
+///
+/// A target with none of the three is not solved. That is also what a despawned `entity` leaves
+/// behind: a scene save and a carry write it as `entity: null`, and the file reloads.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct IkTarget {
-    /// A world-space point to reach or face (default none). To follow an entity, write it from that
-    /// entity's world position on each tick it moves.
+    /// A world-space point to reach or face (default none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub point: Option<[f32; 3]>,
     /// A direction in the model's frame, in `Look`'s convention: positive yaw turns left, positive
     /// pitch looks down (default none). A look-at only: a chain ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<Look>,
+    /// An entity to reach or face, at its world position plus `offset` (default none). The target
+    /// follows it with no write; a null, despawned or `Transform`-less entity is not solved (weight
+    /// `0`, no diagnostic).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub entity: Option<EntityId>,
+    /// An offset in the `entity`'s frame (default `[0, 0, 0]`). Ignored without an `entity`.
+    #[serde(default, skip_serializing_if = "is_zero3")]
+    pub offset: [f32; 3],
     /// The target weight in `[0, 1]` (default `0` — the target is off; `L1673` outside the range).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub weight: f32,
@@ -49,6 +61,8 @@ impl Default for IkTarget {
         IkTarget {
             point: None,
             direction: None,
+            entity: None,
+            offset: [0.0; 3],
             weight: 0.0,
             from_weight: 0.0,
             changed: FrameIndex::ZERO,
@@ -60,14 +74,15 @@ impl Default for IkTarget {
 /// Targets for a voxel assembly's `ik:` entries, keyed by the entry's name.
 ///
 /// A chain reaches its target with its effector; a look-at turns its aim parts so `forward` faces
-/// it. Each target sets exactly one of `point` or `direction` (`L1673`); `weight` blends
-/// from the animated pose to the solved one and ramps over `fade` seconds from `changed`.
+/// it. Each target sets at most one of `point`, `entity` (with an `offset` in its frame) or
+/// `direction` (`L1673`); `weight` blends from the animated pose to the solved one and ramps over
+/// `fade` seconds from `changed`. The map is an entity-reference collection, so a despawned `entity`
+/// is nulled on save and carry.
 ///
 /// **Presentation only.** Extract solves the IK after the clip and its layers; no system reads
 /// the component, and a scene without it poses exactly as before. It is ordinary hashed sim state,
-/// so write it only when a choice changes (a `point` that follows a moving entity is rewritten
-/// each tick it moves). An entry with no target, or at weight `0`, is not solved. An assembly without `ik:`
-/// ignores the component.
+/// so write it only when a choice changes (an `entity` target follows with no write). An entry with
+/// no target, or at weight `0`, is not solved. An assembly without `ik:` ignores the component.
 ///
 /// ```yaml
 /// components:
@@ -78,6 +93,10 @@ impl Default for IkTarget {
 ///         weight: 1.0
 ///       hand_r:
 ///         point: [2.0, 1.0, -3.0]
+///         weight: 1.0
+///       hand_l:
+///         entity: { index: 42, generation: 0 }
+///         offset: [0.0, 0.1, 0.0]
 ///         weight: 1.0
 /// ```
 ///
@@ -97,6 +116,7 @@ impl Default for IkTarget {
 pub struct IkTargets {
     /// The targets by `ik:` entry name (default none).
     #[serde(default)]
+    #[schemars(with = "ludion_ecs::EntityRefCollection<BTreeMap<String, IkTarget>>")]
     pub targets: BTreeMap<String, IkTarget>,
 }
 
@@ -155,9 +175,9 @@ pub fn fade_ik_target(
 }
 
 impl SemanticValidate for IkTargets {
-    /// A target that sets none or both of `point` and `direction`, a weight outside
-    /// `[0, 1]`, a negative or non-finite `fade`, or a non-numeric `point` entry (`L1673`,
-    /// `/targets/<name>/<field>`).
+    /// A target that sets more than one of `point`, `entity` and `direction`, a weight outside
+    /// `[0, 1]`, a negative or non-finite `fade`, or a non-numeric `point` or `offset` entry
+    /// (`L1673`, `/targets/<name>/<field>`).
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         let Some(targets) = value.get("targets").and_then(Value::as_object) else {
@@ -167,15 +187,17 @@ impl SemanticValidate for IkTargets {
             if name.is_empty() {
                 out.push(invalid(name, "", "the target has an empty name"));
             }
-            let set = ["point", "direction"]
+            let set = ["point", "entity", "direction"]
                 .iter()
                 .filter(|field| target.get(**field).is_some_and(|v| !v.is_null()))
                 .count();
-            if set != 1 {
+            if set > 1 {
                 out.push(invalid(
                     name,
                     "",
-                    &format!("the target sets {set} of `point` and `direction`; set exactly one"),
+                    &format!(
+                        "the target sets {set} of `point`, `entity` and `direction`; set at most one"
+                    ),
                 ));
             }
             for field in ["weight", "from_weight"] {
@@ -198,7 +220,7 @@ impl SemanticValidate for IkTargets {
                     &format!("`fade` {v} must be finite and not negative"),
                 ));
             }
-            for field in ["point"] {
+            for field in ["point", "offset"] {
                 if let Some(items) = target.get(field).and_then(Value::as_array) {
                     for (axis, v) in items.iter().enumerate() {
                         if !v.as_f64().is_some_and(f64::is_finite) {
@@ -241,14 +263,19 @@ fn invalid(name: &str, field: &str, message: &str) -> Diagnostic {
     )
     .with_path(pointer)
     .with_help(
-        "set exactly one of `point` or `direction`, weights in [0, 1], and a finite \
-         non-negative fade",
+        "set at most one of `point`, `entity` or `direction`, weights in [0, 1], a finite \
+         `offset` and a finite non-negative fade",
     )
 }
 
 #[allow(clippy::float_cmp)]
 fn is_zero(value: &f32) -> bool {
     *value == 0.0
+}
+
+#[allow(clippy::float_cmp)]
+fn is_zero3(value: &[f32; 3]) -> bool {
+    value.iter().all(|v| *v == 0.0)
 }
 
 fn frame_zero() -> FrameIndex {
@@ -279,21 +306,53 @@ mod tests {
         );
         assert!(messages(json!({"targets": {"look": {"direction": {"yaw_deg": 5.0}}}})).is_empty());
         assert!(messages(json!({})).is_empty());
+        // A target nulled by a despawn still validates, with or without its offset.
+        assert!(messages(json!({"targets": {"none": {}}})).is_empty());
+        assert!(
+            messages(json!({"targets": {"hand": {"entity": null, "offset": [0, 1, 0]}}}))
+                .is_empty()
+        );
+        assert!(
+            messages(json!({"targets": {"hand": {"entity": {"index": 1, "generation": 0}}}}))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_entity_target_round_trips_and_a_plain_one_stays_byte_identical() {
+        let with = IkTarget {
+            entity: Some(EntityId::new(3, 0)),
+            offset: [0.0, 0.1, 0.0],
+            weight: 1.0,
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&with).unwrap();
+        assert_eq!(serde_json::from_value::<IkTarget>(value).unwrap(), with);
+        let plain = serde_json::to_value(IkTarget {
+            point: Some([0.0, 1.0, 2.0]),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(plain.get("entity").is_none() && plain.get("offset").is_none());
     }
 
     #[test]
     fn every_invalid_field_is_l1673_at_its_pointer() {
         let found = messages(json!({"targets": {
-            "none": {},
             "two": {"point": [0, 0, 0], "direction": {}},
+            "three": {"point": [0, 0, 0], "direction": {}, "entity": {"index": 1, "generation": 0}},
+            "pe": {"point": [0, 0, 0], "entity": {"index": 1, "generation": 0}},
+            "off": {"entity": {"index": 1, "generation": 0}, "offset": [0, "x", 0]},
             "w": {"point": [0, 0, 0], "weight": 1.5},
             "fw": {"point": [0, 0, 0], "from_weight": -0.5},
             "fade": {"point": [0, 0, 0], "fade": -1.0},
             "pt": {"point": [0, "x", 0]},
         }}));
         for pointer in [
-            "/targets/none",
             "/targets/two",
+            "/targets/three",
+            "/targets/pe",
+            "/targets/off/offset/1",
             "/targets/w/weight",
             "/targets/fw/from_weight",
             "/targets/fade/fade",

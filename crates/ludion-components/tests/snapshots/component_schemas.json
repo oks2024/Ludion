@@ -4399,29 +4399,34 @@
   "IgnoreCollisions": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "IgnoreCollisions",
-    "description": "Makes a motor's own queries ignore `with`'s collider: its sweeps, ground probes, posture and\nresize tests and [`character_fit`](crate::character_fit). A paired action needs it, because two\ncapsules standing at a 0.5 m choke overlap.\n\nIt is read at query time and is not part of the physics blob. It does not stop the solver from\npushing a dynamic body that `with` names; it only changes what the motor sees. Without the\ncomponent every motor result is unchanged.\n\n```\nuse ludion_core::ids::EntityId;\nuse ludion_physics::IgnoreCollisions;\n\nlet partner = EntityId::new(7, 0);\nlet ignore = IgnoreCollisions { with: partner };\nassert_eq!(ignore.clone(), ignore);\n```",
+    "description": "Makes a motor's own queries ignore every collider `with` names: its sweeps, ground probes,\nposture and resize tests and [`character_fit`](crate::character_fit). A paired action needs it,\nbecause two capsules standing at a 0.5 m choke overlap; each participant of an N-role action\nlists all the others.\n\nIt is read at query time and is not part of the physics blob. It does not stop the solver from\npushing a dynamic body that `with` names; it only changes what the motor sees. Without the\ncomponent, or with an empty list, every motor result is unchanged. A motor looks through at most\n[`MAX_PARTNERS`] (4) entities: a longer list uses its first four at runtime and is `L1759` in a\ndocument.\n\n```\nuse ludion_core::ids::EntityId;\nuse ludion_physics::IgnoreCollisions;\n\nlet partner = EntityId::new(7, 0);\nlet ignore = IgnoreCollisions { with: vec![partner] };\nassert_eq!(ignore.clone(), ignore);\n```",
     "type": "object",
     "properties": {
       "with": {
-        "description": "The entity whose collider the motor looks through.",
-        "type": "object",
-        "properties": {
-          "index": {
-            "type": "integer",
-            "minimum": 0
+        "description": "The entities whose colliders the motor looks through.",
+        "type": "array",
+        "items": {
+          "description": "A reference to another entity by its generational EntityId.",
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 0
+            }
           },
-          "generation": {
-            "type": "integer",
-            "minimum": 0
+          "required": [
+            "index",
+            "generation"
+          ],
+          "x-entity-ref": {
+            "allow_self": false
           }
         },
-        "required": [
-          "index",
-          "generation"
-        ],
-        "x-entity-ref": {
-          "allow_self": false
-        }
+        "x-entity-ref-collection": true
       }
     },
     "additionalProperties": false,
@@ -4432,7 +4437,7 @@
   "IkTargets": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "IkTargets",
-    "description": "Targets for a voxel assembly's `ik:` entries, keyed by the entry's name.\n\nA chain reaches its target with its effector; a look-at turns its aim parts so `forward` faces\nit. Each target sets exactly one of `point` or `direction` (`L1673`); `weight` blends\nfrom the animated pose to the solved one and ramps over `fade` seconds from `changed`.\n\n**Presentation only.** Extract solves the IK after the clip and its layers; no system reads\nthe component, and a scene without it poses exactly as before. It is ordinary hashed sim state,\nso write it only when a choice changes (a `point` that follows a moving entity is rewritten\neach tick it moves). An entry with no target, or at weight `0`, is not solved. An assembly without `ik:`\nignores the component.\n\n```yaml\ncomponents:\n  IkTargets:\n    targets:\n      look:\n        direction: { yaw_deg: 30.0 }\n        weight: 1.0\n      hand_r:\n        point: [2.0, 1.0, -3.0]\n        weight: 1.0\n```\n\n```\nuse ludion_components::{IkTarget, IkTargets, fade_ik_target, ik_target_weight};\nuse ludion_core::time::{SimTime, TickRate};\n\nlet mut ik = IkTargets::default();\nik.targets.insert(\"look\".into(), IkTarget { point: Some([0.0, 1.0, -3.0]), ..Default::default() });\nlet now = SimTime::from_ticks(60, TickRate::DEFAULT);\nassert!(fade_ik_target(&mut ik, \"look\", 1.0, 0.5, now));\n// Half the fade later the target is half on.\nlet later = SimTime::from_ticks(75, TickRate::DEFAULT);\nassert_eq!(ik_target_weight(&ik.targets[\"look\"], later), 0.5);\n```",
+    "description": "Targets for a voxel assembly's `ik:` entries, keyed by the entry's name.\n\nA chain reaches its target with its effector; a look-at turns its aim parts so `forward` faces\nit. Each target sets at most one of `point`, `entity` (with an `offset` in its frame) or\n`direction` (`L1673`); `weight` blends from the animated pose to the solved one and ramps over\n`fade` seconds from `changed`. The map is an entity-reference collection, so a despawned `entity`\nis nulled on save and carry.\n\n**Presentation only.** Extract solves the IK after the clip and its layers; no system reads\nthe component, and a scene without it poses exactly as before. It is ordinary hashed sim state,\nso write it only when a choice changes (an `entity` target follows with no write). An entry with\nno target, or at weight `0`, is not solved. An assembly without `ik:` ignores the component.\n\n```yaml\ncomponents:\n  IkTargets:\n    targets:\n      look:\n        direction: { yaw_deg: 30.0 }\n        weight: 1.0\n      hand_r:\n        point: [2.0, 1.0, -3.0]\n        weight: 1.0\n      hand_l:\n        entity: { index: 42, generation: 0 }\n        offset: [0.0, 0.1, 0.0]\n        weight: 1.0\n```\n\n```\nuse ludion_components::{IkTarget, IkTargets, fade_ik_target, ik_target_weight};\nuse ludion_core::time::{SimTime, TickRate};\n\nlet mut ik = IkTargets::default();\nik.targets.insert(\"look\".into(), IkTarget { point: Some([0.0, 1.0, -3.0]), ..Default::default() });\nlet now = SimTime::from_ticks(60, TickRate::DEFAULT);\nassert!(fade_ik_target(&mut ik, \"look\", 1.0, 0.5, now));\n// Half the fade later the target is half on.\nlet later = SimTime::from_ticks(75, TickRate::DEFAULT);\nassert_eq!(ik_target_weight(&ik.targets[\"look\"], later), 0.5);\n```",
     "type": "object",
     "properties": {
       "targets": {
@@ -4441,16 +4446,17 @@
         "additionalProperties": {
           "$ref": "#/$defs/IkTarget"
         },
+        "x-entity-ref-collection": true,
         "default": {}
       }
     },
     "$defs": {
       "IkTarget": {
-        "description": "One target of an [`IkTargets`]: exactly one of a world point or a direction, and a weight that\nramps.\n\nThe weight is `weight` once `fade` seconds have passed since `changed`; before that it lerps from\n`from_weight`. Use [`fade_ik_target`] to change it without a jump.",
+        "description": "One target of an [`IkTargets`]: at most one of a world point, an entity or a direction, and a\nweight that ramps.\n\nThe weight is `weight` once `fade` seconds have passed since `changed`; before that it lerps from\n`from_weight`. Use [`fade_ik_target`] to change it without a jump.\n\nA target with none of the three is not solved. That is also what a despawned `entity` leaves\nbehind: a scene save and a carry write it as `entity: null`, and the file reloads.",
         "type": "object",
         "properties": {
           "point": {
-            "description": "A world-space point to reach or face (default none). To follow an entity, write it from that\nentity's world position on each tick it moves.",
+            "description": "A world-space point to reach or face (default none).",
             "type": [
               "array",
               "null"
@@ -4472,6 +4478,40 @@
                 "type": "null"
               }
             ]
+          },
+          "entity": {
+            "description": "An entity to reach or face, at its world position plus `offset` (default none). The target\nfollows it with no write; a null, despawned or `Transform`-less entity is not solved (weight\n`0`, no diagnostic).",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "index",
+              "generation"
+            ],
+            "x-entity-ref": {
+              "allow_self": false
+            }
+          },
+          "offset": {
+            "description": "An offset in the `entity`'s frame (default `[0, 0, 0]`). Ignored without an `entity`.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 3,
+            "maxItems": 3
           },
           "weight": {
             "description": "The target weight in `[0, 1]` (default `0` — the target is off; `L1673` outside the range).",
@@ -5157,6 +5197,16 @@
         "minimum": 0.0,
         "maximum": 1.0
       },
+      "porosity": {
+        "description": "Wet-surface porosity in `[0, 1]` (default none, meaning `0.5`): how far rain darkens this mesh.\nInert on geometry that authors its own material (a voxel palette, a sculpt or a mesh document\nthat sets any material field), and not inherited from `Parent`. Render-only.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
       "blend": {
         "description": "Draws this mesh seen through (default none: opaque): see [`MeshBlend`]. `color`'s alpha is the\nopacity. Not inherited down `Parent`: this entity's own `Mesh` only. Ignored with `L2360` on a\n`Viewmodel` mesh.",
         "anyOf": [
@@ -5494,6 +5544,16 @@
           },
           "medium": {
             "description": "Scale in `[0, 1]` on the medium's optical depth along the view ray to this mesh (default none,\nmeaning `1.0`, today's look): `0` shows no air between the eye and the mesh. Render-only. A mesh\nwithout its own value takes its nearest `Parent` ancestor's.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "porosity": {
+            "description": "Wet-surface porosity in `[0, 1]` (default none, meaning `0.5`): how far rain darkens this mesh.\nInert on geometry that authors its own material (a voxel palette, a sculpt or a mesh document\nthat sets any material field), and not inherited from `Parent`. Render-only.",
             "type": [
               "number",
               "null"

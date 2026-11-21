@@ -90,6 +90,7 @@ mod nav;
 mod nav_blockers;
 mod paired;
 mod paired_doc;
+mod paired_sheet;
 mod parent_joint;
 pub mod particles;
 mod path_follow;
@@ -191,14 +192,14 @@ pub use components::{
     Anchor, Animation, AudioEmitter, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
     GiVolume, GroundMarker, GroundMarkerGrid, GroundMarkerShape, GroundMarkerStyle, MapWrap, Mesh,
-    MeshGrid, MeshSource, Name, NavAgent, NavBlocker, NavBlockerMode, NavBlockerShape, NavGoal,
-    NavLink, NavReplan, NavRoute, NavRouteStatus, NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER,
-    ParentJoint, ParticleBlend, ParticleEmitter, Perceiver, PointLight, PostProcess, ProbeShape,
-    Projection, ReflectionProbe, Require, Residue, SightPoint, SightTarget, SightZone, SkinBone,
-    SpotLight, Sprite, SpriteBlend, Static, Text, TextOutline, TileAppearance, Tilemap, Transform,
-    UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiList, UiListItem,
-    UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor, Viewmodel,
-    ViewmodelLens, Visibility, builtin_registry, crossfade,
+    MeshGrid, MeshSource, Name, NavAgent, NavAvoidance, NavBlocker, NavBlockerMode,
+    NavBlockerShape, NavGoal, NavLink, NavReplan, NavRoute, NavRouteStatus, NavSteering,
+    PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter, Perceiver,
+    PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Require, Residue, SightPoint,
+    SightTarget, SightZone, SkinBone, SpotLight, Sprite, SpriteBlend, Static, Text, TextOutline,
+    TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase,
+    UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat,
+    UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
 };
 pub use components::{AnimGraphState, PoseSnapshot, SnapshotPart};
 pub use components::{
@@ -292,6 +293,10 @@ pub use paired::{
     paired_update, start_paired,
 };
 pub use paired_doc::{PairedContactReport, PairedReport, PairedRoleReport, check_paired_files};
+pub use paired_sheet::{
+    MAX_PAIRED_STRIP, MIN_PAIRED_STRIP, PairedPhase, PairedSheetOutcome, PairedSheetRequest,
+    render_paired_sheet,
+};
 pub use parent_joint::{posed_joint_world, scene_parent_joint_diagnostics};
 pub use path_follow::{
     FollowerMotion, PathFollower, PathMode, PathOrient, path_follow, path_follower_motion,

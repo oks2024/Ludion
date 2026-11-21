@@ -714,6 +714,7 @@ mod tests {
             color,
             emissive: None,
             metallic: None,
+            porosity: None,
             roughness: None,
         }
     }
@@ -821,6 +822,7 @@ mod tests {
             normals,
             colors,
             materials,
+            porosity: vec![ludion_renderer::DEFAULT_POROSITY; vertex_count],
             uvs,
             tangents,
             weights: [1.0, 0.0, 0.0, 0.0].repeat(vertex_count),

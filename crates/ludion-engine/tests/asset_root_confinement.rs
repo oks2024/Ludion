@@ -6,7 +6,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The engine modules that root a harness at a document the author named.
-const HARNESS_FILES: [&str; 3] = ["model_sheet.rs", "sprite_sheet.rs", "font_sheet.rs"];
+const HARNESS_FILES: [&str; 4] = [
+    "model_sheet.rs",
+    "sprite_sheet.rs",
+    "font_sheet.rs",
+    "paired_sheet.rs",
+];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).unwrap() {

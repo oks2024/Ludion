@@ -24,7 +24,7 @@ struct VsIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) vertex_color: vec4<f32>,
-    @location(3) vertex_material: vec3<f32>,
+    @location(3) vertex_material: vec4<f32>,
     @location(4) uv: vec2<f32>,
     @location(5) tangent: vec4<f32>,
     @location(6) m0: vec4<f32>,
@@ -46,7 +46,7 @@ struct VsIn {
     // Declared to match the shared `MeshInstanceRaw` layout (the mesh pass's rim lane); unread here.
     @location(20) rim: vec4<f32>,
     // Declared to match the shared `MeshInstanceRaw` layout (the mesh pass's medium lane); unread here.
-    @location(21) medium: f32,
+    @location(21) medium: vec3<f32>,
 };
 
 struct VsOut {

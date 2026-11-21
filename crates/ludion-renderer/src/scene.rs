@@ -26,6 +26,10 @@ use crate::probe::ProbeData;
 /// same constant. An `Environment`'s authored `ambient` supersedes this when present.
 pub const DEFAULT_AMBIENT: [f32; 3] = [0.05, 0.05, 0.06];
 
+/// The wet-surface porosity of geometry that authors none, and of a `Mesh` with no `porosity`: the
+/// constant every mesh was wetted with before porosity became authorable.
+pub const DEFAULT_POROSITY: f32 = 0.5;
+
 /// A resolved camera: the matrices and position the renderer needs, with no projection enum left to
 /// interpret.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -112,6 +116,9 @@ pub struct MeshInstance {
     pub rim: [f32; 4],
     /// Scale on the medium's optical depth to this mesh's pixels; `1.0` renders today's frame.
     pub medium: f32,
+    /// Wet-surface porosity in `[0, 1]`: how far rain darkens this instance's albedo. Rides the
+    /// instance lane `medium.z`; [`DEFAULT_POROSITY`] reproduces the pre-porosity look.
+    pub porosity: f32,
 }
 
 /// A single sprite/billboard: a textured, tinted quad in world space.
@@ -1211,6 +1218,9 @@ pub struct MeshData {
     /// vertex rides the one mesh pipeline. Consumed only when [`authored_material`](MeshData::authored_material)
     /// is set (the extract-time selection flag).
     pub materials: Vec<f32>,
+    /// Flat per-vertex wet-surface porosity, 1 float per vertex. Always populated ([`DEFAULT_POROSITY`]
+    /// fills unauthored vertices) and consumed under the same selection as `materials`.
+    pub porosity: Vec<f32>,
     /// Flat per-vertex texture coordinates, 2 floats per vertex. Always populated: a source with no
     /// UVs fills `(0, 0)`, so every vertex rides the one mesh pipeline whatever the source knows.
     pub uvs: Vec<f32>,
@@ -1671,6 +1681,7 @@ impl StaticRange {
                 viewmodel,
                 rim,
                 medium,
+                porosity,
             } = instance;
             match shape {
                 MeshShape::Cube => bytes.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0]),
@@ -1687,7 +1698,7 @@ impl StaticRange {
                 .chain(normal_matrix.to_cols_array())
                 .chain(color.iter().copied())
                 .chain(material.iter().copied())
-                .chain([*fade, *fade_height_min, *flash, *wrap, *medium])
+                .chain([*fade, *fade_height_min, *flash, *wrap, *medium, *porosity])
                 .chain(flash_color.iter().copied())
                 .chain(scatter_color.iter().copied())
                 .chain(rim.iter().copied());
@@ -2035,6 +2046,7 @@ mod tests {
             cast_shadows: true,
             viewmodel: false,
             rim: [0.0; 4],
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
         }
     }

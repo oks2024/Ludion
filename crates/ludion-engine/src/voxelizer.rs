@@ -1704,6 +1704,7 @@ mod tests {
                 0.0, 0.0, 1.0, 1.0,
             ],
             materials: [1.0, 0.0, 0.0].repeat(3),
+            porosity: vec![ludion_renderer::DEFAULT_POROSITY; 3],
             uvs: vec![0.0; 6],
             tangents: [1.0, 0.0, 0.0, 1.0].repeat(3),
             weights: [1.0, 0.0, 0.0, 0.0].repeat(3),

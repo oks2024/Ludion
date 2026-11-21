@@ -8,10 +8,14 @@
 //! stop. [`SoundTap`] is the whole-run form: it keeps every message (the log keeps only the latest)
 //! and asserts each named sound and track would decode.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crossbeam_channel::Receiver;
+use ludion_core::audio::{
+    AudioCategory, Bus, LoopId, MixLayer, ReverbParams, VoiceId, VoiceSpatial,
+};
+use ludion_core::ids::EntityId;
 use ludion_engine::{AudioMessage, Engine};
 
 /// The engine's *sounding* audio stream as `(frame, sound)` pairs, in emission order: every message
@@ -51,6 +55,215 @@ pub fn audio_messages(engine: &Engine) -> Vec<(u64, AudioMessage)> {
         .iter()
         .map(|entry| (entry.frame.as_u64(), entry.message.clone()))
         .collect()
+}
+
+/// One bus's mix layers: the targets the engine last asked for, not mid-fade levels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BusMix {
+    /// The player's layer.
+    pub user: f32,
+    /// The game's layer.
+    pub game: f32,
+    /// The engine's duck layer.
+    pub duck: f32,
+    /// The engine's zone layer.
+    pub zone: f32,
+    /// Whether the bus is held.
+    pub paused: bool,
+}
+
+impl BusMix {
+    const UNITY: BusMix = BusMix {
+        user: 1.0,
+        game: 1.0,
+        duck: 1.0,
+        zone: 1.0,
+        paused: false,
+    };
+}
+
+/// What a loop or an attached voice was last told to be.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoopMix {
+    /// The sound path.
+    pub sound: String,
+    /// The target linear gain.
+    pub gain: f32,
+    /// The target stereo position.
+    pub pan: f32,
+    /// The bus the sound plays on.
+    pub category: AudioCategory,
+    /// The target filter and send.
+    pub spatial: VoiceSpatial,
+}
+
+/// The mix the audio stream asks for at a frame: bus layers, the reverb, and every loop and
+/// attached voice, as *targets*. See [`audio_mix_at`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct MixState {
+    /// Every bus's layers, indexed by `Bus as usize`; read through [`MixState::bus`].
+    pub buses: [BusMix; 6],
+    /// The reverb the listener hears.
+    pub reverb: ReverbParams,
+    /// The loops running, by identity.
+    pub loops: BTreeMap<LoopId, LoopMix>,
+    /// The attached voices running, by identity.
+    pub voices: BTreeMap<VoiceId, LoopMix>,
+}
+
+impl Default for MixState {
+    fn default() -> MixState {
+        MixState {
+            buses: [BusMix::UNITY; 6],
+            reverb: ReverbParams::DRY,
+            loops: BTreeMap::new(),
+            voices: BTreeMap::new(),
+        }
+    }
+}
+
+impl MixState {
+    /// `bus`'s layers.
+    pub fn bus(&self, bus: Bus) -> BusMix {
+        self.buses[bus as usize]
+    }
+
+    /// Bed `i` of the `AudioZone` entity `zone`, if it is playing.
+    pub fn bed(&self, zone: EntityId, i: u8) -> Option<&LoopMix> {
+        self.loops.get(&LoopId::ZoneBed(zone, i))
+    }
+}
+
+/// The mix state at `frame`, folded from the engine's audio log: every entry stamped at or before
+/// `frame`, in emission order.
+///
+/// It records targets, not mid-fade levels. Two limits: a voice's natural end is not in the stream,
+/// so an attached voice stays until its `VoiceStop` or the next `StopAllLoops`; and the log keeps
+/// only its last 4096 entries, so a long drive should keep a [`SoundTap`]'s messages and fold them
+/// with [`mix_state`].
+///
+/// ```no_run
+/// # use ludion_engine::Engine;
+/// # let engine = Engine::new();
+/// let mix = ludion_testkit::audio::audio_mix_at(&engine, 120);
+/// // assert!(mix.reverb.near(&ludion_core::audio::ReverbParams::DRY));
+/// ```
+pub fn audio_mix_at(engine: &Engine, frame: u64) -> MixState {
+    mix_state(&audio_messages(engine), frame)
+}
+
+/// [`audio_mix_at`] over a message list, such as [`audio_messages`]' or a tap's.
+///
+/// ```
+/// use ludion_core::audio::{AudioMessage, Bus};
+/// use ludion_testkit::audio::mix_state;
+///
+/// let messages = vec![(
+///     3,
+///     AudioMessage::ZoneGain { bus: Bus::Ambient, gain: 0.9, fade_frames: 0 },
+/// )];
+/// assert_eq!(mix_state(&messages, 2).bus(Bus::Ambient).zone, 1.0);
+/// assert_eq!(mix_state(&messages, 3).bus(Bus::Ambient).zone, 0.9);
+/// ```
+pub fn mix_state(messages: &[(u64, AudioMessage)], frame: u64) -> MixState {
+    let mut mix = MixState::default();
+    for (at, message) in messages {
+        if *at > frame {
+            continue;
+        }
+        match message {
+            AudioMessage::LoopSync {
+                id,
+                sound,
+                gain,
+                pan,
+                category,
+                spatial,
+            } => {
+                mix.loops.insert(
+                    id.clone(),
+                    LoopMix {
+                        sound: sound.clone(),
+                        gain: *gain,
+                        pan: *pan,
+                        category: *category,
+                        spatial: *spatial,
+                    },
+                );
+            }
+            AudioMessage::LoopStop { id } => {
+                mix.loops.remove(id);
+            }
+            AudioMessage::VoiceStart {
+                id,
+                sound,
+                gain,
+                pan,
+                category,
+                spatial,
+            } => {
+                mix.voices.insert(
+                    *id,
+                    LoopMix {
+                        sound: sound.clone(),
+                        gain: *gain,
+                        pan: *pan,
+                        category: *category,
+                        spatial: *spatial,
+                    },
+                );
+            }
+            AudioMessage::VoiceSync {
+                id,
+                gain,
+                pan,
+                spatial,
+            } => {
+                if let Some(voice) = mix.voices.get_mut(id) {
+                    voice.gain = *gain;
+                    voice.pan = *pan;
+                    voice.spatial = *spatial;
+                }
+            }
+            AudioMessage::VoiceStop { id, .. } => {
+                mix.voices.remove(id);
+            }
+            AudioMessage::StopAllLoops => {
+                mix.loops.clear();
+                mix.voices.clear();
+                for bus in &mut mix.buses {
+                    bus.game = 1.0;
+                    bus.duck = 1.0;
+                    bus.zone = 1.0;
+                    bus.paused = false;
+                }
+                mix.reverb = ReverbParams::DRY;
+            }
+            AudioMessage::BusGain {
+                bus, layer, gain, ..
+            } => {
+                let slot = &mut mix.buses[*bus as usize];
+                match layer {
+                    MixLayer::User => slot.user = *gain,
+                    MixLayer::Game => slot.game = *gain,
+                }
+            }
+            AudioMessage::Duck { bus, gain, .. } => mix.buses[*bus as usize].duck = *gain,
+            AudioMessage::ZoneGain { bus, gain, .. } => mix.buses[*bus as usize].zone = *gain,
+            AudioMessage::BusPause { buses, paused, .. } => {
+                for bus in buses {
+                    mix.buses[*bus as usize].paused = *paused;
+                }
+            }
+            AudioMessage::ReverbSet { params, .. } => mix.reverb = *params,
+            AudioMessage::OneShot(_)
+            | AudioMessage::MusicPlay { .. }
+            | AudioMessage::MusicSet { .. }
+            | AudioMessage::MusicStemGain { .. }
+            | AudioMessage::MusicStop { .. } => {}
+        }
+    }
+    mix
 }
 
 /// Every audio message an engine sends after [`install`](SoundTap::install), whole and in order.

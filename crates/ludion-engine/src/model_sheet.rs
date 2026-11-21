@@ -972,13 +972,13 @@ pub struct SheetOutcome {
 }
 
 /// Camera vertical field of view, in degrees.
-const FOV_Y_DEG: f32 = 45.0;
+pub(crate) const FOV_Y_DEG: f32 = 45.0;
 /// Fraction of extra distance beyond the tight sphere fit (a 10% framing margin).
 const FIT_MARGIN: f32 = 1.1;
 /// Camera near clip — small enough to never clip the near face of the framed unit sphere.
-const NEAR: f32 = 0.05;
+pub(crate) const NEAR: f32 = 0.05;
 /// Camera far clip — comfortably past the camera distance plus the sphere and ground.
-const FAR: f32 = 100.0;
+pub(crate) const FAR: f32 = 100.0;
 /// Smallest bounding-sphere radius, so a degenerate (empty / single-point) model still frames.
 const MIN_RADIUS: f32 = 1e-3;
 /// The smallest box a part sheet frames on any axis, as a fraction of the whole model's largest
@@ -992,17 +992,17 @@ const CAMERA_CLEARANCE: f32 = 2.0 * NEAR;
 const LIGHT_RANGE_FACTOR: f32 = 5.0;
 /// Key-light intensity (premultiplied into its color by the renderer). Tuned for a clear mid-tone
 /// read on the gallery-gray ground under the ranged, squared attenuation of `mesh.wgsl`.
-const KEY_INTENSITY: f32 = 3.0;
+pub(crate) const KEY_INTENSITY: f32 = 3.0;
 /// Fill-light intensity — dimmer than the key, to soften shadows without flattening the shading.
-const FILL_INTENSITY: f32 = 1.5;
+pub(crate) const FILL_INTENSITY: f32 = 1.5;
 /// Solid fill for a grid cell with no view (only `N = 5`), a deliberately dark neutral gray.
-const UNUSED_CELL: [u8; 4] = [24, 26, 30, 255];
+pub(crate) const UNUSED_CELL: [u8; 4] = [24, 26, 30, 255];
 /// Orientation-label glyph cell height, in the 1080-tall UI canvas units the overlay measures in
 /// (`crate::ui`). Scales with the cell (a fixed fraction of cell height), legible at the default
 /// sheet size without swamping the model.
-const LABEL_SIZE: f32 = 52.0;
+pub(crate) const LABEL_SIZE: f32 = 52.0;
 /// Orientation-label inset from the cell's top-left corner, in canvas units (both axes).
-const LABEL_OFFSET: f32 = 8.0;
+pub(crate) const LABEL_OFFSET: f32 = 8.0;
 /// Vertical pixels one world unit of subject earns under the vertical slice's gameplay camera at
 /// 1080p. `docs/voxel-craft.md` is the source of truth for the measurement: the 2.16-unit statue
 /// covers 106 px there. `--true-size` sizes a cell so the subject renders at exactly that, instead
@@ -1899,9 +1899,9 @@ fn canonical_views(views: &[ModelView]) -> Vec<ModelView> {
 /// How many cells the sheet lays out, and in what shape. Split from [`SheetLayout`] because the
 /// cell *size* depends on the grid under `--true-size` but never the other way round.
 #[derive(Clone, Copy, Debug)]
-struct Grid {
-    cols: u32,
-    rows: u32,
+pub(crate) struct Grid {
+    pub(crate) cols: u32,
+    pub(crate) rows: u32,
 }
 
 impl Grid {
@@ -1917,7 +1917,7 @@ impl Grid {
 
     /// The sweep rule: near-square, `cols = ceil(sqrt(N))`, because cell *area* is what a taste call
     /// needs. Matches `crate::sweep`'s grid so the two contact sheets read as one family.
-    fn near_square(n: u32) -> Grid {
+    pub(crate) fn near_square(n: u32) -> Grid {
         let n = n.max(1);
         // Integer ceil(sqrt(n)) without transcendentals: the smallest `c` with `c*c >= n`.
         let mut cols = 1;
@@ -1932,18 +1932,18 @@ impl Grid {
 }
 
 /// The grid geometry of the sheet: a [`Grid`] plus the pixel size of one cell.
-struct SheetLayout {
-    cols: u32,
-    cell_w: u32,
-    cell_h: u32,
-    sheet_w: u32,
-    sheet_h: u32,
+pub(crate) struct SheetLayout {
+    pub(crate) cols: u32,
+    pub(crate) cell_w: u32,
+    pub(crate) cell_h: u32,
+    pub(crate) sheet_w: u32,
+    pub(crate) sheet_h: u32,
 }
 
 impl SheetLayout {
     /// Cells divide the requested size (integer), and the final sheet is exactly
     /// `cell_w·cols × cell_h·rows` — so it may come back slightly smaller than requested.
-    fn divide(grid: Grid, sheet_width: u32, sheet_height: u32) -> SheetLayout {
+    pub(crate) fn divide(grid: Grid, sheet_width: u32, sheet_height: u32) -> SheetLayout {
         SheetLayout::from_cell(
             grid,
             (sheet_width / grid.cols).max(1),
@@ -2009,14 +2009,14 @@ impl TrueSizeFraming {
 }
 
 /// Fills an RGBA8 buffer with one color.
-fn fill(buffer: &mut [u8], color: [u8; 4]) {
+pub(crate) fn fill(buffer: &mut [u8], color: [u8; 4]) {
     for pixel in buffer.chunks_exact_mut(4) {
         pixel.copy_from_slice(&color);
     }
 }
 
 /// Row-copies one rendered `cell` (`cell_w` × `cell_h`) into the sheet at grid position `(row, col)`.
-fn blit_cell(
+pub(crate) fn blit_cell(
     sheet: &mut [u8],
     sheet_w: u32,
     cell: &RenderedImage,
@@ -2340,7 +2340,7 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
 /// The bottom-center, 1-voxel-per-unit AABB of an assembly's rest pose — [`voxel_aabb`]'s formula
 /// applied to the assembled grid ([`AssemblyDocument::size`]), because the rest pose *is* that grid
 /// (`Plan/voxel-animation.md` decision 9).
-fn assembly_aabb(doc: &AssemblyDocument) -> ([f32; 3], [f32; 3]) {
+pub(crate) fn assembly_aabb(doc: &AssemblyDocument) -> ([f32; 3], [f32; 3]) {
     let [sx, sy, sz] = doc.size;
     let (hx, hz) = (sx as f32 * 0.5, sz as f32 * 0.5);
     ([-hx, 0.0, -hz], [hx, sy as f32, hz])
@@ -3328,7 +3328,7 @@ pub(crate) fn phase_times(
 /// The tick nearest `seconds` on `rate`'s clock — the whole of the harness's time quantization.
 /// Negative and non-finite input reads as tick 0, matching [`ludion_scene::clip_phase`]'s own
 /// handling rather than producing a saturating cast nobody can explain.
-fn quantize(seconds: f64, rate: TickRate) -> u64 {
+pub(crate) fn quantize(seconds: f64, rate: TickRate) -> u64 {
     if !seconds.is_finite() || seconds <= 0.0 {
         return 0;
     }
@@ -3512,6 +3512,7 @@ fn phase_report(
             color: [1.0, 1.0, 1.0, 1.0],
             emissive: None,
             metallic: None,
+            porosity: None,
             roughness: None,
         }],
         slices,
@@ -4239,11 +4240,11 @@ fn bounding_radius(min: [f32; 3], max: [f32; 3]) -> f32 {
 }
 
 /// Where one model stands in the sheet's normalized space.
-struct Placement {
-    translation: [f32; 3],
-    scale: f32,
+pub(crate) struct Placement {
+    pub(crate) translation: [f32; 3],
+    pub(crate) scale: f32,
     /// The model's footprint center, for projecting its caption position.
-    base: Vec3,
+    pub(crate) base: Vec3,
 }
 
 /// The framing every cell shares: where each model stands, what the camera looks at, and the two
@@ -4253,11 +4254,11 @@ struct Placement {
 /// declared `scale:` never moves a pinned sheet. A lineup normalizes the *union* instead, which is
 /// the whole point of one: relative sizes are honest by construction, so a 12-unit house really does
 /// stand 5.5× the 2.16-unit statue beside it.
-struct Subject {
+pub(crate) struct Subject {
     /// One entry per model, in the order the models were given.
-    placements: Vec<Placement>,
+    pub(crate) placements: Vec<Placement>,
     /// The camera's look-at target.
-    target: Vec3,
+    pub(crate) target: Vec3,
     /// The subject's height in declared-scale world units — the tallest model in a lineup. What
     /// `--true-size` earns its pixels from.
     world_height: f32,
@@ -4277,7 +4278,7 @@ impl Subject {
 
     /// [`single`](Self::single) over a bare model-space box and a declared world scale — the form
     /// [`model_camera`] frames with, so the public camera and the sheet's own share one derivation.
-    fn from_box(min: [f32; 3], max: [f32; 3], world_scale: f32) -> Subject {
+    pub(crate) fn from_box(min: [f32; 3], max: [f32; 3], world_scale: f32) -> Subject {
         let rig = NormalizeRig::from_box(min, max);
         let height = max[1] - min[1];
         Subject {
@@ -4447,16 +4448,16 @@ fn row_direction(view: ModelView) -> Vec3 {
 }
 
 /// The camera pose and light positions for one view, all pure functions of `(view, C, D)`.
-struct ViewRig {
-    position: Vec3,
-    rotation_deg: [f32; 3],
-    key_position: Vec3,
-    fill_position: Vec3,
-    range: f32,
+pub(crate) struct ViewRig {
+    pub(crate) position: Vec3,
+    pub(crate) rotation_deg: [f32; 3],
+    pub(crate) key_position: Vec3,
+    pub(crate) fill_position: Vec3,
+    pub(crate) range: f32,
 }
 
 impl ViewRig {
-    fn compute(view: ModelView, subject: &Subject, cell_w: u32, cell_h: u32) -> ViewRig {
+    pub(crate) fn compute(view: ModelView, subject: &Subject, cell_w: u32, cell_h: u32) -> ViewRig {
         let target = subject.target;
         let distance = subject.camera_distance(view, cell_w, cell_h);
         let (direction, up) = view.direction_and_up();
@@ -4783,7 +4784,7 @@ fn synthesize_scene(
 }
 
 /// The canonical text of a scene holding exactly these entities.
-fn emit_entities(entities: Vec<ludion_scene::SceneEntity>) -> String {
+pub(crate) fn emit_entities(entities: Vec<ludion_scene::SceneEntity>) -> String {
     let scene = ludion_scene::Scene {
         entities,
         ..Default::default()
@@ -4792,13 +4793,13 @@ fn emit_entities(entities: Vec<ludion_scene::SceneEntity>) -> String {
 }
 
 /// One component as its `(name, value)` pair — the only place a typed component is serialized.
-fn typed<T: serde::Serialize>(name: &str, value: &T) -> (String, Value) {
+pub(crate) fn typed<T: serde::Serialize>(name: &str, value: &T) -> (String, Value) {
     let value = serde_json::to_value(value).expect("a component serializes to JSON");
     (name.to_string(), value)
 }
 
 /// An unnamed entity carrying these components.
-fn entity(components: Vec<(String, Value)>) -> ludion_scene::SceneEntity {
+pub(crate) fn entity(components: Vec<(String, Value)>) -> ludion_scene::SceneEntity {
     ludion_scene::SceneEntity {
         components,
         ..Default::default()
@@ -4906,7 +4907,7 @@ fn emissive_channel_entity() -> ludion_scene::SceneEntity {
 }
 
 /// One point-light entity (a `Transform` at `position` plus a `PointLight`).
-fn light_entity(
+pub(crate) fn light_entity(
     position: Vec3,
     color: [f32; 3],
     intensity: f32,

@@ -18,7 +18,8 @@ use ludion_core::collections::StableMap;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::{DMat4, DQuat, DVec3, Mat4, Quat, Vec3};
 use ludion_renderer::{
-    MapImage, MeshData, MeshLod, MeshTexture, MeshTextures, SkinJoint, TextureImage, TextureWrap,
+    DEFAULT_POROSITY, MapImage, MeshData, MeshLod, MeshTexture, MeshTextures, SkinJoint,
+    TextureImage, TextureWrap,
 };
 use ludion_scene::{AlphaMode, MeshDocument, MeshSkin, TextureRef};
 
@@ -458,10 +459,13 @@ pub(crate) fn decode(doc: &MeshDocument, hash: u64) -> MeshData {
     let vertex_count = positions.len() / 3;
     let colors = vec![1.0_f32; vertex_count * 4];
     // Per-vertex material: authored channels narrow f64→f32, unauthored channels take the default
-    // material. `authored_material` is set iff the document authors any of the three lists — the
-    // extract-time selector between these values and the `Mesh` component's fields.
-    let authored_material =
-        doc.roughness.is_some() || doc.metallic.is_some() || doc.emissive.is_some();
+    // material. `authored_material` is set iff the document authors any of the four lists
+    // (`porosity` included) — the extract-time selector between these values and the `Mesh`
+    // component's fields.
+    let authored_material = doc.roughness.is_some()
+        || doc.metallic.is_some()
+        || doc.emissive.is_some()
+        || doc.porosity.is_some();
     let channel = |list: &Option<Vec<f64>>, v: usize, default: f32| {
         list.as_ref().map_or(default, |values| values[v] as f32)
     };
@@ -471,6 +475,9 @@ pub(crate) fn decode(doc: &MeshDocument, hash: u64) -> MeshData {
         materials.push(channel(&doc.metallic, v, 0.0));
         materials.push(channel(&doc.emissive, v, 0.0));
     }
+    let porosity: Vec<f32> = (0..vertex_count)
+        .map(|v| channel(&doc.porosity, v, DEFAULT_POROSITY))
+        .collect();
     // Texture coordinates narrow f64→f32 when authored; a document with none fills `(0, 0)`.
     let uvs: Vec<f32> = match &doc.uvs {
         Some(uvs) => uvs.iter().map(|&uv| uv as f32).collect(),
@@ -503,6 +510,7 @@ pub(crate) fn decode(doc: &MeshDocument, hash: u64) -> MeshData {
         normals,
         colors,
         materials,
+        porosity,
         uvs,
         tangents,
         weights,

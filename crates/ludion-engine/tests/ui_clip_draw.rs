@@ -296,3 +296,69 @@ fn needs_gpu_ui_hit_agrees_with_drawn_shapes() {
     };
     assert_hit_agrees_with_pixels(&image, &world, &[ids[2], ids[3]], (960, 540), 5_000);
 }
+
+/// A white concave star turned 25 degrees inside a rect-clipped group turned 20 degrees.
+const POLYGONS_SCENE: &str = "format: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - components:
+      UiGroup:
+        offset:
+          - 300.0
+          - 150.0
+        size:
+          - 360.0
+          - 360.0
+        clip: rect
+        rotation: 20.0
+  - components:
+      UiShape:
+        anchor: center
+        group:
+          index: 1
+          generation: 0
+        shape:
+          type: polygon
+          points:
+          - - 0.0
+            - -200.0
+          - - 76.41
+            - -105.17
+          - - 190.21
+            - -61.8
+          - - 123.64
+            - 40.17
+          - - 117.56
+            - 161.8
+          - - 0.0
+            - 130.0
+          - - -117.56
+            - 161.8
+          - - -123.64
+            - 40.17
+          - - -190.21
+            - -61.8
+          - - -76.41
+            - -105.17
+        fill:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        rotation: 25.0
+";
+
+#[test]
+fn needs_gpu_ui_hit_agrees_with_drawn_polygons() {
+    let Some((image, world, ids)) = render(POLYGONS_SCENE) else {
+        return;
+    };
+    assert_hit_agrees_with_pixels(&image, &world, &[ids[2]], (960, 540), 5_000);
+}

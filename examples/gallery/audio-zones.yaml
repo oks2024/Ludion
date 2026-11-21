@@ -1,0 +1,259 @@
+# Feature: AudioZone — ambient beds, reverb and bus gains by where the listener stands. A yard
+# (rain bed, outdoor_open) meets a dock (hum bed, hall_medium, ambient bus 0.9) at a doorway; the
+# listener marker stands on the yard side. The walk test in tests/audio_mix.rs moves it through
+# the door and asserts on audio_mix_at. A free-standing wall hides a chatter emitter.
+format: 1
+name: "audio-zones - AudioZone: yard, dock and a doorway"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 34.0
+          - 20.0
+        rotation:
+          - -58.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 12.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.8
+          - -0.5
+        intensity: 1.6
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 0.0
+          - 0.0
+        scale:
+          - 44.0
+          - 1.0
+          - 28.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.32
+          - 0.34
+          - 0.33
+          - 1.0
+  - name: dock-west-north
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 1.5
+          - -4.75
+        scale:
+          - 0.4
+          - 3.0
+          - 6.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.58
+          - 0.52
+          - 1.0
+  - name: dock-west-south
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 1.5
+          - 4.75
+        scale:
+          - 0.4
+          - 3.0
+          - 6.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.58
+          - 0.52
+          - 1.0
+  - name: dock-east
+    components:
+      Transform:
+        translation:
+          - 26.0
+          - 1.5
+          - 0.0
+        scale:
+          - 0.4
+          - 3.0
+          - 16.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.58
+          - 0.52
+          - 1.0
+  - name: dock-north
+    components:
+      Transform:
+        translation:
+          - 16.0
+          - 1.5
+          - -8.0
+        scale:
+          - 20.0
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.58
+          - 0.52
+          - 1.0
+  - name: dock-south
+    components:
+      Transform:
+        translation:
+          - 16.0
+          - 1.5
+          - 8.0
+        scale:
+          - 20.0
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.62
+          - 0.58
+          - 0.52
+          - 1.0
+  - name: yard-wall
+    components:
+      Transform:
+        translation:
+          - -7.5
+          - 1.5
+          - 3.0
+        scale:
+          - 0.4
+          - 3.0
+          - 6.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.5
+          - 0.56
+          - 1.0
+  - name: listener-marker
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 1.0
+          - 0.0
+        scale:
+          - 0.8
+          - 0.8
+          - 0.8
+      Mesh:
+        shape: sphere
+        color:
+          - 0.9
+          - 0.75
+          - 0.2
+          - 1.0
+  - name: chatter-marker
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 0.5
+          - 3.0
+        scale:
+          - 0.8
+          - 0.8
+          - 0.8
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.3
+          - 0.3
+          - 1.0
+  - name: listener
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 1.0
+          - 0.0
+      AudioListener: {}
+  - name: chatter
+    components:
+      Transform:
+        translation:
+          - -10.0
+          - 1.0
+          - 3.0
+      AudioEmitter:
+        sound: sounds/chatter.wav
+        gain: 0.5
+        range: 12.0
+  - name: yard-outdoor
+    components:
+      Transform:
+        translation:
+          - -4.0
+          - 0.0
+          - 0.0
+      AudioZone:
+        shape:
+          box:
+            half_extents:
+              - 10.0
+              - 5.0
+              - 8.0
+        reverb:
+          preset: outdoor_open
+        beds:
+          - sound: sounds/rain.wav
+            gain: 0.6
+  - name: dock-interior
+    components:
+      Transform:
+        translation:
+          - 16.0
+          - 0.0
+          - 0.0
+      AudioZone:
+        shape:
+          box:
+            half_extents:
+              - 10.0
+              - 5.0
+              - 8.0
+        priority: 10
+        blend_m: 3.0
+        reverb:
+          preset: hall_medium
+          wet: 0.25
+        beds:
+          - sound: sounds/hum.wav
+            gain: 0.5
+        bus_gains:
+          ambient: 0.9

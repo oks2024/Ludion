@@ -158,6 +158,7 @@ fn mesh_data(mesh: SculptMesh, rim: Option<&ludion_scene::DocRim>, hash: u64) ->
         normals: mesh.normals,
         colors: mesh.colors,
         materials: mesh.materials,
+        porosity: mesh.porosity,
         uvs: vec![0.0; vertex_count * 2],
         tangents: [1.0, 0.0, 0.0, 1.0].repeat(vertex_count),
         weights: [1.0, 0.0, 0.0, 0.0].repeat(vertex_count),

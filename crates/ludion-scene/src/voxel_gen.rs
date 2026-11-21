@@ -43,7 +43,7 @@ const GEN_KEYS: [&str; 11] = [
 ];
 
 /// The palette-entry keys an intermediate may carry — the same four the YAML format defines.
-const PALETTE_ENTRY_KEYS: [&str; 4] = ["color", "emissive", "metallic", "roughness"];
+const PALETTE_ENTRY_KEYS: [&str; 5] = ["color", "emissive", "metallic", "porosity", "roughness"];
 
 /// Parses a generator intermediate into the model it describes and the comments to write with it.
 pub(crate) fn from_json(source: &str) -> Result<(VoxelDocument, VoxelComments), Vec<Diagnostic>> {
@@ -331,6 +331,7 @@ fn parse_palette_entry(
     };
     let emissive = scalar("emissive", diagnostics);
     let metallic = scalar("metallic", diagnostics);
+    let porosity = scalar("porosity", diagnostics);
     let roughness = scalar("roughness", diagnostics);
 
     color.map(|color| PaletteEntry {
@@ -338,6 +339,7 @@ fn parse_palette_entry(
         color,
         emissive,
         metallic,
+        porosity,
         roughness,
     })
 }

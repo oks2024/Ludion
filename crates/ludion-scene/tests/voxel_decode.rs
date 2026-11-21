@@ -125,6 +125,7 @@ fn decoded_cells_match_palette_index_on_a_wide_mixed_model() {
             color: [0.5, 0.5, 0.5, 1.0],
             emissive: None,
             metallic: None,
+            porosity: None,
             roughness: None,
         })
         .collect();

@@ -660,6 +660,7 @@ pub(crate) mod tests {
         material: [f32; 3],
     ) -> MeshInstance {
         MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape,
             model,

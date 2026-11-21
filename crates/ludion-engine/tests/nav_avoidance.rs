@@ -73,7 +73,7 @@ fn cross(engine: &mut Engine, ticks: usize) -> (f32, [f32; 2]) {
 }
 
 const LEFT: [f32; 3] = [3.0, 0.0, 12.5];
-const RIGHT: [f32; 3] = [21.0, 0.0, 12.55];
+const RIGHT: [f32; 3] = [21.0, 0.0, 12.5];
 
 fn head_on(a: &str, b: &str) -> String {
     open_room(&(avoider(0, LEFT, RIGHT, 6.0, a) + &avoider(1, RIGHT, LEFT, 6.0, b)))

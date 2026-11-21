@@ -2163,6 +2163,7 @@ fn connected_clusters(size: [u32; 3], cells: &[[u32; 3]]) -> Vec<Vec<[u32; 3]>> 
             color: [1.0, 1.0, 1.0, 1.0],
             emissive: None,
             metallic: None,
+            porosity: None,
             roughness: None,
         }],
         slices,

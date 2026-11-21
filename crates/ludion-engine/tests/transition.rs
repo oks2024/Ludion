@@ -1060,6 +1060,61 @@ fn a_carried_list_element_follows_its_carried_target_and_a_left_behind_one_is_cl
     );
 }
 
+/// [`refs_scene`] with `player` aiming `IkTargets` at `held` (carried) and `mount` (left behind).
+fn ik_engine(dir: &Path) -> Engine {
+    let entry = |name: &str, index: u32| {
+        format!(
+            "          {name}:
+            entity:
+              index: {index}
+              generation: 0
+            weight: 1.0
+"
+        )
+    };
+    let scene = refs_scene().replace(
+        "  - name: held",
+        &format!(
+            "      IkTargets:
+        targets:
+{}{}  - name: held",
+            entry("hand_l", 1),
+            entry("hand_r", 3)
+        ),
+    );
+    let mut engine = base_game(dir)
+        .system("switch", switch_player)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(&scene).unwrap();
+    for _ in 0..5 {
+        engine.advance_live();
+    }
+    engine
+}
+
+#[test]
+fn a_carried_ik_target_follows_its_carried_entity_and_a_left_behind_one_is_cleared() {
+    let dir = fresh_dir("ik-targets");
+    let engine = ik_engine(&dir);
+    let held = named_of(&engine, "held");
+    let ik = serialized(&engine, named_of(&engine, "player"), "IkTargets").unwrap();
+    assert_eq!(
+        ik["targets"]["hand_l"]["entity"],
+        serde_json::to_value(held).unwrap(),
+        "{ik}"
+    );
+    assert!(ik["targets"]["hand_r"].get("entity").is_none(), "{ik}");
+    let warning = engine.last_transition_error().expect("reported");
+    assert_eq!(warning.code.as_str(), "L3043", "{warning}");
+    assert!(
+        warning
+            .to_string()
+            .contains("`IkTargets`/targets/hand_r/entity"),
+        "{warning}"
+    );
+}
+
 #[test]
 fn a_carried_required_list_element_left_behind_drops_its_component() {
     let dir = fresh_dir("collection-required");

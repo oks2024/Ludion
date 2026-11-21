@@ -324,7 +324,7 @@ pub fn character_fit(
 /// # use ludion_engine::character_fit_ignoring;
 /// # use ludion_ecs::{SystemCtx, World};
 /// fn clear(world: &World, _ctx: &SystemCtx, a: EntityId, b: EntityId) -> bool {
-///     matches!(character_fit_ignoring(world, a, None, [0.0; 3], 0.0, Some(b)), Ok(None))
+///     matches!(character_fit_ignoring(world, a, None, [0.0; 3], 0.0, Some(&[b])), Ok(None))
 /// }
 /// ```
 pub fn character_fit_ignoring(
@@ -333,7 +333,7 @@ pub fn character_fit_ignoring(
     posture: Option<&str>,
     feet: [f32; 3],
     yaw: f32,
-    ignore: Option<EntityId>,
+    ignore: Option<&[EntityId]>,
 ) -> Result<Option<EntityId>, MotorError> {
     ludion_physics::character_fit_ignoring::<Transform>(world, entity, posture, feet, yaw, ignore)
 }

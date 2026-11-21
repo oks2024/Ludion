@@ -31,8 +31,10 @@ Observe: `engine.audio_log()` holds `AudioMessage::BusGain` / `BusPause`, stampe
 | `AudioCategory` → bus | `sfx`, `ambient`, `voice`, `ui` (an `AudioEmitter`'s `category:`); music is its own bus |
 | `MixLayer` | `User` (the player's setting), `Game` (scripted mixes) |
 | duck layer | engine-owned, never a `MixLayer`: `DuckRule`, `duck_start`/`duck_end` (§Ducking) |
+| zone layer | engine-owned, never a `MixLayer`: `AudioZone` `bus_gains` (`ludion docs audio-zones`) |
 
-Effective gain of a bus is `authored × user × game × duck × pause`, and every bus but `Master` is also
+Effective gain of a bus is `authored × user × game × duck × zone × pause` (`zone` is the engine-owned layer of
+`ludion docs audio-zones`), and every bus but `Master` is also
 multiplied by `Master`. Every bus has an authored field in `CategoryGains`, set with
 `CategoryGains::default().with(Bus::Ambient, 0.6)` (`master sfx ambient voice ui music`, each `1.0` by default).
 
@@ -48,7 +50,7 @@ The sink multiplies in `master` for every bus, `voice` and `ui` included.
 - **A paused bus holds each voice's cursor**, loops and music included: resume continues from the same
   sample. A fading pause is audible until it reaches silence, then voices are skipped. An empty bus
   slice queues nothing.
-- **A world rebuild** (a scene load) resets the `Game` layer and every pause to `1.0`
+- **A world rebuild** (a scene load) resets the `Game` layer, the duck and zone layers and every pause to `1.0`
   and drops voices held on a paused bus; the `User` layer survives, so a player's volume holds across levels.
 - **A reopened output device** (unplug, switch) keeps the current `User`/`Game` gains and pauses.
 - **Defaults are bit-identical.** With no bus call the stream and the mix are unchanged.

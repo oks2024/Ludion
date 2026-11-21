@@ -782,6 +782,7 @@ mod tests {
 
     fn mesh(bone_offset: u32) -> crate::scene::MeshInstance {
         crate::scene::MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape: crate::scene::MeshShape::Cube,
             model: Mat4::IDENTITY,

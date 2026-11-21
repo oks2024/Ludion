@@ -809,6 +809,7 @@ pub(crate) fn default_palette_entry() -> PaletteEntry {
         color: [0.5, 0.5, 0.5, 1.0],
         emissive: None,
         metallic: None,
+        porosity: None,
         roughness: None,
     }
 }

@@ -569,6 +569,7 @@ mod tests {
     ) -> RenderScene {
         let mut scene = RenderScene::empty((64, 64));
         let instance = |shape, model, color: [f32; 4]| MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape,
             model,

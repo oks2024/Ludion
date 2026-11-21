@@ -320,6 +320,7 @@ mod tests {
 
     fn mesh(x: f32) -> MeshInstance {
         MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::from_translation(Vec3::new(x, 0.0, 0.0)),

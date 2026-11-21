@@ -196,6 +196,16 @@ block replan, toggle scope, classes, a moving blocker, 1- and 8-thread traces an
 component schema snapshot moved. An `at_blocker` walker also replans when its goal moves to another cell
 (an `at_link` walker never does).
 
+Wave 5a (request 0004 §6), by commit subject: agent avoidance — `ludion-nav` gains `avoid_velocity` (ORCA in the xz
+plane with a fallback program for infeasible sets), `NavAgent.avoidance` (`NavAvoidance`: `radius`, `horizon_s`,
+`max_neighbors`, `priority`) replaces separation for walkers, composing with agent classes (the class radius is the
+default) and blockers (a velocity that leaves the class grid falls back to the seek); `L1528`; `ludion docs nav`
+§Avoidance and example `nav_avoidance`. A world with no `avoidance` steers and hashes as before. Tests pin the pure
+rule (no neighbours, head-on swap, static neighbour, responsibility 0, order independence) and the engine cases:
+head-on pass, priority, classes, a blocker wall, identity for non-avoiders, 1- and 8-thread traces and a mid-crossing
+restore. Only the component schema snapshot moved. A 1% right-hand bias on the preferred velocity breaks the exact
+head-on symmetry deterministically (each agent steers to its own right, so a pair parts to opposite sides).
+
 ## Waves (Neon Shroud request 0004)
 
 The request asks for paths, patrols, off-mesh links, dynamic blockers and avoidance. Each wave is

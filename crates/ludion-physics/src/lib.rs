@@ -215,7 +215,7 @@ pub use surface_tag::{
     CellSurfaces, MAX_SURFACES, PartSurface, SurfaceId, SurfaceOverlay, SurfacePart, SurfaceTable,
     SurfaceTag,
 };
-pub use sweep::{Sweep, SweepFilter, SweepHit};
+pub use sweep::{MAX_PARTNERS, Sweep, SweepFilter, SweepHit};
 pub use systems::{
     CollisionLayers, DEFAULT_SLEEP_AFTER_TICKS, DEFAULT_SOLVER_ITERATIONS,
     DEFAULT_STABILIZATION_ITERATIONS, KinematicTeleports, MAX_COLLISION_LAYERS, MIRROR,

@@ -40,8 +40,8 @@ pub(crate) struct MeshInstanceRaw {
     pub(super) flash: [f32; 4],
     /// Per-instance rim lane `(color·strength rgb, power)` at `@location(20)`; all-zero is no rim.
     pub(super) rim: [f32; 4],
-    /// Per-instance medium lane at `@location(21)`: `.x` is the scale, `yzw` are spare zeros
-    /// (a whole `vec4` keeps the stride a multiple of 16 for `cull.wgsl`).
+    /// Per-instance medium lane at `@location(21)`: `.x` is the medium scale, `.y` is the cull scatter's
+    /// bucket-local index (never authored), `.z` the wet-surface porosity, `w` is a spare zero (a whole `vec4` keeps the stride a multiple of 16 for `cull.wgsl`).
     pub(super) medium: [f32; 4],
 }
 
@@ -193,7 +193,7 @@ pub(super) fn instance_raw(m: &MeshInstance, lane_bounds: &[AssetBounds]) -> Mes
         fade: instance_fade(m),
         flash: instance_flash(m),
         rim: m.rim,
-        medium: [m.medium, 0.0, 0.0, 0.0],
+        medium: [m.medium, 0.0, m.porosity, 0.0],
     }
 }
 

@@ -135,17 +135,17 @@ pub use rain::{
 };
 pub use render::{GpuUploads, Renderer, SHADER_SOURCE_DIR, view_scene};
 pub use scene::{
-    BlendMode, BlendedMesh, CookedMap, DEFAULT_AMBIENT, DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment,
-    DecalBlend, DecalInstance, DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData,
-    FontDraw, GROUND_MARKER_LIFT, GiData, GlyphOutline, GroundMarkerInstance, GroundMarkerShape,
-    GroundMarkerStyle, LocalShadowData, LodSettings, LutData, MAX_GI_TEXTURE_AXIS,
-    MAX_RENDER_VIEWS, MAX_SILHOUETTE_STYLES, MapImage, MeshData, MeshInstance, MeshLod, MeshShape,
-    MeshTexture, MeshTextures, MeterData, MeterWeighting, ParticleInstance, PointLightData,
-    PostData, ProbeWorld, RenderCamera, RenderScene, RenderViewData, SilhouetteMesh,
-    SilhouetteStyle, Silhouettes, SkinJoint, SpotLightData, SpriteInstance, StaticRange,
-    SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap, TonemapOperator, UiClip,
-    UiClipBox, UiInstance, UiRotation, UiShapeGeometry, UiShapeStroke, WorldVoxelGrid,
-    aspect_ratio, drop_shadow_fade,
+    BlendMode, BlendedMesh, CookedMap, DEFAULT_AMBIENT, DEFAULT_POROSITY,
+    DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment, DecalBlend, DecalInstance, DecalMaps,
+    DecalReceivers, DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT, GiData,
+    GlyphOutline, GroundMarkerInstance, GroundMarkerShape, GroundMarkerStyle, LocalShadowData,
+    LodSettings, LutData, MAX_GI_TEXTURE_AXIS, MAX_RENDER_VIEWS, MAX_SILHOUETTE_STYLES, MapImage,
+    MeshData, MeshInstance, MeshLod, MeshShape, MeshTexture, MeshTextures, MeterData,
+    MeterWeighting, ParticleInstance, PointLightData, PostData, ProbeWorld, RenderCamera,
+    RenderScene, RenderViewData, SilhouetteMesh, SilhouetteStyle, Silhouettes, SkinJoint,
+    SpotLightData, SpriteInstance, StaticRange, SunCascadeConfig, SunData, TextRun, TextureImage,
+    TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance, UiRotation, UiShapeGeometry,
+    UiShapeStroke, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
 };
 pub use screen_effect::{MAX_SCREEN_EFFECTS, ScreenEffectData, ScreenMask};
 pub use shader_reload::{check_shader_reload, is_renderer_shader};

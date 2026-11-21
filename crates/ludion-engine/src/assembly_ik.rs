@@ -46,8 +46,9 @@ pub(crate) struct IkGoal {
 }
 
 /// The goals of `id`'s `IkTargets` against `data`'s `ik:` entries at `now`: a target whose name
-/// matches an entry and whose weight is above `0`. A direction on a chain is ignored. Empty — without
-/// allocating — when there is no component or the assembly has no `ik:`.
+/// matches an entry and whose weight is above `0`. An `entity` target aims at its world position plus
+/// `offset`; a null, dead or `Transform`-less entity is skipped, silently. A direction on a chain is
+/// ignored. Empty — without allocating — when there is no component or the assembly has no `ik:`.
 pub(crate) fn assembly_ik_goals(
     world: &World,
     id: EntityId,
@@ -83,6 +84,13 @@ pub(crate) fn assembly_ik_goals(
         }
         let aim = if let Some(point) = target.point {
             IkAim::Point(to_assembly(point.map(f64::from)))
+        } else if let Some(target_id) = target.entity {
+            let Some(affine) = crate::hierarchy::world_affine(world, target_id) else {
+                continue;
+            };
+            IkAim::Point(to_assembly(
+                affine.transform_point(target.offset).map(f64::from),
+            ))
         } else if let Some(look) = target.direction {
             if matches!(ik.kind, AssemblyIkKind::Chain { .. }) {
                 continue;
@@ -587,6 +595,7 @@ mod tests {
             normals: Vec::new(),
             colors: Vec::new(),
             materials: Vec::new(),
+            porosity: Vec::new(),
             uvs: Vec::new(),
             tangents: Vec::new(),
             weights: Vec::new(),

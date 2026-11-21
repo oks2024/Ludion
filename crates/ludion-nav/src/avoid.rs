@@ -20,6 +20,10 @@
 
 use ludion_core::math::sqrt;
 
+/// The sideways share of the preferred velocity added when there are neighbours: it breaks the exact
+/// head-on symmetry, and each agent steers to its own right, so a pair part to opposite sides.
+const RIGHT_BIAS: f32 = 0.01;
+
 /// Below this a length, determinant or denominator counts as zero.
 const EPSILON: f32 = 1e-6;
 
@@ -99,7 +103,8 @@ fn clamp_length(a: [f32; 2], max: f32) -> [f32; 2] {
 }
 
 /// The ORCA velocity for `agent` among `neighbors`: the permitted velocity closest to `agent.preferred`, at
-/// most `agent.max_speed` long. `lines` is scratch, cleared on entry.
+/// most `agent.max_speed` long. With neighbours present the preferred velocity is nudged 1% to the agent's
+/// right, so exactly head-on pairs part instead of deadlocking. `lines` is scratch, cleared on entry.
 pub fn avoid_velocity(
     agent: &AvoidAgent,
     neighbors: &[AvoidNeighbor],
@@ -113,11 +118,19 @@ pub fn avoid_velocity(
         lines.push(neighbor_line(agent, n));
     }
     let count = lines.len();
+    let preferred = if count > 0 {
+        [
+            agent.preferred[0] + agent.preferred[1] * RIGHT_BIAS,
+            agent.preferred[1] - agent.preferred[0] * RIGHT_BIAS,
+        ]
+    } else {
+        agent.preferred
+    };
     let mut result = [0.0; 2];
     let failed = linear_program_2(
         lines,
         agent.max_speed,
-        Objective::Closest(agent.preferred),
+        Objective::Closest(preferred),
         &mut result,
     );
     if failed < count {

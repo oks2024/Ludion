@@ -84,7 +84,20 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   gain. Built on the sink thread (`route`, `declared_voice`), settled at its target; `VoiceSync` and a same-sound
   `LoopSync` call `retarget`, which sweeps in log2 frequency over `ceil(ramp / MIX_BLOCK_FRAMES)` blocks, one
   step per `advance_into`, and drops a stage once it has swept open. Channels past `MAX_FILTER_CHANNELS` (8)
-  pass unfiltered. `VoiceSpatial::send` is carried and not mixed.
+  pass unfiltered.
+- **The reverb is `reverb.rs`: one stereo Freeverb on a mono send bus.** Per channel eight lowpass-feedback
+  combs then four allpasses (feedback 0.5); every buffer and a 200 ms pre-delay line are allocated in `Reverb::new` at
+  the `size = 1` length and never grow (`a_burst_over_the_caps_never_grows_the_mixers_storage` pins it). Lengths scale
+  by `rate / 44100 x (0.5 + size)`, floored at 1 (the test mixer runs at 400 Hz). Feedback (`10^(-3 len / (decay rate))`)
+  and damping recompute per block, and each length steps at most one sample per block; only the return level
+  (`wet`, an `Envelope`) slews per frame. `Voice.send` is an `Envelope` stepped once per frame **only while
+  `advance_into` gets `Some(send)`**; `Mixer::render` passes it only when `reverb.is_active()` and the master is not
+  held, so a dry mix takes today's exact path (bit-identical) and a held master freezes the tail. The send is
+  post-filter, post-pan, post-bus-level: `(what the voice added to the frame) / channels x send`. A voice's level is
+  `send_level(category, spatial.send)` = `clamp(Bus::default_send + send, 0, 1)`; `VoiceSync` carries the raw
+  `spatial.send` and the mixer applies the voice's own category. When the return settles at 0 `process` zero-fills the
+  state in place and the reverb idles. `StopAllLoops` releases the return and the router resets its reverb record;
+  `replay_buses` re-sends a non-dry reverb with `frames: 0`.
 - **Occlusion is engine-side; the sink is unchanged.** `ludion-engine`'s `audio_occlusion.rs` casts listener-to-source
   rays at the frame boundary and folds a gain and a low-pass cutoff into the messages it already sends (a new cutoff
   goes out past `RESYNC_CUTOFF_RATIO`); the sink only sees a filter and a gain.
@@ -110,7 +123,7 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   one-shots) count against the caps; `voices` holds ≤ 2×total, cutting the lowest fading voice. Loops
   are never stolen; the Router holds those past the total. `Mixer::new` reserves every container and
   `render` mixes in blocks; tests build a `Mixer` with other limits.
-- **Buses are a per-frame level buffer.** `Mixer.buses` (authored × user × game × duck × pause envelopes; `duck` is sink-private, written only by `AudioMessage::Duck`) steps
+- **Buses are a per-frame level buffer.** `Mixer.buses` (authored × user × game × duck × zone × pause envelopes; `duck` and `zone` are sink-private, written only by `AudioMessage::Duck` and `AudioMessage::ZoneGain`) steps
   once per device frame into `bus_levels` (`6 × MIX_BLOCK_FRAMES`, reserved in `new`); non-master buses
   then multiply by master. Keep that float order: at default state every factor is exactly `1.0`, which
   is what keeps the dyadic sink tests bit-identical. A *held* bus (paused, fade finished) skips its

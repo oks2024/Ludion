@@ -70,6 +70,7 @@ fn palette() -> impl Strategy<Value = Vec<PaletteEntry>> {
                         color,
                         emissive,
                         metallic,
+                        porosity: None,
                         roughness,
                     },
                 )

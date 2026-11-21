@@ -159,6 +159,7 @@ fn mesh_doc() -> impl Strategy<Value = MeshDocument> {
                         tangents,
                         emissive,
                         metallic,
+                        porosity: None,
                         roughness,
                         textures,
                         alpha_mode,
@@ -725,6 +726,7 @@ fn vertex_budget_warning_does_not_fail_validation() {
         tangents: None,
         emissive: None,
         metallic: None,
+        porosity: None,
         roughness: None,
         textures: MeshTextures::default(),
         alpha_mode: AlphaMode::Opaque,
@@ -880,4 +882,53 @@ triangle_surfaces:
         };
         assert_eq!(surfaces.per_triangle(), vec![1, 1, 0]);
     }
+}
+
+const THREE_VERTICES: &str = "\
+format: 1
+kind: mesh
+positions:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+";
+
+/// `porosity` is a per-vertex list written alphabetically between `metallic` and `roughness`.
+#[test]
+fn porosity_list_round_trips_between_metallic_and_roughness() {
+    let source = format!(
+        "{THREE_VERTICES}metallic:\n  - 1.0\n  - 0.5\n  - 0.0\nporosity:\n  - 0.0\n  - 0.5\n  - 1.0\n\
+         roughness:\n  - 0.1\n  - 0.5\n  - 1.0\nindices:\n  - 0\n  - 1\n  - 2\n"
+    );
+    let mesh = parse_mesh(&source).expect("mesh should parse");
+    assert_eq!(mesh.porosity, Some(vec![0.0, 0.5, 1.0]));
+    assert!(validate_mesh(&mesh).is_empty());
+    assert_eq!(emit_mesh(&mesh), source);
+}
+
+/// `L1111`: a porosity list of the wrong length or out of range, each at its JSON Pointer.
+#[test]
+fn bad_porosity_is_l1111() {
+    let short = format!("{THREE_VERTICES}porosity:\n  - 0.5\nindices:\n  - 0\n  - 1\n  - 2\n");
+    let diagnostics = validate_mesh(&parse_mesh(&short).unwrap());
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code.as_str() == "L1111" && d.path.as_deref() == Some("/porosity"))
+    );
+    let high = format!(
+        "{THREE_VERTICES}porosity:\n  - 0.5\n  - 1.5\n  - 0.5\nindices:\n  - 0\n  - 1\n  - 2\n"
+    );
+    let diagnostics = validate_mesh(&parse_mesh(&high).unwrap());
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code.as_str() == "L1111" && d.path.as_deref() == Some("/porosity/1"))
+    );
 }

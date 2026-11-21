@@ -142,6 +142,7 @@ pub(crate) fn mesh_document(
         tangents,
         emissive: None,
         metallic: None,
+        porosity: None,
         roughness: None,
         textures,
         alpha_mode: AlphaMode::Opaque,

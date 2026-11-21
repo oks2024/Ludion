@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); W6a (root motion) mechanized (2026-11-21); A3 deferred; W6b not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); W4c (entity targets) mechanized (2026-11-21); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); W6a (root motion) mechanized (2026-11-21); A3 deferred; W6b not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -137,6 +137,18 @@ The strip sweeps the yaw 0 to 100 over six phases, so the last two cells clamp a
 owed to the M4. Masks and `ik:` are pose data outside the mesh content hash, so `assembly-layers.png` and
 `humanoid-locomotion-blend-strip.png` passed unblessed. No component, schema, `WorldHash`, replay or existing
 golden moved.
+
+### W4c — `IkTargets` entity targets
+
+| file | role |
+|---|---|
+| `crates/ludion-components/src/ik_targets.rs`, `codes.rs` | `IkTarget.entity` and `offset`; `targets` an `EntityRefCollection`; validation is at most one of `point`/`entity`/`direction` with a finite `offset`; `L1673` text |
+| `crates/ludion-engine/src/assembly_ik.rs` | `assembly_ik_goals` resolves `entity` through `hierarchy::world_affine`; a dead, null or `Transform`-less target is skipped |
+| `crates/ludion-engine/tests/assembly_ik.rs`, `dispatch.rs`, `transition.rs` | follows a moving and a turned entity; null, despawned and stale pose like the plain clip; save, reload (a nulled target), snapshot and carry |
+| `crates/ludion-engine/examples/ik_entity_target.rs` | a hand following a moving ball |
+| `docs/voxel-animation.md`, `docs/components-fx.md` | the `entity`/`offset` form and the null rule |
+
+No `WorldHash`, replay, wire-schema or golden moved; `component_schemas.json` re-blessed.
 
 ### Part sockets — `ParentJoint` naming an assembly part (request 0007 item 0)
 
@@ -357,14 +369,14 @@ share one driver shape.
     `ludion_core::math::f64` and `ludion_scene::slerp`.
 38. **`IkTargets`** is a hashed map of entry name → one of `point` (world) or `direction` (`Look`'s
     convention), with the layer weight ramp (`weight`, `from_weight`, `changed`, `fade`); `L1673`.
-    Entry-name keys also mean a dead target is a missing key, never a stale id.
+    A target is at most one of `point`, `entity` (+ `offset` in the entity's frame) or `direction`;
+    `targets` is an `EntityRefCollection`, so a despawned `entity` nulls on save and carry; a null, dead
+    or `Transform`-less entity is not solved (weight 0, silent); resolved in extract from `world_affine`,
+    presentation-only (d2).
 39. **Deferrals.** `rate_deg`: a look target's jump visibly snaps (needs presentation state; the request's open
     question). Socket-part targets: request item 0, part sockets. `ground` is W5a (decisions 45–49); a third
     chain part stays deferred.
-    IK in the ragdoll switch: a ragdoll that must start from an IK'd pose. **Entity targets**: a target that
-    must follow an entity without per-tick writes — it needs registry support for entity references inside a
-    map (`L1392`); until then game code writes `point` from the entity's world position each tick it moves.
-    Registry support now exists: `EntityRefCollection` (`Plan/ai-behaviour.md` decision 16).
+    IK in the ragdoll switch: a ragdoll that must start from an IK'd pose.
 
 40. **`render --model --look/--ik` pose through the one solver** (`apply_assembly_ik` on the sheet's
     placements, then the gap analysis). `--look [NAME=]YAW,PITCH` takes a number or `lo..hi` per side (`Look`'s

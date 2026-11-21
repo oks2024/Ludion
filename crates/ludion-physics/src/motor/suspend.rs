@@ -5,11 +5,12 @@ use ludion_core::ids::EntityId;
 use ludion_ecs::{Parent, World};
 
 use super::component::{CharacterMotorState, check_in_force, in_force, posture_motor};
-use super::ignore::motor_partner;
+use super::ignore::motor_partners;
 use super::report::{MotorError, ResumeReport};
 use super::resize::{fit_blocker, motor_of, place};
 use super::shape::InForce;
 use crate::pose::PhysicsPose;
+use crate::sweep::Partners;
 use crate::world::PhysicsWorld;
 
 /// Parks `entity`'s motor: it keeps its component and state but loses its physics body at the next
@@ -92,7 +93,7 @@ fn blocker(
     feet: [f32; 3],
     yaw: f32,
     resting: &InForce,
-    ignore: Option<EntityId>,
+    ignore: Option<&[EntityId]>,
 ) -> Result<Option<EntityId>, MotorError> {
     if let Err((pointer, reason)) = check_in_force(resting) {
         return Err(MotorError::InvalidMotor {
@@ -103,8 +104,8 @@ fn blocker(
     let physics = world
         .resource::<PhysicsWorld>()
         .ok_or(MotorError::NoPhysicsWorld)?;
-    let partner = ignore.or_else(|| motor_partner(world, entity));
-    Ok(fit_blocker(physics, entity, resting, feet, yaw, partner))
+    let partners = ignore.map_or_else(|| motor_partners(world, entity), Partners::from_slice);
+    Ok(fit_blocker(physics, entity, resting, feet, yaw, partners))
 }
 
 /// Whether `entity`'s capsule fits standing on `feet`: the lowest-id collider in the way, `None`
@@ -136,16 +137,16 @@ pub fn character_fit<P: PhysicsPose>(
     character_fit_ignoring::<P>(world, entity, posture, feet, yaw, None)
 }
 
-/// [`character_fit`] looking through `ignore`: `Some(e)` ignores `e`'s collider for this test in
-/// place of the motor's [`IgnoreCollisions`](crate::IgnoreCollisions) partner; `None` keeps that
-/// partner, if any. Every other collider still blocks.
+/// [`character_fit`] looking through `ignore`: `Some(list)` ignores those entities' colliders for this test in
+/// place of the motor's [`IgnoreCollisions`](crate::IgnoreCollisions) list; `None` keeps that
+/// list, if any. Every other collider still blocks.
 ///
 /// ```no_run
 /// # use ludion_ecs::{SystemCtx, World};
 /// # use ludion_physics::{character_fit_ignoring, PhysicsPose};
 /// # use ludion_core::ids::EntityId;
 /// fn fits_beside<P: PhysicsPose>(world: &World, _ctx: &SystemCtx, a: EntityId, b: EntityId) -> bool {
-///     matches!(character_fit_ignoring::<P>(world, a, None, [0.0; 3], 0.0, Some(b)), Ok(None))
+///     matches!(character_fit_ignoring::<P>(world, a, None, [0.0; 3], 0.0, Some(&[b])), Ok(None))
 /// }
 /// ```
 pub fn character_fit_ignoring<P: PhysicsPose>(
@@ -154,7 +155,7 @@ pub fn character_fit_ignoring<P: PhysicsPose>(
     posture: Option<&str>,
     feet: [f32; 3],
     yaw: f32,
-    ignore: Option<EntityId>,
+    ignore: Option<&[EntityId]>,
 ) -> Result<Option<EntityId>, MotorError> {
     let _ = motor_of::<P>(world, entity)?;
     if !feet.iter().all(|c| c.is_finite()) {

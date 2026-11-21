@@ -137,7 +137,8 @@ impl Default for VoiceFilter {
 pub struct VoiceSpatial {
     /// The filter; the default is bypass.
     pub filter: VoiceFilter,
-    /// The reverb send level; the sink has no reverb bus, so it is carried and not mixed.
+    /// The reverb send added to the bus's default ([`Bus::default_send`]); the voice's post-fader
+    /// send is `clamp(default + send, 0, 1)`.
     pub send: f32,
 }
 
@@ -208,6 +209,22 @@ impl Bus {
         Bus::Ui,
         Bus::Music,
     ];
+
+    /// The reverb send a voice on this bus starts from: `1.0` for `Sfx`, `Ambient` and `Voice`,
+    /// `0.0` for the rest, so music and interface sounds stay dry.
+    ///
+    /// ```
+    /// use ludion_core::audio::Bus;
+    ///
+    /// assert_eq!(Bus::Ambient.default_send(), 1.0);
+    /// assert_eq!(Bus::Music.default_send(), 0.0);
+    /// ```
+    pub fn default_send(self) -> f32 {
+        match self {
+            Bus::Sfx | Bus::Ambient | Bus::Voice => 1.0,
+            Bus::Master | Bus::Ui | Bus::Music => 0.0,
+        }
+    }
 }
 
 impl From<AudioCategory> for Bus {

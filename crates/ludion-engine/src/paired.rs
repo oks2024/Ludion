@@ -1,4 +1,4 @@
-//! `paired_fit`: whether a two-role `kind: paired` action can start from where its cast stands.
+//! `paired_fit`: whether a paired `kind: paired` action can start from where its cast stands.
 //!
 //! The document is loaded lazily through [`check_paired_files`](crate::check_paired_files) and kept in
 //! a [`PairedLibrary`] resource rebuilt at every world build, the `AnimationLibrary` rule: never
@@ -34,7 +34,8 @@ use ludion_core::suggest;
 use ludion_core::time::{FrameIndex, GameTime};
 use ludion_ecs::{Parent, SystemCtx, World};
 use ludion_physics::{
-    CharacterMotor, CharacterMotorState, IgnoreCollisions, MotorError, character_fit_ignoring,
+    CharacterMotor, CharacterMotorState, IgnoreCollisions, MAX_PARTNERS, MotorError,
+    character_fit_ignoring,
 };
 use ludion_scene::{PairedDocument, PairedMoves};
 
@@ -42,6 +43,7 @@ use crate::animation_events::{AnimationEvents, ClipEvent};
 use crate::components::{Animation, Mesh, MeshSource, Transform};
 use crate::motor::set_character_posture;
 use crate::paired_doc::{PairedReport, check_paired_files};
+use crate::root_motion::{RootMotion, root_motion_of};
 
 type Loaded = Result<Arc<PairedReport>, Vec<Diagnostic>>;
 
@@ -161,77 +163,110 @@ fn plus(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] + b[0], a[1], a[2] + b[2]]
 }
 
-fn minus(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1], a[2] - b[2]]
-}
-
 /// The heading of the entity's `-Z` axis for Euler XYZ degrees, in radians: decision 10's convention.
 pub(crate) fn heading(rotation_deg: [f32; 3]) -> f64 {
     let [x, y, z, w] = euler_xyz_degrees_to_quat(rotation_deg).map(f64::from);
     f64s::atan2(2.0 * (x * z + w * y), w * w - x * x - y * y + z * z)
 }
 
-/// The aligned targets of a two-role document: `poses` is each role's current `(feet, yaw)` and the
-/// result is sorted by role name. Decision 24 states the three cases; feet height is never changed.
+/// A role's place in the frame rule: its offset in the reference's frame, `(translation, yaw)`; the
+/// reference itself sits at the origin.
+fn offset_of(doc: &PairedDocument, role: &str) -> ([f64; 3], f64) {
+    doc.align
+        .offsets
+        .iter()
+        .find(|offset| offset.role == role)
+        .map_or(([0.0; 3], 0.0), |offset| {
+            (offset.translation, offset.yaw_deg.to_radians())
+        })
+}
+
+/// The mean pose the `voters` imply for the frame (decision 34): voter `i` implies yaw `y_i - psi_i`
+/// and feet `p_i - rot(y*, t_i)`. The anchor is the first voter's implied yaw, so a one-voter mean is
+/// exact. `None` without voters.
+fn mean_frame(doc: &PairedDocument, voters: &[(&str, [f64; 3], f64)]) -> Option<([f64; 3], f64)> {
+    let implied: Vec<([f64; 3], f64, [f64; 3])> = voters
+        .iter()
+        .map(|(name, feet, yaw)| {
+            let (t, psi) = offset_of(doc, name);
+            (*feet, yaw - psi, t)
+        })
+        .collect();
+    let (_, anchor, _) = *implied.first()?;
+    let n = implied.len() as f64;
+    let yaw = anchor
+        + implied
+            .iter()
+            .map(|(_, y, _)| wrap(y - anchor))
+            .sum::<f64>()
+            / n;
+    let (mut x, mut z) = (0.0, 0.0);
+    for (feet, _, t) in &implied {
+        let at = rot(yaw, *t);
+        x += feet[0] - at[0];
+        z += feet[2] - at[2];
+    }
+    Some(([x / n, 0.0, z / n], yaw))
+}
+
+/// The aligned targets of a paired document: `poses` is the current `(feet, yaw)` of every role that
+/// is present (all of them for a start, fewer once a role has left) and the result is sorted by role
+/// name. Decision 34 states the three frame cases; feet height is never changed. A role that does
+/// not move, or whose frame has no voter left, holds its pose.
 pub(crate) fn aligned_targets(
     doc: &PairedDocument,
     poses: &[(&str, [f64; 3], f64)],
 ) -> Vec<Target> {
     let reference = doc.align.reference.as_str();
-    let pose_of = |name: &str| {
-        let (_, feet, yaw) = poses
-            .iter()
-            .find(|(n, _, _)| *n == name)
-            .expect("a pose for every role");
-        (*feet, *yaw)
-    };
-    let other = doc
-        .roles
-        .iter()
-        .map(|role| role.name.as_str())
-        .find(|name| *name != reference)
-        .expect("two roles");
-    let offset = doc
-        .align
-        .offsets
-        .iter()
-        .find(|offset| offset.role == other)
-        .expect("an offset for the other role");
-    let t = offset.translation;
-    let psi = offset.yaw_deg.to_radians();
-    let (p_r, y_r) = pose_of(reference);
-    let (p_o, y_o) = pose_of(other);
+    let mut present: Vec<(&str, [f64; 3], f64)> = poses.to_vec();
+    present.sort_by(|a, b| (a.0 != reference, a.0).cmp(&(b.0 != reference, b.0)));
+    let non_reference = || present.iter().filter(|(name, _, _)| *name != reference);
 
-    let (r_star, o_star, r_moves, o_moves) = match &doc.align.moves {
-        PairedMoves::Role(name) if name == other => {
-            ((p_r, y_r), (plus(p_r, rot(y_r, t)), y_r + psi), false, true)
+    // The frame, and the roles that go to it (`None`: every role holds).
+    let (frame, goes): (Option<([f64; 3], f64)>, Vec<&str>) = match &doc.align.moves {
+        PairedMoves::Role(mover) if mover != reference => {
+            let frame = present
+                .iter()
+                .find(|(name, _, _)| *name == reference)
+                .map(|(_, feet, yaw)| (*feet, *yaw));
+            (frame, vec![mover.as_str()])
         }
         PairedMoves::Role(_) => {
-            let y = y_o - psi;
-            ((minus(p_o, rot(y, t)), y), (p_o, y_o), true, false)
+            let voters: Vec<_> = non_reference().copied().collect();
+            (mean_frame(doc, &voters), vec![reference])
         }
-        PairedMoves::Split => {
-            let y = y_r + 0.5 * wrap(y_o - psi - y_r);
-            let mid = [0.5 * (p_r[0] + p_o[0]), 0.0, 0.5 * (p_r[2] + p_o[2])];
-            let p = minus(mid, scaled(rot(y, t), 0.5));
-            ((p, y), (plus(p, rot(y, t)), y + psi), true, true)
-        }
+        PairedMoves::Split => (
+            mean_frame(doc, &present),
+            present.iter().map(|(name, _, _)| *name).collect(),
+        ),
     };
 
-    let mut out = vec![
-        target(reference, p_r, y_r, r_star, r_moves),
-        target(other, p_o, y_o, o_star, o_moves),
-    ];
+    let mut out: Vec<Target> = present
+        .iter()
+        .map(|&(name, feet, yaw)| {
+            let place = frame.filter(|_| goes.contains(&name)).map(|(p, y)| {
+                if name == reference {
+                    (p, y)
+                } else {
+                    let (t, psi) = offset_of(doc, name);
+                    (plus(p, rot(y, t)), y + psi)
+                }
+            });
+            target(
+                name,
+                feet,
+                yaw,
+                place.unwrap_or((feet, yaw)),
+                place.is_some(),
+            )
+        })
+        .collect();
     out.sort_by(|a, b| a.role.cmp(&b.role));
     out
 }
 
 fn with_height(planar: [f64; 3], keep: [f64; 3]) -> [f64; 3] {
     [planar[0], keep[1], planar[2]]
-}
-
-fn scaled(v: [f64; 3], k: f64) -> [f64; 3] {
-    [v[0] * k, v[1] * k, v[2] * k]
 }
 
 fn target(role: &str, from: [f64; 3], from_yaw: f64, to: ([f64; 3], f64), moves: bool) -> Target {
@@ -286,18 +321,21 @@ pub(crate) fn resolve(
         }
     };
     let doc = &report.doc;
-    if doc.roles.len() != 2 {
+    if doc.roles.len() > MAX_PARTNERS + 1 {
         return Err(vec![
             Diagnostic::new(
                 code::PAIRED_UNSUPPORTED,
                 format!(
-                    "paired document `{}` has {} roles; the runtime plays exactly two",
+                    "paired document `{}` has {} roles; the runtime plays at most {}",
                     doc.name,
-                    doc.roles.len()
+                    doc.roles.len(),
+                    MAX_PARTNERS + 1
                 ),
             )
             .with_path("/roles")
-            .with_help("split the action into pairs of roles"),
+            .with_help(
+                "a participant's motor looks through at most 4 partners; split the action into smaller ones",
+            ),
         ]);
     }
 
@@ -380,17 +418,17 @@ pub(crate) fn resolve(
     })
 }
 
-/// Whether a two-role paired action can start from where `cast` stands.
+/// Whether a paired action can start from where `cast` stands.
 ///
 /// `paired` is the document's content-root path (`voxels/choke.paired.yaml`); `cast` names an entity
-/// for every role. Each role is moved to its aligned pose (decision 24), and a role with a
-/// `CharacterMotor` is fit-tested there at its role `posture`, looking through its partner. Nothing
-/// is mutated.
+/// for every role. Each role is moved to its aligned pose (decisions 24, 34), and a role with a
+/// `CharacterMotor` is fit-tested there at its role `posture`, looking through every other cast
+/// entity. Nothing is mutated.
 ///
 /// # Errors
-/// `L4370` when the document does not load (the loader's diagnostics follow); `L4373` for more than
-/// two roles; `L4371` for a cast that is not exactly the document's roles or whose entity cannot play
-/// its role; `L4372` for a scale that is not the role's. All cast problems are collected.
+/// `L4370` when the document does not load (the loader's diagnostics follow); `L4373` for more than five
+/// roles; `L4371` for a cast that
+/// is not exactly the document's roles or whose entity cannot play its role; `L4372` for a scale that is not the role's. All cast problems are collected.
 ///
 /// # Example
 /// ```no_run
@@ -445,7 +483,11 @@ pub fn paired_fit(
         if !target.moves || !world.has::<CharacterMotor>(*entity) {
             continue;
         }
-        let partner = entities[1 - index].1;
+        let others: Vec<EntityId> = entities
+            .iter()
+            .map(|(_, other, _)| *other)
+            .filter(|other| other != entity)
+            .collect();
         let at = &fit.roles[index];
         match character_fit_ignoring::<Transform>(
             world,
@@ -453,7 +495,7 @@ pub fn paired_fit(
             role.posture.as_deref(),
             at.feet,
             at.yaw,
-            Some(partner),
+            Some(&others),
         ) {
             Ok(Some(blocker)) => {
                 if fit.blocked_by.is_none() {
@@ -610,8 +652,8 @@ fn same_group(a: &PairedAction, b: &PairedAction) -> bool {
     a.document == b.document && a.reference == b.reference && a.started == b.started
 }
 
-/// Ends `entity`'s role now: its `PairedAction` and `IgnoreCollisions` go, and so does any partner's
-/// `IgnoreCollisions` that looks through it. The partners keep playing.
+/// Ends `entity`'s role now: its `PairedAction` and `IgnoreCollisions` go, and it leaves every group
+/// member's `IgnoreCollisions` list (an emptied component goes too). The others keep playing.
 pub(crate) fn end_role(world: &mut World, entity: EntityId) {
     let Some(action) = world
         .get_unrecorded::<PairedAction>(entity)
@@ -629,8 +671,19 @@ pub(crate) fn end_role(world: &mut World, entity: EntityId) {
             .get_unrecorded::<IgnoreCollisions>(partner)
             .ok()
             .flatten()
-            .is_some_and(|ignore| ignore.with == entity);
-        if looks_through {
+            .is_some_and(|ignore| ignore.with.contains(&entity));
+        if !looks_through {
+            continue;
+        }
+        let emptied = world
+            .get_mut::<IgnoreCollisions>(partner)
+            .ok()
+            .flatten()
+            .is_some_and(|ignore| {
+                ignore.with.retain(|other| *other != entity);
+                ignore.with.is_empty()
+            });
+        if emptied {
             let _ = world.remove::<IgnoreCollisions>(partner);
         }
     }
@@ -638,7 +691,7 @@ pub(crate) fn end_role(world: &mut World, entity: EntityId) {
     let _ = world.remove::<IgnoreCollisions>(entity);
 }
 
-/// Starts a two-role paired action: both roles are stamped, the movers' postures set, the partners
+/// Starts a paired action: every role is stamped, the movers' postures set, the participants
 /// made transparent to each other's motors, and each clip role crossfades to its clip at speed 1.
 ///
 /// **Register [`paired_update`] after [`animation_events`](crate::animation_events) and before any
@@ -682,11 +735,6 @@ pub fn start_paired(
 
     let mut errors = Vec::new();
     for (name, entity, _) in &resolved.entities {
-        let partner = resolved
-            .entities
-            .iter()
-            .map(|(_, other, _)| *other)
-            .find(|other| other != entity);
         let Some(ignore) = world
             .get_unrecorded::<IgnoreCollisions>(*entity)
             .ok()
@@ -694,15 +742,16 @@ pub fn start_paired(
         else {
             continue;
         };
-        if Some(ignore.with) == partner || in_action_with(world, *entity, ignore.with) {
+        let foreign = ignore.with.iter().find(|with| {
+            !resolved.entities.iter().any(|(_, other, _)| other == *with)
+                && !in_action_with(world, *entity, **with)
+        });
+        let Some(foreign) = foreign else {
             continue;
-        }
+        };
         errors.push(invalid(
             name,
-            format!(
-                "role `{name}`: {entity:?} already ignores {:?}; remove it first",
-                ignore.with
-            ),
+            format!("role `{name}`: {entity:?} already ignores {foreign:?}; remove it first"),
             "remove the entity's `IgnoreCollisions` before pairing it",
         ));
     }
@@ -756,12 +805,13 @@ pub fn start_paired(
     let started = FrameIndex::new(game_time.into().ticks_floor());
     let document = ludion_core::paths::normalize(paired);
     for (name, entity, _) in &resolved.entities {
-        let partner = resolved
+        let mut others: Vec<EntityId> = resolved
             .entities
             .iter()
             .map(|(_, other, _)| *other)
-            .find(|other| other != entity)
-            .expect("two roles");
+            .filter(|other| other != entity)
+            .collect();
+        others.sort_unstable();
         let _ = world.insert(
             *entity,
             PairedAction {
@@ -773,7 +823,7 @@ pub fn start_paired(
                 fired: 0,
             },
         );
-        let _ = world.insert(*entity, IgnoreCollisions { with: partner });
+        let _ = world.insert(*entity, IgnoreCollisions { with: others });
         if let Some(clip) = &role_of(name).clip {
             if !world.has::<Animation>(*entity) {
                 let _ = world.insert(*entity, Animation::default());
@@ -796,15 +846,18 @@ fn in_action_with(world: &World, entity: EntityId, other: EntityId) -> bool {
 }
 
 /// Ends the paired action `entity` is in, on every participant now, and returns the cast as
-/// `(role, entity)` sorted by role, so the game can crossfade each to the clip it wants.
+/// `(role, entity)` sorted by role. `to` is `(role, clip)` pairs: each named role's entity crossfades
+/// to its clip over `fade` seconds (`0` cuts) at `game_time`, the gameplay time of this tick; an empty
+/// `to` only ends the action and leaves the animation to the game.
 ///
 /// # Errors
-/// `L4375` when `entity` is not in an action.
+/// `L4375` when `entity` is not in an action; `L4371` for a `to` role the action does not have, or
+/// one listed twice. Nothing is mutated then.
 ///
 /// # Example
 /// ```no_run
-/// # fn demo(world: &mut ludion_ecs::World, guard: ludion_core::ids::EntityId) {
-/// if let Ok(cast) = ludion_engine::abort_paired(world, guard) {
+/// # fn demo(world: &mut ludion_ecs::World, guard: ludion_core::ids::EntityId, now: ludion_core::time::GameTime) {
+/// if let Ok(cast) = ludion_engine::abort_paired(world, guard, &[("target", "stagger")], 0.1, now) {
 ///     for (role, entity) in cast {
 ///         println!("{role} ({entity:?}) is free");
 ///     }
@@ -814,6 +867,9 @@ fn in_action_with(world: &World, entity: EntityId, other: EntityId) -> bool {
 pub fn abort_paired(
     world: &mut World,
     entity: EntityId,
+    to: &[(&str, &str)],
+    fade: f32,
+    game_time: impl Into<GameTime>,
 ) -> Result<Vec<(String, EntityId)>, Diagnostic> {
     let Some(action) = world
         .get_unrecorded::<PairedAction>(entity)
@@ -836,8 +892,48 @@ pub fn abort_paired(
         })
         .collect();
     cast.sort();
+    let mut named: Vec<&str> = Vec::new();
+    for (role, _) in to {
+        if !cast.iter().any(|(name, _)| name == role) {
+            let help = match suggest::nearest(role, cast.iter().map(|(name, _)| name.as_str())) {
+                Some(candidate) => format!("nearest role is `{candidate}`"),
+                None => format!(
+                    "the action's roles are {}",
+                    cast.iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
+            return Err(invalid(
+                role,
+                format!("`{}` has no role `{role}` to crossfade", action.action),
+                help,
+            ));
+        }
+        if named.contains(role) {
+            return Err(invalid(
+                role,
+                format!("role `{role}` is listed twice in `to`"),
+                "name each role once",
+            ));
+        }
+        named.push(role);
+    }
     for id in members {
         end_role(world, id);
+    }
+    let started = FrameIndex::new(game_time.into().ticks_floor());
+    for (role, clip) in to {
+        let Some((_, member)) = cast.iter().find(|(name, _)| name == role) else {
+            continue;
+        };
+        if !world.has::<Animation>(*member) {
+            let _ = world.insert(*member, Animation::default());
+        }
+        if let Ok(Some(animation)) = world.get_mut::<Animation>(*member) {
+            crossfade(animation, clip, fade, started);
+        }
     }
     Ok(cast)
 }
@@ -853,10 +949,16 @@ fn smooth(u: f64) -> f64 {
 ///
 /// The warp is closed-loop: each tick closes the share of the remaining error that a smoothstep over
 /// `align.ticks` closes between the previous and this gameplay instant, toward the aligned pose
-/// recomputed from both current `Transform`s, so a partner that moves is followed. After the warp the
-/// mover holds the relative pose. A role that does not move, a partner that is gone and a held
-/// frame give a zero step. Feed the result to `move_character` and `turn_character` each tick, before
-/// [`paired_update`].
+/// recomputed from every present participant's current `Transform` (decision 34), so a partner that
+/// moves is followed. After the warp the mover holds the relative pose.
+///
+/// **Root motion** (decision 35): a role whose clip carries a `$root` track (0007) is driven by it
+/// whenever it is not warping: a role that does not move from the first tick, a mover from the tick
+/// after its warp completes (travel inside the warp ticks is not applied). Without a `$root` track a
+/// mover holds the relative pose, and a role that does not move, a frame with no participant to
+/// follow and a held frame give a zero step. **Do not also apply [`root_motion_delta`](crate::root_motion_delta)
+/// to a paired entity**: this is its only source of motion. Feed the result to `move_character` and
+/// `turn_character` each tick, before [`paired_update`].
 ///
 /// # Example
 /// ```no_run
@@ -881,15 +983,6 @@ pub fn paired_motion(world: &World, entity: EntityId, ctx: &SystemCtx) -> Option
         yaw: yaw_now as f32,
         warping: false,
     };
-    let Some(partner) = group_of(world, action).into_iter().find(|id| *id != entity) else {
-        return Some(hold);
-    };
-    let Some(other) = world.get_unrecorded::<PairedAction>(partner).ok().flatten() else {
-        return Some(hold);
-    };
-    let Some(there) = world.get_unrecorded::<Transform>(partner).ok().flatten() else {
-        return Some(hold);
-    };
     let Some(report) = world
         .resource::<PairedLibrary>()
         .and_then(|library| library.report(&action.document).ok())
@@ -897,40 +990,41 @@ pub fn paired_motion(world: &World, entity: EntityId, ctx: &SystemCtx) -> Option
         return Some(hold);
     };
     let doc = &report.doc;
-    if doc.roles.len() != 2 {
-        return Some(hold);
+    let mut poses: Vec<(&str, [f64; 3], f64)> = Vec::new();
+    for member in group_of(world, action) {
+        let role = world.get_unrecorded::<PairedAction>(member).ok().flatten();
+        let transform = world.get_unrecorded::<Transform>(member).ok().flatten();
+        if let (Some(role), Some(transform)) = (role, transform) {
+            poses.push((
+                role.role.as_str(),
+                transform.translation.map(f64::from),
+                heading(transform.rotation),
+            ));
+        }
     }
-    let pose = |transform: &Transform| {
-        (
-            transform.translation.map(f64::from),
-            heading(transform.rotation),
-        )
-    };
-    let (feet_a, yaw_a) = pose(here);
-    let (feet_b, yaw_b) = pose(there);
-    let poses = [
-        (action.role.as_str(), feet_a, yaw_a),
-        (other.role.as_str(), feet_b, yaw_b),
-    ];
-    if !doc
-        .roles
-        .iter()
-        .all(|role| poses.iter().any(|(name, _, _)| *name == role.name))
-    {
-        return Some(hold);
-    }
+    let feet_a = here.translation.map(f64::from);
+    let yaw_a = yaw_now;
     let targets = aligned_targets(doc, &poses);
-    let Some(target) = targets.iter().find(|target| target.role == action.role) else {
-        return Some(hold);
-    };
-    if !target.moves {
-        return Some(hold);
-    }
+    let target = targets
+        .iter()
+        .find(|target| target.role == action.role)
+        .filter(|target| target.moves);
 
     let ticks = doc.align.ticks as f64;
     let elapsed = ctx.game_instant.ticks_since(action.started);
     let x = (elapsed / ticks).clamp(0.0, 1.0);
     let xp = ((elapsed - f64::from(ctx.game_scale())) / ticks).clamp(0.0, 1.0);
+    let warping = target.is_some() && xp < 1.0;
+    if let Some(root) = root_motion(world, entity, here, ctx).filter(|_| !warping) {
+        return Some(PairedMotion {
+            displacement: root.translation,
+            yaw: (yaw_now + f64::from(root.yaw)) as f32,
+            warping: false,
+        });
+    }
+    let Some(target) = target else {
+        return Some(hold);
+    };
     let f = if ctx.game_scale() <= 0.0 {
         0.0
     } else if smooth(xp) >= 1.0 {
@@ -947,8 +1041,24 @@ pub fn paired_motion(world: &World, entity: EntityId, ctx: &SystemCtx) -> Option
     Some(PairedMotion {
         displacement,
         yaw: yaw as f32,
-        warping: xp < 1.0,
+        warping,
     })
+}
+
+/// `entity`'s `$root` travel this tick, read unrecorded like the rest of [`paired_motion`] so a game's
+/// driver needs no query declarations.
+fn root_motion(
+    world: &World,
+    entity: EntityId,
+    here: &Transform,
+    ctx: &SystemCtx,
+) -> Option<RootMotion> {
+    let animation = world.get_unrecorded::<Animation>(entity).ok().flatten()?;
+    let mesh = world.get_unrecorded::<Mesh>(entity).ok().flatten()?;
+    let MeshSource::Assembly(rel) = &mesh.shape else {
+        return None;
+    };
+    root_motion_of(world, animation, rel, here, ctx)
 }
 
 /// Fires the document events of every playing paired action, ends the ones whose clips are done, and

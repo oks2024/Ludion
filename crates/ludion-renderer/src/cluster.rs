@@ -1337,6 +1337,7 @@ mod tests {
     fn scene_with_gun(gun: Vec3, lights: Vec<PointLightData>) -> RenderScene {
         let mut scene = scene_with(camera_at(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO), lights);
         scene.meshes.push(MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape: crate::scene::MeshShape::Cube,
             model: Mat4::from_translation(gun),

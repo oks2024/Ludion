@@ -16,12 +16,15 @@ pub(crate) const DEFAULT_ROUGHNESS: f32 = 1.0;
 pub(crate) const DEFAULT_METALLIC: f32 = 0.0;
 /// `emissive` of a palette entry that authors none.
 pub(crate) const DEFAULT_EMISSIVE: f32 = 0.0;
+/// `porosity` of a palette entry that authors none.
+pub(crate) const DEFAULT_POROSITY: f32 = 0.5;
 
-/// A part's resolved palette entry: linear RGBA and `(roughness, metallic, emissive)`.
+/// A part's resolved palette entry: linear RGBA, `(roughness, metallic, emissive)` and porosity.
 #[derive(Clone, Copy)]
 pub(crate) struct Channels {
     color: [f32; 4],
     material: [f32; 3],
+    porosity: f32,
 }
 
 /// Every part's channels in part order; `None` for a part with no material (a `subtract` or
@@ -38,6 +41,7 @@ pub(crate) fn part_channels(doc: &SculptDocument) -> Vec<Option<Channels>> {
                     entry.metallic.map_or(DEFAULT_METALLIC, |m| m as f32),
                     entry.emissive.map_or(DEFAULT_EMISSIVE, |e| e as f32),
                 ],
+                porosity: entry.porosity.map_or(DEFAULT_POROSITY, |p| p as f32),
             })
         })
         .collect()
@@ -70,15 +74,17 @@ pub(crate) fn dominant_part(weights: &[f32]) -> Option<usize> {
     dominant.map(|(index, _)| index)
 }
 
-/// Appends the weight-blended color (4 values) and material (3 values) of one vertex.
+/// Appends the weight-blended color (4 values), material (3 values) and porosity of one vertex.
 pub(crate) fn blend(
     weights: &[f32],
     channels: &[Option<Channels>],
     colors: &mut Vec<f32>,
     materials: &mut Vec<f32>,
+    porosities: &mut Vec<f32>,
 ) {
     let mut color = [0.0f32; 4];
     let mut material = [0.0f32; 3];
+    let mut porosity = 0.0f32;
     for (&w, part) in weights.iter().zip(channels) {
         if let Some(part) = part {
             for (sum, c) in color.iter_mut().zip(part.color) {
@@ -87,10 +93,12 @@ pub(crate) fn blend(
             for (sum, m) in material.iter_mut().zip(part.material) {
                 *sum += w * m;
             }
+            porosity += w * part.porosity;
         }
     }
     colors.extend_from_slice(&color);
     materials.extend_from_slice(&material);
+    porosities.push(porosity);
 }
 
 #[cfg(test)]

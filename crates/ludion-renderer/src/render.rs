@@ -7479,6 +7479,11 @@ fn upload_mesh_asset(
     material_bg: wgpu::BindGroup,
 ) -> MeshAssetGpu {
     let vertex_count = mesh.positions.len() / 3;
+    debug_assert_eq!(
+        mesh.porosity.len(),
+        vertex_count,
+        "MeshData.porosity must hold one value per vertex"
+    );
     let vertices: Vec<MeshVertex> = (0..vertex_count)
         .map(|v| MeshVertex {
             position: [
@@ -7501,6 +7506,7 @@ fn upload_mesh_asset(
                 mesh.materials[v * 3],
                 mesh.materials[v * 3 + 1],
                 mesh.materials[v * 3 + 2],
+                mesh.porosity[v],
             ],
             uv: [mesh.uvs[v * 2], mesh.uvs[v * 2 + 1]],
             tangent: [
@@ -9464,13 +9470,13 @@ fn module(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {
 // `(shader_location, format)` lists ARE reflectable, and `vertex_inputs_match_generated_reflection`
 // pins each one to the generated `*_VS_MAIN_INPUTS` (out of the WGSL). Edit here AND the WGSL together.
 
-/// Mesh per-vertex attributes (`MeshVertex`: position/normal/color/material/uv/tangent/weights/bones),
+/// Mesh per-vertex attributes (`MeshVertex`: position/normal/color/material+porosity/uv/tangent/weights/bones),
 /// locations 0-5 then 18-19 (the macro's sequential offsets are correct because the two skin fields
 /// are declared last in `MeshVertex`, right after `tangent`).
-const MESH_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3, 4 => Float32x2, 5 => Float32x4, 18 => Float32x4, 19 => Uint32x4];
+const MESH_VERTEX_ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x4, 4 => Float32x2, 5 => Float32x4, 18 => Float32x4, 19 => Uint32x4];
 /// Mesh per-instance attributes (`MeshInstanceRaw`): model rows 6-9, color 10, material 11,
-/// normal-matrix rows 12-15, occlusion-fade lane 16, hit-flash lane 17, rim lane 20, medium lane 21 (`.x`).
-const MESH_INSTANCE_ATTRS: [wgpu::VertexAttribute; 14] = wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4, 15 => Float32x4, 16 => Float32x4, 17 => Float32x4, 20 => Float32x4, 21 => Float32];
+/// normal-matrix rows 12-15, occlusion-fade lane 16, hit-flash lane 17, rim lane 20, medium lane 21 (`.x` the medium scale, `.y` the cull scatter's slot, `.z` the porosity).
+const MESH_INSTANCE_ATTRS: [wgpu::VertexAttribute; 14] = wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4, 15 => Float32x4, 16 => Float32x4, 17 => Float32x4, 20 => Float32x4, 21 => Float32x3];
 /// Ground-marker per-instance attributes (`GroundMarkerInstanceRaw`): model columns 0-3, color 4,
 /// the rounded-box SDF's `(half_extent, radius, kind)` lane 5, the wedge lane 6, the inner colour 7,
 /// the style lanes 8-9, the wedge/ring extra lane 10 and the profile-offset lane 11.

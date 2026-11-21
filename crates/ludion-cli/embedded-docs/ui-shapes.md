@@ -1,12 +1,12 @@
 ---
-description: UiShape: analytic line, circle, ring, arc, wedge, rounded_rect; fill, stroke, origin rule, hit
+description: UiShape: line, circle, ring, arc, wedge, rounded_rect, filled polygon; fill, stroke, hit
 ---
 
 # Screen shapes: `UiShape`
 
 **Scope:** `UiShape`, one SDF-drawn primitive in screen space. It shares `UiRect`'s canvas, anchors, `order`,
 `group`, `UiTween` and `UiWorldAnchor` (`ludion docs screen-ui`, `ludion docs ui-groups`,
-`ludion docs ui-tweens`). Polygons, polylines and dashes are not drawn.
+`ludion docs ui-tweens`). Polygon strokes, polylines and dashes are not drawn.
 
 ## The loop
 
@@ -36,6 +36,7 @@ Lengths are canvas units; angles are clock degrees (0 is 12 o'clock, clockwise).
 | `arc` | `radius`, `start_deg`, `sweep_deg` | stroke only: the band `radius ± width/2` |
 | `wedge` | `radius`, `inner_radius` (`0`), `start_deg`, `sweep_deg` | |
 | `rounded_rect` | `size`, `corner_radius` (`0`) | centred on the origin; the radius clamps to half the short side |
+| `polygon` | `points: [[x, y], ..]` | fill only; a simple polygon, see Polygons |
 
 Other fields: `anchor` (`top_left`), `offset` (`[0,0]`, +Y down), `group`, `fill: [r,g,b,a]`, `stroke: {width, color}`,
 `rotation` (degrees clockwise, `0`), `order` (`0`), `visible` (`true`). A shape with neither fill nor stroke
@@ -55,6 +56,18 @@ draws nothing; so does `sweep_deg: 0` and a zero-length butt line.
 - **Hit:** `ludion::math::ui_shape_hit(&shape, viewport, cursor)` tests the fill (`d < 0`) or the stroke band
   for the ungrouped, untweened shape with its own `rotation` turned back. `ui_hit` adds group, tween, anchor
   and clip. Both agree with the draw to the 1 px anti-aliasing band.
+
+## Polygons
+
+`polygon` fills a simple polygon (concave is fine, either winding) of 3 to 256 `points` in canvas units about
+the origin, +Y down. It takes `rotation`, `group`, tweens and `UiWorldAnchor` like every shape. A `stroke` on
+a polygon is `L1621` (fill only); more than 256 points or a non-finite one is `L1621` too.
+
+- A polygon with fewer than 3 distinct points, zero area, or edges that cross or touch draws nothing and warns
+  once per entity (`L2305`). Fewer than 3 points is not a scene error, so a game can write `points` live.
+- Write `points` only on change: extract triangulates (ear clipping) every frame it draws.
+- The edge is anti-aliased by a one-pixel fringe built at the final size, so a group's scale never widens it.
+- Hit: an even-odd point-in-polygon test, so a concave notch is not a hit.
 
 ## Next
 

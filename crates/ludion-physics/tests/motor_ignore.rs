@@ -101,23 +101,23 @@ fn a_fit_at_the_partners_spot_reports_it_until_ignored() {
         Ok(Some(b))
     );
     assert_eq!(
-        character_fit_ignoring::<TestPose>(&world, a, None, spot, 0.0, Some(b)),
+        character_fit_ignoring::<TestPose>(&world, a, None, spot, 0.0, Some(&[b])),
         Ok(None)
     );
     assert_eq!(
-        character_fit_ignoring::<TestPose>(&world, a, None, [WALL_X, 0.0, 0.0], 0.0, Some(b)),
+        character_fit_ignoring::<TestPose>(&world, a, None, [WALL_X, 0.0, 0.0], 0.0, Some(&[b])),
         Ok(Some(wall)),
         "ignoring the partner does not blind the test to a wall"
     );
 
-    world.insert(a, IgnoreCollisions { with: b }).unwrap();
+    world.insert(a, IgnoreCollisions { with: vec![b] }).unwrap();
     assert_eq!(
         character_fit::<TestPose>(&world, a, None, spot, 0.0),
         Ok(None),
         "the component's partner applies when no explicit one is given"
     );
     assert_eq!(
-        character_fit_ignoring::<TestPose>(&world, a, None, spot, 0.0, Some(wall)),
+        character_fit_ignoring::<TestPose>(&world, a, None, spot, 0.0, Some(&[wall])),
         Ok(Some(b)),
         "an explicit ignore replaces the component's partner for this test"
     );
@@ -151,7 +151,7 @@ fn walk_toward_partner(
 fn a_move_stops_at_the_partner_without_the_component_and_passes_with_it() {
     let (stopped, _) = walk_toward_partner(None);
     assert!(stopped[0] < 0.5, "the capsules collide: {stopped:?}");
-    let (passed, end) = walk_toward_partner(Some(|_, b| IgnoreCollisions { with: b }));
+    let (passed, end) = walk_toward_partner(Some(|_, b| IgnoreCollisions { with: vec![b] }));
     assert!(passed[0] > 0.59, "the partner is ignored: {passed:?}");
     assert!(end[0] > 0.59, "{end:?}");
 }
@@ -159,7 +159,7 @@ fn a_move_stops_at_the_partner_without_the_component_and_passes_with_it() {
 #[test]
 fn an_unrelated_partner_changes_no_bit_of_a_move() {
     let plain = walk_toward_partner(None);
-    let unrelated = walk_toward_partner(Some(|a, _| IgnoreCollisions { with: a }));
+    let unrelated = walk_toward_partner(Some(|a, _| IgnoreCollisions { with: vec![a] }));
     assert_eq!(plain.0.map(f32::to_bits), unrelated.0.map(f32::to_bits));
     assert_eq!(plain.1.map(f32::to_bits), unrelated.1.map(f32::to_bits));
 }
@@ -169,7 +169,7 @@ fn the_component_does_not_enter_the_physics_blob() {
     let blob = |with_component: bool| {
         let (mut world, a, b, _) = scene(1.0);
         if with_component {
-            world.insert(a, IgnoreCollisions { with: b }).unwrap();
+            world.insert(a, IgnoreCollisions { with: vec![b] }).unwrap();
         }
         let (mut world, mut schedule) = rig(world, |_, _| {});
         run(&mut world, &mut schedule, 5);
@@ -187,7 +187,7 @@ fn reading_the_partner_records_no_query_access() {
     use std::any::TypeId;
 
     let (mut world, a, b, _) = scene(0.5);
-    world.insert(a, IgnoreCollisions { with: b }).unwrap();
+    world.insert(a, IgnoreCollisions { with: vec![b] }).unwrap();
     let (mut world, mut schedule) = rig(world, |_, _| {});
     run(&mut world, &mut schedule, 5);
     world.begin_query_recording();
@@ -204,4 +204,17 @@ fn reading_the_partner_records_no_query_access() {
             .all(|shape| shape.iter().all(|(id, _)| *id != ignore)),
         "a game must not have to declare IgnoreCollisions"
     );
+}
+
+#[test]
+fn more_than_four_entries_are_l1759() {
+    use ludion_ecs::SemanticValidate;
+    let entry = serde_json::json!({ "index": 1, "generation": 0 });
+    let four = serde_json::json!({ "with": [entry, entry, entry, entry] });
+    assert!(IgnoreCollisions::validate_semantics(&four).is_empty());
+    let five = serde_json::json!({ "with": [entry, entry, entry, entry, entry] });
+    let found = IgnoreCollisions::validate_semantics(&five);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].code.as_str(), "L1759");
+    assert_eq!(found[0].path.as_deref(), Some("/with"));
 }

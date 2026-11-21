@@ -1,0 +1,185 @@
+# Feature: `UiShape` filled `polygon` (Plan/ui-hud.md W3c-1): an ear-clipped simple polygon with a one-pixel
+# feathered fringe, drawn by `ui_polygon.wgsl`. Over a dark backdrop, in canvas units:
+# - A concave ten-point star.
+# - A radar cone fan: an apex plus an arc of points.
+# - A concave arrow in a scaled, half-opaque group turned 20 degrees, cut by a rect clip.
+# - A bow-tie, which self-intersects and draws nothing.
+format: 1
+name: "ui-polygons - concave star, radar cone, a clipped group and a degenerate bow-tie"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - name: backdrop
+    components:
+      UiRect:
+        fill: true
+        color:
+          - 0.06
+          - 0.07
+          - 0.1
+          - 1.0
+        order: 0
+  - name: clip-group
+    components:
+      UiGroup:
+        offset:
+          - 1100.0
+          - 560.0
+        size:
+          - 500.0
+          - 360.0
+        scale: 0.8
+        opacity: 0.5
+        rotation: 20.0
+        clip: rect
+  - name: clip-group-frame
+    components:
+      UiRect:
+        fill_group: true
+        group:
+          index: 2
+          generation: 0
+        color:
+          - 0.15
+          - 0.2
+          - 0.3
+          - 1.0
+        order: 1
+  - name: star
+    components:
+      UiShape:
+        offset:
+          - 330.0
+          - 330.0
+        shape:
+          type: polygon
+          points:
+            - - 0.0
+              - -200.0
+            - - 50.0
+              - -68.8
+            - - 190.2
+              - -61.8
+            - - 80.8
+              - 26.3
+            - - 117.6
+              - 161.8
+            - - 0.0
+              - 85.0
+            - - -117.6
+              - 161.8
+            - - -80.8
+              - 26.3
+            - - -190.2
+              - -61.8
+            - - -50.0
+              - -68.8
+        fill:
+          - 0.95
+          - 0.75
+          - 0.2
+          - 1.0
+        order: 1
+  - name: radar-cone
+    components:
+      UiShape:
+        offset:
+          - 900.0
+          - 420.0
+        shape:
+          type: polygon
+          points:
+            - - 0.0
+              - 0.0
+            - - -183.8
+              - -183.8
+            - - -158.3
+              - -206.3
+            - - -130.0
+              - -225.2
+            - - -99.5
+              - -240.2
+            - - -67.3
+              - -251.1
+            - - -33.9
+              - -257.8
+            - - 0.0
+              - -260.0
+            - - 33.9
+              - -257.8
+            - - 67.3
+              - -251.1
+            - - 99.5
+              - -240.2
+            - - 130.0
+              - -225.2
+            - - 158.3
+              - -206.3
+            - - 183.8
+              - -183.8
+        fill:
+          - 0.2
+          - 0.9
+          - 0.5
+          - 0.6
+        order: 1
+  - name: clip-group-arrow
+    components:
+      UiShape:
+        anchor: center
+        group:
+          index: 2
+          generation: 0
+        shape:
+          type: polygon
+          points:
+            - - -320.0
+              - -40.0
+            - - 40.0
+              - -40.0
+            - - 40.0
+              - -110.0
+            - - 320.0
+              - 0.0
+            - - 40.0
+              - 110.0
+            - - 40.0
+              - 40.0
+            - - -320.0
+              - 40.0
+        fill:
+          - 0.95
+          - 0.4
+          - 0.8
+          - 1.0
+        rotation: 15.0
+        order: 2
+  - name: bow-tie
+    components:
+      UiShape:
+        offset:
+          - 1500.0
+          - 260.0
+        shape:
+          type: polygon
+          points:
+            - - -120.0
+              - -120.0
+            - - 120.0
+              - 120.0
+            - - 120.0
+              - -120.0
+            - - -120.0
+              - 150.0
+        fill:
+          - 1.0
+          - 0.2
+          - 0.2
+          - 1.0
+        order: 1

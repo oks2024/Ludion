@@ -185,6 +185,7 @@ mod tests {
     fn part(at: Vec3, group: u32) -> BlendedMesh {
         BlendedMesh {
             instance: MeshInstance {
+                porosity: crate::DEFAULT_POROSITY,
                 medium: 1.0,
                 shape: MeshShape::Cube,
                 model: Mat4::from_translation(at),

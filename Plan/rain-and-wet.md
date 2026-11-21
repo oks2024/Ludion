@@ -1,7 +1,7 @@
 # Plan: Rain and wet weather
 
-> Status: **W1a, W1b and W2a mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
-> roof occlusion, mesh wetness and the `rain-open`, `rain-awning` and `rain-wet` goldens. Usage is `ludion docs weather`; the gallery scenes are
+> Status: **W1a, W1b, W2a and W2b mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
+> roof occlusion, mesh wetness, authored porosity and the `rain-open`, `rain-awning`, `rain-wet` and `rain-porosity` goldens. Usage is `ludion docs weather`; the gallery scenes are
 > `examples/gallery/rain-open.yaml`, `rain-awning.yaml` and `rain-wet.yaml`.
 
 ## Why
@@ -58,6 +58,17 @@ for the whole arc; W1a ships the streak field.
     Facing is `clamp(0.5 + 0.5·n.y, 0, 1)` on the geometric normal (flipped for a back face).
 14. **`wetness` defaults to 1.0**, the game's default, so `rain-open` and `rain-awning` are re-blessed once at the new
     default. Wet look: albedo `× mix(1, 0.6, w × porosity)`, roughness `mix(r, 0.08, w × (1 - metallic))`.
+15. **Porosity fields** (W2b). `porosity` in `[0, 1]`, absent ⇒ `0.5`, on a voxel palette entry (which also covers sculpt
+    and assembly palettes, the same struct), as a per-vertex float list `porosity` on a mesh document (a sibling of
+    `roughness`), and as `Mesh.porosity: Option<f32>` for primitives and plain asset meshes. One selection rule, the one
+    roughness follows: geometry that authors a material wins over the `Mesh` component, and porosity is part of
+    `authored_material`, so a palette that authors only `porosity` takes the vertex material. A non-finite or
+    out-of-range value is the format's existing material-scalar or material-list code at its JSON Pointer. No new code.
+16. **GPU lanes, no new attribute.** All 22 vertex attributes are in use. Per vertex, `MeshVertex.material` widens
+    `[f32; 3]` to `[f32; 4]`, w = porosity. Per instance, porosity rides `MeshInstanceRaw.medium[1]`, a lane already
+    padded to a `vec4`, so the cull pass's stride is unchanged. `VsOut.material` widens to `vec4` and interpolates like
+    roughness; `vs_main` mixes porosity through the same `mix` as the rest of the material.
+17. **Probe key.** Probe captures carry no rain, so porosity cannot change a capture: `probe_store` does not key it.
 
 ## Waves
 
@@ -67,8 +78,8 @@ for the whole arc; W1a ships the streak field.
 - **W2a, mesh wetness:** per-pixel `w = wetness × exposure × facing` in `mesh.wgsl` from the occlusion map, with a
   fixed porosity of 0.5, so every voxel palette (16 and 64 cells/m, assemblies), sculpt, primitive and asset mesh gets
   wet without authoring. Characters are wet per pixel. `Rain.wetness` defaults to 1.
-- **W2b:** the `porosity` field on palettes, sculpt, `Mesh` and mesh documents; `RainOccluder`,
-  `--debug-view rain_occlusion` and a `rain_density` quality lever.
+- **W2b, porosity:** the `porosity` field on palettes, sculpt, `Mesh` and mesh documents (D15–D17).
+- **W2c:** `RainOccluder`, `--debug-view rain_occlusion` and a `rain_density` quality lever.
 - **W3:** splashes, plus ripples on wet ground and on `coat` decals.
 - **W4:** sun and local shadow taps, `backlight`, `ParticleEmitter.shadowed` and `.stretch`.
 - **W5:** `rain-camera-move`, budget files, and a tile cache if the measured cost asks for one.
@@ -88,7 +99,7 @@ for the whole arc; W1a ships the streak field.
 - Accepted. Unshadowed light until W4.
 - Accepted. Codes `L2380`–`L2382` in place of the request's `L2130`–`L2134`, which are taken; the request's `L2134` dropped.
 - Accepted. The presenter takes `next`'s rain.
-- Accepted. Porosity fixed at 0.5 until W2b.
+- Accepted, superseded by D15. Porosity was fixed at 0.5 until W2b.
 - Accepted. The wet constants 0.6 (albedo) and 0.08 (roughness).
 - Accepted. A vertical-surface facing of 0.5.
 - Accepted. The 20 cm exposure fade.

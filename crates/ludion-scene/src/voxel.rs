@@ -82,6 +82,8 @@ pub struct PaletteEntry {
     pub emissive: Option<f64>,
     /// Optional metallic factor in `[0, 1]` (finite); `None` defers to the default material.
     pub metallic: Option<f64>,
+    /// Optional wet-surface porosity in `[0, 1]` (finite); `None` defers to `0.5`.
+    pub porosity: Option<f64>,
     /// Optional perceptual roughness in `[0, 1]` (finite); `None` defers to the default material.
     pub roughness: Option<f64>,
 }
@@ -1151,10 +1153,10 @@ pub(crate) fn parse_palette(
 }
 
 /// The palette-entry keys this format recognizes, in the order suggestions should prefer.
-const PALETTE_ENTRY_KEYS: [&str; 4] = ["color", "emissive", "metallic", "roughness"];
+const PALETTE_ENTRY_KEYS: [&str; 5] = ["color", "emissive", "metallic", "porosity", "roughness"];
 
 /// Parses one palette entry — a mapping with a required `color` and optional `emissive`,
-/// `metallic`, `roughness` material scalars.
+/// `metallic`, `porosity`, `roughness` material scalars.
 fn parse_palette_entry(
     node: &Node,
     pointer: &str,
@@ -1184,6 +1186,7 @@ fn parse_palette_entry(
     let mut color_seen = false;
     let mut emissive = None;
     let mut metallic = None;
+    let mut porosity = None;
     let mut roughness = None;
     for sub in entries {
         match sub.key.as_str() {
@@ -1210,6 +1213,15 @@ fn parse_palette_entry(
                     &sub.node,
                     &format!("{pointer}/metallic"),
                     "metallic",
+                    structure_code,
+                    diagnostics,
+                );
+            }
+            "porosity" => {
+                porosity = parse_material_scalar(
+                    &sub.node,
+                    &format!("{pointer}/porosity"),
+                    "porosity",
                     structure_code,
                     diagnostics,
                 );
@@ -1260,6 +1272,7 @@ fn parse_palette_entry(
         color,
         emissive,
         metallic,
+        porosity,
         roughness,
     })
 }
@@ -1660,6 +1673,16 @@ pub(crate) fn validate_palette(
         validate_material_scalar(
             entry.metallic,
             "metallic",
+            &entry.glyph,
+            &pointer,
+            0.0,
+            1.0,
+            data_code,
+            diagnostics,
+        );
+        validate_material_scalar(
+            entry.porosity,
+            "porosity",
             &entry.glyph,
             &pointer,
             0.0,
@@ -2235,6 +2258,11 @@ pub(crate) fn emit_palette(out: &mut String, palette: &[PaletteEntry]) {
             out.push_str(&format_float(metallic));
             out.push('\n');
         }
+        if let Some(porosity) = entry.porosity {
+            out.push_str("    porosity: ");
+            out.push_str(&format_float(porosity));
+            out.push('\n');
+        }
         if let Some(roughness) = entry.roughness {
             out.push_str("    roughness: ");
             out.push_str(&format_float(roughness));
@@ -2258,8 +2286,8 @@ pub(crate) fn comment_line(indent: &str, text: &str) -> String {
 /// The pointer shapes a model override may address, spelled out for every `L4008` this module
 /// raises — a rejected pointer is nearly always a guess at the domain, so the help states it whole.
 const PALETTE_POINTER_SHAPES: &str = "a model override addresses one palette field: \
-     `/palette/<glyph>/color/<0..3>`, `/palette/<glyph>/emissive`, `/palette/<glyph>/metallic`, or \
-     `/palette/<glyph>/roughness`";
+     `/palette/<glyph>/color/<0..3>`, `/palette/<glyph>/emissive`, `/palette/<glyph>/metallic`, \
+     `/palette/<glyph>/porosity`, or `/palette/<glyph>/roughness`";
 
 /// Applies render-time overrides to a parsed voxel document, in order, returning what each changed.
 ///
@@ -2412,11 +2440,12 @@ pub(crate) fn apply_palette_one(
             entry.color[channel] = value;
             Some(from)
         }
-        (Some(name @ ("emissive" | "metallic" | "roughness")), 3) => {
+        (Some(name @ ("emissive" | "metallic" | "porosity" | "roughness")), 3) => {
             let value = as_number(pointer, &over.value)?;
             let slot = match name {
                 "emissive" => &mut entry.emissive,
                 "metallic" => &mut entry.metallic,
+                "porosity" => &mut entry.porosity,
                 _ => &mut entry.roughness,
             };
             let from = slot.map(Value::from);
@@ -2715,6 +2744,7 @@ slices:
                     color: [1.0, 1.0, 1.0, 1.0],
                     emissive,
                     metallic: None,
+                    porosity: None,
                     roughness: None,
                 })
                 .collect(),
@@ -2804,6 +2834,7 @@ slices:
                 color: [1.0, 1.0, 1.0, 1.0],
                 emissive: None,
                 metallic: None,
+                porosity: None,
                 roughness: None,
             }],
             slices: vec![vec![row.clone(); EXTENT]; EXTENT],
@@ -3132,6 +3163,7 @@ slices:
                     color: [1.0, 1.0, 1.0, 1.0],
                     emissive: Some(2.0),
                     metallic: None,
+                    porosity: None,
                     roughness: None,
                 },
                 PaletteEntry {
@@ -3139,6 +3171,7 @@ slices:
                     color: [1.0, 1.0, 1.0, 1.0],
                     emissive: None,
                     metallic: None,
+                    porosity: None,
                     roughness: None,
                 },
             ],
@@ -3287,6 +3320,7 @@ palette:
       - 1.0
     emissive: 1.0
     metallic: 0.25
+    porosity: 0.3
     roughness: 0.75
 slices:
   -
@@ -3315,6 +3349,7 @@ slices:
         for (spec, expected) in [
             ("/palette/S/emissive=2.2", 2.2),
             ("/palette/S/metallic=0.0", 0.0),
+            ("/palette/S/porosity=0.2", 0.2),
             ("/palette/S/roughness=1", 1.0),
         ] {
             let (doc, applied) = palette_set(spec).unwrap();
@@ -3326,10 +3361,48 @@ slices:
             let written = match spec {
                 s if s.contains("emissive") => entry.emissive,
                 s if s.contains("metallic") => entry.metallic,
+                s if s.contains("porosity") => entry.porosity,
                 _ => entry.roughness,
             };
             assert_eq!(written, Some(expected), "{spec}");
         }
+    }
+
+    /// `porosity` round-trips between `metallic` and `roughness`, and an entry without it writes no key.
+    #[test]
+    fn porosity_round_trips_in_alphabetical_order() {
+        let doc = parse(PALETTE_MODEL).expect("a palette with porosity parses");
+        assert_eq!(doc.palette[1].porosity, Some(0.3));
+        assert_eq!(doc.palette[0].porosity, None);
+        assert!(validate(&doc).is_empty());
+        let written = emit(&doc);
+        assert!(
+            written.contains(
+                "    metallic: 0.25
+    porosity: 0.3
+    roughness: 0.75
+"
+            ),
+            "porosity sits between metallic and roughness: {written}"
+        );
+        assert_eq!(emit(&parse(&written).unwrap()), written);
+        let mut bare = doc.clone();
+        bare.palette[1].porosity = None;
+        assert!(
+            !emit(&bare).contains("porosity"),
+            "an unauthored porosity writes no key"
+        );
+    }
+
+    /// An out-of-range porosity is the data-consistency code at the entry's pointer.
+    #[test]
+    fn an_out_of_range_porosity_is_reported_at_its_pointer() {
+        let mut doc = parse(PALETTE_MODEL).unwrap();
+        doc.palette[1].porosity = Some(1.5);
+        let diagnostics = validate(&doc);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].code.as_str(), "L1114");
+        assert_eq!(diagnostics[0].path.as_deref(), Some("/palette/S/porosity"));
     }
 
     /// A scalar the entry left unset is created, and the echo reports `from: None` so a caller can

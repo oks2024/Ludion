@@ -148,6 +148,7 @@ mod tests {
         let mut scene = RenderScene::empty((64, 64));
         let local = local();
         scene.meshes.push(MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape: MeshShape::Cube,
             model: Mat4::IDENTITY,

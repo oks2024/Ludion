@@ -374,3 +374,143 @@ fn a_world_without_shapes_extracts_only_what_it_always_did() {
         }]
     );
 }
+
+// --- polygons (`Plan/ui-hud.md` decisions 67-73) ---
+
+fn polygon(points: &[[f32; 2]], order: i32) -> UiShape {
+    UiShape {
+        shape: UiShapeType::Polygon {
+            points: points.to_vec(),
+        },
+        fill: Some([1.0; 4]),
+        offset: [100.0, 100.0],
+        order,
+        ..UiShape::default()
+    }
+}
+
+/// A "U": the notch between its arms is inside the convex hull but outside the polygon.
+const NOTCHED: [[f32; 2]; 8] = [
+    [0.0, 0.0],
+    [100.0, 0.0],
+    [100.0, 200.0],
+    [70.0, 200.0],
+    [70.0, 50.0],
+    [30.0, 50.0],
+    [30.0, 200.0],
+    [0.0, 200.0],
+];
+
+/// A bow-tie whose edges cross and whose signed area is not zero.
+const BOW_TIE: [[f32; 2]; 4] = [[0.0, 0.0], [100.0, 100.0], [100.0, 0.0], [0.0, 120.0]];
+
+fn polygons(scene: &RenderScene) -> Vec<&UiInstance> {
+    scene
+        .ui
+        .iter()
+        .filter(|instance| matches!(instance, UiInstance::Polygon { .. }))
+        .collect()
+}
+
+#[test]
+fn a_polygon_emits_one_instance_in_order_and_scales_its_points() {
+    let mut engine = engine();
+    spawn(&mut engine, polygon(&NOTCHED, 4));
+    spawn(&mut engine, disc(10.0, 1));
+    let scene = extract(&mut engine);
+    let ps = engine.render_size().1 as f32 / 1080.0;
+    assert!(matches!(scene.ui[0], UiInstance::Shape { .. }));
+    let UiInstance::Polygon {
+        origin_px,
+        points,
+        triangles,
+        ..
+    } = &scene.ui[1]
+    else {
+        panic!("the polygon draws after the lower-order disc");
+    };
+    assert_eq!(*origin_px, [100.0 * ps, 100.0 * ps]);
+    assert_eq!(points.len(), NOTCHED.len());
+    assert_eq!(points[1], [100.0 * ps, 0.0]);
+    assert_eq!(triangles.len(), NOTCHED.len() - 2);
+    assert_eq!(polygons(&scene).len(), 1);
+}
+
+#[test]
+fn a_bow_tie_draws_nothing_and_warns_once() {
+    let mut engine = engine();
+    spawn(&mut engine, polygon(&BOW_TIE, 0));
+    for _ in 0..3 {
+        let scene = extract(&mut engine);
+        assert!(polygons(&scene).is_empty());
+        assert!(scene.ui.is_empty());
+    }
+    let reported = engine
+        .world()
+        .resource::<ludion_engine::Diagnostics>()
+        .map_or(0, |d| {
+            d.reported(ludion_core::codes::code::UI_POLYGON_DEGENERATE)
+                .count()
+        });
+    assert_eq!(reported, 1);
+}
+
+#[test]
+fn ui_hit_is_true_inside_a_concave_polygon_and_false_in_its_notch() {
+    let mut engine = engine();
+    let id = spawn(&mut engine, polygon(&NOTCHED, 0));
+    let ps = engine.render_size().1 as f32 / 1080.0;
+    let now = SimTime::from_ticks(0, TickRate::DEFAULT);
+    let at = |x: f32, y: f32| [(100.0 + x) * ps, (100.0 + y) * ps];
+    let hit = |p: [f32; 2]| ui_hit(engine.world(), id, engine.render_size(), p, now);
+    assert!(hit(at(10.0, 100.0)), "the left arm");
+    assert!(hit(at(50.0, 20.0)), "the bridge");
+    assert!(!hit(at(50.0, 120.0)), "the notch");
+    assert!(!hit(at(-10.0, 100.0)), "outside");
+}
+
+#[test]
+fn a_degenerate_polygon_never_hits() {
+    let mut engine = engine();
+    let id = spawn(&mut engine, polygon(&BOW_TIE, 0));
+    let ps = engine.render_size().1 as f32 / 1080.0;
+    let now = SimTime::from_ticks(0, TickRate::DEFAULT);
+    assert!(!ui_hit(
+        engine.world(),
+        id,
+        engine.render_size(),
+        [(100.0 + 90.0) * ps, (100.0 + 20.0) * ps],
+        now
+    ));
+}
+
+#[test]
+fn a_polygon_follows_its_groups_scale_and_rotation() {
+    let mut engine = engine();
+    let group = engine.world_mut().spawn_presentation();
+    engine
+        .world_mut()
+        .insert(
+            group,
+            UiGroup {
+                size: [400.0, 400.0],
+                scale: 2.0,
+                rotation: 30.0,
+                ..UiGroup::default()
+            },
+        )
+        .unwrap();
+    let mut shape = polygon(&NOTCHED, 0);
+    shape.group = Some(group);
+    spawn(&mut engine, shape);
+    let scene = extract(&mut engine);
+    let ps = engine.render_size().1 as f32 / 1080.0;
+    let UiInstance::Polygon {
+        points, rotation, ..
+    } = &scene.ui[0]
+    else {
+        panic!("a grouped polygon draws");
+    };
+    assert_eq!(points[1], [100.0 * ps * 2.0, 0.0]);
+    assert!((rotation.radians - 30.0f32.to_radians()).abs() < 1e-5);
+}

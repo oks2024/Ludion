@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::time::{SimTime, TickRate};
 use ludion_engine::{Engine, QualityParams, extract_at};
@@ -314,5 +315,96 @@ fn a_direction_turns_the_head_and_stops_at_the_yaw_limit() {
     assert_eq!(posed[TORSO], plain[TORSO]);
     let clamped = engine_at(&root, &scene(&look(120.0), [0.0; 3]));
     assert!((facing(&posed_at(&clamped, 0)) - turned(70.0)).length() < 1e-4);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+const BALL: EntityId = EntityId::new(1, 0);
+/// An entity reference to `BALL`, as the block (indented 14) under `entity:`.
+const LIVE: &str = "              index: 1
+              generation: 0
+";
+
+fn entity_target(entity: &str, offset: [f32; 3]) -> String {
+    format!(
+        "          hand_r:\n            entity:\n{entity}            offset:\n              - {:?}\n              - {:?}\n              - {:?}\n            weight: 1.0\n",
+        offset[0], offset[1], offset[2]
+    )
+}
+
+fn set_ball(engine: &mut Engine, translation: [f32; 3], rotation: [f32; 3]) {
+    let ball = engine
+        .world_mut()
+        .get_mut::<ludion_engine::Transform>(BALL)
+        .unwrap()
+        .unwrap();
+    ball.translation = translation;
+    ball.rotation = rotation;
+}
+
+#[test]
+fn an_entity_target_follows_the_entity() {
+    let root = fixture_project("entity", true);
+    let live = LIVE;
+    let mut engine = engine_at(
+        &root,
+        &scene(&entity_target(live, [0.0; 3]), world_target()),
+    );
+    near(hand(&posed_at(&engine, 0)), Vec3::from(world_target()));
+    // The ball moves; nothing writes `IkTargets`.
+    let moved = [5.2, 1.6, 0.7];
+    set_ball(&mut engine, moved, [0.0; 3]);
+    near(hand(&posed_at(&engine, 0)), Vec3::from(moved));
+    // An offset is in the entity's frame: unrotated it is added as is, turned 90 degrees about Y it
+    // turns with the ball.
+    let mut offset = engine_at(
+        &root,
+        &scene(&entity_target(live, [0.2, 0.0, 0.0]), world_target()),
+    );
+    near(
+        hand(&posed_at(&offset, 0)),
+        Vec3::from(world_target()) + Vec3::new(0.2, 0.0, 0.0),
+    );
+    set_ball(&mut offset, world_target(), [0.0, 90.0, 0.0]);
+    near(
+        hand(&posed_at(&offset, 0)),
+        Vec3::from(world_target()) + Vec3::new(0.0, 0.0, -0.2),
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_dead_or_null_entity_target_poses_like_the_plain_clip() {
+    let root = fixture_project("entity-dead", true);
+    let plain = engine_at(&root, &scene("", [0.0; 3]));
+    let live = LIVE;
+    let mut despawned = engine_at(
+        &root,
+        &scene(&entity_target(live, [0.0; 3]), world_target()),
+    );
+    despawned.world_mut().despawn(BALL).unwrap();
+    let null = engine_at(&root, &scene(&entity_target("", [0.0; 3]), world_target()));
+    let mut stale = engine_at(
+        &root,
+        &scene(&entity_target(live, [0.0; 3]), world_target()),
+    );
+    stale
+        .world_mut()
+        .get_mut::<ludion_engine::IkTargets>(EntityId::new(0, 0))
+        .unwrap()
+        .unwrap()
+        .targets
+        .get_mut("hand_r")
+        .unwrap()
+        .entity = Some(EntityId::new(1, 7));
+    for tick in [0, 7, 31] {
+        let want = posed_at(&plain, tick);
+        assert_eq!(want, posed_at(&despawned, tick), "despawned, tick {tick}");
+        assert_eq!(want, posed_at(&null, tick), "null, tick {tick}");
+        assert_eq!(
+            want,
+            posed_at(&stale, tick),
+            "stale generation, tick {tick}"
+        );
+    }
     let _ = std::fs::remove_dir_all(&root);
 }

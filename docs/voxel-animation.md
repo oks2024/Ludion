@@ -327,10 +327,14 @@ ik:
   block, or the block with no grounded chain.
 - The hinge is `hinge:`, else the second part's `joints:` hinge (its limits clamp the flex), else axis +X
   with bend −1 for `lower-leg-*` and +1 for `lower-arm-*` (the humanoid convention).
-- `IkTargets.targets` maps an entry name to one of `point` (world) or `direction` (`Look`: +yaw turns
-  left, +pitch looks down, relative to `forward`), plus `weight` in `[0, 1]` that ramps over `fade`
-  seconds (`fade_ik_target`, no write when unchanged). Both or neither is `L1673`. A direction on a chain is
-  ignored. To follow an entity, write `point` from its world position each tick it moves.
+- `IkTargets.targets` maps an entry name to at most one of `point` (world), `entity` or `direction` (`Look`: +yaw
+  turns left, +pitch looks down, relative to `forward`), plus `weight` in `[0, 1]` that ramps over `fade`
+  seconds (`fade_ik_target`, no write when unchanged). Two or more is `L1673`; none is not solved. A
+  direction on a chain is ignored. `entity: {index, generation}` (with `offset: [x, y, z]` in that
+  entity's frame) follows it with no per-tick write, from the same world the draw uses. The map is an
+  entity-reference collection: a despawned entity is written `entity: null` on save and carry, and
+  that reloads. A null, despawned, stale or `Transform`-less entity is weight 0, silently. `offset` is
+  ignored without an `entity`.
 - Order: every look-at (name order), then every chain. A look-at turns its aim parts root-first, each by its
   mask weight's share of the total; the yaw and pitch of the target clamp to `limits_deg`. A chain bends the
   second part about the hinge to the right reach, then swings the first part to point at the target. A

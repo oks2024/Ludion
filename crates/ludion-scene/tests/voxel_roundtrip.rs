@@ -114,6 +114,7 @@ fn voxel_doc() -> impl Strategy<Value = VoxelDocument> {
                         color,
                         emissive,
                         metallic,
+                        porosity: None,
                         roughness,
                     })
                     .collect();
@@ -684,6 +685,7 @@ fn duplicate_palette_glyph_is_l1114() {
                 color: [1.0; 4],
                 emissive: None,
                 metallic: None,
+                porosity: None,
                 roughness: None,
             },
             PaletteEntry {
@@ -691,6 +693,7 @@ fn duplicate_palette_glyph_is_l1114() {
                 color: [1.0; 4],
                 emissive: None,
                 metallic: None,
+                porosity: None,
                 roughness: None,
             },
         ],
@@ -716,6 +719,7 @@ fn non_finite_color_is_l1114() {
             color: [f64::NAN, 1.0, 1.0, 1.0],
             emissive: None,
             metallic: None,
+            porosity: None,
             roughness: None,
         }],
         slices: vec![vec!["A".into()]],
@@ -835,6 +839,7 @@ fn non_finite_material_scalar_is_l1114() {
             color: [1.0; 4],
             emissive: Some(f64::NAN),
             metallic: Some(f64::INFINITY),
+            porosity: None,
             roughness: Some(f64::NEG_INFINITY),
         }],
         slices: vec![vec!["A".into()]],

@@ -30,7 +30,6 @@ use ludion_core::par;
 use ludion_core::time::{FrameIndex, GameClock, GameTime, Q16_PER_TICK, SimTime, TickRate};
 use ludion_ecs::{ReadColumn, World};
 use ludion_protocol::command::ViewPose;
-use ludion_renderer::LodSettings;
 use ludion_renderer::{
     BlendData, BlendMode, BlendedMesh, CameraBlend, DebugSegment, DecalBlend, DecalInstance,
     DecalMaps, DecalReceivers, DropShadowInstance, EnvironmentData, FontDraw, GROUND_MARKER_LIFT,
@@ -40,6 +39,7 @@ use ludion_renderer::{
     SpotLightData, SpriteInstance, SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap,
     UiInstance, WorldVoxelGrid, aspect_ratio,
 };
+use ludion_renderer::{DEFAULT_POROSITY, LodSettings};
 use ludion_renderer::{UiClip, UiRotation};
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
@@ -1586,6 +1586,7 @@ fn extract_inner(
                         viewmodel: false,
                         rim: resolve_rim_lane(&mesh_assets, Some(index), rim),
                         medium,
+                        porosity: mesh.porosity.unwrap_or(DEFAULT_POROSITY),
                     };
                     match blend {
                         Some(mode) => {
@@ -3430,6 +3431,8 @@ pub(crate) struct PlacedMesh<'w> {
     pub(crate) rim: Option<Rim>,
     /// The `Mesh` component's own medium scale; inheritance down `Parent` is resolved at instance build.
     pub(crate) medium: Option<f32>,
+    /// The `Mesh` component's wet-surface porosity; inert on geometry that authors its own material.
+    pub(crate) porosity: Option<f32>,
     /// The `Mesh` component's own blend; never inherited.
     pub(crate) blend: Option<MeshBlend>,
     /// The normal matrix (object→world for normals): the model's upper-3×3 for a uniform scale, its
@@ -4044,6 +4047,7 @@ pub(crate) fn placed_mesh<'a>(
         scatter_color: mesh.scatter_color,
         rim: mesh.rim,
         medium: mesh.medium,
+        porosity: mesh.porosity,
         blend: mesh.blend,
         source: placed_source(&mesh.shape),
         dynamic,
@@ -5569,6 +5573,7 @@ pub(crate) fn mesh_instance(
         viewmodel: false,
         rim: resolve_rim_lane(mesh_assets, asset, rim),
         medium,
+        porosity: mesh.porosity.unwrap_or(DEFAULT_POROSITY),
     }
 }
 
@@ -9402,6 +9407,7 @@ mod tests {
                 normals: Vec::new(),
                 colors: Vec::new(),
                 materials: Vec::new(),
+                porosity: Vec::new(),
                 uvs: Vec::new(),
                 tangents: Vec::new(),
                 weights: Vec::new(),
@@ -9555,6 +9561,7 @@ mod tests {
                 normals: Vec::new(),
                 colors: Vec::new(),
                 materials: Vec::new(),
+                porosity: Vec::new(),
                 uvs: Vec::new(),
                 tangents: Vec::new(),
                 weights: Vec::new(),

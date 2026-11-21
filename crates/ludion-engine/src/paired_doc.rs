@@ -397,3 +397,46 @@ fn posed_cells(
     }
     (cells, scale)
 }
+
+/// The first rest-pose cell of `role/part`: its centre in the assembly frame and in the reference
+/// frame as `posed_cells` places it, for the paired sheet's agreement test.
+#[cfg(test)]
+pub(crate) fn first_rest_cell(
+    root: AssetRoot<'_>,
+    rel: &str,
+    role: &str,
+    part: &str,
+) -> (Vec3, Vec3) {
+    let report = check_paired_files(root, rel).expect("valid document");
+    let spec = report
+        .doc
+        .roles
+        .iter()
+        .find(|candidate| candidate.name == role)
+        .expect("role");
+    let file = ludion_core::paths::sibling(rel, &spec.assembly);
+    let (data, _, parts) = crate::assembly_mesh::load_meshed_documents(root, &file).expect("loads");
+    let assembly = crate::assembly_mesh::load_meshed_documents(root, &file)
+        .expect("loads")
+        .1;
+    let grid = ludion_scene::assembly_assembled_grid(&assembly, &parts);
+    let rest = part_placements(&data, None);
+    let load = Loaded { data, grid, rest };
+    let index = load
+        .data
+        .parts
+        .iter()
+        .position(|candidate| candidate.name == part)
+        .expect("part");
+    let [sx, sy, sz] = load.grid.voxel.size;
+    let (hx, hz) = (sx as f32 * 0.5, sz as f32 * 0.5);
+    let local = (0..sy)
+        .flat_map(|y| (0..sz).flat_map(move |z| (0..sx).map(move |x| (x, y, z))))
+        .find(|&(x, y, z)| load.grid.owners_at(x, y, z).contains(&index))
+        .map(|(x, y, z)| Vec3::new(x as f32 - hx + 0.5, y as f32 + 0.5, z as f32 - hz + 0.5))
+        .expect("the part owns a cell");
+    let placements = Placements::new(&report.doc);
+    let (offset, yaw_deg) = placements.of(role);
+    let (cells, _) = posed_cells(&load, part, None, 0.0, offset, yaw_deg, spec.scale);
+    (local, cells[0])
+}

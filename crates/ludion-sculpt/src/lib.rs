@@ -50,6 +50,9 @@ pub struct SculptMesh {
     /// `(roughness, metallic, emissive)`, 3 values per vertex, blended like `colors`; an unauthored
     /// palette channel takes the default material `(1, 0, 0)`.
     pub materials: Vec<f32>,
+    /// Wet-surface porosity, 1 value per vertex, blended like `colors`; an unauthored palette entry
+    /// takes `0.5`.
+    pub porosity: Vec<f32>,
     /// Triangle list, 3 vertex indices per triangle, counter-clockwise seen from outside.
     pub indices: Vec<u32>,
     /// Values per vertex in `weights`: the document's part count.
@@ -278,6 +281,7 @@ fn mesh_with_offset(
     let mut positions = Vec::with_capacity(3 * vertex_count);
     let mut colors = Vec::with_capacity(4 * vertex_count);
     let mut materials = Vec::with_capacity(3 * vertex_count);
+    let mut porosity = Vec::with_capacity(vertex_count);
     let mut weights = Vec::with_capacity(part_count * vertex_count);
     let mut part_of = Vec::with_capacity(vertex_count);
     let mut part_bounds: Vec<Option<Aabb>> = vec![None; part_count];
@@ -288,7 +292,13 @@ fn mesh_with_offset(
         let moved = [p[0] + offset[0], p[1] + offset[1], p[2] + offset[2]];
         positions.extend_from_slice(&moved);
         let vertex_weights = &decimated.attributes[source * part_count..(source + 1) * part_count];
-        material::blend(vertex_weights, &channels, &mut colors, &mut materials);
+        material::blend(
+            vertex_weights,
+            &channels,
+            &mut colors,
+            &mut materials,
+            &mut porosity,
+        );
         weights.extend_from_slice(vertex_weights);
         part_of.push(nearest[source].map(|part| part as u32));
         if let Some(part) = nearest[source] {
@@ -323,6 +333,7 @@ fn mesh_with_offset(
         normals: split.normals.into_iter().flatten().collect(),
         colors,
         materials,
+        porosity,
         indices: split.indices,
         part_count,
         weights,
@@ -476,6 +487,7 @@ fn empty_mesh(doc: &SculptDocument) -> SculptMesh {
         normals: Vec::new(),
         colors: Vec::new(),
         materials: Vec::new(),
+        porosity: Vec::new(),
         indices: Vec::new(),
         part_count: doc.parts.len(),
         weights: Vec::new(),

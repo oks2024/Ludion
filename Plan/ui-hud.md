@@ -323,8 +323,8 @@ than a selected-only stroke; overlapping strokes at small gaps left to `gap_deg`
     origin-relative px, after `unrotate`; `ui_hit` adds `clip_contains`. A degenerate polygon never hits.
 
 **Proposed — owner ruling owed (W3c-1):** the W3c-1/2/3 split; `L2305` as a once-per-entity warning rather than per change;
-fewer than 3 points as a runtime warning, not a field error; the miter fringe capped at 2× (spikes sharper than about 30° soften by
-under a pixel); a polygon stroke as `L1621` until W3c-2. Request differences: `type: polygon`; no stroke or dash yet; `polyline` is
+fewer than 3 points as a runtime warning, not a field error; the miter fringe capped at 2× (a 2× cap holds the miter for corners of
+60° and wider; sharper tips are cut back, so the GPU agreement test uses ~78° tips); a polygon stroke as `L1621` until W3c-2. Request differences: `type: polygon`; no stroke or dash yet; `polyline` is
 W3c-2.
 
 ## Waves

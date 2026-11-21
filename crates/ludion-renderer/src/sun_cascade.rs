@@ -679,6 +679,7 @@ mod tests {
 
     fn cube(model: Mat4) -> crate::scene::MeshInstance {
         crate::scene::MeshInstance {
+            porosity: crate::DEFAULT_POROSITY,
             medium: 1.0,
             shape: crate::scene::MeshShape::Cube,
             model,

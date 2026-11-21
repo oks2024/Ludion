@@ -323,14 +323,15 @@ fn abort_ends_every_participant_and_refuses_a_non_participant() {
     let mut r = run("abort", "", &scene(""), START);
     r.until(START + 2);
     let (i, t) = (r.instigator, r.target);
-    let cast = abort_paired(r.engine.world_mut(), t).expect("in an action");
+    let cast =
+        abort_paired(r.engine.world_mut(), t, &[], 0.0, at(START + 2)).expect("in an action");
     assert_eq!(
         cast,
         vec![("instigator".to_owned(), i), ("target".to_owned(), t)]
     );
     assert!(r.action(i).is_none() && r.action(t).is_none());
     assert!(!r.ignores(i) && !r.ignores(t));
-    let refused = abort_paired(r.engine.world_mut(), t).unwrap_err();
+    let refused = abort_paired(r.engine.world_mut(), t, &[], 0.0, at(START + 2)).unwrap_err();
     assert_eq!(refused.code, code::PAIRED_NOT_PLAYING);
     r.done();
 }

@@ -526,6 +526,12 @@ pub struct Mesh {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub medium: Option<f32>,
+    /// Wet-surface porosity in `[0, 1]` (default none, meaning `0.5`): how far rain darkens this mesh.
+    /// Inert on geometry that authors its own material (a voxel palette, a sculpt or a mesh document
+    /// that sets any material field), and not inherited from `Parent`. Render-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub porosity: Option<f32>,
     /// Draws this mesh seen through (default none: opaque): see [`MeshBlend`]. `color`'s alpha is the
     /// opacity. Not inherited down `Parent`: this entity's own `Mesh` only. Ignored with `L2360` on a
     /// `Viewmodel` mesh.
@@ -582,6 +588,7 @@ impl Default for Mesh {
             scatter_color: [1.0; 3],
             rim: None,
             medium: None,
+            porosity: None,
             blend: None,
         }
     }
@@ -7115,6 +7122,18 @@ const SIM_ONLY_COMPONENTS: [&str; 35] = [
 mod tests {
     use super::*;
     use ludion_ecs::World;
+
+    /// An absent `Mesh.porosity` writes no key, so every existing scene and hash is unchanged.
+    #[test]
+    fn mesh_porosity_is_omitted_when_absent() {
+        let bare = serde_json::to_value(Mesh::default()).unwrap();
+        assert!(bare.get("porosity").is_none());
+        let authored = Mesh {
+            porosity: Some(0.25),
+            ..Mesh::default()
+        };
+        assert_eq!(serde_json::to_value(authored).unwrap()["porosity"], 0.25);
+    }
 
     /// Exactly these built-ins are sim-only; a guard that the list above grows on purpose.
     #[test]

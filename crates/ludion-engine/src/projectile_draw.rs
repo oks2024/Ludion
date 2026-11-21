@@ -622,6 +622,7 @@ pub(crate) fn extract_projectiles(
                     viewmodel: false,
                     rim,
                     medium: visual.medium,
+                    porosity: ludion_renderer::DEFAULT_POROSITY,
                 });
             }
             ProjectileLook::Billboard { softness } => {

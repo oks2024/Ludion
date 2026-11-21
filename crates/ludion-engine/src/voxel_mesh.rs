@@ -28,7 +28,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::Vec3;
 use std::sync::Arc;
 
-use ludion_renderer::{MeshData, MeshLod};
+use ludion_renderer::{DEFAULT_POROSITY, MeshData, MeshLod};
 use ludion_scene::VoxelDocument;
 
 /// The pinned face-direction sweep order: `(axis, positive)` for −X, +X, −Y, +Y, −Z, +Z. Emission
@@ -287,6 +287,14 @@ fn palette_channels(doc: &VoxelDocument) -> (Vec<[f32; 4]>, Vec<[f32; 3]>) {
     (colors, materials)
 }
 
+/// Each palette entry's wet-surface porosity: the authored value, else [`DEFAULT_POROSITY`].
+fn palette_porosity(doc: &VoxelDocument) -> Vec<f32> {
+    doc.palette
+        .iter()
+        .map(|entry| entry.porosity.map_or(DEFAULT_POROSITY, |p| p as f32))
+        .collect()
+}
+
 /// The object-space box of a voxel grid of `size`: 1 voxel = 1 unit, X and Z centered, Y sitting on
 /// zero — the frame [`mesh`] emits. The one copy of this rule: the GI voxelizer and `render.bounds`
 /// both size a voxel model through it.
@@ -310,13 +318,18 @@ pub(crate) fn mesh(doc: &VoxelDocument, hash: u64) -> MeshData {
     // Bottom-center origin: X and Z are centered (offset = half the extent), Y sits on the ground.
     let offset = [doc.size[0] as f32 * 0.5, 0.0, doc.size[2] as f32 * 0.5];
     let (colors, materials) = palette_channels(doc);
+    let porosity = palette_porosity(doc);
     let authored_material = doc.palette.iter().any(|entry| {
-        entry.roughness.is_some() || entry.metallic.is_some() || entry.emissive.is_some()
+        entry.roughness.is_some()
+            || entry.metallic.is_some()
+            || entry.emissive.is_some()
+            || entry.porosity.is_some()
     });
     let frame = Frame {
         offset,
         colors: &colors,
         materials: &materials,
+        porosity: &porosity,
         authored_material,
         rim: doc.rim.as_ref().map(crate::extract::doc_rim_lane),
     };
@@ -354,6 +367,7 @@ struct Frame<'a> {
     offset: [f32; 3],
     colors: &'a [[f32; 4]],
     materials: &'a [[f32; 3]],
+    porosity: &'a [f32],
     authored_material: bool,
     rim: Option<[f32; 4]>,
 }
@@ -365,6 +379,7 @@ fn mesh_grid(grid: &Grid, step: i64, frame: &Frame<'_>, hash: u64) -> MeshData {
         offset,
         colors,
         materials,
+        porosity,
         authored_material,
         rim,
     } = frame;
@@ -373,6 +388,7 @@ fn mesh_grid(grid: &Grid, step: i64, frame: &Frame<'_>, hash: u64) -> MeshData {
     let mut normals: Vec<f32> = Vec::new();
     let mut vertex_colors: Vec<f32> = Vec::new();
     let mut vertex_materials: Vec<f32> = Vec::new();
+    let mut vertex_porosity: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
     for &(axis, positive) in &FACES {
@@ -451,6 +467,7 @@ fn mesh_grid(grid: &Grid, step: i64, frame: &Frame<'_>, hash: u64) -> MeshData {
                     };
                     let color = colors[pi as usize];
                     let material = materials[pi as usize];
+                    let quad_porosity = porosity[pi as usize];
                     let base = (positions.len() / 3) as u32;
                     for (uc, vc) in corners {
                         let mut g = [0_i64; 3];
@@ -465,6 +482,7 @@ fn mesh_grid(grid: &Grid, step: i64, frame: &Frame<'_>, hash: u64) -> MeshData {
                         normals.extend_from_slice(&normal);
                         vertex_colors.extend_from_slice(&color);
                         vertex_materials.extend_from_slice(&material);
+                        vertex_porosity.push(quad_porosity);
                     }
                     indices.extend_from_slice(&[
                         base,
@@ -487,6 +505,7 @@ fn mesh_grid(grid: &Grid, step: i64, frame: &Frame<'_>, hash: u64) -> MeshData {
         normals,
         colors: vertex_colors,
         materials: vertex_materials,
+        porosity: vertex_porosity,
         uvs: vec![0.0; vertex_count * 2],
         tangents: [1.0, 0.0, 0.0, 1.0].repeat(vertex_count),
         weights: [1.0, 0.0, 0.0, 0.0].repeat(vertex_count),
@@ -517,6 +536,7 @@ mod tests {
             color,
             emissive: None,
             metallic: None,
+            porosity: None,
             roughness: None,
         }
     }
@@ -576,6 +596,7 @@ mod tests {
             normals,
             colors,
             materials,
+            porosity: vec![DEFAULT_POROSITY; vertex_count],
             uvs,
             tangents,
             weights: [1.0, 0.0, 0.0, 0.0].repeat(vertex_count),
@@ -1282,6 +1303,7 @@ mod tests {
         PaletteEntry {
             glyph: glyph.to_string(),
             color,
+            porosity: None,
             roughness: Some(mat[0]),
             metallic: Some(mat[1]),
             emissive: Some(mat[2]),

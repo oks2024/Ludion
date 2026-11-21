@@ -26,7 +26,7 @@ pub const SLOPPY_TARGET_ERROR: f32 = 1.0;
 /// Vertices at one position are welded for the simplifier (a faceted mesh gives every corner its own
 /// normal, which would pin every edge), and `simplify_sloppy` takes over when the plain pass leaves
 /// more than 10% above the target. The level is unindexed: every output triangle owns three vertices
-/// (`indices` is `0..n`) and each corner takes the normal, uv, tangent, emissive, metallic, roughness,
+/// (`indices` is `0..n`) and each corner takes the normal, uv, tangent, emissive, metallic, porosity, roughness,
 /// skin weights and bone indices of the first base vertex at its position, so a texture may smear
 /// along a UV seam. A base without `normals` gives a level without, which the loader computes flat
 /// (a smooth base keeps smooth normals). `joints` are the base's. The
@@ -92,6 +92,7 @@ pub fn simplify_level(base: &MeshDocument, ratio: f64) -> MeshDocument {
         tangents: gather_f64(&base.tangents, 4),
         emissive: gather_f64(&base.emissive, 1),
         metallic: gather_f64(&base.metallic, 1),
+        porosity: gather_f64(&base.porosity, 1),
         roughness: gather_f64(&base.roughness, 1),
         skin: base.skin.as_ref().map(|skin| MeshSkin {
             joints: skin.joints.clone(),
@@ -584,6 +585,7 @@ mod tests {
             tangents: Some((0..vertices).flat_map(|_| [1.0, 0.0, 0.0, 1.0]).collect()),
             emissive: Some(vec![0.0; vertices]),
             metallic: Some(vec![0.25; vertices]),
+            porosity: Some(vec![0.75; vertices]),
             roughness: Some((0..vertices).map(|v| v as f64 / vertices as f64).collect()),
             skin: Some(MeshSkin {
                 joints: vec![joint("root", None), joint("tip", Some(0))],
@@ -619,6 +621,7 @@ mod tests {
             tangents: base.tangents.as_ref().map(|v| gather(v, &rows, 4)),
             emissive: base.emissive.as_ref().map(|v| gather(v, &rows, 1)),
             metallic: base.metallic.as_ref().map(|v| gather(v, &rows, 1)),
+            porosity: base.porosity.as_ref().map(|v| gather(v, &rows, 1)),
             roughness: base.roughness.as_ref().map(|v| gather(v, &rows, 1)),
             skin: Some(MeshSkin {
                 joints: skin.joints.clone(),
@@ -682,6 +685,16 @@ mod tests {
             );
             assert_eq!(uvs[v * 2..v * 2 + 2], base_uvs[source * 2..source * 2 + 2]);
         }
+    }
+
+    #[test]
+    fn a_level_keeps_the_authored_porosity_one_value_per_corner() {
+        let base = faceted(&grid(16));
+        let level = simplify_level(&base, 0.25);
+        let porosity = level.porosity.as_ref().expect("porosity gathered");
+        assert_eq!(porosity.len(), level.positions.len() / 3);
+        assert!(porosity.iter().all(|&p| p == 0.75));
+        ludion_scene::check_mesh(&ludion_scene::emit_mesh(&level)).expect("a valid level");
     }
 
     #[test]

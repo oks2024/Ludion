@@ -232,6 +232,8 @@ fn instance_hash(instance: &MeshInstance, assets: &[Arc<MeshData>], palette: &[M
         viewmodel,
         rim,
         medium,
+        // Probe captures carry no rain, so porosity cannot change a capture.
+        porosity: _,
     } = instance;
     let mut w = KeyWriter(Vec::new());
     let mut skin_joints = 0;
@@ -684,6 +686,7 @@ mod tests {
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             colors: vec![1.0; 12],
             materials: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            porosity: [crate::DEFAULT_POROSITY].repeat(3),
             uvs: vec![0.0; 6],
             tangents: vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0],
             weights: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],

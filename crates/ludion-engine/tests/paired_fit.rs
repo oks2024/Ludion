@@ -346,26 +346,32 @@ pub(crate) fn copy_dir(from: &Path, to: &Path) {
 }
 
 #[test]
-fn three_roles_are_l4373() {
+fn three_roles_fit() {
     let root = std::env::temp_dir().join(format!("ludion-paired-fit-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     copy_dir(&gallery().join("voxels"), &root.join("voxels"));
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/paired/three-roles.paired.yaml");
     std::fs::copy(fixture, root.join("voxels/three-roles.paired.yaml")).unwrap();
-    let mut engine = boot(&root, &scene(""));
-    let (a, b) = (
+    let third = motor_entity("third", [-3.0, 0.0, -2.0], 0.0, 0.125, ASSEMBLY);
+    let mut engine = boot(&root, &scene(&third));
+    let (a, b, c) = (
         named(&mut engine, "instigator"),
         named(&mut engine, "target"),
+        named(&mut engine, "third"),
     );
-    let errors = paired_fit(
+    let warp = Warp {
+        distance: 100.0,
+        yaw_deg: 360.0,
+    };
+    let fit = paired_fit(
         engine.world(),
         "voxels/three-roles.paired.yaml",
-        &[("a", a), ("b", b)],
-        WARP,
+        &[("a", a), ("b", b), ("c", c)],
+        warp,
     )
-    .unwrap_err();
-    assert_eq!(codes(&errors), ["L4373"], "{errors:?}");
+    .expect("three roles resolve");
+    assert_eq!(fit.roles.len(), 3, "{fit:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -430,4 +436,32 @@ fn a_restore_reloads_the_library_and_the_fit_is_unchanged() {
     )
     .expect("a valid cast");
     assert_eq!(before, after);
+}
+
+#[test]
+fn six_roles_are_l4373() {
+    let root = std::env::temp_dir().join(format!("ludion-paired-six-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    copy_dir(&gallery().join("voxels"), &root.join("voxels"));
+    let names = ["a", "b", "c", "d", "e", "f"];
+    let mut text = String::from("format: 1\nkind: paired\nname: six-roles\nroles:\n");
+    for name in names {
+        text.push_str(&format!(
+            "  {name}:\n    assembly: humanoid.assembly.yaml\n    align_only: true\n    scale: 0.125\n"
+        ));
+    }
+    text.push_str("align:\n  reference: a\n  moves: a\n  ticks: 4\n  offsets:\n");
+    for name in &names[1..] {
+        text.push_str(&format!(
+            "    {name}:\n      translation:\n        - 0.5\n        - 0.0\n        - 0.0\n      yaw_deg: 0.0\n"
+        ));
+    }
+    std::fs::write(root.join("voxels/six-roles.paired.yaml"), text).unwrap();
+    let mut engine = boot(&root, &scene(""));
+    let a = named(&mut engine, "instigator");
+    let cast: Vec<(&str, EntityId)> = names.iter().map(|name| (*name, a)).collect();
+    let errors =
+        paired_fit(engine.world(), "voxels/six-roles.paired.yaml", &cast, WARP).unwrap_err();
+    assert_eq!(codes(&errors), ["L4373"], "{errors:?}");
+    let _ = std::fs::remove_dir_all(&root);
 }
