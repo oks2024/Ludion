@@ -45,11 +45,13 @@ pub(crate) const COLLIDERS: &str = "colliders";
 /// The category [`segments`] draws from the live `PhysicsWorld`'s colliders, tinted by surface.
 pub(crate) const SURFACES: &str = "surfaces";
 
-/// The host-side `nav` category and its sub-filters; `nav` alone enables all three parts.
+/// The host-side `nav` category and its sub-filters; `nav` alone enables all five parts.
 pub(crate) const NAV: &str = "nav";
 pub(crate) const NAV_GRID: &str = "nav:grid";
 pub(crate) const NAV_ROUTES: &str = "nav:routes";
 pub(crate) const NAV_FLOW: &str = "nav:flow";
+pub(crate) const NAV_LINKS: &str = "nav:links";
+pub(crate) const NAV_BLOCKERS: &str = "nav:blockers";
 
 /// The host-side `perception` category and its sub-filters; `perception` alone enables all four parts.
 pub(crate) const PERCEPTION: &str = "perception";
@@ -636,9 +638,10 @@ pub(crate) fn pen_lines(
 /// The `hierarchy` category is drawn here from the live world rather than by a system, so it is
 /// always current, even paused, and costs nothing unless enabled. It sorts among the categories;
 /// `probes`, `colliders` (every physics body's wireframe) and `nav` are drawn the same way. `nav`
-/// shows the grid, the `NavRoute` polylines and the cached flow arrows; `nav:grid`, `nav:routes` and
-/// `nav:flow` pick one part. Grid nodes and arrows within 30 m of the game camera are drawn (all when
-/// there is no camera); routes are never culled. `perception` is drawn the same way from the last
+/// shows every class grid, the `NavRoute` polylines, the cached flow arrows of every class, the
+/// `NavLink` arcs and the `NavBlocker` boxes; `nav:grid`, `nav:routes`, `nav:flow`, `nav:links` and
+/// `nav:blockers` pick one part. Grid nodes and arrows within 30 m of the game camera are drawn (all when
+/// there is no camera); routes, links and blockers are never culled. `perception` is drawn the same way from the last
 /// tick's `PerceptionResults`: `perception:zones`, `perception:rays`, `perception:noises` and
 /// `perception:memory` pick one part. `local_shadows`
 /// is the exception: the engine appends it after extract, because it needs the camera's grants.
@@ -685,8 +688,10 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
         grid: filter.enables(NAV) || filter.enables(NAV_GRID),
         routes: filter.enables(NAV) || filter.enables(NAV_ROUTES),
         flow: filter.enables(NAV) || filter.enables(NAV_FLOW),
+        links: filter.enables(NAV) || filter.enables(NAV_LINKS),
+        blockers: filter.enables(NAV) || filter.enables(NAV_BLOCKERS),
     };
-    if parts.grid || parts.routes || parts.flow {
+    if parts.grid || parts.routes || parts.flow || parts.links || parts.blockers {
         let eye = crate::extract::stream_camera(world, (1, 1), None)
             .ok()
             .map(|camera| camera.position.to_array());
@@ -712,7 +717,7 @@ pub(crate) fn segments(world: &World, filter: &DebugCategories) -> Vec<DebugSegm
 
 /// The categories the world has drawn: what [`DebugDraw::drawn`] lists plus `hierarchy` when any
 /// entity has a `Parent`, `probes` when any has a `ReflectionProbe` and `colliders` when the
-/// physics world holds a body, `surfaces` when the scene declares surfaces, `nav`, `nav:grid`, `nav:routes` and `nav:flow` when there is something
+/// physics world holds a body, `surfaces` when the scene declares surfaces, `nav` and its five sub-filters when there is something
 /// to draw for them, `perception` and its four sub-filters likewise, `local_shadows` when any point or spot light casts and `cull` when
 /// any entity has a `Mesh`, sorted.
 pub(crate) fn drawn(world: &World) -> Vec<&'static str> {
@@ -1611,18 +1616,27 @@ mod tests {
 
     /// A 24 m floor, a camera over it, a goal-routed walker and a flow-field walker, on a 16 x 16 grid.
     fn nav_engine() -> crate::Engine {
+        nav_engine_with(single_class_config(), "")
+    }
+
+    fn single_class_config() -> crate::NavConfig {
+        crate::NavConfig {
+            nx: 16,
+            nz: 16,
+            y_min: -2.0,
+            y_max: 8.0,
+            ..crate::NavConfig::default()
+        }
+    }
+
+    /// [`nav_engine`] with `config` and `extra_yaml` (more entity entries) appended to the scene.
+    fn nav_engine_with(config: crate::NavConfig, extra_yaml: &str) -> crate::Engine {
         let root =
             std::env::temp_dir().join(format!("ludion-debug-draw-nav-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let mut engine = crate::Engine::builder()
             .project_root(&root)
-            .nav(crate::NavConfig {
-                nx: 16,
-                nz: 16,
-                y_min: -2.0,
-                y_max: 8.0,
-                ..crate::NavConfig::default()
-            })
+            .nav(config)
             .system("nav_update", crate::nav_update)
             .system("nav_steer", crate::nav_steer)
             .build()
@@ -1664,6 +1678,7 @@ mod tests {
                 yaml += "        neighbor_layers: 0\n";
             }
         }
+        yaml += extra_yaml;
         engine.load_inline_scene(&yaml).unwrap();
         for _ in 0..4 {
             engine.advance_live();
@@ -1694,10 +1709,255 @@ mod tests {
         );
         assert!(grid > 0 && routes > 0 && flow > 0);
         assert!(routes < all && flow < all && grid < all);
+        assert_eq!(count("nav:links") + count("nav:blockers"), 0);
         assert_eq!(all, grid + routes + flow, "`nav` is the three parts");
         assert_eq!(count("nav:routes,nav:flow"), routes + flow);
         assert_eq!(count("motor"), 0);
         assert_eq!(count(""), 0);
+    }
+
+    fn two_class_config() -> crate::NavConfig {
+        crate::NavConfig {
+            classes: vec![
+                crate::NavClass {
+                    name: "walker".into(),
+                    radius: 0.35,
+                    ..crate::NavClass::default()
+                },
+                crate::NavClass {
+                    name: "forklift".into(),
+                    radius: 1.0,
+                    ..crate::NavClass::default()
+                },
+            ],
+            ..single_class_config()
+        }
+    }
+
+    /// A `NavLink` entity at the origin; \`fields\` are extra component lines (each 8-space indented).
+    fn link_yaml(from: [f32; 3], to: [f32; 3], fields: &str) -> String {
+        format!(
+            "  - name: link\n    components:\n      Transform: {{}}\n      NavLink:\n        from:\n{}        to:\n{}{fields}",
+            seq3(from, 10),
+            seq3(to, 10)
+        )
+    }
+
+    /// A \`NavBlocker\` entity at \`at\`, yawed \`yaw\` degrees, with half extents \`half\`.
+    fn blocker_yaml(at: [f32; 3], yaw: f32, half: [f32; 3], fields: &str) -> String {
+        format!(
+            "  - name: blocker\n    components:\n      Transform:\n        translation:\n{}        rotation:\n          - 0.0\n          - {yaw:?}\n          - 0.0\n      NavBlocker:\n        shape:\n          box:\n            half_extents:\n{}{fields}",
+            seq3(at, 10),
+            seq3(half, 14)
+        )
+    }
+
+    fn colored(lines: &[DebugSegment], color: [f32; 4]) -> Vec<&DebugSegment> {
+        lines.iter().filter(|s| s.color == color).collect()
+    }
+
+    #[test]
+    fn a_single_class_world_draws_the_grid_exactly_in_the_class_zero_colours() {
+        use crate::nav::{LINK_FLAT_COLOR, LINK_STEP_COLOR, NAV_LIFT, NODE_COLOR};
+        let mut engine = nav_engine();
+        let grid = lines_under(&mut engine, "nav:grid");
+        assert!(!grid.is_empty());
+        for s in &grid {
+            assert!([NODE_COLOR, LINK_FLAT_COLOR, LINK_STEP_COLOR].contains(&s.color));
+            assert!((s.a[1] - (0.0 + NAV_LIFT)).abs() < 1e-5, "{s:?}");
+        }
+    }
+
+    #[test]
+    fn every_class_grid_is_drawn_tinted_and_lifted() {
+        use crate::nav::{CLASS_LIFT, CLASS_PALETTE, NAV_LIFT, NODE_COLOR};
+        let single = lines_under(&mut nav_engine(), "nav:grid").len();
+        let mut engine = nav_engine_with(two_class_config(), "");
+        let grid = lines_under(&mut engine, "nav:grid");
+        assert!(grid.len() > single, "{} vs {single}", grid.len());
+        let blue = CLASS_PALETTE[0];
+        let crosses_1: Vec<_> = grid
+            .iter()
+            .filter(|s| s.color == [blue[0], blue[1], blue[2], 1.0])
+            .collect();
+        let crosses_0 = colored(&grid, NODE_COLOR);
+        assert!(!crosses_1.is_empty() && !crosses_0.is_empty());
+        assert!(
+            crosses_1
+                .iter()
+                .all(|s| (s.a[1] - (NAV_LIFT + CLASS_LIFT)).abs() < 1e-5)
+        );
+        assert!(crosses_0.iter().all(|s| (s.a[1] - NAV_LIFT).abs() < 1e-5));
+        let class_1 = grid
+            .iter()
+            .filter(|s| (s.a[1] - (NAV_LIFT + CLASS_LIFT)).abs() < 1e-5)
+            .count();
+        let class_0 = grid
+            .iter()
+            .filter(|s| (s.a[1] - NAV_LIFT).abs() < 1e-5)
+            .count();
+        assert_eq!(grid.len(), class_0 + class_1);
+    }
+
+    #[test]
+    fn flow_arrows_are_drawn_for_every_class() {
+        let walker = "  - name: fork\n    components:\n      Transform:\n        translation:\n          - 5.0\n          - 0.0\n          - 5.0\n      NavAgent:\n        class: forklift\n        neighbor_layers: 0\n        target:\n          - 12.0\n          - 0.0\n          - 12.0\n";
+        let without = lines_under(&mut nav_engine_with(two_class_config(), ""), "nav:flow").len();
+        let mut engine = nav_engine_with(two_class_config(), walker);
+        let flow = lines_under(&mut engine, "nav:flow");
+        assert!(flow.len() > without, "{} vs {without}", flow.len());
+        assert!(flow.iter().all(|s| s.color == crate::nav::FLOW_COLOR));
+        assert!(engine.debug_draw_drawn().contains(&NAV_FLOW));
+    }
+
+    #[test]
+    fn a_snapped_link_draws_an_arc_with_arrowheads_and_a_bad_one_draws_red() {
+        use crate::nav::{LINK_OFFMESH_COLOR, LINK_UNSNAPPED_COLOR, dim};
+        let (from, to) = ([4.0, 0.0, 4.0], [10.0, 0.0, 4.0]);
+        let mut engine = nav_engine_with(single_class_config(), &link_yaml(from, to, ""));
+        let drawn = lines_under(&mut engine, "nav:links");
+        assert_eq!(drawn.len(), 16, "12 arc + 2 + 2 for a bidirectional link");
+        assert!(drawn.iter().all(|s| s.color == LINK_OFFMESH_COLOR));
+        assert_eq!(drawn[0].a, from);
+        assert_eq!(drawn[11].b, to);
+        assert!(engine.debug_draw_drawn().contains(&NAV_LINKS));
+
+        let one_way = link_yaml(from, to, "        bidirectional: false\n");
+        let mut engine = nav_engine_with(single_class_config(), &one_way);
+        assert_eq!(lines_under(&mut engine, "nav:links").len(), 14);
+
+        let far = link_yaml(from, [60.0, 0.0, 6.0], "");
+        let mut engine = nav_engine_with(single_class_config(), &far);
+        let drawn = lines_under(&mut engine, "nav:links");
+        assert!(drawn.iter().all(|s| s.color == LINK_UNSNAPPED_COLOR));
+
+        let off = link_yaml(from, to, "        enabled: false\n");
+        let mut engine = nav_engine_with(single_class_config(), &off);
+        let drawn = lines_under(&mut engine, "nav:links");
+        assert_eq!(drawn.len(), 16);
+        assert!(drawn.iter().all(|s| s.color == dim(LINK_OFFMESH_COLOR)));
+    }
+
+    #[test]
+    fn a_link_serving_no_defined_class_is_dim_not_red() {
+        use crate::nav::{LINK_OFFMESH_COLOR, dim};
+        let ghost = link_yaml(
+            [4.0, 0.0, 4.0],
+            [10.0, 0.0, 4.0],
+            "        classes:
+          - ghost
+",
+        );
+        let mut engine = nav_engine_with(two_class_config(), &ghost);
+        let drawn = lines_under(&mut engine, "nav:links");
+        assert!(drawn.iter().all(|s| s.color == dim(LINK_OFFMESH_COLOR)));
+    }
+
+    #[test]
+    fn blockers_draw_their_authored_boxes_by_mode() {
+        use crate::nav::{BLOCK_COLOR, COST_COLOR, INTERACT_COLOR, dim};
+        let extra = [
+            blocker_yaml([3.0, 1.0, 3.0], 0.0, [0.5, 1.0, 0.5], ""),
+            blocker_yaml(
+                [6.0, 1.0, 3.0],
+                0.0,
+                [0.5, 1.0, 0.5],
+                "        mode: cost\n        cost: 2.0\n",
+            ),
+            blocker_yaml(
+                [9.0, 1.0, 3.0],
+                0.0,
+                [0.5, 1.0, 0.5],
+                "        mode: interact\n",
+            ),
+            blocker_yaml(
+                [12.0, 1.0, 3.0],
+                0.0,
+                [0.5, 1.0, 0.5],
+                "        enabled: false\n",
+            ),
+        ]
+        .concat();
+        let mut engine = nav_engine_with(single_class_config(), &extra);
+        let drawn = lines_under(&mut engine, "nav:blockers");
+        assert_eq!(drawn.len(), 48);
+        assert_eq!(colored(&drawn, BLOCK_COLOR).len(), 12);
+        assert_eq!(colored(&drawn, COST_COLOR).len(), 12);
+        assert_eq!(colored(&drawn, INTERACT_COLOR).len(), 12);
+        assert_eq!(colored(&drawn, dim(BLOCK_COLOR)).len(), 12);
+        assert!(engine.debug_draw_drawn().contains(&NAV_BLOCKERS));
+    }
+
+    #[test]
+    fn a_rotated_blocker_draws_the_posed_corners() {
+        let extra = blocker_yaml([6.0, 1.0, 6.0], 45.0, [2.0, 0.5, 0.5], "");
+        let mut engine = nav_engine_with(single_class_config(), &extra);
+        let drawn = lines_under(&mut engine, "nav:blockers");
+        let id = engine
+            .world_mut()
+            .query_ids::<(&ludion_components::NavBlocker,)>()
+            .next()
+            .map(|(id, _)| id)
+            .unwrap();
+        let affine = crate::hierarchy::world_transform(engine.world(), id)
+            .unwrap()
+            .trs
+            .to_affine();
+        let corner = |x: f32, y: f32, z: f32| affine.transform_point([x, y, z]);
+        let expected = [corner(-2.0, -0.5, -0.5), corner(2.0, -0.5, -0.5)];
+        assert!(
+            drawn
+                .iter()
+                .any(|s| s.a == expected[0] && s.b == expected[1]),
+            "the bottom-front edge is posed"
+        );
+    }
+
+    #[test]
+    fn nav_is_the_sum_of_its_five_parts() {
+        let extra = [
+            link_yaml([4.0, 0.0, 4.0], [10.0, 0.0, 4.0], ""),
+            blocker_yaml([3.0, 1.0, 9.0], 0.0, [0.5, 1.0, 0.5], ""),
+        ]
+        .concat();
+        let mut engine = nav_engine_with(single_class_config(), &extra);
+        let mut count = |filter: &str| lines_under(&mut engine, filter).len();
+        let parts = [
+            count("nav:grid"),
+            count("nav:routes"),
+            count("nav:flow"),
+            count("nav:links"),
+            count("nav:blockers"),
+        ];
+        assert!(parts.iter().all(|n| *n > 0), "{parts:?}");
+        assert_eq!(count("nav"), parts.iter().sum::<usize>());
+        let drawn = engine.debug_draw_drawn();
+        for name in [NAV, NAV_GRID, NAV_ROUTES, NAV_FLOW, NAV_LINKS, NAV_BLOCKERS] {
+            assert!(drawn.contains(&name), "{name} missing from {drawn:?}");
+        }
+    }
+
+    #[test]
+    fn nav_debug_never_moves_the_world_hash_or_the_extract() {
+        let extra = [
+            link_yaml([4.0, 0.0, 4.0], [10.0, 0.0, 4.0], ""),
+            blocker_yaml([3.0, 1.0, 9.0], 0.0, [0.5, 1.0, 0.5], ""),
+        ]
+        .concat();
+        let run = |enabled: bool| {
+            let mut engine = nav_engine_with(two_class_config(), &extra);
+            let mut trace = Vec::new();
+            for _ in 0..10 {
+                if enabled {
+                    lines_under(&mut engine, "nav");
+                }
+                engine.advance_live();
+                trace.push(engine.world_hash().unwrap().as_u64());
+            }
+            engine.set_debug_draw(DebugCategories::None);
+            (trace, engine.extract_render_scene(64, 64).unwrap())
+        };
+        assert_eq!(run(true), run(false));
     }
 
     #[test]

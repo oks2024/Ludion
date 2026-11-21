@@ -317,7 +317,7 @@ Two trace channels answer "what was this agent's route doing on tick N, and why 
 ## Next
 
 - `ludion docs motor` — the capsule that applies a steering velocity.
-- `--debug-draw nav` (`nav:grid`, `nav:routes`, `nav:flow`) draws the grid, routes and flow arrows: `ludion docs debug-draw`.
+- `--debug-draw nav` (`nav:grid`, `nav:routes`, `nav:flow`, `nav:links`, `nav:blockers`) draws the class grids, routes, flow arrows, link arcs and blocker boxes: `ludion docs debug-draw`.
 - `ludion docs spatial-3d` — the index separation reads.
 - `ludion docs patrol` — guards that walk `kind: patrol` routes as nav legs.
 - `ludion docs components` — the `NavAgent`, `NavSteering`, `NavGoal` and `NavRoute` rows.

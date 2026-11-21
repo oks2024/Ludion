@@ -26,11 +26,14 @@
 //! with `NavRoute.status = at_link` until the game calls [`nav_link_done`]. The engine never moves the body.
 
 use ludion_components::nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
-use ludion_components::{NavAgent, NavLink, NavObstacle, NavObstacleState, NavSteering};
+use ludion_components::{
+    NavAgent, NavBlocker, NavBlockerMode, NavBlockerShape, NavLink, NavObstacle, NavObstacleState,
+    NavSteering,
+};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
-use ludion_core::math::sqrt;
+use ludion_core::math::{Trs, sqrt};
 use ludion_core::par;
 use ludion_core::rng::DeterministicRng;
 use ludion_ecs::{SystemCtx, World};
@@ -844,6 +847,20 @@ type Unsnapped = (EntityId, &'static str, Option<f32>);
 /// A `NavLink` `classes` entry no class has: the link entity, the entry's index and its text.
 type UnknownClass = (EntityId, usize, String);
 
+/// Whether `link` serves `class`: an empty `classes` list serves every class, else the class must be named.
+fn link_serves(link: &NavLink, class: &NavClass) -> bool {
+    link.classes.is_empty() || link.classes.contains(&class.name)
+}
+
+/// The node of `grid` a posed link end `p` snaps to within `snap_radius`; a non-finite end snaps to nothing.
+fn snap_link_end(grid: &NavGrid, p: [f32; 3], snap_radius: f32) -> Option<NodeId> {
+    if p.iter().all(|c| c.is_finite()) {
+        nearest_node(grid, p, snap_radius)
+    } else {
+        None
+    }
+}
+
 /// The link tables from the enabled `NavLink`s, ascending by entity, one per class: each end snapped to the
 /// class's grid, a link left out of a class its `classes` does not permit or where an end does not snap.
 /// Also the ends that snapped on no permitted class as `(entity, "from" | "to", nearest node distance on
@@ -865,13 +882,6 @@ fn build_links(
     for (entity, link) in found.into_iter().filter(|(_, l)| l.enabled) {
         let affine = crate::hierarchy::world_affine(world, entity);
         let posed = |p: [f32; 3]| affine.as_ref().map_or(p, |a| a.transform_point(p));
-        let snap = |grid: &NavGrid, p: [f32; 3]| {
-            if p.iter().all(|c| c.is_finite()) {
-                nearest_node(grid, p, link.snap_radius)
-            } else {
-                None
-            }
-        };
         for (i, name) in link.classes.iter().enumerate() {
             if !classes.iter().any(|c| c.name == *name) {
                 unknown.push((entity, i, name.clone()));
@@ -881,11 +891,14 @@ fn build_links(
         let mut permitted = false;
         let mut end_snapped = [false; 2];
         for (k, grid) in grids.iter().enumerate() {
-            if !link.classes.is_empty() && !link.classes.iter().any(|n| *n == classes[k].name) {
+            if !link_serves(&link, &classes[k]) {
                 continue;
             }
             permitted = true;
-            let (from, to) = (snap(grid, ends[0]), snap(grid, ends[1]));
+            let (from, to) = (
+                snap_link_end(grid, ends[0], link.snap_radius),
+                snap_link_end(grid, ends[1], link.snap_radius),
+            );
             end_snapped[0] |= from.is_some();
             end_snapped[1] |= to.is_some();
             let (Some(from), Some(to)) = (from, to) else {
@@ -2301,7 +2314,9 @@ const NAV_VIEW_RADIUS: f32 = 30.0;
 /// Most segments the `nav` view draws; the grid is drawn last, so it is what gets truncated.
 const NAV_MAX_SEGMENTS: usize = 200_000;
 /// Metres the `nav` lines sit above the floor.
-const NAV_LIFT: f32 = 0.05;
+pub(crate) const NAV_LIFT: f32 = 0.05;
+/// Extra metres each class past the first sits higher, so overlapping class grids do not z-fight.
+pub(crate) const CLASS_LIFT: f32 = 0.03;
 
 /// Which `nav` parts [`debug_lines`] draws.
 #[derive(Clone, Copy, Debug)]
@@ -2309,19 +2324,55 @@ pub(crate) struct NavDebugParts {
     pub(crate) grid: bool,
     pub(crate) routes: bool,
     pub(crate) flow: bool,
+    pub(crate) links: bool,
+    pub(crate) blockers: bool,
 }
 
 const ROUTE_AHEAD: [f32; 4] = [0.0, 0.85, 0.85, 1.0];
 const ROUTE_PARTIAL: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
 const ROUTE_UNREACHABLE: [f32; 4] = [1.0, 0.15, 0.15, 1.0];
-const FLOW_COLOR: [f32; 4] = [1.0, 0.85, 0.1, 1.0];
-const NODE_COLOR: [f32; 4] = [0.7, 0.7, 0.7, 1.0];
-const LINK_FLAT_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
-const LINK_STEP_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 1.0];
-const LINK_OFFMESH_COLOR: [f32; 4] = [1.0, 0.2, 0.9, 1.0];
+pub(crate) const FLOW_COLOR: [f32; 4] = [1.0, 0.85, 0.1, 1.0];
+pub(crate) const NODE_COLOR: [f32; 4] = [0.7, 0.7, 0.7, 1.0];
+pub(crate) const LINK_FLAT_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
+pub(crate) const LINK_STEP_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 1.0];
+pub(crate) const LINK_OFFMESH_COLOR: [f32; 4] = [1.0, 0.2, 0.9, 1.0];
+pub(crate) const LINK_UNSNAPPED_COLOR: [f32; 4] = [1.0, 0.1, 0.1, 1.0];
+pub(crate) const BLOCK_COLOR: [f32; 4] = [1.0, 0.15, 0.15, 1.0];
+pub(crate) const COST_COLOR: [f32; 4] = [1.0, 0.6, 0.1, 1.0];
+pub(crate) const INTERACT_COLOR: [f32; 4] = [0.2, 0.5, 1.0, 1.0];
+/// Grid tints for the classes past the first, in class order, cycling.
+pub(crate) const CLASS_PALETTE: [[f32; 3]; 6] = [
+    [0.2, 0.6, 1.0],
+    [1.0, 0.55, 0.1],
+    [0.3, 0.9, 0.3],
+    [0.8, 0.3, 1.0],
+    [1.0, 0.9, 0.2],
+    [0.2, 0.9, 0.9],
+];
+/// Segments of a link arc.
+const LINK_ARC_SEGMENTS: usize = 12;
+/// The 12 edges of a box whose corner `i` has bit 0/1/2 set for the max x/y/z side.
+const BOX_EDGES: [[usize; 2]; 12] = [
+    [0, 1],
+    [2, 3],
+    [4, 5],
+    [6, 7],
+    [0, 2],
+    [1, 3],
+    [4, 6],
+    [5, 7],
+    [0, 4],
+    [1, 5],
+    [2, 6],
+    [3, 7],
+];
 
-fn lifted(p: [f32; 3]) -> [f32; 3] {
-    [p[0], p[1] + NAV_LIFT, p[2]]
+fn lifted(p: [f32; 3], lift: f32) -> [f32; 3] {
+    [p[0], p[1] + lift, p[2]]
+}
+
+pub(crate) fn dim(color: [f32; 4]) -> [f32; 4] {
+    [color[0] * 0.4, color[1] * 0.4, color[2] * 0.4, color[3]]
 }
 
 fn within(eye: Option<[f32; 3]>, p: [f32; 3]) -> bool {
@@ -2331,24 +2382,25 @@ fn within(eye: Option<[f32; 3]>, p: [f32; 3]) -> bool {
     })
 }
 
-/// The entities with a `NavRoute`, ascending.
-fn route_entities(world: &World) -> Vec<EntityId> {
-    let mut ids: Vec<EntityId> = world
-        .entities()
-        .filter(|id| world.has::<NavRoute>(*id))
-        .collect();
+/// The entities with a `T`, ascending.
+fn entities_with<T: ludion_ecs::Component>(world: &World) -> Vec<EntityId> {
+    let mut ids: Vec<EntityId> = world.entities().filter(|id| world.has::<T>(*id)).collect();
     ids.sort_unstable();
     ids
 }
 
-/// The distinct nodes walking agents without a `NavGoal` head for, ascending: the flow fields they read.
-fn flow_targets(world: &World, grid: &NavGrid) -> Vec<NodeId> {
+/// The distinct nodes on class `k`'s grid that walking agents of class `k` without a `NavGoal` head for,
+/// ascending: the flow fields they read.
+fn flow_targets(world: &World, nav: &Nav, k: usize) -> Vec<NodeId> {
+    let Some(grid) = nav.grids.get(k) else {
+        return Vec::new();
+    };
     let mut targets: Vec<NodeId> = world
         .entities()
         .filter(|id| !world.has::<NavGoal>(*id))
         .filter_map(|id| {
             let agent = world.get::<NavAgent>(id).ok().flatten()?;
-            (!agent.flying)
+            (!agent.flying && nav.config.class_index(&agent.class) == Some(k))
                 .then(|| grid.node_at(agent.target))
                 .flatten()
         })
@@ -2358,10 +2410,167 @@ fn flow_targets(world: &World, grid: &NavGrid) -> Vec<NodeId> {
     targets
 }
 
-/// The `nav` debug category, drawn at extraction from the [`Nav`] resource and the `NavRoute` and
-/// `NavAgent` components; read-only, it never builds a field. Routes come first and are never culled,
-/// then flow arrows, then the grid, so [`NAV_MAX_SEGMENTS`] only ever truncates the grid. Flow arrows and
-/// grid nodes within [`NAV_VIEW_RADIUS`] of `eye` are drawn (all of them when `eye` is `None`).
+/// A link arc's points from `from` to `to`: a quadratic Bézier raised at the midpoint, plus its end tangent.
+fn link_arc(from: [f32; 3], to: [f32; 3]) -> (Vec<[f32; 3]>, [f32; 3]) {
+    let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    let len = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    let rise = (0.5 * len).clamp(0.3, 2.0);
+    let control = [
+        0.5 * (from[0] + to[0]),
+        0.5 * (from[1] + to[1]) + rise,
+        0.5 * (from[2] + to[2]),
+    ];
+    let at = |t: f32| {
+        let (a, b, c) = ((1.0 - t) * (1.0 - t), 2.0 * t * (1.0 - t), t * t);
+        [
+            a * from[0] + b * control[0] + c * to[0],
+            a * from[1] + b * control[1] + c * to[1],
+            a * from[2] + b * control[2] + c * to[2],
+        ]
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let points = (0..=LINK_ARC_SEGMENTS)
+        .map(|i| at(i as f32 / LINK_ARC_SEGMENTS as f32))
+        .collect();
+    (
+        points,
+        [to[0] - control[0], to[1] - control[1], to[2] - control[2]],
+    )
+}
+
+/// The two arrowhead segments of an arrow whose tip is at `tip` heading along `dir`.
+fn arrow_head(tip: [f32; 3], dir: [f32; 3], color: [f32; 4]) -> [DebugSegment; 2] {
+    let len = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    let dir = if len > f32::EPSILON {
+        [dir[0] / len, dir[1] / len, dir[2] / len]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let up = if dir[1].abs() > 0.9 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let side = [
+        dir[1] * up[2] - dir[2] * up[1],
+        dir[2] * up[0] - dir[0] * up[2],
+        dir[0] * up[1] - dir[1] * up[0],
+    ];
+    let side_len =
+        sqrt(side[0] * side[0] + side[1] * side[1] + side[2] * side[2]).max(f32::EPSILON);
+    let (head, wing) = (0.3_f32, 0.12_f32);
+    let [sx, sy, sz] = side.map(|c| c / side_len * wing);
+    let base = [
+        tip[0] - dir[0] * head,
+        tip[1] - dir[1] * head,
+        tip[2] - dir[2] * head,
+    ];
+    [
+        DebugSegment {
+            a: tip,
+            b: [base[0] + sx, base[1] + sy, base[2] + sz],
+            color,
+        },
+        DebugSegment {
+            a: tip,
+            b: [base[0] - sx, base[1] - sy, base[2] - sz],
+            color,
+        },
+    ]
+}
+
+/// The `NavLink` arcs: magenta, red where an end snaps for no class the link serves, dim where the link
+/// is disabled or serves no defined class. Never culled.
+fn link_lines(world: &World, nav: Option<&Nav>, lines: &mut Vec<DebugSegment>) {
+    for id in entities_with::<NavLink>(world) {
+        let Ok(Some(link)) = world.get::<NavLink>(id) else {
+            continue;
+        };
+        let affine = crate::hierarchy::world_affine(world, id);
+        let posed = |p: [f32; 3]| affine.as_ref().map_or(p, |a| a.transform_point(p));
+        let (from, to) = (posed(link.from), posed(link.to));
+        if !from.iter().chain(to.iter()).all(|c| c.is_finite()) {
+            continue;
+        }
+        let mut color = LINK_OFFMESH_COLOR;
+        if let Some(nav) = nav.filter(|n| !n.grids.is_empty()) {
+            let served: Vec<usize> = (0..nav.grids.len().min(nav.classes.len()))
+                .filter(|&k| link_serves(link, &nav.classes[k]))
+                .collect();
+            let snaps = |p: [f32; 3]| {
+                served
+                    .iter()
+                    .any(|&k| snap_link_end(&nav.grids[k], p, link.snap_radius).is_some())
+            };
+            if !link.enabled || served.is_empty() {
+                color = dim(color);
+            } else if !snaps(from) || !snaps(to) {
+                color = LINK_UNSNAPPED_COLOR;
+            }
+        } else if !link.enabled {
+            color = dim(color);
+        }
+        let (points, tangent) = link_arc(from, to);
+        for pair in points.windows(2) {
+            lines.push(DebugSegment {
+                a: pair[0],
+                b: pair[1],
+                color,
+            });
+        }
+        lines.extend(arrow_head(to, tangent, color));
+        if link.bidirectional {
+            let back = [
+                from[0] - points[1][0],
+                from[1] - points[1][1],
+                from[2] - points[1][2],
+            ];
+            lines.extend(arrow_head(from, back, color));
+        }
+    }
+}
+
+/// The `NavBlocker` boxes as authored (not the inflated node coverage), by mode, dim when disabled.
+fn blocker_lines(world: &World, lines: &mut Vec<DebugSegment>) {
+    for id in entities_with::<NavBlocker>(world) {
+        let Ok(Some(blocker)) = world.get::<NavBlocker>(id) else {
+            continue;
+        };
+        let NavBlockerShape::Box { half_extents: h } = blocker.shape;
+        let pose = world_transform(world, id).map_or(Trs::IDENTITY, |p| p.trs);
+        let affine = pose.to_affine();
+        let corners: [[f32; 3]; 8] = std::array::from_fn(|corner| {
+            affine.transform_point([
+                if corner & 1 == 0 { -h[0] } else { h[0] },
+                if corner & 2 == 0 { -h[1] } else { h[1] },
+                if corner & 4 == 0 { -h[2] } else { h[2] },
+            ])
+        });
+        if !corners.iter().flatten().all(|c| c.is_finite()) {
+            continue;
+        }
+        let base = match blocker.mode {
+            NavBlockerMode::Block => BLOCK_COLOR,
+            NavBlockerMode::Cost => COST_COLOR,
+            NavBlockerMode::Interact => INTERACT_COLOR,
+        };
+        let color = if blocker.enabled { base } else { dim(base) };
+        for [a, b] in BOX_EDGES {
+            lines.push(DebugSegment {
+                a: corners[a],
+                b: corners[b],
+                color,
+            });
+        }
+    }
+}
+
+/// The `nav` debug category, drawn at extraction from the [`Nav`] resource and the `NavRoute`, `NavAgent`,
+/// `NavLink` and `NavBlocker` components; read-only, it never builds a field. Order: routes, link arcs,
+/// blocker boxes (all never culled), then each class's flow arrows, then each class's grid, so
+/// [`NAV_MAX_SEGMENTS`] only ever truncates the grid and drops the later classes first. Class 0 keeps the
+/// grey grid; class `k` past it is tinted from [`CLASS_PALETTE`] and lifted a further [`CLASS_LIFT`] per class.
+/// Flow arrows and grid nodes within [`NAV_VIEW_RADIUS`] of `eye` are drawn (all of them when `eye` is `None`).
 pub(crate) fn debug_lines(
     world: &World,
     parts: NavDebugParts,
@@ -2369,8 +2578,9 @@ pub(crate) fn debug_lines(
 ) -> Vec<DebugSegment> {
     let mut lines = Vec::new();
     let seg = |a, b, color| DebugSegment { a, b, color };
+    let up = |p| lifted(p, NAV_LIFT);
     if parts.routes {
-        for id in route_entities(world) {
+        for id in entities_with::<NavRoute>(world) {
             let Ok(Some(route)) = world.get::<NavRoute>(id) else {
                 continue;
             };
@@ -2383,13 +2593,13 @@ pub(crate) fn debug_lines(
             let behind = [ahead[0] * 0.4, ahead[1] * 0.4, ahead[2] * 0.4, 1.0];
             let done = &route.waypoints[..route.waypoints.len().min(index + 1)];
             for pair in done.windows(2) {
-                lines.push(seg(lifted(pair[0]), lifted(pair[1]), behind));
+                lines.push(seg(up(pair[0]), up(pair[1]), behind));
             }
             if let Some(pose) = world_transform(world, id) {
-                let mut at = lifted(pose.trs.translation);
+                let mut at = up(pose.trs.translation);
                 for waypoint in route.waypoints.iter().skip(index) {
-                    lines.push(seg(at, lifted(*waypoint), ahead));
-                    at = lifted(*waypoint);
+                    lines.push(seg(at, up(*waypoint), ahead));
+                    at = up(*waypoint);
                 }
             }
             let color = if route.status == NavRouteStatus::Unreachable {
@@ -2397,7 +2607,7 @@ pub(crate) fn debug_lines(
             } else {
                 ahead
             };
-            let g = lifted(route.goal);
+            let g = up(route.goal);
             for axis in [[0.15, 0.0, 0.0], [0.0, 0.0, 0.15]] {
                 let a = [g[0] - axis[0], g[1], g[2] - axis[2]];
                 let b = [g[0] + axis[0], g[1], g[2] + axis[2]];
@@ -2405,89 +2615,106 @@ pub(crate) fn debug_lines(
             }
         }
     }
-    let Some(nav) = world.resource::<Nav>() else {
+    let nav = world.resource::<Nav>();
+    if parts.links {
+        link_lines(world, nav, &mut lines);
+    }
+    if parts.blockers {
+        blocker_lines(world, &mut lines);
+    }
+    let Some(nav) = nav else {
         return lines;
     };
-    let Some(grid) = nav.grid() else {
-        return lines;
-    };
-    let cell = grid.params().cell_size;
     if parts.flow {
         let (cos, sin) = (0.866_025_4_f32, 0.5_f32);
-        for target in flow_targets(world, grid) {
-            let Some(field) = nav.cache().get(target) else {
-                continue;
-            };
-            for &node in field.reached() {
-                let p = lifted(grid.node_pos(NodeId(node)));
-                let flow = field.flow(NodeId(node));
-                if flow == [0.0; 2] || !within(eye, p) {
+        for (k, grid) in nav.grids.iter().enumerate() {
+            let cell = grid.params().cell_size;
+            for target in flow_targets(world, nav, k) {
+                let Some(field) = nav.caches.get(k).and_then(|cache| cache.get(target)) else {
                     continue;
-                }
-                let len = 0.4 * cell;
-                let tip = [p[0] + flow[0] * len, p[1], p[2] + flow[1] * len];
-                lines.push(seg(p, tip, FLOW_COLOR));
-                for sign in [1.0_f32, -1.0] {
-                    let (bx, bz) = (-flow[0], -flow[1]);
-                    let (s, c) = (sin * sign, cos);
-                    let head = [
-                        tip[0] + 0.3 * len * (bx * c - bz * s),
-                        p[1],
-                        tip[2] + 0.3 * len * (bx * s + bz * c),
-                    ];
-                    lines.push(seg(tip, head, FLOW_COLOR));
+                };
+                for &node in field.reached() {
+                    let p = up(grid.node_pos(NodeId(node)));
+                    let flow = field.flow(NodeId(node));
+                    if flow == [0.0; 2] || !within(eye, p) {
+                        continue;
+                    }
+                    let len = 0.4 * cell;
+                    let tip = [p[0] + flow[0] * len, p[1], p[2] + flow[1] * len];
+                    lines.push(seg(p, tip, FLOW_COLOR));
+                    for sign in [1.0_f32, -1.0] {
+                        let (bx, bz) = (-flow[0], -flow[1]);
+                        let (s, c) = (sin * sign, cos);
+                        let head = [
+                            tip[0] + 0.3 * len * (bx * c - bz * s),
+                            p[1],
+                            tip[2] + 0.3 * len * (bx * s + bz * c),
+                        ];
+                        lines.push(seg(tip, head, FLOW_COLOR));
+                    }
                 }
             }
         }
     }
     if parts.grid {
-        for entry in &nav.tables[0].entries {
-            let (a, b) = (grid.node_pos(entry.from), grid.node_pos(entry.to));
-            if (within(eye, a) || within(eye, b)) && lines.len() < NAV_MAX_SEGMENTS {
-                lines.push(seg(lifted(a), lifted(b), LINK_OFFMESH_COLOR));
-            }
-        }
-        let half = 0.2 * cell;
-        'nodes: for n in 0..grid.node_count() {
-            #[allow(clippy::cast_possible_truncation)]
-            let id = NodeId(n as u32);
-            let p = grid.node_pos(id);
-            if !within(eye, p) {
-                continue;
-            }
-            let q = lifted(p);
-            let cross = [
-                seg(
-                    [q[0] - half, q[1], q[2]],
-                    [q[0] + half, q[1], q[2]],
-                    NODE_COLOR,
-                ),
-                seg(
-                    [q[0], q[1], q[2] - half],
-                    [q[0], q[1], q[2] + half],
-                    NODE_COLOR,
-                ),
-            ];
-            for line in cross {
-                if lines.len() >= NAV_MAX_SEGMENTS {
-                    break 'nodes;
-                }
-                lines.push(line);
-            }
-            for dir in 0..8 {
-                let Some(other) = grid.link(id, dir).filter(|other| *other > id) else {
-                    continue;
-                };
-                if lines.len() >= NAV_MAX_SEGMENTS {
-                    break 'nodes;
-                }
-                let o = grid.node_pos(other);
-                let color = if (o[1] - p[1]).abs() <= 0.01 {
-                    LINK_FLAT_COLOR
+        for (k, grid) in nav.grids.iter().enumerate() {
+            #[allow(clippy::cast_precision_loss)]
+            let lift = NAV_LIFT + CLASS_LIFT * k as f32;
+            let tint = |color: [f32; 4], scale: f32| {
+                if k == 0 {
+                    color
                 } else {
-                    LINK_STEP_COLOR
-                };
-                lines.push(seg(q, lifted(o), color));
+                    let t = CLASS_PALETTE[(k - 1) % CLASS_PALETTE.len()];
+                    [t[0] * scale, t[1] * scale, t[2] * scale, 1.0]
+                }
+            };
+            let (node_color, flat_color, step_color) = (
+                tint(NODE_COLOR, 1.0),
+                tint(LINK_FLAT_COLOR, 0.6),
+                tint(LINK_STEP_COLOR, 0.35),
+            );
+            let half = 0.2 * grid.params().cell_size;
+            'nodes: for n in 0..grid.node_count() {
+                #[allow(clippy::cast_possible_truncation)]
+                let id = NodeId(n as u32);
+                let p = grid.node_pos(id);
+                if !within(eye, p) {
+                    continue;
+                }
+                let q = lifted(p, lift);
+                let cross = [
+                    seg(
+                        [q[0] - half, q[1], q[2]],
+                        [q[0] + half, q[1], q[2]],
+                        node_color,
+                    ),
+                    seg(
+                        [q[0], q[1], q[2] - half],
+                        [q[0], q[1], q[2] + half],
+                        node_color,
+                    ),
+                ];
+                for line in cross {
+                    if lines.len() >= NAV_MAX_SEGMENTS {
+                        break 'nodes;
+                    }
+                    lines.push(line);
+                }
+                for dir in 0..8 {
+                    let Some(other) = grid.link(id, dir).filter(|other| *other > id) else {
+                        continue;
+                    };
+                    if lines.len() >= NAV_MAX_SEGMENTS {
+                        break 'nodes;
+                    }
+                    let o = grid.node_pos(other);
+                    let color = if (o[1] - p[1]).abs() <= 0.01 {
+                        flat_color
+                    } else {
+                        step_color
+                    };
+                    lines.push(seg(q, lifted(o, lift), color));
+                }
             }
         }
     }
@@ -2495,18 +2722,18 @@ pub(crate) fn debug_lines(
     lines
 }
 
-/// The `nav` parts with something to draw, for `drawn`: `nav:grid` when the grid has a node,
-/// `nav:routes` when a `NavRoute` has a waypoint, `nav:flow` when a flowing walker's field is cached;
-/// `nav` itself when any of them is.
+/// The `nav` parts with something to draw, for `drawn`: `nav:grid` when any class grid has a node,
+/// `nav:routes` when a `NavRoute` has a waypoint, `nav:links` when an entity has a `NavLink`,
+/// `nav:blockers` when one has a `NavBlocker`, `nav:flow` when a flowing walker's field is cached on its
+/// class; `nav` itself when any of them is.
 pub(crate) fn debug_present(world: &World) -> Vec<&'static str> {
-    use crate::debug_draw::{NAV, NAV_FLOW, NAV_GRID, NAV_ROUTES};
+    use crate::debug_draw::{NAV, NAV_BLOCKERS, NAV_FLOW, NAV_GRID, NAV_LINKS, NAV_ROUTES};
     let mut present = Vec::new();
     let nav = world.resource::<Nav>();
-    let grid = nav.and_then(Nav::grid);
-    if grid.is_some_and(|g| g.node_count() > 0) {
+    if nav.is_some_and(|n| n.grids.iter().any(|g| g.node_count() > 0)) {
         present.push(NAV_GRID);
     }
-    if route_entities(world).into_iter().any(|id| {
+    if entities_with::<NavRoute>(world).into_iter().any(|id| {
         world
             .get::<NavRoute>(id)
             .ok()
@@ -2515,10 +2742,18 @@ pub(crate) fn debug_present(world: &World) -> Vec<&'static str> {
     }) {
         present.push(NAV_ROUTES);
     }
-    if let (Some(nav), Some(grid)) = (nav, grid)
-        && flow_targets(world, grid)
-            .into_iter()
-            .any(|target| nav.cache().get(target).is_some())
+    if !entities_with::<NavLink>(world).is_empty() {
+        present.push(NAV_LINKS);
+    }
+    if !entities_with::<NavBlocker>(world).is_empty() {
+        present.push(NAV_BLOCKERS);
+    }
+    if let Some(nav) = nav
+        && (0..nav.grids.len()).any(|k| {
+            flow_targets(world, nav, k)
+                .into_iter()
+                .any(|target| nav.caches.get(k).is_some_and(|c| c.get(target).is_some()))
+        })
     {
         present.push(NAV_FLOW);
     }
