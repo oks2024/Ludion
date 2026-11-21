@@ -61,6 +61,7 @@ pub mod radial;
 pub mod rain;
 pub mod render_layers;
 pub mod render_view;
+pub mod screen_effect;
 pub mod ui;
 pub mod ui_shape;
 pub mod validators;
@@ -102,6 +103,10 @@ pub use radial::{AimKind, MAX_RADIAL_ITEMS, RadialEvent, UiRadial, UiRadialItem,
 pub use rain::{MAX_RAIN_HEIGHT_SPAN, Rain, rain_problems};
 pub use render_layers::{DEFAULT_RENDER_LAYER, RenderLayers, layer_names_diagnostics};
 pub use render_view::{RENDER_VIEW_SIZE_RANGE, RenderView};
+pub use screen_effect::{
+    ScreenEffect, ScreenEffectPreset, ScreenEffectStages, ScreenEffectTarget, ScreenMaskKind,
+    screen_effect_target_problems,
+};
 pub use ui::{
     TextOutline, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav,
     UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
@@ -7056,6 +7061,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<PairedAction>("PairedAction")
         .expect("unique");
+    // The screen-look filter, appended after `PairedAction`: read by `extract` into `RenderScene.screen_effects`.
+    registry
+        .register_validated::<ScreenEffect>("ScreenEffect")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7600,12 +7609,13 @@ mod tests {
                 "NavBlocker",
                 "AudioZone",
                 "PairedAction",
+                "ScreenEffect",
             ]
         );
         assert_eq!(
             registry.len(),
-            91,
-            "appending `PairedAction` grows the registry to 91"
+            92,
+            "appending `ScreenEffect` grows the registry to 92"
         );
     }
 

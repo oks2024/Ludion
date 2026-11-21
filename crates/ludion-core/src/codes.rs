@@ -2343,6 +2343,14 @@ pub mod code {
     /// `L1760` — a `PostProcess` metering field is out of range: `metering_clip`, `exposure_range`.
     pub const POST_PROCESS_INVALID_METERING: DiagnosticCode = DiagnosticCode::new("L1760");
 
+    /// `L1761` — a `ScreenEffect` region target is unusable: a non-positive or non-finite size, or a
+    /// non-finite offset.
+    pub const SCREEN_EFFECT_INVALID_TARGET: DiagnosticCode = DiagnosticCode::new("L1761");
+
+    /// `L2392` — more than four `ScreenEffect`s are applied; the extras (highest `order`, then highest
+    /// entity id) are dropped.
+    pub const SCREEN_EFFECT_CAP: DiagnosticCode = DiagnosticCode::new("L2392");
+
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
     pub const RENDER_GOLDEN_MISSING: DiagnosticCode = DiagnosticCode::new("L2201");
@@ -11451,6 +11459,28 @@ Fix: keep each clip share below 1 and the pair's sum below 1 (the default is `[0
 `exposure_range` as `[min, max]` inside `[-8, 8]`.",
     },
     CodeEntry {
+        code: code::SCREEN_EFFECT_INVALID_TARGET,
+        severity: Severity::Error,
+        title: "invalid screen-effect region",
+        explanation: "A `ScreenEffect` with a `region` target has a size element that is zero, negative or not
+finite, or an offset element that is not finite. The region is laid out in the UI's canvas units like a `UiRect`:
+`anchor` picks the corner or edge, `offset` moves it, `size` is `[width, height]` and must be positive. An effect
+with an unusable region is not applied.
+
+Fix: give `size` two positive numbers and `offset` two finite numbers, or use `target: fill`.",
+    },
+    CodeEntry {
+        code: code::SCREEN_EFFECT_CAP,
+        severity: Severity::Warning,
+        title: "too many screen effects",
+        explanation: "More than four `ScreenEffect`s would apply to the frame. At most four are applied, lowest
+`order` first and then lowest entity id; the rest are not drawn. An effect with every stage off (for example
+`preset: none` and no override) is not applied and is not counted. Raised once per load by extract and by
+check-scene.
+
+Fix: remove an effect, merge two into one region, or leave the extra one's stages off.",
+    },
+    CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
         severity: Severity::Error,
         title: "golden image is missing",
@@ -14757,6 +14787,8 @@ mod tests {
         code::CUBE_LUT_MALFORMED,
         code::CUBE_LUT_UNSUPPORTED,
         code::POST_PROCESS_INVALID_METERING,
+        code::SCREEN_EFFECT_INVALID_TARGET,
+        code::SCREEN_EFFECT_CAP,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,
@@ -15143,6 +15175,7 @@ mod tests {
             code::RENDER_VIEW_BUDGET,
             code::RAIN_DUPLICATE,
             code::RAIN_STREAK_BUDGET,
+            code::SCREEN_EFFECT_CAP,
             code::TRANSITION_CARRY_DEAD,
             code::TRANSITION_CARRY_ORPHANED,
             code::RESTORE_ENGINE_VERSION_DIFFERS,

@@ -1377,6 +1377,7 @@ fn extract_inner(
     // space has no view depth to sort by instead. This is the determinism contract for
     // `RenderScene.ui` (mirrors the extract-determinism guarantee every other field already has).
     ui_entries.sort_by_key(|(order, id, _)| (*order, *id));
+    let ui_orders: Vec<i32> = ui_entries.iter().map(|e| e.0).collect();
     let ui: Vec<UiInstance> = ui_entries
         .into_iter()
         .map(|(_, _, instance)| instance)
@@ -1842,6 +1843,9 @@ fn extract_inner(
         views: view_table.views,
         rain: crate::rain::extract_rain(world, &ids, now, degraded),
         layered: None,
+        screen_effects: crate::screen_effect::extract_screen_effects(
+            world, &ids, now, viewport, &ui_orders, degraded,
+        ),
     };
     if let Some(data) = scene.viewmodel.as_mut() {
         data.particles = scene

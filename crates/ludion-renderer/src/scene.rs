@@ -1924,6 +1924,9 @@ pub struct RenderScene {
     /// `None` for an unlayered frame. A layered frame's main scene holds only the items its camera's
     /// layers draw; this is the full scene and every item's mask, which each secondary view filters.
     pub layered: Option<Box<crate::layers::LayeredSource>>,
+    /// The screen effects applied over the frame, in draw order, at most [`crate::MAX_SCREEN_EFFECTS`].
+    /// Empty leaves the frame unchanged.
+    pub screen_effects: Vec<crate::screen_effect::ScreenEffectData>,
 }
 
 impl RenderScene {
@@ -1969,6 +1972,7 @@ impl RenderScene {
             views: Vec::new(),
             rain: None,
             layered: None,
+            screen_effects: Vec::new(),
         }
     }
 }

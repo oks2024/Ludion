@@ -8518,6 +8518,363 @@
     "type": "object",
     "properties": {}
   },
+  "ScreenEffect": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ScreenEffect",
+    "description": "A screen-look filter over the frame (`target: fill`) or a rectangle of it (`target: region`).\nDrawn in UI order: elements with a lower `order` draw under it, the rest over it. Each stage is\noptional; an unset stage takes the `preset`'s value, so the scene text carries only what was\noverridden. An effect with every stage off is not applied. At most four are applied per frame\n(`L2392`). Animated stages follow game time and `seed`.\n\n```\nuse ludion_components::{ScreenEffect, ScreenEffectPreset};\n\nlet fx: ScreenEffect = serde_json::from_value(serde_json::json!({\n    \"preset\": \"crt\",\n    \"scanlines\": 0.5,\n}))\n.unwrap();\nassert_eq!(fx.preset, ScreenEffectPreset::Crt);\nassert_eq!(fx.stages().scanlines, 0.5);\nassert_eq!(fx.stages().curvature, 0.06);\n```",
+    "type": "object",
+    "properties": {
+      "target": {
+        "description": "Where the effect draws (default the whole frame).",
+        "$ref": "#/$defs/ScreenEffectTarget",
+        "default": "fill"
+      },
+      "order": {
+        "description": "UI order: elements with a lower `order` draw under the effect (default 0).",
+        "type": "integer",
+        "format": "int32"
+      },
+      "preset": {
+        "description": "The starting look (default none).",
+        "$ref": "#/$defs/ScreenEffectPreset"
+      },
+      "scanlines": {
+        "description": "Scanline darkening, in `[0, 1]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "scanline_count": {
+        "description": "Scanlines across the effect's height, in `[1, 4320]`.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint32",
+        "minimum": 1,
+        "maximum": 4320
+      },
+      "mask": {
+        "description": "The shadow mask pattern.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ScreenMaskKind"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "mask_strength": {
+        "description": "The shadow mask's strength, in `[0, 1]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "curvature": {
+        "description": "Barrel curvature, in `[0, 0.3]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 0.3
+      },
+      "phosphor": {
+        "description": "Linear mono tint `[r, g, b]`, each at least 0; `[0, 0, 0]` keeps the colour.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "glow": {
+        "description": "Bloom of the bright parts, in `[0, 1]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "chroma_bleed": {
+        "description": "Horizontal chroma smear, in `[0, 1]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "noise": {
+        "description": "Animated noise, in `[0, 1]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "tracking": {
+        "description": "Tracking error bands, in `[0, 1]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "roll": {
+        "description": "Vertical roll in regions per second, in `[-4, 4]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": -4.0,
+        "maximum": 4.0
+      },
+      "jitter": {
+        "description": "Horizontal line jitter, in `[0, 1]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "flicker": {
+        "description": "Brightness flicker, in `[0, 1]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "interlace": {
+        "description": "Alternate the scanline phase each frame.",
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "posterize": {
+        "description": "Colour levels per channel, in `[0, 256]`; 0 or 1 is off.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint32",
+        "minimum": 0,
+        "maximum": 256
+      },
+      "sweep": {
+        "description": "The sweep bar's strength, in `[0, 1]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0
+      },
+      "sweep_period": {
+        "description": "Seconds per sweep, in `[0.1, 600]`.",
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "float",
+        "minimum": 0.1,
+        "maximum": 600.0
+      },
+      "seed": {
+        "description": "Varies the noise and jitter hash (default 0).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      }
+    },
+    "additionalProperties": false,
+    "$defs": {
+      "ScreenEffectTarget": {
+        "description": "Where a [`ScreenEffect`] draws.",
+        "oneOf": [
+          {
+            "description": "The whole output frame.",
+            "type": "string",
+            "const": "fill"
+          },
+          {
+            "description": "A rectangle laid out like a `UiRect`, in the UI's canvas units.",
+            "type": "object",
+            "properties": {
+              "region": {
+                "type": "object",
+                "properties": {
+                  "anchor": {
+                    "description": "Which canvas point the rectangle hangs from.",
+                    "$ref": "#/$defs/Anchor"
+                  },
+                  "offset": {
+                    "description": "Canvas-unit shift from the anchor `[x, y]`.",
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "minItems": 2,
+                    "maxItems": 2
+                  },
+                  "size": {
+                    "description": "Canvas-unit size `[width, height]`; both must be positive.",
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "minItems": 2,
+                    "maxItems": 2
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "anchor",
+                  "offset",
+                  "size"
+                ]
+              }
+            },
+            "required": [
+              "region"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Anchor": {
+        "description": "Which of the nine canvas points a screen-space UI element ([`UiRect`], [`UiText`]) pins to — and,\nequally, which point of the element's own extent sits on it (its own pivot). For example,\n[`Anchor::BottomRight`] pins the element's bottom-right corner to the canvas's bottom-right\ncorner (a corner HUD needs no size arithmetic); [`Anchor::Center`] centers the element on the\ncanvas center with zero offset. There is no separate `pivot` field — one anchor names both ends.\n\n**Every variant carries a doc comment.** This is load-bearing, not style: `schemars` only emits\nthe `oneOf`-of-`const` schema shape (which the editor inspector needs to render a dropdown) when\nevery variant of a unit-only enum is doc-commented — an undocumented variant collapses the whole\nschema to a bare `{\"enum\": [...]}`, which falls to the raw-JSON textarea instead.",
+        "oneOf": [
+          {
+            "description": "The canvas's top-left corner; the element's own top-left corner sits there.",
+            "type": "string",
+            "const": "top_left"
+          },
+          {
+            "description": "The canvas's top edge, horizontally centered; the element's own top-center point sits there.",
+            "type": "string",
+            "const": "top_center"
+          },
+          {
+            "description": "The canvas's top-right corner; the element's own top-right corner sits there.",
+            "type": "string",
+            "const": "top_right"
+          },
+          {
+            "description": "The canvas's left edge, vertically centered; the element's own center-left point sits there.",
+            "type": "string",
+            "const": "center_left"
+          },
+          {
+            "description": "The canvas's center; the element's own center sits there.",
+            "type": "string",
+            "const": "center"
+          },
+          {
+            "description": "The canvas's right edge, vertically centered; the element's own center-right point sits there.",
+            "type": "string",
+            "const": "center_right"
+          },
+          {
+            "description": "The canvas's bottom-left corner; the element's own bottom-left corner sits there.",
+            "type": "string",
+            "const": "bottom_left"
+          },
+          {
+            "description": "The canvas's bottom edge, horizontally centered; the element's own bottom-center point sits\nthere.",
+            "type": "string",
+            "const": "bottom_center"
+          },
+          {
+            "description": "The canvas's bottom-right corner; the element's own bottom-right corner sits there.",
+            "type": "string",
+            "const": "bottom_right"
+          }
+        ]
+      },
+      "ScreenEffectPreset": {
+        "description": "A named starting point for the stages.",
+        "oneOf": [
+          {
+            "description": "Every stage off.",
+            "type": "string",
+            "const": "none"
+          },
+          {
+            "description": "A green phosphor CRT: scanlines, an aperture mask, curvature, glow and light noise.",
+            "type": "string",
+            "const": "crt"
+          },
+          {
+            "description": "Analog video: chroma bleed, tracking, jitter, noise and an amber tint.",
+            "type": "string",
+            "const": "analog_video"
+          },
+          {
+            "description": "Fine scanlines, a slow sweep bar and a slight posterize.",
+            "type": "string",
+            "const": "scan"
+          }
+        ]
+      },
+      "ScreenMaskKind": {
+        "description": "The shadow mask pattern of a CRT.",
+        "oneOf": [
+          {
+            "description": "No mask.",
+            "type": "string",
+            "const": "none"
+          },
+          {
+            "description": "Vertical RGB stripes.",
+            "type": "string",
+            "const": "aperture"
+          },
+          {
+            "description": "Staggered RGB slots.",
+            "type": "string",
+            "const": "slot"
+          },
+          {
+            "description": "Triangular RGB dots.",
+            "type": "string",
+            "const": "shadow"
+          }
+        ]
+      }
+    }
+  },
   "SightSampleRecord": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "SightSampleRecord",

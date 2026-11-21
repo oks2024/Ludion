@@ -79,6 +79,7 @@ pub(crate) fn face_scene(scene: &RenderScene, position: Vec3, face: u32) -> Rend
         light.scatter = 0.0;
     }
     out.ui.clear();
+    out.screen_effects.clear();
     out.views.clear();
     out.rain = None;
     out.debug_lines.clear();

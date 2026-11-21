@@ -153,6 +153,8 @@ pub(crate) fn world_key(
         rain: _,
         // layers filter the main frame and the views; a capture draws the scene it is given
         layered: _,
+        // `face_scene` drops the screen effects: they filter the displayed frame, never a capture
+        screen_effects: _,
     } = face_scene;
 
     let mut w = KeyWriter(Vec::new());

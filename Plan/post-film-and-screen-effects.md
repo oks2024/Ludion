@@ -144,10 +144,17 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
     analog_video | scan`, and the stages of the request (`scanlines`, `scanline_count`, `mask`, `mask_strength`,
     `curvature`, `phosphor`, `glow`, `chroma_bleed`, `noise`, `tracking`, `roll`, `jitter`, `flicker`, `interlace`,
     `posterize`, `sweep`, `sweep_period`, `seed`). Each stage is optional: unset takes the preset's value, so canonical
-    text carries only what the author overrode.
+    text carries only what the author overrode. Targets are `fill | region` for W4 (`view` arrives in W5). A phosphor of
+    `[0, 0, 0]`, a `posterize` below 2 and a `mask` at strength 0 are off; an effect with every stage off is not applied
+    and not counted. A region lays out like a `UiRect` (`anchor`, `offset`, `size`, canvas units) and is clamped to the
+    viewport at extract.
 23. **Presets** take the request's proposed values: `crt` = scanlines, aperture mask, curvature, phosphor tint, glow,
     light noise; `analog_video` = chroma bleed, tracking, jitter, noise, desaturated amber, no mask; `scan` = fine
-    scanlines, a slow sweep bar, slight posterize, no curvature.
+    scanlines, a slow sweep bar, slight posterize, no curvature. Base (`none`): every stage off, `scanline_count` 240,
+    `sweep_period` 2. `crt`: scanlines 0.35, aperture mask 0.2, curvature 0.06, phosphor `[0.25, 1, 0.45]`, glow 0.3,
+    noise 0.04, flicker 0.02. `analog_video`: scanlines 0.1, chroma bleed 0.4, tracking 0.15, jitter 0.2, noise 0.08,
+    flicker 0.03, phosphor `[1, 0.72, 0.4]`, interlace. `scan`: scanlines 0.2 at 540 lines, sweep 0.25 every 4 s,
+    posterize 24, noise 0.02.
 24. **Placement (region and fill).** A backdrop filter in UI order: with effects present, the overlay is split at each
     effect's `order`; the region of the output is copied to a transient, the effect draws the region back over it, then
     the remaining UI draws on top. A scene with no `ScreenEffect` keeps today's single overlay pass. The 3D frame's own
@@ -155,7 +162,8 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
 25. **Placement (view).** The effect is the last step of that `RenderView`'s own chain, so it is baked into the texture
     before any `UiRect` samples it. It waits on request 0017's view chain.
 26. **Cap.** At most 4 applied per frame; the extra ones (highest `order`, then highest `EntityId`) are not applied and
-    raise `L2392` once per load, never silently. `L1761` for a non-positive region size or a `view` naming no
+    raise `L2392` once per load, never silently. The applied ones are the lowest `(order, EntityId)` among the effects
+    that change a pixel and have a usable region. `L1761` for a non-positive region size or a `view` naming no
     `RenderView`. Animated stages are functions of game time (decision 3) and `seed`. Target cost ≤ 0.15 ms at 1080p for
     a 320² region plus a fullscreen `scan`, measured on the pinned machines.
 
@@ -228,3 +236,4 @@ before the silhouette (decision 13); codes renumbered.
 - W2b (`ludion lut identity|bake|apply|stats`, the `grade_model` CPU twin of `grade()`) mechanized on the M5 2026-11-21: a LUT baked from a warm/teal analytic grade renders within 5 output steps (mean 0.05) of the analytic render of the same scene. Scratch scene `post-film-1982-lut` + its `.cube` owed a move into `examples/gallery/` and goldens on the pinned machines.
 - W3a (`exposure_mode`, `exposure_compensation`, `metering*`, `exposure_range`, `L1760`, the `exposure_meter` pass) mechanized on the M5 2026-11-21; goldens, the scratch scene `post-metered-exposure` and the `exposure` budget are owed on the pinned machines.
 - W3b (`--debug-view exposure_meter`, the metered EV in the `ludion render` summary and `--frames` strip, the pan check `exposure_pan`) mechanized on the M5 2026-11-21: a metered frame and its manual twin render byte-identical with the readback armed or not, and manual scenes' graphs are unmoved. The `ProfileReport` EV field is an R14 item (it moves the protocol schema and `replay_schema_hash`). The view's look is judged by a human at the next sitting.
+- W4b (`ScreenEffect` component, presets, `L1761`/`L2392`, extract into `RenderScene.screen_effects`, check-scene's cap warning) mechanized on the M5 2026-11-21; no pass reads it yet, so every frame and `dump-graph` is unchanged.

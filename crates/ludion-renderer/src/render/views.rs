@@ -95,6 +95,7 @@ pub fn view_scene(scene: &RenderScene, index: usize) -> RenderScene {
     out.silhouettes = Silhouettes::default();
     out.debug_view = None;
     out.ui.clear();
+    out.screen_effects.clear();
     out.views.clear();
     for light in &mut out.lights {
         light.scatter = 0.0;

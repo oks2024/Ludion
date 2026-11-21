@@ -80,6 +80,7 @@ pub mod rain;
 mod render;
 mod scatter;
 mod scene;
+mod screen_effect;
 mod shader_reload;
 mod ssr_pyramid;
 mod ssr_trace;
@@ -146,6 +147,7 @@ pub use scene::{
     UiClipBox, UiInstance, UiRotation, UiShapeGeometry, UiShapeStroke, WorldVoxelGrid,
     aspect_ratio, drop_shadow_fade,
 };
+pub use screen_effect::{MAX_SCREEN_EFFECTS, ScreenEffectData, ScreenMask};
 pub use shader_reload::{check_shader_reload, is_renderer_shader};
 pub use sun_cascade::{
     SUN_CASCADE_BIAS_TEXEL, SUN_CASCADE_LAMBDA, SUN_CASCADE_MIN_TILE, SunCascade, SunCascadeStat,

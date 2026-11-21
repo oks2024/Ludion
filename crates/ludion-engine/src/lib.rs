@@ -134,6 +134,7 @@ mod run_save;
 mod scene_check;
 mod scene_physics;
 mod scene_session;
+mod screen_effect;
 mod sculpt_mesh;
 mod secondary_view;
 pub mod sequences;
@@ -259,6 +260,7 @@ pub use ludion_components::Rain;
 pub use ludion_components::RenderLayers;
 pub use ludion_components::RenderView;
 pub use ludion_components::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
+pub use ludion_components::{ScreenEffect, ScreenEffectPreset, ScreenEffectTarget, ScreenMaskKind};
 pub use ludion_nav::PathStatus;
 pub use ludion_protocol::replay::GameIdentity;
 pub use ludion_scene::Mirror;
@@ -379,6 +381,7 @@ pub use scene_check::{
     scene_prefab_clip_diagnostics, scene_sensor_diagnostics, scene_sun_diagnostics,
     scene_surface_diagnostics,
 };
+pub use screen_effect::scene_screen_effect_diagnostics;
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use secondary_view::scene_render_view_diagnostics;
 pub use sequences::{SequenceEvents, sequence_update};
