@@ -419,6 +419,8 @@ pub use ludion_renderer::{
     AntiAliasing, DebugView, FrameSize, GpuUploads, LookMotion, PresentSize, ProbePrune, Quality,
     QualityParams, RenderScale, dump_frame_graph_json,
 };
+// The metered exposure `ludion render` prints ([`RenderOutcome::metered`]).
+pub use ludion_renderer::MeterReading;
 
 #[cfg(test)]
 mod animation_clock_tests;

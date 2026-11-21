@@ -52,6 +52,7 @@ mod cull;
 mod cull_stats;
 mod debug_view;
 mod exposure_meter;
+mod exposure_readback;
 mod frame_observer;
 mod gi_bake;
 mod gi_bin;
@@ -99,6 +100,7 @@ pub use cull_stats::CullViewCount;
 pub use debug_view::{
     DebugView, IRRADIANCE_VIEW_SCALE, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE,
 };
+pub use exposure_readback::MeterReading;
 pub use frame_observer::{FrameObserver, FramePhase};
 pub use gi_bake::{GiReadback, max_gi_probes};
 pub use graph::{

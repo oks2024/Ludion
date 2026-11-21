@@ -4,7 +4,7 @@
 //! missing" is answerable from one PNG. It is host render state, like debug-draw categories: it never
 //! enters a scene file or a `WorldHash`, and it never turns its effect on — with SSR off for the frame
 //! there is no trace to show, a scene without probes has no index to draw, and a frame with no granted
-//! local-light shadow has no atlas, and a sun without fitted cascades has none to tint by; the normal
+//! local-light shadow has no atlas, and a sun without fitted cascades has none to tint by, and an unmetered scene has no histogram; the normal
 //! frame is drawn in each case. The irradiance view needs no subject: it always draws.
 
 /// One of the full-screen debug views.
@@ -29,17 +29,22 @@ pub enum DebugView {
     /// local lights and the sun, each with its shadow), no specular, emissive or post, stored as
     /// `sRGB(E / IRRADIANCE_VIEW_SCALE)`. The picture `light_exposure` is checked against.
     Irradiance,
+    /// The metered frame, dimmed, with the meter's 64-bin histogram, its trimmed bins, the mean, the
+    /// mid-grey target and the unclamped window drawn over the bottom quarter. Drawn only when the
+    /// scene meters (`exposure_mode: metered`); a manual scene draws the normal frame.
+    ExposureMeter,
 }
 
 impl DebugView {
     /// Every view, in the order the CLI lists them.
-    pub const ALL: [DebugView; 6] = [
+    pub const ALL: [DebugView; 7] = [
         DebugView::SsrConfidence,
         DebugView::SsrFootprint,
         DebugView::ProbeIndex,
         DebugView::LocalShadowAtlas,
         DebugView::SunCascades,
         DebugView::Irradiance,
+        DebugView::ExposureMeter,
     ];
 
     /// The spelling used by the CLI and in summaries.
@@ -51,6 +56,7 @@ impl DebugView {
             DebugView::LocalShadowAtlas => "local_shadow_atlas",
             DebugView::SunCascades => "sun_cascades",
             DebugView::Irradiance => "irradiance",
+            DebugView::ExposureMeter => "exposure_meter",
         }
     }
 

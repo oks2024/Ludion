@@ -73,6 +73,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "dof.wgsl",
     "dof_coc.wgsl",
     "exposure_meter.wgsl",
+    "exposure_meter_debug.wgsl",
     "gi_bake.wgsl",
     "gi_inject.wgsl",
     "ground_marker.wgsl",
@@ -125,6 +126,7 @@ pub const UNFILTERABLE_TEXTURES: &[&str] = &[
     "trace_hiz",
     "probe_live",
     "exposure_tex",
+    "emd_table",
     "proj_receivers",
     "lit_receivers",
 ];
@@ -301,6 +303,7 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
         "dof_coc.wgsl",
         &["fullscreen_vs.wgsl", "hdr.wgsl", "world_from_depth.wgsl"],
     ),
+    ("exposure_meter_debug.wgsl", &["fullscreen_vs.wgsl"]),
     (
         "ground_marker.wgsl",
         &["camera.wgsl", "rounded_box.wgsl", "quad.wgsl"],

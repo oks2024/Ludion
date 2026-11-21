@@ -16,9 +16,18 @@ pub(crate) struct ExposureMeter {
     fallback: wgpu::TextureView,
 }
 
+/// The table's bin range, `[LOG2_MIN, LOG2_MAX)` in log2 luminance split into `shader_gen::BINS`
+/// bins: the WGSL constants of the same names, read by the debug view's uniform.
+pub(crate) const LOG2_MIN: f32 = -16.0;
+pub(crate) const LOG2_MAX: f32 = 8.0;
+
 /// One frame's meter upload: the params uniform.
 pub(crate) struct MeterFrame {
     params: wgpu::Buffer,
+    /// The frame's authored correction limits `[min, max]` in EV.
+    pub(crate) range: [f32; 2],
+    /// The shares of the weight trimmed off the dark and bright ends.
+    pub(crate) clip: [f32; 2],
 }
 
 impl ExposureMeter {
@@ -73,6 +82,8 @@ impl ExposureMeter {
             pad1: 0,
         };
         MeterFrame {
+            range: meter.range,
+            clip: meter.clip,
             params: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("exposure meter params"),
                 contents: bytemuck::bytes_of(&params),

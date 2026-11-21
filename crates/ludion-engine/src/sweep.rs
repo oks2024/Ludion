@@ -251,6 +251,8 @@ pub struct FrameCell {
     pub frame: u64,
     /// The text burned into the cell (`frame N`).
     pub label: String,
+    /// The exposure the meter chose for this cell; `None` for a scene that does not meter.
+    pub metered: Option<ludion_renderer::MeterReading>,
 }
 
 /// The result of a time strip: the stitched image plus everything a caller must echo.
@@ -354,7 +356,11 @@ pub fn render_frame_strip(
             driver.time(),
             QualityParams::FULL.particle_density,
         )?);
-        cells.push(FrameCell { frame, label });
+        cells.push(FrameCell {
+            frame,
+            label,
+            metered: None,
+        });
     }
 
     // --- GPU work: one renderer, reused across every cell. ---
@@ -366,6 +372,7 @@ pub fn render_frame_strip(
     );
 
     let mut strip = vec![0u8; layout.sheet_w as usize * layout.sheet_h as usize * 4];
+    renderer.set_meter_readback(true);
     for (col, scene) in render_scenes.iter().enumerate() {
         let pixels = renderer
             .render(
@@ -374,7 +381,9 @@ pub fn render_frame_strip(
             )
             .map_err(|d| vec![d])?;
         blit_cell(&mut strip, &layout, &pixels, 0, col as u32);
+        cells[col].metered = renderer.collect_meter_readings(true).pop();
     }
+    renderer.set_meter_readback(false);
 
     Ok(FrameStripOutcome {
         image: RenderedImage {

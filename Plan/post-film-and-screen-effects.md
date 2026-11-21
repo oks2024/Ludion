@@ -117,9 +117,16 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
     the meter is render-only and never feeds the sim. A game that drives zone targets from `LightExposure` gets one
     light model on both sides. The `irradiance` debug view replaces `composite`, so it stays unmetered.
 20. **Instruments.** `ludion render --debug-view exposure_meter` (CLI and engine only, not on the wire: a
-    `RenderDebugView` variant moves `replay_schema_hash`, `Plan/light-exposure.md` decision 18) draws the histogram and
-    the chosen EV, reading the 65x1 table. `ludion profile` records the metered EV per frame by reading texel 64 back off
-    the frame path.
+    `RenderDebugView` variant moves `replay_schema_hash`, `Plan/light-exposure.md` decision 18) replaces `composite`
+    with the metered frame, dimmed, and the 64-bin histogram over its bottom quarter: bars white inside the trimmed
+    window and grey where `metering_clip` cut them, a green line at the trimmed mean, a yellow one at the mid-grey
+    target, a translucent blue band over the means the correction does not clamp. The view needs the meter, so a manual
+    scene draws the normal frame and the CLI says why. The EV is text, not drawn: the table's texel 64 is read back
+    through a non-blocking three-deep ring (the cull-stats precedent, `Renderer::set_meter_readback` /
+    `collect_meter_readings`) and `ludion render` prints it in its summary, ` (metered: +1.42 EV, mean log2 -4.05)` with
+    `, clamped` when the correction sits on a range end; a `--frames` strip prints one per frame. **R14 item:** the
+    `ProfileReport` per-frame EV field moves the protocol schema and `replay_schema_hash`; ship it in the R14 round, with
+    the render summary as the shipped stand-in.
 
 ### D — animated grain
 
@@ -174,8 +181,9 @@ The rest of both ranges is reserved for this plan.
   identity|bake|apply|stats` with the grade's CPU twin, a committed `.cube` in the gallery, `docs/post-processing.md`
   and `anti-aliasing.md` (where the LUT sits with SMAA on).
 - **W3 — metered exposure** (C), split: **W3a** the fields, `L1760`, `exposure_compensation`, the `exposure_meter`
-  pass, the composite's optional input, `[post_groups] exposure`; **W3b** the `exposure_meter` view, the profile field,
-  an `image-stats` bright-to-dark pan check.
+  pass, the composite's optional input, `[post_groups] exposure`; **W3b** the `exposure_meter` view, the render-summary
+  EV (the `ProfileReport` field is an R14 item, decision 20), a bright-to-dark pan check as a CLI test (`image-stats`
+  measures defects, not brightness, so it is not an `image-stats` metric).
 - **W4 — animated grain and region/fill effects** (D, F): the tick in `PostData`, `grain_motion`, `ScreenEffect`,
   `L1761`/`L2392`, the overlay split, `[post_groups] screen_fx`, gallery `screen-effects.yaml` with a `--frames 0,1,2`
   strip, `docs/screen-effects.md`. May split into W4a (D) and W4b (F) at planning. Needs no 0018 field (decision 3).
@@ -219,3 +227,4 @@ before the silhouette (decision 13); codes renumbered.
 - W2a (`.cube` parser, `lut` field, the composite step 7a) mechanized on the M5 2026-11-21; goldens owed on the pinned machines.
 - W2b (`ludion lut identity|bake|apply|stats`, the `grade_model` CPU twin of `grade()`) mechanized on the M5 2026-11-21: a LUT baked from a warm/teal analytic grade renders within 5 output steps (mean 0.05) of the analytic render of the same scene. Scratch scene `post-film-1982-lut` + its `.cube` owed a move into `examples/gallery/` and goldens on the pinned machines.
 - W3a (`exposure_mode`, `exposure_compensation`, `metering*`, `exposure_range`, `L1760`, the `exposure_meter` pass) mechanized on the M5 2026-11-21; goldens, the scratch scene `post-metered-exposure` and the `exposure` budget are owed on the pinned machines.
+- W3b (`--debug-view exposure_meter`, the metered EV in the `ludion render` summary and `--frames` strip, the pan check `exposure_pan`) mechanized on the M5 2026-11-21: a metered frame and its manual twin render byte-identical with the readback armed or not, and manual scenes' graphs are unmoved. The `ProfileReport` EV field is an R14 item (it moves the protocol schema and `replay_schema_hash`). The view's look is judged by a human at the next sitting.

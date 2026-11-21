@@ -39,6 +39,7 @@ use crate::cull::{
     AssetBounds, CullVolume, LodView, bounds_table, instance_bounds, instance_lod_radii,
 };
 use crate::cull_stats::{CullStatsRing, CullViewCount, SampleMeta};
+use crate::exposure_readback::{MeterReading, MeterRing};
 use crate::frame_observer::{FrameObserver, FramePhase};
 use crate::gi_bake::{BakeInput, GiBake, GiReadback, ResolvedGi, scaled_lattice, static_lights};
 use crate::gi_inject::{GiInject, GiInjectFrame, InjectInput};
@@ -708,6 +709,9 @@ pub struct Renderer {
     cull_over_cap: std::cell::Cell<u32>,
     /// The cull's counts readback ring, while armed ([`set_cull_stats`](Renderer::set_cull_stats)).
     cull_stats: std::cell::RefCell<Option<CullStatsRing>>,
+    /// The metered exposure's verdict readback ring, while armed
+    /// ([`set_meter_readback`](Renderer::set_meter_readback)).
+    meter_readback: std::cell::RefCell<Option<MeterRing>>,
 }
 
 impl Renderer {
@@ -892,6 +896,7 @@ impl Renderer {
             sun_cascade_override: std::cell::Cell::new(None),
             cull_over_cap: std::cell::Cell::new(0),
             cull_stats: std::cell::RefCell::new(None),
+            meter_readback: std::cell::RefCell::new(None),
         })
     }
 
@@ -1366,6 +1371,24 @@ impl Renderer {
     /// never inside a frame; without it, only samples the GPU already completed come back.
     pub fn collect_cull_stats(&self, wait: bool) -> Vec<Vec<CullViewCount>> {
         self.cull_stats
+            .borrow_mut()
+            .as_mut()
+            .map_or_else(Vec::new, |ring| ring.collect(self.gpu.device(), wait))
+    }
+
+    /// Arms or disarms the metered exposure's readback: armed, each metered frame copies its verdict
+    /// texel into a three-deep ring and skips the sample when the ring is full (see
+    /// [`collect_meter_readings`](Renderer::collect_meter_readings)). A frame with no meter files
+    /// nothing. Arming discards any earlier samples.
+    pub fn set_meter_readback(&self, armed: bool) {
+        *self.meter_readback.borrow_mut() = armed.then(MeterRing::new);
+    }
+
+    /// The finished readings of the armed ring, oldest first; empty when disarmed. `wait` blocks
+    /// until every filed reading has finished, so it is for after a render and never inside a
+    /// frame; without it, only readings the GPU already completed come back.
+    pub fn collect_meter_readings(&self, wait: bool) -> Vec<MeterReading> {
+        self.meter_readback
             .borrow_mut()
             .as_mut()
             .map_or_else(Vec::new, |ring| ring.collect(self.gpu.device(), wait))
@@ -4309,6 +4332,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::PROBE_DEBUG => self.record_probe_debug(pass),
             pass::LOCAL_SHADOW_DEBUG => self.record_local_shadow_debug(pass),
             pass::IRRADIANCE_DEBUG => self.record_irradiance_debug(pass),
+            pass::EXPOSURE_METER_DEBUG => self.record_exposure_meter_debug(pass),
             pass::PROBE_FACE => self.record_probe_face(pass),
             pass::TRANSPARENTS => self.record_transparents(pass),
             pass::TRANSPARENT_DEPTH => self.record_transparent_depth(pass),
@@ -4927,8 +4951,37 @@ impl FrameRecorder<'_> {
             pass.inputs[1],
             out,
         );
-        let mut compute = pass.begin_compute();
-        self.r.exposure_meter.dispatch(&mut compute, &bind);
+        {
+            let mut compute = pass.begin_compute();
+            self.r.exposure_meter.dispatch(&mut compute, &bind);
+        }
+        if let Some(ring) = self.r.meter_readback.borrow_mut().as_mut() {
+            ring.file(pass.device, pass.encoder, out.texture(), frame.range);
+        }
+    }
+
+    /// The `exposure_meter` debug view: the metered frame dimmed and the table's histogram, in place
+    /// of `composite`. The uniform carries the composite's CPU-side exposure and the meter's
+    /// authored limits, so the view draws what the frame was metered with.
+    fn record_exposure_meter_debug(&self, pass: &mut RecordedPass<'_>) {
+        let frame = self
+            .exposure_meter
+            .as_ref()
+            .expect("the view is scheduled only with a metered frame");
+        let uniform = shader_gen::ExposureMeterDebug {
+            exposure: compensated(self.post.exposure, self.post.exposure_compensation),
+            log2_min: crate::exposure_meter::LOG2_MIN,
+            log2_max: crate::exposure_meter::LOG2_MAX,
+            target_log2: 0.18_f32.log2(),
+            range: frame.range,
+            clip: frame.clip,
+        };
+        self.fullscreen_effect(
+            pass,
+            ShaderId::ExposureMeterDebug,
+            &[],
+            bytemuck::bytes_of(&uniform),
+        );
     }
 
     /// The mesh lighting's bind groups 2 and 3 — the sun with its shadows, and the environment with the
@@ -7865,6 +7918,7 @@ pub(crate) enum ShaderId {
     ProbeDebug,
     Projector,
     LocalShadowDebug,
+    ExposureMeterDebug,
     DecalReceiver,
     DecalLit,
     SmaaEdges,
@@ -7897,7 +7951,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 48;
+const SHADER_COUNT: usize = 49;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -8329,6 +8383,13 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         layouts: &[Some(LayoutId::LocalShadowDebug)],
     },
     ShaderDesc {
+        id: ShaderId::ExposureMeterDebug,
+        file_name: "exposure_meter_debug.wgsl",
+        body: include_str!("shaders/exposure_meter_debug.wgsl"),
+        snippets: &[Snippet::FullscreenVs],
+        layouts: &[Some(LayoutId::ExposureMeterDebug)],
+    },
+    ShaderDesc {
         id: ShaderId::DecalReceiver,
         file_name: "decal_receiver.wgsl",
         body: include_str!("shaders/decal_receiver.wgsl"),
@@ -8757,6 +8818,7 @@ enum LayoutId {
     ProbeDebug,
     Projector,
     LocalShadowDebug,
+    ExposureMeterDebug,
     /// The projector's group 1: the decal batch's base-colour map and its sampler.
     ProjectorMap,
     /// The receiver-id pass's group 1: `scene_depth`, the draw's mesh indices and its base offset.
@@ -8782,7 +8844,7 @@ enum LayoutId {
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 50;
+const LAYOUT_COUNT: usize = 51;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -8955,6 +9017,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::LocalShadowDebug,
         create: shader_gen::create_lsdbg_atlas_lsdbg_bgl,
+    },
+    LayoutDesc {
+        id: LayoutId::ExposureMeterDebug,
+        create: shader_gen::create_emd_scene_emd_table_emd_samp_emd_bgl,
     },
     LayoutDesc {
         id: LayoutId::ProjectorMap,
@@ -9185,7 +9251,8 @@ fn build_pipeline(
         | ShaderId::SmaaBlend
         | ShaderId::SsrDebug
         | ShaderId::ProbeDebug
-        | ShaderId::LocalShadowDebug => {
+        | ShaderId::LocalShadowDebug
+        | ShaderId::ExposureMeterDebug => {
             build_fullscreen_pipeline(device, label, src, &layout, OUTPUT_FORMAT, None)
         }
         ShaderId::UiRect => build_ui_rect_pipeline(device, label, src, &layout),

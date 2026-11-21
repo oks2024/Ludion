@@ -1464,7 +1464,7 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 61] = [
+const KNOWN_PASS_NAMES: [&str; 62] = [
     ludion_renderer::graph::pass::CULL,
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
@@ -1490,6 +1490,7 @@ const KNOWN_PASS_NAMES: [&str; 61] = [
     ludion_renderer::graph::pass::PROBE_DEBUG,
     ludion_renderer::graph::pass::LOCAL_SHADOW_DEBUG,
     ludion_renderer::graph::pass::IRRADIANCE_DEBUG,
+    ludion_renderer::graph::pass::EXPOSURE_METER_DEBUG,
     ludion_renderer::graph::pass::PROBE_RELIGHT,
     ludion_renderer::graph::pass::SHAFTS,
     ludion_renderer::graph::pass::SHAFTS_BLUR,
@@ -4224,6 +4225,7 @@ gpu_frame_max_ms = 9.5
             local_shadow_view: false,
             sun_cascade_view: false,
             irradiance_view: false,
+            exposure_meter_view: false,
             probe_relight: true,
             drop_shadow_atlas: Some(256),
             local_shadow_atlas: Some(256),

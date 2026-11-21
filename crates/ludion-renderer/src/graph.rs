@@ -49,6 +49,8 @@
 //!   debug view: one compute workgroup bins the HDR `scene`'s log2 luminance on a fixed sample grid into
 //!   the 65x1 `exposure` table, whose last texel `composite` reads (after `lens_up_0`) to scale its
 //!   exposure the same frame.
+//!   With [`PostChain::exposure_meter_view`] set, [`pass::EXPOSURE_METER_DEBUG`] replaces `composite`, reads the
+//!   `scene` and the table, and draws the metered frame with its histogram; the meter stays scheduled.
 //! - **composite** — blends in the defocused scene, mixes scene + blurred bloom, then applies fog, the
 //!   light shafts, exposure, the selected tonemap operator, the colour grade, the vignette and the
 //!   optional output dither, HDR→sRGB into the read-back output. It also reads `scene_depth` —
@@ -229,6 +231,10 @@ pub mod pass {
     /// The `irradiance` debug view (`ludion render --debug-view irradiance`): replaces `composite`,
     /// blitting the `scene` target the mesh pass wrote as `E / IRRADIANCE_VIEW_SCALE`.
     pub const IRRADIANCE_DEBUG: &str = "irradiance_debug";
+    /// The `exposure_meter` debug view (`ludion render --debug-view exposure_meter`): replaces
+    /// `composite`, reading the `scene` and the `exposure` table to draw the metered frame, dimmed,
+    /// with the histogram over its bottom quarter.
+    pub const EXPOSURE_METER_DEBUG: &str = "exposure_meter_debug";
     /// A probe capture's last pass: the lit face into the capture target, with sky visibility in
     /// alpha. Reads `scene` and `scene_depth`.
     pub const PROBE_FACE: &str = "probe_face";
@@ -911,6 +917,10 @@ pub struct PostChain {
     /// and [`pass::IRRADIANCE_DEBUG`] replaces `composite`. It needs no subject, so it is always set when
     /// asked for and no quality mask removes it.
     pub irradiance_view: bool,
+    /// The `exposure_meter` view: [`pass::EXPOSURE_METER_DEBUG`] replaces `composite` and draws the
+    /// histogram the meter binned. Set only when the scene asked for it **and** meters
+    /// ([`exposure_meter`](PostChain::exposure_meter)): a view never turns its effect on.
+    pub exposure_meter_view: bool,
     /// The anti-aliasing the host asked for. A client setting like [`RenderScale`]: `for_scene` leaves
     /// it [`Off`](AntiAliasing::Off), [`masked`](PostChain::masked) never changes it, and a debug view
     /// suppresses it ([`smaa_scheduled`](PostChain::smaa_scheduled)).
@@ -1096,6 +1106,8 @@ impl PostChain {
             sun_cascade_view: scene.debug_view == Some(crate::DebugView::SunCascades)
                 && sun_cascades.is_some(),
             irradiance_view: scene.debug_view == Some(crate::DebugView::Irradiance),
+            exposure_meter_view: scene.debug_view == Some(crate::DebugView::ExposureMeter)
+                && scene.post.is_some_and(|post| post.meter.is_some()),
             probe_relight: !scene.probes.is_empty(),
             drop_shadow_atlas: crate::projector::occlusion_atlas(scene.drop_shadows.len())
                 .map(|atlas| atlas.edge),
@@ -1141,6 +1153,7 @@ impl PostChain {
             && !self.local_shadow_view
             && !self.sun_cascade_view
             && !self.irradiance_view
+            && !self.exposure_meter_view
     }
 
     /// Whether this frame runs the `transparent_depth` pass: a transparent is drawn, a reader needs
@@ -1152,10 +1165,11 @@ impl PostChain {
     }
 
     /// Whether this frame runs the `exposure_meter` pass: the scene meters and no debug view stands in
-    /// for the composite that would read the table (the `irradiance` view stays unmetered). The one
-    /// predicate the graph and the recorder share.
+    /// for the composite that would read the table (the `irradiance` view stays unmetered; the
+    /// `exposure_meter` view draws the table, so it keeps the meter). The one predicate the graph
+    /// and the recorder share.
     pub fn exposure_meter_scheduled(self) -> bool {
-        self.exposure_meter && self.view().is_none()
+        self.exposure_meter && (self.view().is_none() || self.exposure_meter_view)
     }
 
     /// Whether the resample is the last output pass: the frame is resampled and no debug view stands in
@@ -1178,6 +1192,10 @@ impl PostChain {
                     .then_some(crate::DebugView::SunCascades)
             })
             .or_else(|| self.irradiance_view.then_some(crate::DebugView::Irradiance))
+            .or_else(|| {
+                self.exposure_meter_view
+                    .then_some(crate::DebugView::ExposureMeter)
+            })
     }
 
     /// The chain the scene requires, minus what this machine's [`Quality`] disables — masking an
@@ -1220,6 +1238,7 @@ impl PostChain {
             // Masked cascades leave nothing to tint by: the normal frame is drawn.
             sun_cascade_view: self.sun_cascade_view && sun_cascades.is_some(),
             irradiance_view: self.irradiance_view,
+            exposure_meter_view: self.exposure_meter_view,
             ssao: self.ssao && quality.ssao,
             // The march reads the shadow map, so the pair cannot outlive it. Keeping the map alive
             // for the shafts alone was the alternative and is worse: "shadows off" would then still
@@ -1659,9 +1678,12 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     });
     // The metered-exposure table: one texel per histogram bin plus the verdict in the last. Declared
     // after the streak chain so no existing resource handle moves.
-    let exposure = chain
-        .exposure_meter_scheduled()
-        .then(|| graph.transient("exposure", TextureDesc::rgba32_storage(65, 1)));
+    let exposure = chain.exposure_meter_scheduled().then(|| {
+        // `CopySrc`: the verdict texel is read back to the CPU.
+        let mut desc = TextureDesc::rgba32_storage(65, 1);
+        desc.usages.push(ludion_render_graph::TextureUsage::CopySrc);
+        graph.transient("exposure", desc)
+    });
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
     let output = graph.output("final", TextureDesc::present_target(width, height));
@@ -2123,6 +2145,12 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
+        _ if chain.exposure_meter_view => graph.add_external_pass(
+            pass::EXPOSURE_METER_DEBUG,
+            pass::EXPOSURE_METER_DEBUG,
+            vec![scene, exposure.expect("the view implies a scheduled meter")],
+            vec![composite_target],
+        ),
         _ if chain.irradiance_view => graph.add_external_pass(
             pass::IRRADIANCE_DEBUG,
             pass::IRRADIANCE_DEBUG,
@@ -2886,6 +2914,7 @@ mod tests {
                 local_shadow_view: false,
                 sun_cascade_view: false,
                 irradiance_view: false,
+                exposure_meter_view: false,
                 probe_relight: bits & 1 != 0,
                 // Content too, like the probes: no quality switch removes a drop shadow.
                 drop_shadow_atlas: (bits & 1 != 0).then_some(128),
@@ -3777,6 +3806,55 @@ mod tests {
         let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
         assert!(graph.passes().iter().all(|p| p.name != "exposure_meter"));
         assert!(graph.resources().iter().all(|r| r.name != "exposure"));
+    }
+
+    /// The `exposure_meter` view replaces `composite`, keeps the meter it draws, schedules no SMAA,
+    /// and exists only for a metered scene: a manual scene's view never turns the effect on.
+    #[test]
+    fn the_exposure_meter_view_replaces_composite_and_keeps_the_meter() {
+        let size = FrameSize::native(1920, 1080);
+        let mut scene = sun_scene();
+        scene.post = Some(crate::scene::PostData {
+            meter: Some(crate::scene::MeterData {
+                weighting: crate::scene::MeterWeighting::Center,
+                clip: [0.0, 0.0],
+                range: [-2.0, 2.0],
+            }),
+            ..crate::scene::PostData::default()
+        });
+        scene.debug_view = Some(crate::DebugView::ExposureMeter);
+        let mut chain = PostChain::for_scene(&scene);
+        assert!(chain.exposure_meter_view);
+        assert_eq!(chain.view(), Some(crate::DebugView::ExposureMeter));
+        assert!(chain.exposure_meter_scheduled());
+        assert!(
+            chain
+                .masked(&Quality::LOW, &QualityParams::LOW)
+                .exposure_meter_view
+        );
+        chain.aa = AntiAliasing::Smaa;
+        assert!(!chain.smaa_scheduled());
+
+        let (graph, _) = build_frame_graph(size, chain);
+        let names = pass_names(&graph);
+        assert!(names.contains(&pass::EXPOSURE_METER));
+        assert!(names.contains(&pass::EXPOSURE_METER_DEBUG));
+        assert!(!names.contains(&pass::COMPOSITE));
+        let at = |n: &str| names.iter().position(|p| *p == n).unwrap();
+        assert!(at("exposure_meter") < at("exposure_meter_debug"));
+        assert_eq!(
+            reads_of(&graph, "exposure_meter_debug"),
+            ["scene", "exposure"]
+        );
+
+        // A manual scene asking for the view draws the normal frame.
+        scene.post = Some(crate::scene::PostData::default());
+        let manual = PostChain::for_scene(&scene);
+        assert!(!manual.exposure_meter_view);
+        assert_eq!(manual.view(), None);
+        let (graph, _) = build_frame_graph(size, manual);
+        assert!(pass_names(&graph).contains(&pass::COMPOSITE));
+        assert!(!pass_names(&graph).contains(&pass::EXPOSURE_METER_DEBUG));
     }
 
     /// The meter derives from the scene's own mode, and no quality switch masks it.

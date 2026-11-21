@@ -58,6 +58,8 @@ pub struct RenderOutcome {
     /// The debug view actually drawn: the requested one when the frame traces reflections, `None`
     /// when none was asked for or SSR is off for this frame (not authored, or masked by the quality).
     pub debug_view: Option<DebugView>,
+    /// The exposure the meter chose for this frame; `None` for a scene that does not meter.
+    pub metered: Option<ludion_renderer::MeterReading>,
 }
 
 /// Renders the scene at `path` at `size` through the full pipeline, at [`QualitySetting::full`] —
@@ -154,7 +156,10 @@ pub fn render_scene_with_registry(
         renderer.adapter_name(),
         renderer.adapter_backend()
     );
+    renderer.set_meter_readback(true);
     let image = renderer.render(&render_scene, size).map_err(|d| vec![d])?;
+    let metered = renderer.collect_meter_readings(true).pop();
+    renderer.set_meter_readback(false);
 
     let timings_json = if collect_timings {
         Some(
@@ -179,6 +184,7 @@ pub fn render_scene_with_registry(
         applied_overrides,
         debug_drawn,
         debug_view,
+        metered,
     })
 }
 

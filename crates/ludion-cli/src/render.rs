@@ -380,7 +380,7 @@ fn run_scene(
                 return ExitCode::FAILURE;
             }
             println!(
-                "{}: rendered {width}x{height}{}{}{}{} on {}",
+                "{}: rendered {width}x{height}{}{}{}{}{} on {}",
                 out.display(),
                 resample_note(size),
                 frames_note(frames),
@@ -388,6 +388,9 @@ fn run_scene(
                     .summary(&outcome.debug_drawn)
                     .map_or_else(String::new, |clause| format!(" ({clause})")),
                 debug_view_note(view, outcome.debug_view),
+                outcome
+                    .metered
+                    .map_or_else(String::new, |m| metered_note(&m)),
                 outcome.adapter
             );
             ExitCode::SUCCESS
@@ -397,6 +400,16 @@ fn run_scene(
             report(scene, &diagnostics)
         }
     }
+}
+
+/// The summary clause for a metered frame: the EV the meter chose and the mean it aimed from.
+fn metered_note(reading: &ludion_engine::MeterReading) -> String {
+    format!(
+        " (metered: {:+.2} EV, mean log2 {:.2}{})",
+        reading.correction_ev,
+        reading.mean_log2,
+        if reading.clamped { ", clamped" } else { "" }
+    )
 }
 
 /// The summary clause for `--debug-view`: the view drawn, or why the normal frame was drawn instead.
@@ -417,6 +430,10 @@ fn debug_view_note(
         (Some(ludion_engine::DebugView::SunCascades), None) => format!(
             " (debug view: {} not drawn: the sun fits no cascades for this frame (no sun, no `cascades`, or this quality masks shadows))",
             ludion_engine::DebugView::SunCascades.name()
+        ),
+        (Some(ludion_engine::DebugView::ExposureMeter), None) => format!(
+            " (debug view: {} not drawn: the scene is not metered (`PostProcess.exposure_mode` is `manual`))",
+            ludion_engine::DebugView::ExposureMeter.name()
         ),
         (Some(view), None) => format!(
             " (debug view: {} not drawn: the scene has no reflection probes)",
@@ -755,7 +772,7 @@ fn run_frame_strip(
                 scale,
             );
             println!(
-                "frames {}: {} cells, {}x{}{} on {}",
+                "frames {}: {} cells, {}x{}{}{} on {}",
                 outcome
                     .cells
                     .iter()
@@ -768,11 +785,28 @@ fn run_frame_strip(
                 resample_verb(cell)
                     .map(|verb| format!(" (cells {verb} from {}x{})", cell.render.0, cell.render.1))
                     .unwrap_or_default(),
+                strip_metered_note(&outcome.cells),
                 outcome.adapter
             );
             ExitCode::SUCCESS
         }
         Err(diagnostics) => report(scene, &diagnostics),
+    }
+}
+
+/// The strip's metered EV per frame, empty when no cell metered.
+fn strip_metered_note(cells: &[ludion_engine::FrameCell]) -> String {
+    let readings: Vec<String> = cells
+        .iter()
+        .filter_map(|cell| {
+            cell.metered
+                .map(|m| format!("{}:{:+.2}", cell.frame, m.correction_ev))
+        })
+        .collect();
+    if readings.is_empty() {
+        String::new()
+    } else {
+        format!(" (metered EV per frame: {})", readings.join(" "))
     }
 }
 

@@ -7,6 +7,7 @@ use crate::scene::{MeshInstance, RenderScene};
 
 mod blended;
 mod exposure;
+mod exposure_view;
 mod film;
 mod gpu_cull;
 mod lit_additive;

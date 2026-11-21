@@ -26,6 +26,7 @@ mod docs;
 mod explain;
 mod export;
 mod exposure;
+mod exposure_pan;
 mod r#gen;
 mod generate_atlas;
 mod generate_atlas_font;
