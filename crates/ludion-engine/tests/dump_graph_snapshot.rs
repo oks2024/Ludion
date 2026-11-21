@@ -119,6 +119,23 @@ fn a_ui_scene_dumps_the_overlay_pass() {
     );
 }
 
+/// A scene carrying two `ScreenEffect`s dumps one `screen_fx` pass per effect after the overlay.
+#[test]
+fn a_screen_effect_scene_dumps_the_screen_fx_passes() {
+    let json = ludion_engine::dump_scene_graph_json(
+        &gallery("screen-effects.yaml"),
+        FrameSize::native(64, 64),
+        &QualitySetting::full(),
+        AntiAliasing::Off,
+    )
+    .expect("the gallery scene validates and schedules");
+    let passes = scheduled_passes(&json);
+    assert_eq!(
+        passes[passes.len() - 3..],
+        ["overlay", "screen_fx_0", "screen_fx_1"]
+    );
+}
+
 /// A scene carrying `GroundMarker` telegraphs dumps the unchanged minimal graph: the marker pipeline
 /// draws inside the `scene` pass (an accepted deviation from a dedicated pass — see
 /// `ludion_renderer::graph::ground_markers_leave_the_graph_untouched`), so the schedule the CLI

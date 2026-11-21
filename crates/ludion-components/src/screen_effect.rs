@@ -356,7 +356,7 @@ impl SemanticValidate for ScreenEffect {
                     format!("`ScreenEffect` region {what}"),
                 )
                 .with_path(path)
-                .with_help("see `ludion explain L1761`")
+                .with_help("see `ludion explain L1761` and `ludion docs screen-effects`")
             })
             .collect();
         if let Some(phosphor) = fx.phosphor {

@@ -51,7 +51,7 @@ pub(crate) fn extract_screen_effects(
                     format!("`ScreenEffect` region {what}"),
                 )
                 .with_path(path)
-                .with_help("see `ludion explain L1761`"),
+                .with_help("see `ludion explain L1761` and `ludion docs screen-effects`"),
             ));
             continue;
         }
@@ -131,7 +131,7 @@ fn cap_diagnostic(what: String) -> Diagnostic {
             "{what}: at most {MAX_SCREEN_EFFECTS} `ScreenEffect`s are applied, lowest `order` then lowest entity id first"
         ),
     )
-    .with_help("remove an effect or leave its stages off; `ludion explain L2392`")
+    .with_help("remove an effect or leave its stages off; `ludion explain L2392` and `ludion docs screen-effects`")
 }
 
 /// `L2392` at each non-neutral `ScreenEffect` past the cap, from scene text, in the order extract

@@ -1464,7 +1464,7 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 62] = [
+const KNOWN_PASS_NAMES: [&str; 66] = [
     ludion_renderer::graph::pass::CULL,
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
@@ -1527,6 +1527,10 @@ const KNOWN_PASS_NAMES: [&str; 62] = [
     ludion_renderer::graph::pass::RESOLVE,
     ludion_renderer::graph::pass::UPSCALE,
     ludion_renderer::graph::pass::OVERLAY,
+    ludion_renderer::graph::pass::SCREEN_FX[0],
+    ludion_renderer::graph::pass::SCREEN_FX[1],
+    ludion_renderer::graph::pass::SCREEN_FX[2],
+    ludion_renderer::graph::pass::SCREEN_FX[3],
 ];
 
 /// The post-process effect groups a budget can put a ceiling on, and the passes each one sums.
@@ -1555,7 +1559,7 @@ const KNOWN_PASS_NAMES: [&str; 62] = [
 ///
 /// `ssr` is the pyramids and the trace, not `reflections` (which runs every frame for the sky) and not
 /// the `ssr_debug` view.
-const POST_GROUPS: [(&str, &[&str]); 8] = [
+const POST_GROUPS: [(&str, &[&str]); 9] = [
     (
         "bloom",
         &[
@@ -1628,6 +1632,15 @@ const POST_GROUPS: [(&str, &[&str]); 8] = [
         ],
     ),
     ("exposure", &[ludion_renderer::graph::pass::EXPOSURE_METER]),
+    (
+        "screen_fx",
+        &[
+            ludion_renderer::graph::pass::SCREEN_FX[0],
+            ludion_renderer::graph::pass::SCREEN_FX[1],
+            ludion_renderer::graph::pass::SCREEN_FX[2],
+            ludion_renderer::graph::pass::SCREEN_FX[3],
+        ],
+    ),
 ];
 
 /// Pass kinds whose graph names carry a mip suffix (`hiz_reduce_3`): one pass per pyramid level, and
@@ -4219,6 +4232,7 @@ gpu_frame_max_ms = 9.5
             gi_inject: Some([4, 4, 4]),
             cull: Some(ludion_renderer::CullShape::for_counts(1000, 8, 4, 1)),
             debug_lines: true,
+            screen_effects: 4,
             ssr: Some(0.5),
             ssr_view: Some(DebugView::SsrConfidence),
             probe_view: true,

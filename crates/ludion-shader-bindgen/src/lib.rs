@@ -95,6 +95,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "rain.wgsl",
     "reflections.wgsl",
     "resolve.wgsl",
+    "screen_effect.wgsl",
     "shadow.wgsl",
     "shadow_cutout.wgsl",
     "shafts.wgsl",
@@ -388,6 +389,10 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "srgb.wgsl",
             "output_encode.wgsl",
         ],
+    ),
+    (
+        "screen_effect.wgsl",
+        &["bayer.wgsl", "srgb.wgsl", "output_encode.wgsl"],
     ),
     (
         "shafts.wgsl",

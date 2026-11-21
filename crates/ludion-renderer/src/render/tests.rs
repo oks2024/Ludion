@@ -17,6 +17,7 @@ mod medium_scatter;
 mod mesh_medium;
 mod rain;
 mod rim;
+mod screen_effect;
 mod shaft_layer;
 mod silhouette;
 mod skin_bounds;
@@ -1000,7 +1001,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
     // Two consecutive untextured rects → one batch of two instances.
     let mut scene = RenderScene::empty((64, 64));
     scene.ui = vec![rect(0.0), rect(20.0)];
-    let batches = renderer.build_ui_batches(&scene, device, &[], &[]);
+    let batches = renderer.build_ui_batches(&scene.ui, device, &[], &[]);
     assert_eq!(batches.len(), 1);
     assert!(
         matches!(batches[0], UiBatch::Rects { count: 2, .. }),
@@ -1009,7 +1010,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
 
     // rect, text, rect → three batches (a kind change closes each batch).
     scene.ui = vec![rect(0.0), text, rect(20.0)];
-    let batches = renderer.build_ui_batches(&scene, device, &[], &[]);
+    let batches = renderer.build_ui_batches(&scene.ui, device, &[], &[]);
     assert_eq!(batches.len(), 3, "kinds never merge across the boundary");
     assert!(matches!(batches[0], UiBatch::Rects { .. }));
     assert!(matches!(batches[1], UiBatch::Text { .. }));
@@ -1041,7 +1042,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
         texture: renderer.atlas.texture.clone(),
         view: renderer.atlas.view.clone(),
     }];
-    let batches = renderer.build_ui_batches(&scene, device, &atlas, &[]);
+    let batches = renderer.build_ui_batches(&scene.ui, device, &atlas, &[]);
     assert_eq!(batches.len(), 3, "a face change closes the text batch");
     assert!(batches.iter().all(|b| matches!(
         b,

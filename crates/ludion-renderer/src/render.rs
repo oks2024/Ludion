@@ -68,6 +68,7 @@ use crate::scene::{
     SpriteInstance, TextureImage, TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance,
     UiRotation, UiShapeGeometry, UiShapeStroke,
 };
+use crate::screen_effect::{ScreenEffectData, effect_params, ui_segments};
 use crate::shader_reload::{
     ReloadTarget, build_ibl, build_mipgen, classify, pipeline_incompatible, validate_wgsl,
 };
@@ -2477,7 +2478,16 @@ impl Renderer {
             .flatten()
             .map(|rain| rain::WetFrame::new(rain, scene.camera.position));
         let text_draws = self.build_text_draws(scene, device, &textures);
-        let ui_batches = self.build_ui_batches(scene, device, &textures, &view_targets);
+        let screen_effects: Vec<ScreenEffectData> = scene
+            .screen_effects
+            .iter()
+            .take(usize::from(chain.screen_effects))
+            .copied()
+            .collect();
+        let ui_batches = ui_segments(&scene.ui, &screen_effects)
+            .into_iter()
+            .map(|segment| self.build_ui_batches(segment, device, &textures, &view_targets))
+            .collect();
 
         let (lut_view, lut_params) = self.lut_view(scene);
 
@@ -2562,6 +2572,7 @@ impl Renderer {
             wet,
             text_draws,
             ui_batches,
+            screen_effects,
         })
     }
 
@@ -3202,15 +3213,15 @@ impl Renderer {
     /// decision 4).
     fn build_ui_batches(
         &self,
-        scene: &RenderScene,
+        ui: &[UiInstance],
         device: &wgpu::Device,
         textures: &[GpuTexture],
         views: &[wgpu::TextureView],
     ) -> Vec<UiBatch> {
         let mut batches = Vec::new();
         let mut i = 0;
-        while i < scene.ui.len() {
-            match &scene.ui[i] {
+        while i < ui.len() {
+            match &ui[i] {
                 UiInstance::Rect { texture, view, .. } => {
                     let source = (*texture, *view);
                     let mut raws = Vec::new();
@@ -3222,7 +3233,7 @@ impl Renderer {
                         clip,
                         view,
                         rotation,
-                    }) = scene.ui.get(i)
+                    }) = ui.get(i)
                     {
                         if (*texture, *view) != source {
                             break;
@@ -3277,7 +3288,7 @@ impl Renderer {
                         stroke,
                         clip,
                         rotation,
-                    }) = scene.ui.get(i)
+                    }) = ui.get(i)
                     {
                         raws.push(ui_shape_raw(
                             *origin_px, geometry, *fill, *stroke, clip, rotation,
@@ -3304,7 +3315,7 @@ impl Renderer {
                         stroke,
                         clip,
                         rotation,
-                    }) = scene.ui.get(i)
+                    }) = ui.get(i)
                     {
                         if let Some(fill) = fill {
                             push_ui_polygon_verts(
@@ -3349,7 +3360,7 @@ impl Renderer {
                         outline,
                         rotation,
                         ..
-                    }) = scene.ui.get(i)
+                    }) = ui.get(i)
                     {
                         if *font != face {
                             break;
@@ -4305,7 +4316,11 @@ struct FrameRecorder<'a> {
     /// (its last read of the scene pass).
     wet: Option<rain::WetFrame>,
     text_draws: Vec<TextDraw>,
-    ui_batches: Vec<UiBatch>,
+    /// The UI draws split at each screen effect's `ui_start`: one batch list per segment, so
+    /// `screen_effects.len() + 1` of them (a single list when the frame applies no effect).
+    ui_batches: Vec<Vec<UiBatch>>,
+    /// The effects this frame applies, in UI order; effect `k` draws in the `screen_fx_k` pass.
+    screen_effects: Vec<ScreenEffectData>,
 }
 
 impl PassRecorder for FrameRecorder<'_> {
@@ -4516,6 +4531,10 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::RESOLVE => self.record_resolve(pass),
             pass::UPSCALE => self.record_upscale(pass),
             pass::OVERLAY => self.record_overlay(pass),
+            name if pass::SCREEN_FX.contains(&name) => {
+                let k = pass::SCREEN_FX.iter().position(|n| *n == name).unwrap_or(0);
+                self.record_screen_fx(pass, k);
+            }
             // The pyramid's ten passes (and the streak chain's) are label arrays, not single constants, so they dispatch by
             // position rather than by pattern. Only the *first* downsample Karis-averages.
             other => {
@@ -6351,19 +6370,7 @@ impl FrameRecorder<'_> {
             &self.r.nearest_sampler,
         );
 
-        let ui_uniform = Ui {
-            viewport: [
-                pass.colors()[0].extent.width as f32,
-                pass.colors()[0].extent.height as f32,
-            ],
-            pad: [0.0, 0.0],
-        };
-        let ui_buf = init_buffer(
-            pass.device,
-            wgpu::BufferUsages::UNIFORM,
-            bytemuck::bytes_of(&ui_uniform),
-        );
-        let ui_bg = uniform_bind_group(pass.device, self.r.layouts.get(LayoutId::Ui), &ui_buf);
+        let ui_bg = self.ui_bind_group(pass);
 
         // The debug lines' depth read and output extent (`inputs[1]` is `scene_depth`, declared by the
         // graph exactly when lines exist).
@@ -6412,8 +6419,35 @@ impl FrameRecorder<'_> {
             rp.draw(0..lines.count, 0..1);
         }
 
-        // UI batches, in the scene's pinned draw order.
-        for batch in &self.ui_batches {
+        // UI batches, in the scene's pinned draw order (segment 0: what draws under the first effect).
+        self.draw_ui_batches(&mut rp, &self.ui_batches[0], &ui_bg);
+    }
+
+    /// The UI viewport uniform (the target's pixel extent) as a bind group.
+    fn ui_bind_group(&self, pass: &RecordedPass<'_>) -> wgpu::BindGroup {
+        let ui_uniform = Ui {
+            viewport: [
+                pass.colors()[0].extent.width as f32,
+                pass.colors()[0].extent.height as f32,
+            ],
+            pad: [0.0, 0.0],
+        };
+        let ui_buf = init_buffer(
+            pass.device,
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::bytes_of(&ui_uniform),
+        );
+        uniform_bind_group(pass.device, self.r.layouts.get(LayoutId::Ui), &ui_buf)
+    }
+
+    /// Draws one segment's UI batches in order; the overlay and every screen-effect pass share it.
+    fn draw_ui_batches(
+        &self,
+        rp: &mut wgpu::RenderPass<'_>,
+        batches: &[UiBatch],
+        ui_bg: &wgpu::BindGroup,
+    ) {
+        for batch in batches {
             match batch {
                 UiBatch::Rects {
                     tex_bg,
@@ -6421,20 +6455,20 @@ impl FrameRecorder<'_> {
                     count,
                 } => {
                     rp.set_pipeline(self.r.pipeline(ShaderId::UiRect));
-                    rp.set_bind_group(UI_GROUP, &ui_bg, &[]);
+                    rp.set_bind_group(UI_GROUP, ui_bg, &[]);
                     rp.set_bind_group(RECT_TEX_GROUP, tex_bg, &[]);
                     rp.set_vertex_buffer(0, instances.slice(..));
                     rp.draw(0..6, 0..*count);
                 }
                 UiBatch::Shapes { instances, count } => {
                     rp.set_pipeline(self.r.pipeline(ShaderId::UiShape));
-                    rp.set_bind_group(UI_GROUP, &ui_bg, &[]);
+                    rp.set_bind_group(UI_GROUP, ui_bg, &[]);
                     rp.set_vertex_buffer(0, instances.slice(..));
                     rp.draw(0..6, 0..*count);
                 }
                 UiBatch::Polygons { verts, count } => {
                     rp.set_pipeline(self.r.pipeline(ShaderId::UiPolygon));
-                    rp.set_bind_group(UI_GROUP, &ui_bg, &[]);
+                    rp.set_bind_group(UI_GROUP, ui_bg, &[]);
                     rp.set_vertex_buffer(0, verts.slice(..));
                     rp.draw(0..*count, 0..1);
                 }
@@ -6444,13 +6478,61 @@ impl FrameRecorder<'_> {
                     count,
                 } => {
                     rp.set_pipeline(self.r.pipeline(ShaderId::UiText));
-                    rp.set_bind_group(UI_GROUP, &ui_bg, &[]);
+                    rp.set_bind_group(UI_GROUP, ui_bg, &[]);
                     rp.set_bind_group(ATLAS_TEX_GROUP, tex_bg, &[]);
                     rp.set_vertex_buffer(0, verts.slice(..));
                     rp.draw(0..*count, 0..1);
                 }
             }
         }
+    }
+
+    /// Screen-effect pass `k`: blit the layer the overlay (or effect `k - 1`) wrote (input 0), draw
+    /// effect `k` over its rect reading that same layer, then UI segment `k + 1` on top. The blit
+    /// covers every pixel, so pixels outside the rect match the layer exactly.
+    fn record_screen_fx(&self, pass: &mut RecordedPass<'_>, k: usize) {
+        let effect = &self.screen_effects[k];
+        let target = pass.colors()[0].extent;
+        let blit_bg = self.r.texture_bind_group(
+            pass.device,
+            LayoutId::Src,
+            pass.inputs[0],
+            &self.r.nearest_sampler,
+        );
+        let params = effect_params(effect, [target.width as f32, target.height as f32]);
+        let params_buf = init_buffer(
+            pass.device,
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::bytes_of(&params),
+        );
+        let effect_bg = pass.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("screen effect bind group"),
+            layout: self.r.layouts.get(LayoutId::ScreenEffect),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::SCREEN_FX_SRC_BINDING,
+                    resource: wgpu::BindingResource::TextureView(pass.inputs[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::SCREEN_FX_SAMP_BINDING,
+                    resource: wgpu::BindingResource::Sampler(&self.r.linear_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::SCREEN_FX_PARAMS_BINDING,
+                    resource: params_buf.as_entire_binding(),
+                },
+            ],
+        });
+        let ui_bg = self.ui_bind_group(pass);
+
+        let mut rp = pass.begin();
+        rp.set_pipeline(self.r.pipeline(ShaderId::Blit));
+        rp.set_bind_group(SRC_TEX_GROUP, &blit_bg, &[]);
+        rp.draw(0..3, 0..1);
+        rp.set_pipeline(self.r.pipeline(ShaderId::ScreenEffect));
+        rp.set_bind_group(0, &effect_bg, &[]);
+        rp.draw(0..6, 0..1);
+        self.draw_ui_batches(&mut rp, &self.ui_batches[k + 1], &ui_bg);
     }
 
     /// One fullscreen post effect: clear the target, bind the pass's textures plus `uniform`, and
@@ -7931,6 +8013,7 @@ pub(crate) enum ShaderId {
     Resolve,
     Upscale,
     Blit,
+    ScreenEffect,
     UiRect,
     UiText,
     UiShape,
@@ -7980,7 +8063,7 @@ struct ShaderDesc {
 }
 
 /// The number of renderer shaders — the length of [`SHADERS`] and of `Renderer::pipelines`.
-const SHADER_COUNT: usize = 49;
+const SHADER_COUNT: usize = 50;
 
 /// The per-shader registry, indexed by [`ShaderId`].
 ///
@@ -8264,6 +8347,13 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         body: include_str!("shaders/blit.wgsl"),
         snippets: &[Snippet::FullscreenVs],
         layouts: &[Some(LayoutId::Src)],
+    },
+    ShaderDesc {
+        id: ShaderId::ScreenEffect,
+        file_name: "screen_effect.wgsl",
+        body: include_str!("shaders/screen_effect.wgsl"),
+        snippets: &[Snippet::Bayer, Snippet::Srgb, Snippet::OutputEncode],
+        layouts: &[Some(LayoutId::ScreenEffect)],
     },
     ShaderDesc {
         id: ShaderId::UiRect,
@@ -8870,10 +8960,12 @@ enum LayoutId {
     /// The mesh pipelines' group 3: [`Env`](LayoutId::Env) plus the rain-occlusion map the wetness reads.
     /// The lit decal pass keeps `Env`: it already fills the fragment stage's sampled-texture limit.
     EnvWet,
+    /// The screen-effect pass: the layer it filters, a sampler and the effect's parameters.
+    ScreenEffect,
 }
 
 /// The number of bind group layouts — the length of [`LAYOUTS`] and of [`Layouts`].
-const LAYOUT_COUNT: usize = 51;
+const LAYOUT_COUNT: usize = 52;
 
 /// One row of the layout registry: a [`LayoutId`] and the generated constructor that builds it.
 struct LayoutDesc {
@@ -9091,6 +9183,10 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
         id: LayoutId::EnvWet,
         create: shader_gen::create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map_bgl,
     },
+    LayoutDesc {
+        id: LayoutId::ScreenEffect,
+        create: shader_gen::create_screen_fx_src_screen_fx_samp_screen_fx_params_bgl,
+    },
 ];
 
 /// Every bind group layout, built once and indexed by [`LayoutId`].
@@ -9277,6 +9373,7 @@ fn build_pipeline(
         | ShaderId::Resolve
         | ShaderId::Upscale
         | ShaderId::Blit
+        | ShaderId::ScreenEffect
         | ShaderId::SmaaBlend
         | ShaderId::SsrDebug
         | ShaderId::ProbeDebug

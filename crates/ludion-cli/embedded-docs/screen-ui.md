@@ -225,6 +225,10 @@ Hit-test a rotated rect with `ludion::math::ui_point_in(&rect, viewport, cursor)
 
 `UiTween` animates opacity, offset, scale, rotation, size and colour closed-form (`ludion docs ui-tweens`); `UiWorldAnchor` pins an element to a 3D target and clamps it to the screen edge (`ludion docs ui-world-anchor`). Both resolve in `extract`: nothing is written per tick. A textured rect can sample a sub-rect (`uv_rect`) or draw as a nine-slice frame (`slice`): `ludion docs ui-nine-slice`. A `UiGroup` is a box other elements anchor, scale, fade and hide inside (`group: <ref>`): `ludion docs ui-groups`.
 
+## Filtering the frame
+
+`ScreenEffect` draws a CRT, analog-video or scan filter over the whole frame or a rectangle of it, under every UI element above its `order`: `ludion docs screen-effects`.
+
 ## Next
 
 - `ludion docs ui-nine-slice` — `uv_rect` and resizable frames.
@@ -236,5 +240,6 @@ Hit-test a rotated rect with `ludion::math::ui_point_in(&rect, viewport, cursor)
 - `ludion docs fonts` — TrueType faces for `UiText`/`UiList`/`Text`.
 - `ludion docs systems` — the system contract and the determinism rules.
 - `ludion docs components` — declaring components, and the built-in visual set.
+- `ludion docs screen-effects` — CRT, analog-video and scan filters over the frame or a region.
 - `ludion docs post-processing` — the imaging chain.
 - `ludion docs verify-loop` — the `cargo test` verification loop.

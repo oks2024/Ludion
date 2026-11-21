@@ -1,0 +1,243 @@
+# Feature: ScreenEffect — retro display filters as backdrop filters in UI order (Neon Shroud request 0019,
+# part F). The ui-hud scene again, with two effects layered over it:
+#
+# - `radar-fx` (order 10): a 320x320 `crt` region hung from the top-right corner — the radar panel. It
+#   filters the 3D world and every UI element under order 10 inside the rect (the timer readout, part
+#   of the checker icon is outside it); pixels outside the rect are untouched.
+# - `radar-label` (order 20): a clean UiText inside the region. It draws above the effect, so the
+#   scanlines and curvature never touch it.
+# - `screen-fx` (order 0): a fullscreen `scan` preset under every UI element, so the HUD stays crisp
+#   while the world gets scanlines, a slow sweep bar, a slight posterize and noise. A render of
+#   `--frames 0,1,2` shows the animated stages (noise, sweep, flicker) moving with the game tick.
+# - Together the two are the cost case of the plan: a 320x320 region plus a fullscreen `scan`, the
+#   `screen_fx` profile group.
+format: 1
+name: "screen-effects - a CRT radar region and a fullscreen scan over the HUD mock"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 7.0
+        rotation:
+          - -12.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.3
+          - 0.32
+          - 0.36
+          - 1.0
+        roughness: 0.85
+  - name: block
+    components:
+      Transform:
+        translation:
+          - -1.4
+          - 0.6
+          - -0.6
+        scale:
+          - 1.2
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.55
+          - 0.4
+          - 0.7
+          - 1.0
+        roughness: 0.5
+  - name: beacon
+    components:
+      Transform:
+        translation:
+          - 1.6
+          - 0.9
+          - -0.4
+        scale:
+          - 0.6
+          - 0.6
+          - 0.6
+      Mesh:
+        shape: sphere
+        color:
+          - 1.0
+          - 0.7
+          - 0.3
+          - 1.0
+        roughness: 0.2
+        emissive: 4.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 4.5
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.96
+          - 0.9
+        intensity: 5.0
+        range: 20.0
+  - name: hp-frame
+    components:
+      UiRect:
+        anchor: bottom_left
+        offset:
+          - 24.0
+          - -24.0
+        size:
+          - 220.0
+          - 40.0
+        color:
+          - 0.05
+          - 0.05
+          - 0.06
+          - 1.0
+        order: 0
+  - name: hp-fill
+    components:
+      UiRect:
+        anchor: bottom_left
+        offset:
+          - 30.0
+          - -30.0
+        size:
+          - 150.0
+          - 28.0
+        color:
+          - 0.85
+          - 0.2
+          - 0.25
+          - 1.0
+        order: 1
+  - name: center-panel
+    components:
+      UiRect:
+        anchor: center
+        offset:
+          - 0.0
+          - 0.0
+        size:
+          - 560.0
+          - 220.0
+        color:
+          - 0.05
+          - 0.07
+          - 0.1
+          - 0.55
+        order: 0
+  - name: center-title
+    components:
+      UiText:
+        anchor: center
+        offset:
+          - 0.0
+          - 0.0
+        text: GALLERY HUD
+        size: 48.0
+        color:
+          - 0.95
+          - 0.9
+          - 0.7
+          - 1.0
+        order: 1
+  - name: timer-text
+    components:
+      UiText:
+        anchor: top_right
+        offset:
+          - -24.0
+          - 24.0
+        text: "12:34"
+        size: 32.0
+        color:
+          - 0.7
+          - 0.9
+          - 1.0
+          - 1.0
+        order: 0
+  - name: caption-text
+    components:
+      UiText:
+        anchor: bottom_center
+        offset:
+          - 0.0
+          - -24.0
+        text: PRESS START
+        size: 24.0
+        color:
+          - 0.08
+          - 0.08
+          - 0.1
+          - 1.0
+        order: 0
+  - name: icon-rect
+    components:
+      UiRect:
+        anchor: top_left
+        offset:
+          - 24.0
+          - 24.0
+        size:
+          - 96.0
+          - 96.0
+        texture: assets/checker.png
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        order: 0
+  - name: radar-fx
+    components:
+      ScreenEffect:
+        target:
+          region:
+            anchor: top_right
+            offset:
+              - -32.0
+              - 32.0
+            size:
+              - 320.0
+              - 320.0
+        order: 10
+        preset: crt
+  - name: radar-label
+    components:
+      UiText:
+        anchor: top_right
+        offset:
+          - -48.0
+          - 48.0
+        text: RADAR 03
+        size: 28.0
+        color:
+          - 0.9
+          - 1.0
+          - 0.9
+          - 1.0
+        order: 20
+  - name: screen-fx
+    components:
+      ScreenEffect:
+        order: 0
+        preset: scan

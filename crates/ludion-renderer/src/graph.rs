@@ -160,7 +160,12 @@
 //! composite ─► ldr ─► overlay ─► final                                   [native, UI]
 //! composite ─► ldr ─► resample ─► final                                  [scaled, no UI]
 //! composite ─► ldr ─► resample ─► ldr_resolved ─► overlay ─► final       [scaled, UI]
+//! composite ─► ldr ─► overlay ─► screen_fx_0 ─► screen_fx_1 ─► final     [native, two screen effects]
 //! ```
+//!
+//! With screen effects the overlay writes the whole-frame transient `screen_fx_layer_0` instead of
+//! the output, and each `screen_fx_k` pass blits its layer, draws effect `k` over its rect and the next
+//! slice of UI on top, writing the next layer, or the output for the last.
 //!
 //! With [`AntiAliasing::Smaa`] the composite writes `aa_input` instead, and three passes stand
 //! between it and the seam it would have written (`ldr`, or `final` when nothing follows):
@@ -409,6 +414,19 @@ pub mod pass {
     /// Screen-space UI overlay: blit the tonemapped LDR image, then draw the sorted UI rects/text on
     /// top, into the output. Only present when the scene carries UI (`Plan/phase-14-ui.md` dec. 5).
     pub const OVERLAY: &str = "overlay";
+    /// The screen-effect passes, in UI order: `SCREEN_FX[k]` blits the layer the overlay (or effect
+    /// `k - 1`) wrote, draws effect `k` over its rect, then the next slice of UI, writing the next
+    /// layer — or `output` for the last. Present exactly as many as the frame applies
+    /// ([`crate::MAX_SCREEN_EFFECTS`] at most).
+    pub const SCREEN_FX: [&str; 4] = ["screen_fx_0", "screen_fx_1", "screen_fx_2", "screen_fx_3"];
+    /// The whole-frame transients between the overlay and the screen-effect passes: `SCREEN_FX_LAYER[k]`
+    /// is what `SCREEN_FX[k]` reads.
+    pub const SCREEN_FX_LAYER: [&str; 4] = [
+        "screen_fx_layer_0",
+        "screen_fx_layer_1",
+        "screen_fx_layer_2",
+        "screen_fx_layer_3",
+    ];
 }
 
 /// The anti-aliasing a frame applies after `composite`: SMAA 1x with luma edge detection and the
@@ -885,6 +903,11 @@ pub struct PostChain {
     /// [`ui`](PostChain::ui), and additionally reads `scene_depth` so the lines can be dimmed where
     /// geometry hides them.
     pub debug_lines: bool,
+    /// How many screen effects the frame applies (at most [`crate::MAX_SCREEN_EFFECTS`]): the
+    /// `overlay` pass exists for them alone and writes a whole-frame transient, and one
+    /// [`pass::SCREEN_FX`] pass per effect follows it, the last writing the output. Content, so
+    /// `masked` keeps it.
+    pub screen_effects: u8,
     /// The trace's scale against the output extent, or `None` when the scene draws no screen-space
     /// reflections: the [`pass::HIZ_SEED`] / [`pass::HIZ_REDUCE`] and
     /// [`pass::SSR_COLOR_SEED`] / [`pass::SSR_COLOR_REDUCE`] pyramid passes, the trace and
@@ -1089,6 +1112,10 @@ impl PostChain {
             gi_inject: crate::gi_inject::scheduled_lattice(scene),
             cull: cull_shape(scene, sun_views + local_plan.views.len()),
             debug_lines: !scene.debug_lines.is_empty(),
+            screen_effects: scene
+                .screen_effects
+                .len()
+                .min(crate::screen_effect::MAX_SCREEN_EFFECTS) as u8,
             // `ssr` is a strength *and* the gate: at zero the blend takes the sky fill alone, so
             // tracing would be work with no output. Machines scale it down in `masked`.
             ssr: scene
@@ -1696,7 +1723,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // the frame to the output extent. When the resample owns the output dither it is half-float, so the
     // sub-LSB offsets have something finer than 8 bits to land on; under a debug view it stays 8-bit,
     // because those passes have no half-float twin.
-    let overlay = chain.ui || chain.debug_lines;
+    let overlay = chain.ui || chain.debug_lines || chain.screen_effects > 0;
     let ldr_desc = if chain.resample_owns_output(size) {
         TextureDesc::hdr_color(render_w, render_h)
     } else {
@@ -2217,7 +2244,25 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         if chain.debug_lines {
             reads.push(scene_depth);
         }
-        graph.add_external_pass(pass::OVERLAY, pass::OVERLAY, reads, vec![output]);
+        // Effects: the overlay writes a whole-frame layer and each effect pass filters the previous
+        // one. The layers are declared only here so a frame without effects keeps its resource list.
+        let layers: Vec<ResourceId> = (0..usize::from(chain.screen_effects))
+            .map(|k| graph.transient(pass::SCREEN_FX_LAYER[k], TextureDesc::color(width, height)))
+            .collect();
+        graph.add_external_pass(
+            pass::OVERLAY,
+            pass::OVERLAY,
+            reads,
+            vec![layers.first().copied().unwrap_or(output)],
+        );
+        for (k, layer) in layers.iter().enumerate() {
+            graph.add_external_pass(
+                pass::SCREEN_FX[k],
+                pass::SCREEN_FX[k],
+                vec![*layer],
+                vec![layers.get(k + 1).copied().unwrap_or(output)],
+            );
+        }
     }
 
     (graph, output)
@@ -2433,6 +2478,7 @@ pub(crate) fn build_probe_capture_graph(
             && !chain.dof
             && !chain.ui
             && !chain.debug_lines
+            && chain.screen_effects == 0
             && chain.drop_shadow_atlas.is_none()
             && !chain.decals
             && !chain.lit_decals
@@ -2907,6 +2953,8 @@ mod tests {
                 cull: None,
                 // Content like `ui`, so masking leaves it alone (`ui` already varies over the walk).
                 debug_lines: bits & 1 != 0,
+                // Content too: masking keeps the count.
+                screen_effects: if bits & 1 != 0 { 2 } else { 0 },
                 // Varies with `ssao` so both gates are walked; `FULL` keeps the same scale.
                 ssr: (bits & 4 != 0).then_some(QualityParams::FULL.ssr_scale),
                 ssr_view: None,
@@ -3351,6 +3399,139 @@ mod tests {
         assert_eq!(pass_names(&plain), pass_names(&off));
         assert_eq!(resource_names(&plain), resource_names(&off));
         assert!(!pass_names(&plain).contains(&"overlay"));
+    }
+
+    /// What a pass reads and writes, by resource name.
+    fn io<'g>(graph: &'g RenderGraph, pass: &str) -> (Vec<&'g str>, Vec<&'g str>) {
+        let name_of = |id: &ResourceId| graph.resources()[id.index()].name.as_str();
+        let p = graph.passes().iter().find(|p| p.name == pass).unwrap();
+        (
+            p.reads().iter().map(name_of).collect(),
+            p.writes().iter().map(name_of).collect(),
+        )
+    }
+
+    /// No screen effect leaves the graph exactly as it was, over every UI/debug-line/AA/resample
+    /// combination: no layer is declared and the overlay still writes the output.
+    #[test]
+    fn no_screen_effects_leave_the_graph_untouched() {
+        for bits in 0..16u8 {
+            let base = PostChain {
+                ui: bits & 1 != 0,
+                debug_lines: bits & 2 != 0,
+                aa: if bits & 4 != 0 {
+                    AntiAliasing::Smaa
+                } else {
+                    AntiAliasing::Off
+                },
+                ..PostChain::default()
+            };
+            let size = if bits & 8 != 0 {
+                FrameSize::scaled(1920, 1080, RenderScale::new(2.0).unwrap())
+            } else {
+                FrameSize::native(1920, 1080)
+            };
+            let (a, _) = build_frame_graph(size, base);
+            let (b, _) = build_frame_graph(
+                size,
+                PostChain {
+                    screen_effects: 0,
+                    ..base
+                },
+            );
+            assert_eq!(pass_names(&a), pass_names(&b));
+            assert_eq!(resource_names(&a), resource_names(&b));
+            assert!(
+                !resource_names(&a)
+                    .iter()
+                    .any(|n| n.starts_with("screen_fx")),
+                "{bits}: a no-effect frame declares no layer",
+            );
+        }
+    }
+
+    /// One effect: the overlay writes the layer, `screen_fx_0` reads it and writes `final`.
+    #[test]
+    fn one_screen_effect_filters_the_overlay_layer() {
+        let chain = PostChain {
+            ui: true,
+            screen_effects: 1,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let names = pass_names(&graph);
+        assert_eq!(names[names.len() - 2..], ["overlay", "screen_fx_0"]);
+        assert_eq!(io(&graph, "overlay").1, ["screen_fx_layer_0"]);
+        assert_eq!(
+            io(&graph, "screen_fx_0"),
+            (vec!["screen_fx_layer_0"], vec!["final"]),
+        );
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// Four effects chain through four layers, the last pass writing `final`.
+    #[test]
+    fn four_screen_effects_chain_through_four_layers() {
+        let chain = PostChain {
+            ui: true,
+            screen_effects: 4,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        let names = pass_names(&graph);
+        assert_eq!(
+            names[names.len() - 5..],
+            [
+                "overlay",
+                "screen_fx_0",
+                "screen_fx_1",
+                "screen_fx_2",
+                "screen_fx_3"
+            ],
+        );
+        assert_eq!(io(&graph, "overlay").1, ["screen_fx_layer_0"]);
+        for k in 0..3 {
+            let (reads, writes) = io(&graph, pass::SCREEN_FX[k]);
+            assert_eq!(reads, [pass::SCREEN_FX_LAYER[k]]);
+            assert_eq!(writes, [pass::SCREEN_FX_LAYER[k + 1]]);
+        }
+        assert_eq!(
+            io(&graph, "screen_fx_3"),
+            (vec!["screen_fx_layer_3"], vec!["final"]),
+        );
+        assert!(schedule(&graph).is_ok());
+    }
+
+    /// Effects with no UI and no debug lines still build the overlay (and with it `ldr`).
+    #[test]
+    fn a_screen_effect_alone_builds_the_overlay_and_ldr() {
+        let chain = PostChain {
+            screen_effects: 1,
+            ..PostChain::default()
+        };
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        assert!(pass_names(&graph).contains(&"overlay"));
+        assert!(resource_names(&graph).contains(&"ldr"));
+        assert_eq!(
+            io(&graph, "overlay"),
+            (vec!["ldr"], vec!["screen_fx_layer_0"])
+        );
+    }
+
+    /// Under a resample the overlay reads `ldr_resolved`, so the layers sit at the output extent.
+    #[test]
+    fn a_screen_effect_under_a_resample_reads_ldr_resolved() {
+        let chain = PostChain {
+            screen_effects: 1,
+            ..PostChain::default()
+        };
+        let size = FrameSize::scaled(1920, 1080, RenderScale::new(2.0).unwrap());
+        let (graph, _) = build_frame_graph(size, chain);
+        assert_eq!(
+            io(&graph, "overlay"),
+            (vec!["ldr_resolved"], vec!["screen_fx_layer_0"]),
+        );
+        assert!(schedule(&graph).is_ok());
     }
 
     /// The sun graph prepends a depth-only `shadow` pass writing the `shadow_map` resource, and the

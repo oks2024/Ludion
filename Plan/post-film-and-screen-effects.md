@@ -157,9 +157,12 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
     flicker 0.03, phosphor `[1, 0.72, 0.4]`, interlace. `scan`: scanlines 0.2 at 540 lines, sweep 0.25 every 4 s,
     posterize 24, noise 0.02.
 24. **Placement (region and fill).** A backdrop filter in UI order: with effects present, the overlay is split at each
-    effect's `order`; the region of the output is copied to a transient, the effect draws the region back over it, then
-    the remaining UI draws on top. A scene with no `ScreenEffect` keeps today's single overlay pass. The 3D frame's own
-    chain is never touched.
+    effect's `order` and writes a whole-frame transient layer instead of `output`; each effect pass blits the previous
+    layer, draws the effect over its rect reading that layer, then the next UI slice draws on top, the last pass writing
+    `output`. A whole-frame layer, not a region copy, because `output` is `RenderAttachment + CopySrc` only: sampling or
+    copying it would change its description in every graph. Pixels outside every rect match the no-effect frame exactly.
+    A scene with no `ScreenEffect` keeps today's single overlay pass and declares no layer. The 3D frame's own chain is
+    never touched.
 25. **Placement (view).** The effect is the last step of that `RenderView`'s own chain, so it is baked into the texture
     before any `UiRect` samples it. It waits on request 0017's view chain.
 26. **Cap.** At most 4 applied per frame; the extra ones (highest `order`, then highest `EntityId`) are not applied and
@@ -196,7 +199,7 @@ The rest of both ranges is reserved for this plan.
 - **W4 — animated grain and region/fill effects** (D, F), split three ways. Needs no 0018 field (decision 3).
   - **W4a** (D): the tick in `PostData`, `grain_motion`.
   - **W4b** (F, shipped): `ScreenEffect`, presets, `L1761`/`L2392`, extract into `RenderScene.screen_effects`.
-  - **W4c** (F): the `ScreenEffect` pass, the overlay split, `[post_groups] screen_fx`, `docs/screen-effects.md`, gallery
+  - **W4c** (F, shipped): the `ScreenEffect` pass, the overlay split, `[post_groups] screen_fx`, `docs/screen-effects.md`, gallery
     `screen-effects.yaml` with a `--frames 0,1,2` strip.
 - **W5 — view targets** (F): `target: { view }` once request 0017's view chain closes.
 
@@ -240,4 +243,5 @@ before the silhouette (decision 13); codes renumbered.
 - W3a (`exposure_mode`, `exposure_compensation`, `metering*`, `exposure_range`, `L1760`, the `exposure_meter` pass) mechanized on the M5 2026-11-21; goldens, the scratch scene `post-metered-exposure` and the `exposure` budget are owed on the pinned machines.
 - W3b (`--debug-view exposure_meter`, the metered EV in the `ludion render` summary and `--frames` strip, the pan check `exposure_pan`) mechanized on the M5 2026-11-21: a metered frame and its manual twin render byte-identical with the readback armed or not, and manual scenes' graphs are unmoved. The `ProfileReport` EV field is an R14 item (it moves the protocol schema and `replay_schema_hash`). The view's look is judged by a human at the next sitting.
 - W4b (`ScreenEffect` component, presets, `L1761`/`L2392`, extract into `RenderScene.screen_effects`, check-scene's cap warning) mechanized on the M5 2026-11-21; no pass reads it yet, so every frame and `dump-graph` is unchanged.
+- W4c mechanized on the RTX 3090 2026-11-21: no-effect renders and `dump-graph` byte-identical (22 files: six gallery scenes plain and SMAA, `ui-hud` at both resamples); golden `screen-effects` blessed (Windows); `screen_fx` 0.072 ms at 1080p (median of three runs, fill `scan` 0.051 + 320x320 `crt` 0.021) vs the 0.15 ms target; macOS twin and the budget ceiling owed.
 - W4a (`grain_motion`) mechanized on the RTX 3090 2026-11-21: absent/static left 25 renders and `dump-graph` dumps (seven gallery scenes plain and SMAA, `post-full` at both resamples) byte-identical; animated grain moves per tick in all four owning passes. The M4 check is owed.

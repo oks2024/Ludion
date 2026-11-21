@@ -53,6 +53,7 @@ mod replay;
 mod room_assembly;
 mod room_assembly_bench;
 mod room_assembly_runtime;
+mod screen_effect;
 mod sculpt;
 mod serve;
 mod sim_hash;

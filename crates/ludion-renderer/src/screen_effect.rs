@@ -1,6 +1,9 @@
 //! The extracted form of a `ScreenEffect`: one applied effect with its output-pixel rectangle, its
 //! UI split point and its resolved stages. Plain data; the component lives in `ludion-components`.
 
+use crate::scene::UiInstance;
+use crate::shader_gen::ScreenEffectParams;
+
 /// The most screen effects applied to one frame.
 pub const MAX_SCREEN_EFFECTS: usize = 4;
 
@@ -65,4 +68,60 @@ pub struct ScreenEffectData {
     pub phosphor: [f32; 3],
     /// Alternate the scanline phase each frame.
     pub interlace: bool,
+}
+
+/// Splits `ui` at each effect's `ui_start`: segment 0 is what draws under effect 0, segment `k + 1`
+/// what draws between effects `k` and `k + 1` (the last runs to the end). Starts are clamped to the
+/// list and made monotone, so an out-of-range or reordered start yields an empty segment rather than
+/// a panic. With no effect it is the whole list as the one segment.
+pub(crate) fn ui_segments<'a>(
+    ui: &'a [UiInstance],
+    effects: &[ScreenEffectData],
+) -> Vec<&'a [UiInstance]> {
+    let mut segments = Vec::with_capacity(effects.len() + 1);
+    let mut from = 0;
+    for effect in effects {
+        let start = (effect.ui_start as usize).min(ui.len()).max(from);
+        segments.push(&ui[from..start]);
+        from = start;
+    }
+    segments.push(&ui[from..]);
+    segments
+}
+
+/// The shader's uniform for one effect over a `viewport` of output pixels.
+pub(crate) fn effect_params(data: &ScreenEffectData, viewport: [f32; 2]) -> ScreenEffectParams {
+    let [r, g, b] = data.phosphor;
+    ScreenEffectParams {
+        rect: data.rect_px,
+        viewport,
+        time_s: data.time_s,
+        frame: data.frame,
+        seed: data.seed,
+        scanline_count: data.scanline_count,
+        posterize: data.posterize,
+        mask: match data.mask {
+            ScreenMask::None => 0,
+            ScreenMask::Aperture => 1,
+            ScreenMask::Slot => 2,
+            ScreenMask::Shadow => 3,
+        },
+        phosphor: [r, g, b, 0.0],
+        scanlines: data.scanlines,
+        mask_strength: data.mask_strength,
+        curvature: data.curvature,
+        glow: data.glow,
+        chroma_bleed: data.chroma_bleed,
+        noise: data.noise,
+        tracking: data.tracking,
+        roll: data.roll,
+        jitter: data.jitter,
+        flicker: data.flicker,
+        sweep: data.sweep,
+        sweep_period: data.sweep_period,
+        interlace: u32::from(data.interlace),
+        pad0: 0,
+        pad1: 0,
+        pad2: 0,
+    }
 }
