@@ -6,7 +6,7 @@ description: UiRadial, the tool wheel — format, angle and selection rules, nav
 
 **Scope:** `UiRadial` — up to 16 items on a ring, picked by stick angle, cursor or locked-mouse delta. It
 shares `UiRect`'s canvas and pivot rule (`ludion docs screen-ui`) and `group` (`ludion docs ui-groups`). It
-draws each item's label, detail line and icon; wedge fills and strokes are not drawn.
+draws each item's label, detail line and icon, and optionally a filled or stroked wedge under them.
 
 ## The loop
 
@@ -50,11 +50,33 @@ Runnable: `cargo run -p ludion --example ui_radial`.
 | `deadzone`, `hysteresis_deg` | `0.45`, `6` | `[0, 1)`; `[0, 360/n)` |
 | `size`, `icon_size`, `font` | `24`, `48`, default face | label glyph height; icon edge; `fonts.yaml` face |
 | `color`, `selected_color`, `disabled_color` | white, warm, grey | disabled outranks selected |
+| `fill`, `selected_fill`, `stroke` | none | the wedges, see Drawing |
 | `order`, `visible`, `outline` | `0`, `true`, none | as `UiList` |
 
 An empty or invisible wheel draws nothing. Labels sit at the mid-radius on each item's centre angle; the
 icon is `icon_size` square, `0.5 * (size + icon_size)` above that point; `detail` is `size` below at
 `0.75 * size`. Icons take the item's colour as a tint.
+
+## Drawing wedges
+
+With a `fill` or a `stroke`, each item draws a wedge under its icon and text: a sector from `radius_inner` to
+`radius_outer` over the item's sweep with the gap taken off, the same area `radial_hit` tests.
+
+```yaml
+      UiRadial:
+        fill: [0.1, 0.12, 0.18, 0.8]
+        selected_fill: [0.8, 0.5, 0.1, 0.9]   # the selected item; falls back to fill
+        stroke: { width: 2, color: [1, 1, 1, 1] }
+```
+
+- `fill` colours every wedge; `selected_fill` only the selected, enabled one. A disabled item's wedge uses
+  `fill` (there is no `disabled_fill`); its text still dims.
+- `stroke` outlines every drawn wedge, centred on its edge, `width` in canvas units. A wedge draws when it has
+  a fill colour or a stroke; with neither, the wheel draws exactly as before.
+- Each wedge is drawn before its own icon and text, so labels land on top. A stroke can overlap the neighbour's
+  wedge when `gap_deg` is small: widen the gap.
+- Invalid: a non-finite `fill`/`selected_fill` channel, a `stroke.width` not above 0 (`L1619`).
+- A rotated wheel is a rotated `UiGroup`; the wedges turn about the wheel centre.
 
 ## Rules
 

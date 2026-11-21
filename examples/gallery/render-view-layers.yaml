@@ -5,6 +5,9 @@
 # ludion docs render-views.
 format: 1
 name: "render-view-layers - RenderLayers: markers and a cube that only one camera draws"
+render_layers:
+  - name: radar
+  - name: world
 entities:
   - name: camera
     components:

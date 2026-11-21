@@ -1,0 +1,14 @@
+# Assembly animation budget — pinned RTX 3090 (5950X), release, 1 sim thread.
+#
+# Gates the `full` arm of `assembly_anim_bench.rs`: 32 grounded voxel assemblies with a walk clip, a
+# blend, two layers, IK chains, look-ats and ground feet, measured over 120 ticks:
+#
+#   cargo test -p ludion-engine --release --test it -- assembly_anim_bench --ignored --nocapture
+#
+# A regression tripwire at about 2x the measured median, under the owner-accepted 0.5 ms budget.
+# Re-calibrate deliberately (a re-bless event); see `dev-docs/budget-files.md`. Its Apple M4 twin is owed.
+#
+# MEASURED 2026-11-21 on a quiet box: full arm extract median 0.2150 ms, p99 0.2976 ms (1 thread).
+
+threads = 1
+extract_ms = 0.45   # 0.2150 measured

@@ -450,6 +450,7 @@ impl Voice {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum LoopKey {
     Entity(EntityId),
+    ZoneBed(EntityId, u8),
     Sound(u32),
     /// An attached voice (`AudioMessage::VoiceStart`): a one-shot kept in the table so it can be
     /// synced and stopped by id.
@@ -1146,6 +1147,7 @@ impl Router {
     fn key(&mut self, id: LoopId) -> LoopKey {
         match id {
             LoopId::Entity(entity) => LoopKey::Entity(entity),
+            LoopId::ZoneBed(zone, bed) => LoopKey::ZoneBed(zone, bed),
             LoopId::Sound(name) => {
                 let next = self.loop_names.len() as u32;
                 LoopKey::Sound(*self.loop_names.entry(name).or_insert(next))
@@ -1343,6 +1345,8 @@ impl Router {
                     frames: self.mix_frames(fade_frames),
                 }
             }
+            // The sink has no reverb bus or zone layer yet.
+            AudioMessage::ReverbSet { .. } | AudioMessage::ZoneGain { .. } => return None,
             AudioMessage::BusPause {
                 buses,
                 paused,
@@ -3941,6 +3945,36 @@ mod tests {
         assert_eq!(loops.len(), 64);
         assert_eq!(loops[&waiting].envelope.target, 0.5);
         assert!(!loops.contains_key(&stopped_waiting));
+    }
+
+    /// A zone bed is a loop like an emitter's; the zone messages the sink cannot mix route to nothing.
+    #[test]
+    fn a_zone_bed_loops_and_stops_and_zone_messages_route_to_nothing() {
+        let root = scratch_root("zone-bed");
+        std::fs::write(root.join("bed.wav"), wav_bytes(&[8192, 16384])).unwrap();
+        let mut rig = rig(root);
+        let bed = LoopId::ZoneBed(EntityId::new(3, 0), 1);
+        rig.step(loop_message(bed.clone(), "bed.wav", 0.5));
+        render_once(&mut rig.mixer);
+        let key = rig.router.key(bed.clone());
+        assert_eq!(rig.mixer.loops[&key].envelope.target, 0.5);
+        rig.step(AudioMessage::LoopStop { id: bed });
+        for _ in 0..4 {
+            render_once(&mut rig.mixer);
+        }
+        assert!(rig.mixer.loops.is_empty());
+
+        let reverb = AudioMessage::ReverbSet {
+            params: ludion_core::audio::ReverbParams::DRY,
+            fade_frames: 0,
+        };
+        assert!(rig.router.route(reverb).is_none());
+        let zone = AudioMessage::ZoneGain {
+            bus: Bus::Ambient,
+            gain: 0.5,
+            fade_frames: 0,
+        };
+        assert!(rig.router.route(zone).is_none());
     }
 
     /// The callback frees nothing: a buffer the cache let go of while a voice held it is kept by

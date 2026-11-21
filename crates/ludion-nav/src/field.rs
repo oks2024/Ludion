@@ -92,6 +92,10 @@ impl FlowField {
                     if grid.raw_links(x)[OPPOSITE[dir]] != node.node {
                         continue;
                     }
+                    // An `interact` node is never reached: a chaser does not open doors.
+                    if grid.stop_tag(NodeId(x)).is_some() {
+                        continue;
+                    }
                     let nd = node.dist + grid.raw_costs(x)[OPPOSITE[dir]];
                     if nd < self.distance[x as usize] {
                         if !self.distance[x as usize].is_finite() {

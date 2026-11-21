@@ -1,0 +1,115 @@
+# Feature: `UiRadial` wedges (Plan/ui-hud.md W6b): `fill`, `selected_fill` and `stroke` draw a sector under each
+# item's icon and text. Over a dark backdrop, in canvas units:
+# - Left: a six-item wheel with an atlas icon and a detail line per item, item 1 selected (brighter wedge), item 3
+#   disabled (the plain `fill`, dimmed text), every wedge outlined.
+# - Right: a smaller four-item wheel inside a 20-degree rotated `UiGroup`, so the wedges turn about the wheel
+#   centre with the group.
+format: 1
+name: "ui-radial - UiRadial wedges: fill, selected_fill and stroke, plus a wheel in a rotated group"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - name: backdrop
+    components:
+      UiRect:
+        fill: true
+        color:
+          - 0.06
+          - 0.07
+          - 0.1
+          - 1.0
+        order: 0
+  - name: wheel-group
+    components:
+      UiGroup:
+        anchor: top_left
+        offset:
+          - 1280.0
+          - 340.0
+        size:
+          - 400.0
+          - 400.0
+        rotation: 20.0
+  - name: tools
+    components:
+      UiRadial:
+        anchor: center
+        offset:
+          - -380.0
+          - 0.0
+        items:
+          - text: AXE
+            detail: x3
+            atlas: sprites/gallery.atlas.yaml
+            frame: ship/idle
+          - text: BOW
+            detail: x12
+            atlas: sprites/gallery.atlas.yaml
+            frame: bullet/player
+          - text: SHIELD
+          - text: TORCH
+            detail: x1
+            atlas: sprites/gallery.atlas.yaml
+            frame: tiles/hazard
+            enabled: false
+          - text: RATION
+            detail: x5
+            atlas: sprites/gallery.atlas.yaml
+            frame: tiles/crate
+          - text: MAP
+            atlas: sprites/gallery.atlas.yaml
+            frame: tiles/floor
+        selected: 1
+        fill:
+          - 0.1
+          - 0.14
+          - 0.22
+          - 0.85
+        selected_fill:
+          - 0.85
+          - 0.5
+          - 0.12
+          - 0.95
+        stroke:
+          width: 3.0
+          color:
+            - 0.7
+            - 0.8
+            - 1.0
+            - 1.0
+        order: 2
+  - name: sub-wheel
+    components:
+      UiRadial:
+        anchor: center
+        group:
+          index: 2
+          generation: 0
+        radius_inner: 50.0
+        radius_outer: 190.0
+        gap_deg: 4.0
+        size: 20.0
+        icon_size: 32.0
+        items:
+          - text: ONE
+          - text: TWO
+          - text: THREE
+          - text: FOUR
+        selected: 2
+        fill:
+          - 0.12
+          - 0.2
+          - 0.16
+          - 0.85
+        selected_fill:
+          - 0.3
+          - 0.8
+          - 0.5
+          - 0.95
+        order: 2

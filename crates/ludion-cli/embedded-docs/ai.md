@@ -12,7 +12,7 @@ read see `ludion docs game-clock`; for registering components, `ludion docs comp
 
 1. Write an enum that `impl Machine` (the hierarchy is its `parent` fn, the callbacks are plain fns).
 2. Register it once: `EngineBuilder::components(|r| ludion::ai::register_machine::<Guard>(r))`, plus
-   your blackboard type if it is not `()`. This registers `GuardMind`, `Group` and `GroupMember`.
+   your blackboard type if it is not `()`. This registers `GuardMind`, `Group`, `GroupMember` and `GroupRoster`.
 3. Schedule `ai_tick::<Guard>` once: `.system("guard_ai", ludion::ai::ai_tick::<Guard>)`, after the
    systems that `send` events and before the ones that read the state.
 4. Give entities `GuardMind: {}` (starts at `ROOT`) or `GuardMind: { state: Alert }`.
@@ -26,11 +26,12 @@ parent chain that misses `ROOT`), `L1511` (`initial(s)` not a child of `s`).
 | --- | --- |
 | `Mind<M>` (`{NAME}Mind`) | `state` (authored start, any level; at runtime the active leaf); `entered` ticks root→leaf (runtime); `inbox`; `dropped` |
 | `Machine::Blackboard` | per-agent component, `Default`; `()` stores nothing |
-| `Machine::Event` | what `send` carries; keep it free of entity refs (see Rules) |
+| `Machine::Event` | what `send` carries; an entity ref in it must be `Option<EntityId>` (see Rules) |
 | `Step` | `Stay`, `Go(s)`, `Restart(s)` |
 | `Timer { deadline }` | one-shot, gameplay ticks; `start(ctx, secs)`, `expired`, `just_expired`, `remaining` |
 | `Cooldown { ready_at }` | reusable gate; `trigger(ctx, secs)`, `ready` |
 | `Group { kind }`, `GroupMember { group, role }` | squads; `members(world, group)` sorts by `(role, entity)` |
+| `GroupRoster` | opt-in on a group entity: remembers the membership so departures reach the rest (`Machine::member_left`) |
 
 Consts: `LEAF_FIRST` (default root first), `INBOX_CAPACITY` (16).
 
@@ -56,13 +57,25 @@ Consts: `LEAF_FIRST` (default root first), `INBOX_CAPACITY` (16).
 
 Agents spawned during a tick start on the next one.
 
+## MemberLeft
+
+Add `GroupRoster: {}` to a group entity and, each gameplay tick before the agents run, the departures
+(a member despawned, or its `GroupMember.group` changed) go to the remaining members: for each one, in
+the order the roster last listed it, `Machine::member_left(member)` builds the game's event, and every
+remaining member with this machine receives it in `(role, entity)` order, handled that same tick. `None`
+sends nothing. The argument is `None` when the member was despawned across a save, a carry or a restore
+before the departure was seen. Joins are not reported, and a fresh roster (empty) reports nothing. Two
+machines on one group share one refresh per tick. A group without `GroupRoster` behaves as before.
+
 ## Rules
 
 - **Time is gameplay time.** `Timer`, `Cooldown`, `Cx::time_in` read `ctx.game_time`; they freeze
   while the game holds, and the absolute deadlines survive a snapshot restore. They count whole
   gameplay frames: under a time scale `just_expired` still fires once, on the crossing tick.
-- **Events are ref-free.** An `EntityRefSchema` field inside the event type is refused at registration
-  (`L1392`, the inbox is a list). Keep the reference in one marked blackboard field and send a tag.
+- **Event refs are nullable.** An event may carry an entity ref written `Option<EntityId>` with
+  `#[schemars(with = "Option<EntityRefSchema>")]`; a scene save, a carry and a snapshot remap it per
+  inbox element, and a target that is gone reads `None`. A ref that is not an `Option` is `L1513` at
+  registration. A marked ref inside a blackboard *list* is still `L1392`.
 - **The take-out trap.** Inside a callback the agent's own `Mind` and blackboard are out of the world
   (they read as defaults through `cx.world`): use `cx.bb`, `cx.send`, `cx.go`. Reading *other* agents
   through `cx.world` is fine.

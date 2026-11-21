@@ -36,6 +36,17 @@ pub fn row(report: &ProfileReport, name: &str) -> Row {
     }
 }
 
+/// The median of a `sim.sequential` entry (`world_hash`, `extract`, `command_drain`), in milliseconds.
+pub fn sequential(report: &ProfileReport, name: &str) -> f64 {
+    report
+        .sim
+        .sequential
+        .iter()
+        .find(|s| s.name == name)
+        .unwrap_or_else(|| panic!("no sequential timing for `{name}`"))
+        .median_ms
+}
+
 /// The pinned box name the budget file carries, `None` where no pinned box exists.
 pub fn pinned_box(platform: &str) -> Option<&'static str> {
     match platform {

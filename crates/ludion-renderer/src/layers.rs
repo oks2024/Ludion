@@ -2,7 +2,7 @@
 //! split of a full extracted scene into the main frame and the source its secondary views draw from.
 //! No GPU here; `ludion docs render-views` is the guide.
 
-use crate::scene::{DecalReceivers, RenderScene, StaticRange};
+use crate::scene::{DecalReceivers, ProbeWorld, RenderScene, StaticRange};
 
 /// The bit of the `default` layer: the layer an item is in when it names none.
 pub const DEFAULT_LAYER_BIT: u32 = 1;
@@ -12,6 +12,8 @@ pub const DEFAULT_LAYER_BIT: u32 = 1;
 pub struct LayerMasks {
     /// The layers the main camera draws; `u32::MAX` draws every layer.
     pub main: u32,
+    /// The light layers the main camera is lit by; `u32::MAX` takes every light.
+    pub main_lights: u32,
     /// Parallel to [`RenderScene::meshes`].
     pub meshes: Vec<u32>,
     /// Parallel to [`RenderScene::blended`].
@@ -28,6 +30,10 @@ pub struct LayerMasks {
     pub particles: Vec<u32>,
     /// Parallel to [`RenderScene::texts`].
     pub texts: Vec<u32>,
+    /// Parallel to [`RenderScene::lights`].
+    pub lights: Vec<u32>,
+    /// Parallel to [`RenderScene::spot_lights`].
+    pub spot_lights: Vec<u32>,
 }
 
 /// The full scene before the main camera's filter, and every item's mask. The main [`RenderScene`] of a
@@ -59,6 +65,10 @@ pub struct Keep {
     pub particles: Vec<bool>,
     /// Parallel to [`RenderScene::texts`].
     pub texts: Vec<bool>,
+    /// Parallel to [`RenderScene::lights`].
+    pub lights: Vec<bool>,
+    /// Parallel to [`RenderScene::spot_lights`].
+    pub spot_lights: Vec<bool>,
 }
 
 /// Where each item of a list went after [`RenderScene::retain`]: its new index, or `None` if dropped.
@@ -80,6 +90,10 @@ pub struct Remap {
     pub particles: Vec<Option<u32>>,
     /// For [`RenderScene::texts`].
     pub texts: Vec<Option<u32>>,
+    /// For [`RenderScene::lights`].
+    pub lights: Vec<Option<u32>>,
+    /// For [`RenderScene::spot_lights`].
+    pub spot_lights: Vec<Option<u32>>,
 }
 
 impl Keep {
@@ -94,12 +108,14 @@ impl Keep {
             decals: vec![true; scene.decals.len()],
             particles: vec![true; scene.particles.len()],
             texts: vec![true; scene.texts.len()],
+            lights: vec![true; scene.lights.len()],
+            spot_lights: vec![true; scene.spot_lights.len()],
         }
     }
 }
 
 impl LayerMasks {
-    /// The items whose mask shares a bit with `mask`.
+    /// The items whose mask shares a bit with `mask`, lights included.
     ///
     /// ```
     /// use ludion_renderer::{DEFAULT_LAYER_BIT, LayerMasks};
@@ -108,8 +124,17 @@ impl LayerMasks {
     /// assert_eq!(masks.keep(DEFAULT_LAYER_BIT).meshes, [true, false]);
     /// ```
     pub fn keep(&self, mask: u32) -> Keep {
-        let of = |masks: &[u32]| masks.iter().map(|m| m & mask != 0).collect();
+        self.keep_with(mask, mask)
+    }
+
+    /// The items whose mask shares a bit with `layers`, and the lights whose mask shares one with
+    /// `lights` (a camera or view lights by its own light mask, apart from what it draws).
+    pub fn keep_with(&self, layers: u32, lights: u32) -> Keep {
+        let of = |masks: &[u32]| masks.iter().map(|m| m & layers != 0).collect();
+        let of_lights = |masks: &[u32]| masks.iter().map(|m| m & lights != 0).collect();
         Keep {
+            lights: of_lights(&self.lights),
+            spot_lights: of_lights(&self.spot_lights),
             meshes: of(&self.meshes),
             blended: of(&self.blended),
             sprites: of(&self.sprites),
@@ -173,6 +198,8 @@ impl RenderScene {
             decals: retain_by(&mut self.decals, &keep.decals),
             particles: retain_by(&mut self.particles, &keep.particles),
             texts: retain_by(&mut self.texts, &keep.texts),
+            lights: retain_by(&mut self.lights, &keep.lights),
+            spot_lights: retain_by(&mut self.spot_lights, &keep.spot_lights),
         };
         if static_dropped {
             let kept = keep.meshes[..statics.count].iter().filter(|&&k| k).count();
@@ -266,7 +293,12 @@ impl RenderScene {
 /// remap from `full`'s list indices to the main scene's.
 pub fn split_layers(full: RenderScene, masks: LayerMasks) -> (RenderScene, Remap) {
     let mut main = full.clone();
-    let remap = main.retain(&masks.keep(masks.main));
+    let remap = main.retain(&masks.keep_with(masks.main, masks.main_lights));
+    // Probes capture the main frame's world, and every view reuses that capture: freezing it here keeps the
+    // store key the same for the main frame and each view (a view's own mesh list would differ).
+    if !main.probes.is_empty() && main.probe_world.is_none() {
+        main.probe_world = Some(ProbeWorld::new(main.clone()));
+    }
     main.layered = Some(Box::new(LayeredSource { scene: full, masks }));
     (main, remap)
 }
@@ -276,8 +308,9 @@ mod tests {
     use super::*;
     use crate::render::view_scene;
     use crate::scene::{
-        DecalBlend, DecalInstance, DecalMaps, DropShadowInstance, GroundMarkerShape, MeshInstance,
-        MeshShape, RenderViewData, SilhouetteMesh, SilhouetteStyle,
+        DecalBlend, DecalInstance, DecalMaps, DropShadowInstance, GiData, GroundMarkerShape,
+        MeshInstance, MeshShape, PointLightData, RenderViewData, SilhouetteMesh, SilhouetteStyle,
+        SpotLightData, SunData,
     };
     use crate::viewmodel::{ViewmodelData, ViewmodelLocal, ViewmodelParticle};
     use ludion_core::ids::EntityId;
@@ -455,8 +488,156 @@ mod tests {
             size: (16, 16),
             camera,
             layers,
+            lights: layers,
+            sun: true,
         });
         main
+    }
+
+    const PORTRAIT: u32 = 4;
+
+    fn point(x: f32) -> PointLightData {
+        PointLightData {
+            position: Vec3::new(x, 0.0, 0.0),
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range: 5.0,
+            dynamic: false,
+            shadow: None,
+            scatter: 0.0,
+        }
+    }
+
+    fn spot(x: f32) -> SpotLightData {
+        SpotLightData {
+            position: Vec3::new(x, 0.0, 0.0),
+            direction: Vec3::NEG_Y,
+            color: Vec3::ONE,
+            intensity: 1.0,
+            range: 5.0,
+            cos_inner: 0.9,
+            cos_outer: 0.8,
+            shadow: None,
+            scatter: 0.0,
+        }
+    }
+
+    fn sun() -> SunData {
+        SunData {
+            direction: Vec3::NEG_Y,
+            color: Vec3::ONE,
+            light_space: Mat4::IDENTITY,
+            bias: 0.001,
+            angular_radius: 0.0,
+            cascades: None,
+        }
+    }
+
+    /// Lights at x = 0..3 (the first two point, the last two spot) on `[D, P]` and `[D, P]`, a sun, and a
+    /// GI volume.
+    fn lit_scene() -> (RenderScene, LayerMasks) {
+        let mut scene = RenderScene::empty((64, 64));
+        scene.lights = vec![point(0.0), point(1.0)];
+        scene.spot_lights = vec![spot(2.0), spot(3.0)];
+        scene.sun = Some(sun());
+        scene.gi = Some(GiData {
+            probe_spacing: 1.0,
+            normal_bias: 0.0,
+            sky_visibility: 1.0,
+            bounce: 1.0,
+            count: [2, 2, 2],
+            origin: Vec3::ZERO,
+            span: Vec3::ONE,
+        });
+        let masks = LayerMasks {
+            main: DEFAULT_LAYER_BIT,
+            main_lights: DEFAULT_LAYER_BIT,
+            lights: vec![DEFAULT_LAYER_BIT, PORTRAIT],
+            spot_lights: vec![DEFAULT_LAYER_BIT, PORTRAIT],
+            ..LayerMasks::default()
+        };
+        (scene, masks)
+    }
+
+    #[test]
+    fn the_split_keeps_the_lights_the_main_light_mask_meets() {
+        let (scene, mut masks) = lit_scene();
+        let (main, remap) = split_layers(scene.clone(), masks.clone());
+        assert_eq!(main.lights, [scene.lights[0]]);
+        assert_eq!(main.spot_lights, [scene.spot_lights[0]]);
+        assert_eq!(remap.lights, [Some(0), None]);
+        assert_eq!(remap.spot_lights, [Some(0), None]);
+        // The main camera lights by `main_lights`, apart from what it draws.
+        masks.main_lights = DEFAULT_LAYER_BIT | PORTRAIT;
+        let (main, _) = split_layers(scene.clone(), masks.clone());
+        assert_eq!(main.lights.len(), 2);
+        masks.main_lights = PORTRAIT;
+        let (main, _) = split_layers(scene, masks);
+        assert_eq!(main.lights, [point(1.0)]);
+    }
+
+    #[test]
+    fn a_view_lights_by_its_own_mask_and_drops_the_sun_on_request() {
+        let (scene, masks) = lit_scene();
+        let (mut main, _) = split_layers(with_view(scene, DEFAULT_LAYER_BIT), masks);
+        main.views[0].lights = PORTRAIT;
+        let derived = view_scene(&main, 0);
+        assert_eq!(derived.lights, [point(1.0)]);
+        assert_eq!(derived.spot_lights, [spot(3.0)]);
+        assert!(
+            derived.sun.is_some(),
+            "the sun stays unless the view drops it"
+        );
+        main.views[0].sun = false;
+        assert!(view_scene(&main, 0).sun.is_none());
+    }
+
+    #[test]
+    fn a_view_keeps_gi_only_when_its_lights_and_sun_match_the_main_frame() {
+        let (scene, masks) = lit_scene();
+        let (mut main, _) = split_layers(with_view(scene, DEFAULT_LAYER_BIT), masks);
+        assert!(view_scene(&main, 0).gi.is_some(), "the same lights and sun");
+        main.views[0].lights = DEFAULT_LAYER_BIT | PORTRAIT;
+        assert!(view_scene(&main, 0).gi.is_none(), "another light set");
+        main.views[0].lights = DEFAULT_LAYER_BIT;
+        main.views[0].sun = false;
+        let derived = view_scene(&main, 0);
+        assert!(derived.gi.is_none() && derived.voxel.is_none(), "no sun");
+    }
+
+    #[test]
+    fn a_sunless_view_works_in_an_unlayered_frame() {
+        let (mut scene, _) = lit_scene();
+        scene = with_view(scene, u32::MAX);
+        scene.views[0].sun = false;
+        let derived = view_scene(&scene, 0);
+        assert!(derived.sun.is_none() && derived.gi.is_none());
+        assert_eq!(derived.lights.len(), 2);
+    }
+
+    #[test]
+    fn split_freezes_the_probe_world_only_when_probes_exist() {
+        let (scene, masks) = scene_with_four_meshes();
+        let (main, _) = split_layers(scene.clone(), masks.clone());
+        assert!(main.probe_world.is_none());
+        let mut probed = scene;
+        probed.probes = vec![crate::probe::ProbeData {
+            entity: EntityId::new(1, 0),
+            position: Vec3::ZERO,
+            rotation: ludion_core::math::glam::Quat::IDENTITY,
+            volume: crate::probe::ProbeVolume::Sphere { radius: 1.0 },
+            blend: 0.5,
+            priority: 0,
+        }];
+        let (main, _) = split_layers(probed, masks);
+        let frozen = main.probe_world.as_ref().expect("frozen");
+        assert_eq!(frozen.scene().meshes.len(), 2, "the filtered main world");
+        let view = view_scene(&with_view(main, RADAR), 0);
+        assert_eq!(view.meshes.len(), 2);
+        assert!(
+            view.probe_world.is_some(),
+            "a view reuses the main frame's world"
+        );
     }
 
     #[test]

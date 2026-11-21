@@ -1276,6 +1276,16 @@ pub(crate) fn validate(doc: &AssemblyDocument) -> Vec<Diagnostic> {
                 ),
             );
         }
+        if part.name == crate::animation::ROOT_TRACK {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::ASSEMBLY_DATA_CONSISTENCY,
+                    "the part name `$root` is reserved for a clip's root-motion track",
+                )
+                .with_path(format!("{pointer}/name"))
+                .with_help("rename the part; `$root` never draws and cannot name a part"),
+            );
+        }
         if part.file.is_empty() {
             diagnostics.push(
                 Diagnostic::new(

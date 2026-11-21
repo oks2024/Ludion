@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); A3 deferred; W5b, W6 not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); A3 deferred; W6 not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -184,6 +184,16 @@ No `WorldHash`, trace, replay, protocol schema or golden moved (no committed sce
 `AnimGraphState`); the component schema snapshot gained `AnimGraphState` only. `CYCLE`, `cycle_builder`,
 `character-cycle.trace.txt` and `character-cycle.lrp` are untouched (decision 53).
 
+### W5b — the assembly animation bench
+
+| file | role |
+|---|---|
+| `crates/ludion-engine/tests/assembly_anim_bench.rs`, `it.rs` | the five arms, the in-file 0.5 ms gate on `full`, the optional pinned budget check, the non-ignored `assembly_anim_bench_scene_poses` companion (hash at 1 and 8 threads, layers/IK/ground change figure 0, at least half the figures have a foot moved by the ground) |
+| `crates/ludion-engine/tests/bench_rows.rs` | `sequential(report, name)`, the median of a `sim.sequential` entry |
+| `docs/voxel-animation.md` §Ground feet, embedded mirror | the cost line and the bench command |
+
+No measurement was taken and no budget file written. Only tests and docs changed.
+
 ## Trigger
 
 The game's characters do locomotion plus something else on one skin: carry a body, aim, peek around a
@@ -238,7 +248,9 @@ share one driver shape.
     after layers; the final pose goes through `posed_joint_world` so sockets follow. (Decision 36 replaces
     `IkRig` with the assembly's `ik:` key.)
 11. **Foot grounding** (W5): read-only physics casts in extract, the 32-character budget of ≤0.5 ms, and
-    `ProfileReport` counters (a schema move, re-blessed there).
+    `ProfileReport` counters (a schema move, re-blessed there). *Amended (2026-11-21):* the bench gates
+    `ProfileReport`'s existing extract sequential timing (`Budget.extract_ms`); the four counters move the
+    protocol schema, so they ride R14 (decision 54).
 12. **Root motion** (W6): a `ludion_root_motion` extras flag at import and `root_motion_delta`, a deterministic
     sim read of clip data through the libm sampler.
 13. **Blend points** are `clip` plus `at`: a number is 1D (`params[0]`), a block list `[x, z]` is 2D
@@ -414,6 +426,14 @@ share one driver shape.
     (`ludion-sim/src/hash.rs` rule 4). W3 proves the port instead: `anim_graph_cycle.rs` runs `CYCLE` and a six-state
     graph port side by side and asserts an identical `Animation` every tick. Vigil's `animate_player` on the graph
     (the request's acceptance) waits for the same round. **Trigger:** R14.
+54. **The bench is a runnable `#[ignore]` target over five arms** (`empty`, `clip`, `layers`, `ik`, `full`; the
+    same 32 placements, each adding one feature), printing the extract median, p99 and delta over `empty` at 1
+    and 8 threads. The `full` arm at one thread is gated in-file at 0.5 ms (decision 11, the owner's 2026-11-19
+    acceptance) and by an optional `budgets/pinned-<box>-assembly-anim.toml` (`threads = 1`, `extract_ms` at
+    about 2x the pinned median, never above 0.5); its `WorldHash` at 1 and 8 threads is asserted equal. The
+    fixture figure is the gallery's 10-part humanoid with three IK chains (two feet, a hand) and a look-at,
+    where the request's figure is 11 parts with four chains; no assembly was authored for the bench.
+    **Owed:** the quiet release measurement and the budget files on the 3090 and the M4.
 
 ## Waves
 
@@ -443,7 +463,8 @@ share one driver shape.
   deferral for assembly parts.
 - **W5a (shipped 2026-11-19).** Ground feet on voxel assemblies (decisions 45–49; the macOS twin of the
   `assembly-ground` golden is owed to the M4).
-- **W5b.** The bench and the profile counters (decision 11).
+- **W5b (bench shipped 2026-11-21).** The 32-character bench (decision 54); the measurement and the budget
+  files are owed. The `ProfileReport` counters (decision 11) ride R14.
 - **W6.** Root motion import and `root_motion_delta` (decision 12).
 
 ## Owner rulings (2026-11-19)

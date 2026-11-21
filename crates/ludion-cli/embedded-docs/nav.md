@@ -5,7 +5,7 @@ description: Navigation — walkability grid, agent classes, flow fields, paths,
 # Navigation: a grid from the colliders, one flow field per target, agents that steer
 
 **Scope:** `NavConfig`, `Engine::nav`, `nav_update`, `NavAgent`, `NavSteering`, `nav_steer`, `NavGoal`, `NavRoute`,
-`NavLink`, `nav_link_done`, `nav_path` and its queries, `NavClass`. The
+`NavLink`, `NavBlocker`, `nav_link_done`, `nav_path` and its queries, `NavClass`. The
 engine writes a desired velocity; moving the body is yours — `ludion docs motor` for a capsule,
 `ludion docs components` for the rows. Static colliders come from `ludion docs physics` and
 `ludion docs collision-layers`; the neighbour index is `ludion docs spatial-3d`.
@@ -139,7 +139,7 @@ let config = NavConfig {
 Give a walker a `NavGoal { at }` (`replan: on_change` default, or `never`) beside its `NavAgent`.
 `nav_steer` plans a route, stores it as a `NavRoute` (`waypoints`, `index`, `status`, `partial`, `cost`)
 and steers along it; a game reads `NavRoute.status`: `planning` (waiting for the per-tick cap),
-`following`, `arrived` (within `arrive_radius` of the last waypoint), `unreachable` or `at_link`.
+`following`, `arrived` (within `arrive_radius` of the last waypoint), `unreachable`, `at_link` or `at_blocker`.
 
 - **Replanning is pure**: when the goal moves to another cell, or, under `on_change`, when the leg being
   walked (the stored waypoint pair, not where the agent stands) is no longer walkable (a static wall
@@ -170,6 +170,55 @@ The engine never moves the body.
   `replan` modes). An `at_link` route is never replanned until `nav_link_done`.
 - The link table is derived and rebuilt every `nav_update`. Flow fields (agents with only a `target`) ignore
   links. A scene with no `NavLink` plans and hashes as before.
+
+## Blockers
+
+A `NavBlocker` entity closes, prices or gates part of the grid without re-sampling physics: a door, a
+pushed crate, a mud patch. Every `nav_update` overlays the enabled blockers on each class grid.
+
+```yaml
+components:
+  Transform:
+    translation:
+      - 12.0
+      - 1.0
+      - 12.5
+  NavBlocker:
+    shape:
+      box:
+        half_extents:       # default 0.5 each, before scale
+          - 0.6
+          - 1.0
+          - 1.5
+    mode: interact          # block (default) | cost | interact
+    cost: 0.0               # metres, for `cost`
+    classes:                # empty is every class
+      - walker
+    enabled: true
+```
+
+A node is covered when its position, in the box's frame, lies inside the half-extents inflated by the class
+radius and the agent's body (`y` to `y + height`) overlaps the box vertically. A non-uniform scale is
+approximated per axis. A moving blocker (a carried crate, a closing door) is followed every tick, at the
+price of one flow-field rebuild per tick for the classes it touches. Where blockers overlap: block beats
+interact beats cost.
+
+- **`block`**: nothing enters the covered nodes (A*, fields, line walks).
+- **`cost`**: entering a covered node from outside costs `cost` extra metres, **once per crossing**, so A*
+  detours only when another way is cheaper. Switching a blocker to or from `cost` prices the next plan; it
+  never replans a route by itself.
+- **`interact`**: A* routes straight through, but the walker stops before the region with
+  `NavRoute.status = at_blocker` and `NavRoute.blocker = Some(door entity)` (the lowest covering entity),
+  velocity exactly zero. **You open it by disabling the blocker or switching it to `cost`; the walker
+  continues the next tick.** There is no done call. If the blocker becomes `block` the route replans. Flow
+  fields treat `interact` as blocked: a chaser does not open doors.
+- **Replanning**: under `replan: on_change`, with a blocker on the grid, every remaining leg is checked, so a
+  door that closes anywhere ahead replans the route (legs that start at a link or blocker are skipped). A
+  route in another room is untouched.
+- A `classes` name no class has is `L4147`, once per blocker; bad half-extents, a negative `cost` or an empty
+  `classes` entry is `L1527`. A scene with no `NavBlocker` builds the same grids, routes and `WorldHash`.
+
+`cargo run -p ludion --example nav_blocker` opens a door when the guard has waited.
 
 ## Feeding the motor
 

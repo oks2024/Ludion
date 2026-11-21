@@ -376,6 +376,7 @@ ground:
 - Presentation only: no foot pitch to the slope, no moving platforms, not in the model sheet, the ragdoll
   switch or `kind: character` skins. Sockets on a grounded part follow it; the sim keeps the rest socket.
 - `check-scene` ends a grounded chain's row with `, ground` and prints `ground: max_adjust 3, root_drop`.
+- Cost: the budget is at most 0.5 ms of extract for 32 grounded, layered, IK'd assemblies; `cargo test -p ludion-engine --release --test it -- assembly_anim_bench --ignored --nocapture` prints it by feature.
 
 ### Live editing
 

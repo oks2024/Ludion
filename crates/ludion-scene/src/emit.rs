@@ -6,7 +6,7 @@
 //! - **LF line endings**, 2-space indent, block style everywhere; the only flow forms are the
 //!   empty `[]` and `{}`.
 //! - **Stable key order.** Top-level: `format`, `name`, `generated_from`, `seed`, `physics`,
-//!   `preload` (omitted when empty), `entities` (a present `physics:` block itself orders `space`, `gravity`, `solver_iterations`,
+//!   `render_layers` (omitted when empty), `preload` (omitted when empty), `entities` (a present `physics:` block itself orders `space`, `gravity`, `solver_iterations`,
 //!   `stabilization_iterations`, `sleep_after_ticks`, `layers`, skipping absent fields). Entity:
 //!   `name`, `presentation` (only when true), `components`. Components: registry registration order (unregistered names follow, in
 //!   document order). Component fields: schema property order — i.e. struct declaration order —
@@ -54,6 +54,14 @@ pub(crate) fn emit(scene: &Scene, registry: &Registry) -> String {
     }
     if let Some(physics) = &scene.physics {
         emit_physics(&mut out, physics);
+    }
+    if !scene.render_layers.is_empty() {
+        out.push_str("render_layers:\n");
+        for layer in &scene.render_layers {
+            out.push_str("  - name: ");
+            out.push_str(&scalar_string(&layer.name));
+            out.push('\n');
+        }
     }
     if !scene.preload.is_empty() {
         out.push_str("preload:\n");

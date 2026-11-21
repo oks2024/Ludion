@@ -32,6 +32,8 @@ use ludion_render_graph::{RenderedImage, schedule};
 ///     size: (256, 256),
 ///     camera: scene.camera,
 ///     layers: u32::MAX,
+///     lights: u32::MAX,
+///     sun: true,
 /// });
 /// let derived = view_scene(&scene, 0);
 /// assert!(derived.views.is_empty() && derived.ui.is_empty());
@@ -40,6 +42,10 @@ pub fn view_scene(scene: &RenderScene, index: usize) -> RenderScene {
     let source = scene.layered.as_deref();
     let mut out = source.map_or(scene, |s| &s.scene).clone();
     out.layered = None;
+    if source.is_some() {
+        // Probes capture the main frame's world; the view resolves to the same key, a cache hit.
+        out.probe_world = scene.probe_world.clone();
+    }
     out.camera = scene.views[index].camera;
     out.cull_camera = None;
     // The gun belongs to the screen, not the world.
@@ -51,7 +57,9 @@ pub fn view_scene(scene: &RenderScene, index: usize) -> RenderScene {
         *kept = !particle.viewmodel;
     }
     if let Some(source) = source {
-        let by_layer = source.masks.keep(scene.views[index].layers);
+        let by_layer = source
+            .masks
+            .keep_with(scene.views[index].layers, scene.views[index].lights);
         for (kept, layer) in keep.meshes.iter_mut().zip(&by_layer.meshes) {
             *kept &= layer;
         }
@@ -64,8 +72,19 @@ pub fn view_scene(scene: &RenderScene, index: usize) -> RenderScene {
         keep.drop_shadows = by_layer.drop_shadows;
         keep.decals = by_layer.decals;
         keep.texts = by_layer.texts;
+        keep.lights = by_layer.lights;
+        keep.spot_lights = by_layer.spot_lights;
     }
     out.retain(&keep);
+    if !scene.views[index].sun {
+        out.sun = None;
+    }
+    // The GI bake and inject are keyed on the lights and the sun: a view that lights differently draws
+    // without GI rather than rebaking the main frame's volume.
+    if out.lights != scene.lights || out.sun != scene.sun {
+        out.gi = None;
+        out.voxel = None;
+    }
     // A view whose static set differs from the main frame's draws its statics as dynamics, so it never
     // swaps the renderer's one persistent static slot.
     if out.statics.key != scene.statics.key {
@@ -160,6 +179,8 @@ impl Renderer {
     ///     size: (256, 256),
     ///     camera: scene.camera,
     ///     layers: u32::MAX,
+    ///     lights: u32::MAX,
+    ///     sun: true,
     /// });
     /// let image = renderer.render_view(&scene, 0)?;
     /// assert_eq!((image.width, image.height), (256, 256));

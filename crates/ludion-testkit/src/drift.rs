@@ -84,6 +84,7 @@ fn probe_seed(name: &str) -> Value {
             "target": { "index": 0, "generation": 0 },
         }),
         "NoiseZone" => json!({ "shape": { "sphere": { "radius": 1.0 } } }),
+        "AudioZone" => json!({ "shape": { "sphere": { "radius": 1.0 } } }),
         "PendingNoise" => json!({
             "id": 0,
             "at": [0.0, 0.0, 0.0],

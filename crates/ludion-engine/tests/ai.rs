@@ -380,3 +380,233 @@ fn describe_carries_the_machine_and_its_live_agents() {
     }
     assert_eq!(agents[0]["name"], "leader");
 }
+
+// ---- ref-carrying events and the opt-in group roster ----
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+enum Sight {
+    Saw {
+        #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+        body: Option<EntityId>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+enum Scout {
+    Root,
+}
+
+impl Machine for Scout {
+    type Blackboard = ();
+    type Event = Sight;
+    const NAME: &'static str = "Scout";
+    const ROOT: Self = Scout::Root;
+    const ALL: &'static [Self] = &[Scout::Root];
+    fn parent(_: Self) -> Option<Self> {
+        None
+    }
+}
+
+/// `squad` lists both scouts in its roster; `scout-a` has seen `scout-b`.
+const SCOUTS: &str = "format: 1
+seed: 1
+entities:
+  - name: squad
+    components:
+      Group: {}
+      GroupRoster:
+        members:
+          - index: 1
+            generation: 0
+          - index: 2
+            generation: 0
+  - name: scout-a
+    components:
+      ScoutMind:
+        inbox:
+          - Saw:
+              body:
+                index: 2
+                generation: 0
+      GroupMember:
+        group:
+          index: 0
+          generation: 0
+        role: 0
+  - name: scout-b
+    components:
+      ScoutMind: {}
+      GroupMember:
+        group:
+          index: 0
+          generation: 0
+        role: 1
+";
+
+fn scouts(root: &std::path::Path) -> Engine {
+    let mut engine = Engine::builder()
+        .project_root(root)
+        .components(register_machine::<Scout>)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(SCOUTS).unwrap();
+    engine
+}
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("ludion-ai-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// (squad, scout-a, scout-b) by their components.
+fn trio(world: &World) -> (EntityId, EntityId, EntityId) {
+    let find = |role: u8| {
+        world
+            .entities()
+            .find(|&e| {
+                world
+                    .component::<ludion_ai::GroupMember>(e)
+                    .is_some_and(|m| m.role == role)
+            })
+            .expect("a scout")
+    };
+    let squad = world
+        .entities()
+        .find(|&e| world.component::<ludion_ai::Group>(e).is_some())
+        .expect("a squad");
+    (squad, find(0), find(1))
+}
+
+fn save(engine: &mut Engine, path: &str) {
+    ludion_engine::dispatch(
+        engine,
+        Command::SceneSave(ludion_protocol::command::SceneSaveParams {
+            path: path.to_string(),
+            force: true,
+        }),
+    )
+    .expect("saves");
+}
+
+fn load(engine: &mut Engine, path: &str) {
+    ludion_engine::dispatch(
+        engine,
+        Command::SceneLoad(ludion_protocol::command::SceneLoadParams {
+            path: path.to_string(),
+        }),
+    )
+    .expect("loads");
+}
+
+#[test]
+fn an_inbox_ref_follows_its_entity_through_save_and_reload_and_nulls_when_it_is_gone() {
+    let root = scratch("inbox");
+    let mut engine = scouts(&root);
+    save(&mut engine, "scouts.yaml");
+    load(&mut engine, "scouts.yaml");
+    let (_, a, b) = trio(engine.world());
+    let inbox = engine
+        .world()
+        .component::<Mind<Scout>>(a)
+        .unwrap()
+        .inbox
+        .clone();
+    assert_eq!(
+        inbox,
+        [Sight::Saw { body: Some(b) }],
+        "the ref follows scout-b"
+    );
+
+    engine.world_mut().despawn(b).unwrap();
+    save(&mut engine, "gone.yaml");
+    load(&mut engine, "gone.yaml");
+    let a = engine
+        .world()
+        .entities()
+        .find(|&e| engine.world().component::<Mind<Scout>>(e).is_some())
+        .unwrap();
+    let inbox = engine
+        .world()
+        .component::<Mind<Scout>>(a)
+        .unwrap()
+        .inbox
+        .clone();
+    assert_eq!(
+        inbox,
+        [Sight::Saw { body: None }],
+        "a dead target saves as null"
+    );
+}
+
+#[test]
+fn a_roster_round_trips_through_save_with_a_dead_member_nulled() {
+    let root = scratch("roster");
+    let mut engine = scouts(&root);
+    let (squad, a, b) = trio(engine.world());
+    assert_eq!(
+        engine
+            .world()
+            .component::<ludion_ai::GroupRoster>(squad)
+            .unwrap()
+            .members,
+        [Some(a), Some(b)]
+    );
+    engine.world_mut().despawn(b).unwrap();
+    save(&mut engine, "roster.yaml");
+    load(&mut engine, "roster.yaml");
+    let (squad, a, _) = trio_after_loss(engine.world());
+    assert_eq!(
+        engine
+            .world()
+            .component::<ludion_ai::GroupRoster>(squad)
+            .unwrap()
+            .members,
+        [Some(a), None]
+    );
+}
+
+/// `trio` for a world where scout-b is gone: the squad and scout-a only.
+fn trio_after_loss(world: &World) -> (EntityId, EntityId, EntityId) {
+    let squad = world
+        .entities()
+        .find(|&e| world.component::<ludion_ai::Group>(e).is_some())
+        .unwrap();
+    let a = world
+        .entities()
+        .find(|&e| world.component::<Mind<Scout>>(e).is_some())
+        .unwrap();
+    (squad, a, a)
+}
+
+#[test]
+fn snapshot_restore_keeps_the_inbox_ref_and_the_roster() {
+    let root = scratch("snapshot");
+    let mut engine = scouts(&root);
+    let (squad, a, b) = trio(engine.world());
+    let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    let mut restored = Engine::builder()
+        .project_root(&root)
+        .components(register_machine::<Scout>)
+        .build()
+        .expect("boots");
+    restored
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    let world = restored.world();
+    assert_eq!(
+        world.component::<Mind<Scout>>(a).unwrap().inbox,
+        [Sight::Saw { body: Some(b) }]
+    );
+    assert_eq!(
+        world
+            .component::<ludion_ai::GroupRoster>(squad)
+            .unwrap()
+            .members,
+        [Some(a), Some(b)]
+    );
+}

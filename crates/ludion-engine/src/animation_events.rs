@@ -74,13 +74,14 @@
 use ludion_assets::AssetRoot;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::time::{FrameIndex, GameTime};
 use ludion_ecs::{SystemCtx, World};
-use ludion_scene::AnimationEvent;
+use ludion_scene::{AnimationEvent, Keyframe, ROOT_TRACK};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -113,6 +114,22 @@ pub(crate) struct ClipTiming {
     pub events: Vec<AnimationEvent>,
 }
 
+/// One clip's `$root` track as [`root_motion_delta`](crate::root_motion_delta) reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RootClip {
+    /// The clip length in seconds.
+    pub duration: f64,
+    /// Whether the clip loops.
+    pub looped: bool,
+    /// The `$root` translation channel (voxel units; `v[0]` and `v[2]` are read).
+    pub translation: Vec<Keyframe>,
+    /// The `$root` rotation channel (Euler degrees; `v[1]` is read).
+    pub rotation: Vec<Keyframe>,
+}
+
+/// An assembly's clips that carry a `$root` track, keyed by clip short name.
+pub(crate) type RootClips = BTreeMap<String, RootClip>;
+
 /// The per-model clip timings [`animation_events`] reads, loaded lazily from `root`. Engine
 /// configuration installed at every world rebuild, never hashed; see the module docs.
 pub(crate) struct AnimationLibrary {
@@ -122,6 +139,9 @@ pub(crate) struct AnimationLibrary {
     models: BTreeMap<Model, Result<BTreeMap<String, ClipTiming>, Vec<Diagnostic>>>,
     /// The blend spaces of each loaded character or assembly (`blend_clock`).
     blends: BTreeMap<Model, Vec<BlendSpaceData>>,
+    /// The `$root` clips of each assembly, keyed by its path. Interior-mutable so the sim read
+    /// `root_motion_delta` works through `&World`; the lock is held only to get or insert.
+    roots: Mutex<BTreeMap<String, Arc<RootClips>>>,
 }
 
 /// A model that binds clips, with its path: the `Mesh.shape` of an assembly or character, or an
@@ -148,7 +168,21 @@ impl AnimationLibrary {
             root,
             models: BTreeMap::new(),
             blends: BTreeMap::new(),
+            roots: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The `$root` clips of the assembly at `rel`, loaded on first use (or already filled by
+    /// [`Self::timings`]); empty for a model that fails to load, which `animation_events` reports.
+    pub(crate) fn root_clips(&self, rel: &str) -> Arc<RootClips> {
+        let lock = || self.roots.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(found) = lock().get(rel) {
+            return Arc::clone(found);
+        }
+        let loaded = crate::assembly_mesh::load(AssetRoot::content(&self.root), rel)
+            .map(|data| Arc::new(root_clips_of(&data.clips)))
+            .unwrap_or_default();
+        Arc::clone(lock().entry(rel.to_string()).or_insert(loaded))
     }
 
     /// The clip timings of `model`, loading it on first use, or the loader's diagnostics for a
@@ -174,6 +208,10 @@ impl AnimationLibrary {
                 Model::Assembly(_) => {
                     crate::assembly_mesh::load(AssetRoot::content(&self.root), rel).map(|data| {
                         self.blends.insert(model.clone(), data.blends.clone());
+                        self.roots
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(rel.to_string(), Arc::new(root_clips_of(&data.clips)));
                         data.clips
                             .iter()
                             .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
@@ -206,6 +244,23 @@ impl AnimationLibrary {
             Err(error) => Err(error),
         }
     }
+}
+
+/// The clips that carry a `$root` track.
+fn root_clips_of(clips: &[crate::assembly_mesh::AssemblyClipData]) -> RootClips {
+    clips
+        .iter()
+        .filter_map(|b| {
+            let track = ludion_scene::clip_track(&b.clip, ROOT_TRACK)?;
+            let root = RootClip {
+                duration: b.clip.duration,
+                looped: b.clip.looped,
+                translation: track.translation.clone(),
+                rotation: track.rotation.clone(),
+            };
+            Some((b.name.clone(), root))
+        })
+        .collect()
 }
 
 impl AnimationLibrary {

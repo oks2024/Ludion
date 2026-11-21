@@ -8,7 +8,8 @@
 
 1. **A layered 2.5D grid, sampled from static physics colliders only, not derived from voxels.**
    Kinematic and rigid bodies never shape the grid (a moving body would leave a stale hole and split
-   a restored world's grid from the original). `ignore_layers` is optional. Any static collider is
+   a restored world's grid from the original). Ruled 2026-11-19: authored `NavBlocker`s overlay the
+   sampled grid without re-sampling (decision 20). `ignore_layers` is optional. Any static collider is
    walkable ground, not only voxel rooms, and bridges and overhangs are extra layers in a column.
 2. **Walkability is sampled per column**: a downward ray walk finds every floor, an upward ray
    measures headroom, and a capsule overlap of the agent's radius drops floors an agent cannot
@@ -93,6 +94,26 @@
     over the nodes within `radius` metres of path distance (grid links, no off-mesh links) from `around`, in
     ascending `NodeId`, with one `gen_range_usize` draw.
 
+20. **The blocker overlay is derived, per class grid, rebuilt every `nav_update`** from the enabled `NavBlocker`s in
+    ascending `EntityId`. A node is covered when its xz lies inside the posed box inflated by the class radius and
+    the agent's body `[y, y + height]` overlaps the box's vertical extent. Precedence: block > interact > cost. An
+    overlay change bumps the grid generation, so flow fields recompute and a moving blocker costs one field rebuild
+    per tick. Replans never read the generation (decision 12 holds). The overlay rewrites the grid's link arrays
+    from pristine base copies, so A*, fields, line walks and the debug grid respect it without hot-loop edits.
+21. **Modes.** `block` nodes cannot be entered by A*, fields, line walks or off-mesh edges. `cost` adds `cost` metres
+    on each step that enters a cost node from a node without cost: once per crossing. `interact` nodes are
+    passable for A* and blocked for flow fields (a chaser does not open doors). A string pull never walks into an
+    interact node: the crossing is its own leg, as a link is.
+22. **Routes stop at interact blockers.** `NavRoute.blockers: Vec<u32>` holds the waypoint indices `i` whose next leg
+    enters an interact region. While the region at waypoint `i + 1` still resolves to an interact blocker, the
+    walker at `i` stands still `at_blocker` with `NavRoute.blocker = Some(entity)` (lowest entity). When the game
+    disables it or switches it to `cost`, the walker continues the next tick. There is no done call. If the region
+    becomes `block`, the route replans.
+23. **Replan triggers with blockers.** Under `replan: on_change`, and only when the class overlay is non-empty, every
+    remaining leg is checked: a leg that is no longer walkable replans. Legs that start at a link or blocker index
+    are skipped. A walkable check fails on entering a blocked node or entering an interact node from outside. A
+    `cost` toggle never replans; it prices the next plan. With no blockers the current-leg rule is unchanged.
+
 **Known second way (temporary):** vigil keeps its game-side 2D nav (`games/vigil/src/nav.rs`).
 Moving it to the layered grid moves its `WorldHash`; the exit is the owed migration, gated by
 `games/vigil/tests/nav_equivalence.rs`, owing a pinned replay re-record and a human sitting on enemy
@@ -141,6 +162,17 @@ link table per class from one shared down-walk, `NavAgent.class`, `PathRequest.c
 `Copy`. A config with no `classes` builds the same grid and routes; tests pin a single class equal to the legacy fields,
 1- and 8-thread grids and traces, and the gap, ramp, link and unknown-class cases. Only the component schema snapshot moved.
 
+Wave 4 (request 0004 §5), by commit subject: dynamic blockers — `ludion-nav` gains `NavOverlay`, `NodeMark`,
+`NavGrid::set_overlay` (links rewritten from pristine base copies; a change bumps the generation) and
+`string_pull_marked`; the engine gains `NavBlocker` (`block`, `cost`, `interact`; per class, box, posed), the
+derived blocker table, `NavRouteStatus::AtBlocker` with `NavRoute.blockers`/`blocker`, and `NavPath.blockers`;
+`L1527`; `ludion docs nav` §Blockers and example `nav_blocker`. A world with no `NavBlocker` builds the same
+grids, routes and hashes. Tests pin the overlay rules (empty is identity, block, cost once per crossing, stop,
+A* equals Dijkstra under costs) and the two-room cases: block, cost detour, interact wait and open, interact to
+block replan, toggle scope, classes, a moving blocker, 1- and 8-thread traces and a mid-wait restore. Only the
+component schema snapshot moved. An `at_blocker` walker also replans when its goal moves to another cell
+(an `at_link` walker never does).
+
 ## Waves (Neon Shroud request 0004)
 
 The request asks for paths, patrols, off-mesh links, dynamic blockers and avoidance. Each wave is
@@ -159,8 +191,8 @@ independently shippable; later ones add fields and components, never reshape ear
   its own subtask after 2a.
 - **3 — off-mesh links (shipped):** `NavLink`, `NavRouteStatus::AtLink`, `nav_link_done`; `L1526`, `L4145`, `L4146`
   (decisions 14–16).
-- **4 — dynamic blockers:** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics. Amends
-  decision 1 (statics only) — **accepted 2026-11-19, scheduled (after wave 2)**.
+- **4 — dynamic blockers (this):** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics; `L1527`
+  (decisions 20–23). Amends decision 1 (statics only) — **accepted 2026-11-19**.
 - **5 — avoidance:** `NavAgent.avoidance` and `NavObstacle`; brings "Avoidance beyond separation" into
   scope and subsumes Serious Isaac draft 0029 — **accepted 2026-11-19, scheduled (after wave 4)**.
 
@@ -174,3 +206,4 @@ keeps plain points. `nav_random_point` and `nav_raycast` shipped with wave 2a; t
 - **Avoidance beyond separation** — wave 5.
 - **Links in flow fields** — trigger: a chasing crowd that must climb.
 - **Voxel-derived walkability** — trigger: a voxel room the collider sampler misreads.
+- **A door that one class may open and others not** (per-class `mode` on one blocker) — trigger: a game asks.

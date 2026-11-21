@@ -69,6 +69,7 @@ use crate::audio::{
     resync_is_current,
 };
 use crate::audio_occlusion::{AudioOcclusion, Measure, OccluderKey, OcclusionState};
+use crate::audio_zones::ZoneState;
 use crate::builtin_registry;
 use crate::components::{
     AudioEmitter, AudioListener, Camera, ListenerOrientation, Name, ReflectionProbe, Transform,
@@ -558,6 +559,10 @@ pub struct Engine {
     /// recorded. Cleared by [`install_audio_queue`](Engine::install_audio_queue), whose blanket stop
     /// already silences everything a rebuilt world used to sound.
     audible_emitters: StableMap<EntityId, SentLoop>,
+    /// What the sink was told about `AudioZone`s: beds, zone gains, reverb. Host-side bookkeeping
+    /// like `audible_emitters`: never hashed or snapshotted, reset by
+    /// [`install_audio_queue`](Engine::install_audio_queue).
+    audio_zones: ZoneState,
     /// The attached voices ([`AudioQueue::play_on`]) still sounding that the engine follows: each
     /// re-resolved against the listener per tick until its clip ends, it is stopped, or its entity
     /// despawns. Host-side bookkeeping like `audible_emitters`: never hashed, snapshotted or
@@ -1035,6 +1040,7 @@ impl Engine {
             queued_render_fault: None,
             audio_sender: None,
             audible_emitters: StableMap::new(),
+            audio_zones: ZoneState::default(),
             attached_voices: StableMap::new(),
             voice_ticks: StableMap::new(),
             duck_rules: Vec::new(),
@@ -2149,6 +2155,7 @@ impl Engine {
         self.drain_rumble();
         self.drain_settings(frame);
         self.refresh_occlusion(frame);
+        self.sync_audio_zones(frame);
         self.sync_audio_emitters(frame);
         self.sync_attached_voices(frame);
         self.sync_ducks(frame);
@@ -2867,6 +2874,22 @@ impl Engine {
         self.session
             .audio_log
             .push_back(AudioLogEntry { frame, message });
+    }
+
+    /// Resolves the `AudioZone`s around the listener into bed syncs, zone gains and the reverb, at
+    /// the frame boundary; with no listener the step is a no-op and the state stands.
+    fn sync_audio_zones(&mut self, frame: FrameIndex) {
+        let Some(listener) = audio_listener(self.driver.world_mut()) else {
+            return;
+        };
+        let messages = crate::audio_zones::resolve(
+            self.driver.world_mut(),
+            listener.position,
+            &mut self.audio_zones,
+        );
+        for message in messages {
+            self.emit_audio(frame, message);
+        }
     }
 
     /// Keeps every [`AudioEmitter`](crate::AudioEmitter) in the world synced to its distance from the
@@ -4466,6 +4489,7 @@ impl Engine {
             .world_mut()
             .insert_resource(AudioQueue::default());
         self.audible_emitters.clear();
+        self.audio_zones = ZoneState::default();
         self.attached_voices.clear();
         self.occlusion_state = OcclusionState::default();
         self.voice_ticks.clear();
@@ -7729,6 +7753,7 @@ impl Engine {
             generated_from,
             seed,
             physics: self.scene_physics.clone(),
+            render_layers: authored.map_or_else(Vec::new, |scene| scene.render_layers.clone()),
             preload: authored.map_or_else(Vec::new, |scene| scene.preload.clone()),
             entities,
         };

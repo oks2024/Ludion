@@ -7,8 +7,9 @@
 
 use ludion_core::math;
 use ludion_font::{GlyphQuad, YAxis, fold_line_breaks, layout};
-use ludion_renderer::{FontDraw, GlyphOutline, UiClip, UiInstance, UiRotation};
+use ludion_renderer::{FontDraw, GlyphOutline, UiClip, UiInstance, UiRotation, UiShapeStroke};
 
+use super::shape::sector_instance;
 use super::{FontFace, pixel_scale, resolve_ui_rect};
 use crate::components::{UiRadial, UiRadialItem};
 
@@ -133,6 +134,18 @@ fn item_color(radial: &UiRadial, item: usize) -> [f32; 4] {
     }
 }
 
+/// The wedge colour of an item: `selected_fill` on the selected, enabled item, else `fill`. A disabled
+/// item keeps `fill`.
+fn wedge_fill(radial: &UiRadial, item: usize) -> Option<[f32; 4]> {
+    let selected =
+        radial.items[item].enabled && radial.selected.is_some_and(|s| s as usize == item);
+    if selected {
+        radial.selected_fill.or(radial.fill)
+    } else {
+        radial.fill
+    }
+}
+
 /// One text line centred on `centre_px`, laid out unwrapped like a `UiList` line.
 fn centred_line(
     face: &FontFace,
@@ -154,7 +167,8 @@ fn centred_line(
 pub(crate) type IconResolver<'a> =
     dyn FnMut(usize, &UiRadialItem) -> Option<(usize, [f32; 4])> + 'a;
 
-/// What `extract` draws of a wheel, in draw order: per item, its icon (a rect `icon_size` square,
+/// What `extract` draws of a wheel, in draw order: per item, its wedge when `fill` or `stroke` is set (a
+/// sector over the item's gapped sweep, decisions 62–64), its icon (a rect `icon_size` square,
 /// `0.5 * (size + icon_size)` above the label point), its `text` centred on the label point, and its
 /// `detail` centred `size` below it at `0.75 * size`. `icon` resolves an item's atlas frame to a
 /// texture index and uv, or `None` to skip the icon. An empty or invisible wheel draws nothing.
@@ -172,6 +186,21 @@ pub(crate) fn radial_draw(
     for (i, (item, placed)) in radial.items.iter().zip(&layout.items).enumerate() {
         let color = item_color(radial, i);
         let [mx, my] = placed.mid_px;
+        let fill = wedge_fill(radial, i);
+        if fill.is_some() || radial.stroke.is_some() {
+            out.push(sector_instance(
+                layout.center_px,
+                layout.radius_outer_px,
+                layout.radius_inner_px,
+                placed.start_deg,
+                placed.sweep_deg,
+                fill,
+                radial.stroke.map(|s| UiShapeStroke {
+                    width_px: s.width * scale,
+                    color: s.color,
+                }),
+            ));
+        }
         if let Some((texture, uv)) = icon(i, item) {
             let edge = radial.icon_size * scale;
             let lift = 0.5 * (radial.size + radial.icon_size) * scale;
@@ -211,6 +240,7 @@ pub(crate) fn radial_draw(
 mod tests {
     use super::*;
     use crate::components::Anchor;
+    use ludion_renderer::UiShapeGeometry;
 
     fn wheel(n: usize) -> UiRadial {
         UiRadial {
@@ -378,5 +408,120 @@ mod tests {
             &mut |_, _| None,
         );
         assert!(drawn.is_empty());
+    }
+
+    fn draw(w: &UiRadial, viewport: (u32, u32)) -> Vec<UiInstance> {
+        radial_draw(
+            FontFace::embedded(),
+            w,
+            viewport,
+            None,
+            None,
+            &mut |_, _| None,
+        )
+    }
+
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+    #[test]
+    fn a_filled_wheel_draws_each_wedge_before_its_own_text() {
+        let mut w = wheel(4);
+        w.fill = Some(RED);
+        let drawn = draw(&w, (1920, 1080));
+        assert_eq!(drawn.len(), 8);
+        let layout = radial_layout(&w, (1920, 1080));
+        for (i, placed) in layout.items.iter().enumerate() {
+            let UiInstance::Shape {
+                origin_px,
+                geometry:
+                    UiShapeGeometry::Sector {
+                        radius_outer,
+                        radius_inner,
+                        start,
+                        sweep,
+                    },
+                fill,
+                stroke,
+                ..
+            } = &drawn[i * 2]
+            else {
+                panic!("wedge {i} comes before its text")
+            };
+            assert_eq!(*origin_px, layout.center_px);
+            assert_eq!(
+                (*radius_outer, *radius_inner),
+                (layout.radius_outer_px, layout.radius_inner_px)
+            );
+            assert_eq!(*start, placed.start_deg.to_radians());
+            assert_eq!(*sweep, placed.sweep_deg.to_radians());
+            assert_eq!((*fill, *stroke), (Some(RED), None));
+            let UiInstance::Text { text, .. } = &drawn[i * 2 + 1] else {
+                panic!("text {i}")
+            };
+            assert_eq!(*text, format!("I{i}"));
+        }
+    }
+
+    #[test]
+    fn selected_fill_is_the_selected_wedge_only_and_a_disabled_item_keeps_fill() {
+        let mut w = wheel(4);
+        w.fill = Some(RED);
+        w.selected_fill = Some(BLUE);
+        w.selected = Some(1);
+        w.items[2].enabled = false;
+        let fills: Vec<_> = draw(&w, (1920, 1080))
+            .iter()
+            .filter_map(|d| match d {
+                UiInstance::Shape { fill, .. } => Some(*fill),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fills, [Some(RED), Some(BLUE), Some(RED), Some(RED)]);
+        // Without `fill`, `selected_fill` alone still draws only the selected wedge.
+        w.fill = None;
+        let fills: Vec<_> = draw(&w, (1920, 1080))
+            .iter()
+            .filter_map(|d| match d {
+                UiInstance::Shape { fill, .. } => Some(*fill),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fills, [Some(BLUE)]);
+    }
+
+    #[test]
+    fn a_stroke_alone_draws_unfilled_wedges_scaled_to_pixels() {
+        let mut w = wheel(3);
+        w.stroke = Some(crate::components::UiStroke {
+            width: 4.0,
+            color: BLUE,
+        });
+        let drawn = draw(&w, (960, 540));
+        let strokes: Vec<_> = drawn
+            .iter()
+            .filter_map(|d| match d {
+                UiInstance::Shape { fill, stroke, .. } => Some((*fill, *stroke)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(strokes.len(), 3);
+        for (fill, stroke) in strokes {
+            assert_eq!(fill, None);
+            assert_eq!(
+                stroke,
+                Some(UiShapeStroke {
+                    width_px: 2.0,
+                    color: BLUE
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_wheel_without_fill_or_stroke_draws_no_shape() {
+        let drawn = draw(&wheel(4), (1920, 1080));
+        assert_eq!(drawn.len(), 4);
+        assert!(drawn.iter().all(|d| matches!(d, UiInstance::Text { .. })));
     }
 }

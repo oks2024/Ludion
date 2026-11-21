@@ -249,7 +249,8 @@ fn step(
                         }
                         NavRouteStatus::Planning
                         | NavRouteStatus::Following
-                        | NavRouteStatus::AtLink => {}
+                        | NavRouteStatus::AtLink
+                        | NavRouteStatus::AtBlocker => {}
                     }
                 }
             }

@@ -62,7 +62,7 @@ mod timer;
 mod trace;
 
 pub use faults::{AiFault, AiFaults};
-pub use group::{Group, GroupMember, members};
+pub use group::{Group, GroupMember, GroupRoster, members};
 pub use machine::{Cx, Machine, Step};
 pub use mind::{Mind, active_path, register_machine, send};
 pub use tick::{MAX_TRANSITIONS_PER_TICK, ai_tick};

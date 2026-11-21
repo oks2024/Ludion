@@ -23,6 +23,13 @@ fn main() {
             item("SHIELD", false),
             item("TORCH", true),
         ],
+        // Wedges under the labels: every item filled, the selected one brighter, all outlined.
+        fill: Some([0.1, 0.12, 0.18, 0.8]),
+        selected_fill: Some([0.8, 0.5, 0.1, 0.9]),
+        stroke: Some(UiStroke {
+            width: 2.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        }),
         ..UiRadial::default()
     };
 

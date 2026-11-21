@@ -1,11 +1,12 @@
 # Plan: HUD motion and shapes — tweens, world anchors, rotation, clipping (Neon Shroud request 0020)
 
-> Status: **Waves 1, 2, 3a, 3b, 4a, 4b, 5a, 6a mechanized (2026-11-20)** — W3b: `UiShape` (`line circle ring arc wedge rounded_rect`, fill and
+> Status: **Waves 1, 2, 3a, 3b, 4a, 4b, 5a, 6a, 6b mechanized (2026-11-21)** — W6b: `fill`/`selected_fill`/`stroke` wedges on
+> `UiRadial` (decisions 62–66; the `ui-radial` golden is blessed on the RTX 3090, the macOS golden is owed on the M4); W3b: `UiShape` (`line circle ring arc wedge rounded_rect`, fill and
 > stroke, decisions 53–61, `L1621`, `ui_shape.wgsl`, `ludion::math::ui_shape_hit`, `docs/ui-shapes.md`; the `ui-shapes` golden is blessed on
 > the RTX 3090, the macOS golden is owed on the M4); W3a: `rotation` on `UiRect`/`UiText`/`UiGroup`
 > (decisions 45–52, `L1620`, `UiTweenField::Rotation`, `ui_rect_corners`/`ui_point_in`, rotated clip and hit; the `ui-rotation`
 > golden is blessed on the RTX 3090, the macOS golden is owed on the M4); W6a: `UiRadial` (decisions 37–44, `L1619`,
-> `radial_layout`/`radial_hit`, `docs/ui-radial.md`; labels and icons only, wedges are W6b); W5a: `outline` on `UiText`/`UiList` (decisions 31–36,
+> `radial_layout`/`radial_hit`, `docs/ui-radial.md`; labels and icons, wedges came in W6b); W5a: `outline` on `UiText`/`UiList` (decisions 31–36,
 > `L1618`, `L2304`, `ui_text.wgsl`; the `ui-text-outline` golden is blessed on the RTX 3090, the macOS golden is owed on the M4);
 > `UiGroup` (`group`, `fill_group`; scale, opacity,
 > visibility composed through up to 8 levels; CPU only, only the component schema snapshot moved);
@@ -15,7 +16,7 @@
 > `UiTween` and `UiWorldAnchor`, resolved in `extract`
 > (`ui/hud.rs`; the component and schema snapshots moved once, no golden, replay or protocol hash);
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
-> component schema snapshot moved). Waves 3c, 5b and 6b–7 are recorded below and not started. Owed: the
+> component schema snapshot moved). Waves 3c, 5b and 7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -272,6 +273,25 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 `sweep_deg` tween field (a game writes `sweep_deg`; trigger: a request for one). Request differences: `type:`;
 `polyline`/`polygon`/`dash` are W3c; `ring` and `wedge` stay two kinds with different radius fields though they draw the same sector.
 
+62. **Wedge fields** on `UiRadial`, all `Option`, skipped when none: `fill` (every item's wedge colour), `selected_fill` (the
+    selected item's wedge; falls back to `fill`) and `stroke` (`UiStroke`, on every drawn wedge). There is no `disabled_fill`: a
+    disabled item's wedge uses `fill`, and its text keeps `disabled_color`.
+63. **Geometry.** Item `i`'s wedge is a `UiShapeGeometry::Sector`: the layout's inner and outer radii, `start`/`sweep` the layout's
+    `start_deg`/`sweep_deg` in radians (the gap is already off; a sweep of 360 or more is `TAU`), origin the wheel centre, `rotation`
+    and `clip` `NONE` for `hud::post` and the group to apply, the stroke width in canvas units times `pixel_scale`. An item draws a
+    wedge when its fill colour or `stroke` is `Some`. Built by `shape::sector_instance`.
+64. **Order.** `radial_draw` emits each item's wedge before that item's icon and text, all under the radial's `(order, EntityId)`
+    key; the stable sort puts each label over its own wedge. A stroke can overlap the neighbouring wedge at a small `gap_deg`; the
+    author widens the gap.
+65. **Validation (`L1619`).** A non-finite `fill`/`selected_fill` channel, and a stroke `width` that is non-finite or not above 0,
+    are errors at their pointer. `ui_shape::stroke_problems` is the one check, shared with `UiShape` (`L1621`).
+66. **Hash and hit.** The fields are authored, never written by `navigate`, and skip-serialize when absent, so an existing wheel's
+    `WorldHash` and replay content hash do not move. `radial_hit` already tests the gapped sector and annulus the wedge draws.
+    Group rotation turns a wedge about the wheel centre (the `Shape` arm of `rotate_into_group`).
+
+**Proposed — owner ruling owed (W6b):** no `disabled_fill`; `selected_fill` falling back to `fill`; the stroke on every wedge rather
+than a selected-only stroke; overlapping strokes at small gaps left to `gap_deg`. Request differences: none beyond the fallbacks.
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -298,8 +318,8 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 - **W6a — `UiRadial`, `UiRadialNav`, `radial_layout`/`radial_hit`** (decisions 37–44): CPU only, no renderer change;
   item text, detail and icons through the existing UI instances; the 1/2/8-thread replay and the snapshot test
   (`tests/ui_radial.rs`); `L1619`; docs `ui-radial`; example `ui_radial`. Only the component schema snapshot moved.
-- **W6b — wedge fills and strokes** on W3b's shape pipeline, after W3b: `fill`, `selected_fill`, `stroke` fields and the
-  `ui-radial` gallery golden. A rotated wheel is a rotated `UiGroup` (W3a).
+- **W6b — wedge fills and strokes** on W3b's shape pipeline (decisions 62–66): `fill`, `selected_fill`, `stroke` fields and the
+  `ui-radial` gallery golden. CPU only, no renderer change. A rotated wheel is a rotated `UiGroup` (W3a).
 - **W7 — anchor blend keys under interpolation, `rotate_toward`, `distance.scale`, `camera`.**
 
 ## Owner rulings (2026-11-19)
@@ -317,13 +337,13 @@ Accepted. W3a: the clockwise-degrees convention (shared with decision 38), the c
 the glyph-bounds centre rather than the measured block, the additive rotation tween, no `rotation` field on `UiList`/`UiRadial`,
 the W3a/W3b/W3c split. W3a request differences: `UiShape` and its rotation are W3b, the tween adds to the authored rotation,
 there is no rotation field on lists.
-Accepted. Request differences: no polygon in `ui-groups` (W3c); `ui_hit` does not return list items; W6a draws no wedge or stroke (W6b)
+Accepted. Request differences: no polygon in `ui-groups` (W3c); `ui_hit` does not return list items; W6a draws no wedge or stroke (W6b, since shipped)
 and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 ## Out of scope (triggers recorded)
 
 polygon, polyline and dashes (W3c), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
-when stretched), slicing `UiList`/`UiText`, text shadow (W5b), `UiRadial` wedge and stroke drawing (W6b), sub-wheels, item-level `ui_hit`,
+when stretched), slicing `UiList`/`UiText`, text shadow (W5b), a wedge `disabled_fill` or per-item colour, sub-wheels, item-level `ui_hit`,
 anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see
 `Plan/font-assets.md` for the SDF outline path).

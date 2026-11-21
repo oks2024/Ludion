@@ -167,6 +167,10 @@ impl Keyframe {
     }
 }
 
+/// The reserved track target carrying a clip's root motion: horizontal translation and yaw only,
+/// never drawn, read by the sim as the displacement the clip authors.
+pub const ROOT_TRACK: &str = "$root";
+
 /// One target's animated channels within a clip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimationTrack {
@@ -997,9 +1001,61 @@ pub(crate) fn validate(doc: &AnimationDocument) -> Vec<Diagnostic> {
                 }
             }
         }
+        if track.target == ROOT_TRACK {
+            validate_root_track(track, &pointer, &mut diagnostics);
+        }
     }
     validate_events(doc, &mut diagnostics);
     diagnostics
+}
+
+/// The `$root` track rules (`L1142`): horizontal translation and yaw only, so no `scale`, every
+/// translation key's `v[1]` is 0, and every rotation key's `v[0]` and `v[2]` are 0.
+fn validate_root_track(track: &AnimationTrack, pointer: &str, diagnostics: &mut Vec<Diagnostic>) {
+    if !track.scale.is_empty() {
+        diagnostics.push(
+            Diagnostic::new(
+                code::ANIMATION_DATA_CONSISTENCY,
+                "the `$root` track must not carry a `scale` channel",
+            )
+            .with_path(format!("{pointer}/scale"))
+            .with_help("root motion is translation and yaw only; remove `scale` from `$root`"),
+        );
+    }
+    for (index, key) in track.translation.iter().enumerate() {
+        if key.v[1] != 0.0 {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::ANIMATION_DATA_CONSISTENCY,
+                    format!(
+                        "`$root` translation key `v[1]` must be 0, found {}",
+                        format_float(key.v[1])
+                    ),
+                )
+                .with_path(format!("{pointer}/translation/{index}/v/1"))
+                .with_help(
+                    "root motion is horizontal: set y to 0; vertical travel belongs to the motor",
+                ),
+            );
+        }
+    }
+    for (index, key) in track.rotation.iter().enumerate() {
+        for axis in [0, 2] {
+            if key.v[axis] != 0.0 {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::ANIMATION_DATA_CONSISTENCY,
+                        format!(
+                            "`$root` rotation key `v[{axis}]` must be 0, found {}",
+                            format_float(key.v[axis])
+                        ),
+                    )
+                    .with_path(format!("{pointer}/rotation/{index}/v/{axis}"))
+                    .with_help("root motion turns about the vertical axis only: keep x and z at 0"),
+                );
+            }
+        }
+    }
 }
 
 /// Validates `events` (`L1198`): finite `t` inside `[0, duration]` (below it on a looping clip), strictly increasing, a

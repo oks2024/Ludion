@@ -7,9 +7,9 @@ use ludion_core::ids::EntityId;
 use ludion_ecs::{SystemCtx, World};
 
 use crate::faults::fault;
-use crate::group::{Group, GroupMember};
+use crate::group::{self, Group, GroupMember};
 use crate::machine::{Cx, Machine, Step};
-use crate::mind::{Mind, active_path, overflow_fault, path_to};
+use crate::mind::{self, Mind, active_path, overflow_fault, path_to};
 use crate::trace::{AiCause, AiRecord, AiState, AiTrace, AiTransition, path_names, roster_upsert};
 
 /// The most transitions one agent makes in one tick (its start excluded). A machine that flips
@@ -43,6 +43,7 @@ pub fn ai_tick<M: Machine>(world: &mut World, ctx: &SystemCtx) {
     if !ctx.game_advanced() {
         return;
     }
+    deliver_member_left::<M>(world, ctx.game_time.ticks());
     let (transitions, states) = world
         .resource::<AiTrace>()
         .map_or((false, false), |t| (t.transitions, t.states));
@@ -51,6 +52,24 @@ pub fn ai_tick<M: Machine>(world: &mut World, ctx: &SystemCtx) {
         run_agent::<M>(world, ctx, agent, transitions);
         if states {
             record_state::<M>(world, ctx, agent);
+        }
+    }
+}
+
+/// Refreshes the rosters, then sends each group's departures, in departure order, to every remaining
+/// member that runs machine `M`.
+fn deliver_member_left<M: Machine>(world: &mut World, now: u64) {
+    group::refresh_rosters(world, now);
+    for (remaining, left) in group::departures(world, now) {
+        for departed in left {
+            let Some(event) = M::member_left(departed) else {
+                continue;
+            };
+            for &member in &remaining {
+                if world.component::<Mind<M>>(member).is_some() {
+                    mind::send::<M>(world, member, event.clone());
+                }
+            }
         }
     }
 }

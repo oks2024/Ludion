@@ -1894,8 +1894,8 @@ fn extract_inner(
             .collect(),
         projectiles: projectile_keys,
         sprites: sprite_keys,
-        lights: light_ids,
-        spot_lights: spot_light_ids,
+        lights: light_ids.clone(),
+        spot_lights: spot_light_ids.clone(),
         texts: text_keys.clone(),
         ground_markers: ground_marker_ids.clone(),
         drop_shadows: drop_shadow_ids.clone(),
@@ -1918,6 +1918,8 @@ fn extract_inner(
                 decals: &decal_ids,
                 particles: &particle_keys,
                 texts: &text_keys,
+                lights: &light_ids,
+                spot_lights: &spot_light_ids,
             },
         );
         let full = std::mem::replace(&mut scene, RenderScene::empty(viewport));
@@ -1968,6 +1970,8 @@ impl BlendKeys {
         }
         let at = |map: &[Option<u32>], index: u32| map.get(index as usize).copied().flatten();
         keep(&mut self.meshes, &remap.meshes);
+        keep(&mut self.lights, &remap.lights);
+        keep(&mut self.spot_lights, &remap.spot_lights);
         keep(&mut self.sprites, &remap.sprites);
         keep(&mut self.texts, &remap.texts);
         keep(&mut self.ground_markers, &remap.ground_markers);

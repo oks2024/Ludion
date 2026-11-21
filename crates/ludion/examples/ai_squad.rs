@@ -3,7 +3,9 @@
 //! `ai::register_machine` registers the `GuardMind` component (and `Group`/`GroupMember`); `ai_tick`
 //! runs every guard once per gameplay tick. A perception system tells the leader it heard something
 //! on frame 10; the leader's `enter(Investigate)` broadcasts to the squad, and a `Timer` brings
-//! everyone back. Each agent's active path is printed whenever it changes.
+//! everyone back. Each agent's active path is printed whenever it changes. The squad also carries a
+//! `GroupRoster`: when a flanker is despawned, `Machine::member_left` builds a `Heard::Down` that names
+//! it (a nullable entity reference in the event) and the remaining guards receive it the same tick.
 //!
 //! Run it headless:
 //!
@@ -30,11 +32,19 @@ enum Guard {
 #[derive(Default, Serialize, Deserialize, JsonSchema)]
 struct Memory {
     timer: Timer,
+    /// Who the squad lost, as the `Heard::Down` events named them.
+    #[serde(default)]
+    lost: Vec<Option<EntityId>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 enum Heard {
     Noise,
+    /// A squadmate left; `None` when the member was despawned across a save before it was seen.
+    Down {
+        #[schemars(with = "Option<EntityRefSchema>")]
+        who: Option<EntityId>,
+    },
 }
 
 impl Machine for Guard {
@@ -67,12 +77,18 @@ impl Machine for Guard {
             _ => {}
         }
     }
-    fn on_event(_: &mut Cx<'_, Self>, s: Self, _: &Heard) -> Step<Self> {
-        if s == Guard::Patrol {
-            Step::Go(Guard::Investigate)
-        } else {
-            Step::Stay
+    fn on_event(cx: &mut Cx<'_, Self>, s: Self, e: &Heard) -> Step<Self> {
+        match e {
+            Heard::Noise if s == Guard::Patrol => Step::Go(Guard::Investigate),
+            Heard::Down { who } => {
+                cx.bb.lost.push(*who);
+                Step::Stay
+            }
+            Heard::Noise => Step::Stay,
         }
+    }
+    fn member_left(member: Option<EntityId>) -> Option<Heard> {
+        Some(Heard::Down { who: member })
     }
     fn update(cx: &mut Cx<'_, Self>, s: Self) -> Step<Self> {
         match s {
@@ -116,6 +132,7 @@ entities:
     components:
       Group:
         kind: patrol
+      GroupRoster: {}
   - name: leader
     components:
       GuardMind: {}
@@ -157,7 +174,20 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut last: Vec<Vec<Guard>> = Vec::new();
-    for _ in 0..110 {
+    let mut gone = None;
+    for tick in 0..110 {
+        if tick == 50 {
+            // The last flanker is despawned; the roster notices on the next guard tick.
+            let flank = engine
+                .world()
+                .entities()
+                .filter(|&id| engine.world().component::<Mind<Guard>>(id).is_some())
+                .last();
+            if let Some(flank) = flank {
+                let _ = engine.world_mut().despawn(flank);
+                gone = Some(flank);
+            }
+        }
         engine.advance_live();
         let world = engine.world();
         let paths: Vec<Vec<Guard>> = world
@@ -169,6 +199,18 @@ fn main() -> ExitCode {
             println!("frame {:>3}: {paths:?}", engine.frame().as_u64() - 1);
             last = paths;
         }
+    }
+    let world = engine.world();
+    let heard: Vec<Vec<Option<EntityId>>> = world
+        .entities()
+        .filter_map(|id| world.component::<Memory>(id).map(|m| m.lost.clone()))
+        .collect();
+    println!("member left: {gone:?} -> each remaining guard heard {heard:?}");
+    if gone.is_none() || heard.len() != 2 || heard.iter().any(|lost| *lost != [gone]) {
+        eprintln!(
+            "the remaining guards did not each receive one MemberLeft for the despawned flanker"
+        );
+        return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }

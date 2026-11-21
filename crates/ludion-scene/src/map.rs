@@ -1604,6 +1604,7 @@ pub fn generate_traced(
             generated_from: map.source.clone(),
             seed: map.seed,
             physics: map.physics.clone(),
+            render_layers: Vec::new(),
             preload: Vec::new(),
             entities,
         },

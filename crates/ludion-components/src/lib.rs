@@ -45,6 +45,7 @@ pub mod ik_targets;
 pub mod lane;
 pub mod light_exposure;
 pub mod mesh_blend;
+pub mod nav_blocker;
 pub mod nav_link;
 pub mod nav_route;
 pub mod occluded_silhouette;
@@ -67,13 +68,17 @@ pub use animation_layers::{
     AnimationLayer, AnimationLayers, LayerMode, fade_layer, layer_weight, layer_weight_at,
     play_layer, set_layer_params,
 };
-pub use audio::{AudioListener, ListenerOrientation};
+pub use audio::{
+    AudioListener, AudioZone, AudioZoneBed, AudioZoneBusGains, AudioZoneReverb, AudioZoneShape,
+    ListenerOrientation, ReverbPreset,
+};
 pub use blend_clock::{BlendClock, LayerPhase};
 pub use ground_marker_clip::{GroundMarkerClip, MAX_CLIP_BINS, MIN_CLIP_BINS};
 pub use ik_targets::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_target_weight_at};
 pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
 pub use mesh_blend::MeshBlend;
+pub use nav_blocker::{NavBlocker, NavBlockerMode, NavBlockerShape};
 pub use nav_link::NavLink;
 pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
 pub use occluded_silhouette::{
@@ -3651,6 +3656,11 @@ pub struct Camera {
     /// document and the hash. See `ludion docs render-views`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layers: Option<Vec<String>>,
+    /// The `PointLight`s and `SpotLight`s that light this camera's image, by `RenderLayers` (default none,
+    /// meaning the camera's own `layers`). Absent is omitted from the document and the hash. See
+    /// `ludion docs render-views`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lights: Option<Vec<String>>,
 }
 
 impl Default for Camera {
@@ -3662,6 +3672,7 @@ impl Default for Camera {
             lod_bias: None,
             shadow_bias_levels: None,
             layers: None,
+            lights: None,
         }
     }
 }
@@ -3699,6 +3710,7 @@ impl SemanticValidate for Camera {
         let mut found = Self::validate_lod(value);
         found.extend(Self::validate_depth(value));
         found.extend(render_layers::field_layer_diagnostics(value, "layers"));
+        found.extend(render_layers::field_layer_diagnostics(value, "lights"));
         found
     }
 }
@@ -6740,6 +6752,14 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<ludion_physics::IgnoreCollisions>("IgnoreCollisions")
         .expect("unique");
+    // The dynamic nav blocker, appended after `IgnoreCollisions`: `nav_update` overlays it on every class grid.
+    registry
+        .register_validated::<NavBlocker>("NavBlocker")
+        .expect("unique");
+    // The audio zone, appended after `NavBlocker`: beds, reverb and bus gains resolved from the listener point by the engine's audio path.
+    registry
+        .register_validated::<AudioZone>("AudioZone")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -6748,7 +6768,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 34] = [
+const SIM_ONLY_COMPONENTS: [&str; 35] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -6783,6 +6803,7 @@ const SIM_ONLY_COMPONENTS: [&str; 34] = [
     "SightSampleRecord",
     "NavLink",
     "IgnoreCollisions",
+    "NavBlocker",
 ];
 
 #[cfg(test)]
@@ -6835,6 +6856,7 @@ mod tests {
             "SightSampleRecord",
             "NavLink",
             "IgnoreCollisions",
+            "NavBlocker",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -7279,12 +7301,14 @@ mod tests {
                 "UiShape",
                 "RenderLayers",
                 "IgnoreCollisions",
+                "NavBlocker",
+                "AudioZone",
             ]
         );
         assert_eq!(
             registry.len(),
-            88,
-            "appending `IgnoreCollisions` grows the registry to 88"
+            90,
+            "appending `AudioZone` grows the registry to 90"
         );
     }
 

@@ -83,6 +83,41 @@ let id = queue.push_on(guard, radio, 18.0); // entity, event, range
   resent `LoopSync` or `VoiceSync` retargets the running voice and keeps its cursor.
 - **`send` is carried, not mixed:** there is no reverb bus yet.
 
+## Occlusion
+
+Off unless the game opts in: `Engine::builder().audio_occlusion(AudioOcclusion::default())`. Every **positional**
+source (an `AudioEmitter` loop, `play_at`/`push_at`, `play_on`/`push_on`) is then muffled and quieted while static
+geometry lies between it and the listener. Global sounds (`play`, `loop_start`, music) are never occluded. With no
+builder call the message stream is byte-identical to today.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `filter` | `QueryFilter::new().only_fixed()` | which colliders occlude; `include_layer`/`ignore_layer` work |
+| `rays` | `3` | `1`, `3` or `5` rays per source |
+| `spread_m` | `0.6` | side-ray offset at the source |
+| `per_hit_db` | `-6.0` | loss per distinct blocker on one ray |
+| `max_db` | `-18.0` | floor of one ray's loss |
+| `occluded_low_pass_hz` | `1200.0` | cutoff when every ray is blocked |
+| `interval_ticks` | `2` | ticks between re-casts of one source |
+| `max_rays_per_tick` | `96` | ray budget per tick, shared round-robin |
+| `smoothing_ticks` | `8` | ticks a changed result takes to apply |
+
+- **The mapping.** Rays start at the listener; the centre ray ends at the source, `3` adds ends `spread_m` to either
+  side (horizontal), `5` also above and below. A ray's loss is `blockers x per_hit_db`, floored at `max_db`. The
+  source's gain is the mean of its rays' losses; its cutoff slides in log frequency from open (20 kHz) toward
+  `occluded_low_pass_hz` by the share of blocked rays, and no blocked ray is exactly bypass. One wall across all three
+  rays is `per_hit_db` and the occluded cutoff; one clear side ray gives partial values. An authored `spatial` low-pass
+  stays: the lower cutoff wins.
+- **Self-exclusion.** A hit on the source's or the listener's own hierarchy (same `Parent` root) is ignored, so a
+  guard's capsule or the player's body never occludes.
+- **Cost.** At most `max_rays_per_tick` rays a tick; due sources are cast round-robin and an uncast one keeps its old
+  result. A one-shot or voice starting this tick is cast at once and its first result is applied unsmoothed (a voice
+  starting behind a wall starts muffled); later changes slew over `smoothing_ticks`. Queries read the last completed
+  physics step.
+- **Errors.** `L5101` refuses a bad config at `build` (`rays` not 1/3/5, a positive or non-finite loss, a cutoff outside
+  20-20000 Hz, `interval_ticks` 0, `max_rays_per_tick` below `rays`); `L5102` is a warning, once, when the physics query
+  refused the filter (an undeclared layer): sources then play unoccluded.
+
 ## Gotchas
 
 - A WAV that is not 16-bit PCM never decodes: its voice still starts (the sink reports it) but is never followed
@@ -96,4 +131,5 @@ let id = queue.push_on(guard, radio, 18.0); // entity, event, range
 
 - `ludion docs audio` — emitters, `play_at`, stereo pan.
 - `ludion docs audio-mix` — buses, runtime gain, pause.
+- `ludion docs audio-zones` — `AudioZone`: ambient beds, reverb and bus gains by where the listener stands.
 - `ludion docs hierarchy` — `Parent` and the composed world pose.

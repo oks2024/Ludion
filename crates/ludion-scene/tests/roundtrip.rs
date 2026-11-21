@@ -256,6 +256,7 @@ fn scene() -> impl Strategy<Value = Scene> {
                     seed,
                     physics,
                     preload,
+                    render_layers: Vec::new(),
                     entities,
                 }
             },
@@ -403,6 +404,7 @@ proptest! {
             seed: None,
             physics: None,
             preload: Vec::new(),
+            render_layers: Vec::new(),
             entities: vec![SceneEntity {
                 presentation: false,
                 name: None,
@@ -428,6 +430,7 @@ proptest! {
             seed: None,
             physics: None,
             preload: Vec::new(),
+            render_layers: Vec::new(),
             entities: vec![],
         };
         let parsed = parse(&emit(&s, &registry)).expect("canonical output must parse");
@@ -508,6 +511,7 @@ fn generated_from_round_trips_between_name_and_seed() {
         seed: Some(3),
         physics: None,
         preload: Vec::new(),
+        render_layers: Vec::new(),
         entities: vec![],
     };
     let text = emit(&scene, &registry);
@@ -686,6 +690,87 @@ fn a_prefab_document_refuses_preload() {
     let errors = parse_prefab("format: 1\npreload:\n  - a.yaml\nentities: []\n").unwrap_err();
     assert!(
         errors.iter().any(|d| d.path.as_deref() == Some("/preload")),
+        "{errors:?}"
+    );
+}
+
+/// `render_layers` emits between `physics` and `preload`, and survives a parse→emit round trip.
+#[test]
+fn render_layers_round_trip_between_physics_and_preload() {
+    let registry = registry();
+    let scene = Scene {
+        seed: Some(3),
+        render_layers: vec![
+            ludion_scene::SceneRenderLayer {
+                name: "radar".into(),
+            },
+            ludion_scene::SceneRenderLayer {
+                name: "portrait".into(),
+            },
+        ],
+        preload: vec!["prefabs/a.yaml".into()],
+        ..Scene::default()
+    };
+    let text = emit(&scene, &registry);
+    assert_eq!(
+        text,
+        "format: 1\nseed: 3\nrender_layers:\n  - name: radar\n  - name: portrait\npreload:\n  - prefabs/a.yaml\nentities: []\n"
+    );
+    assert_eq!(parse(&text).unwrap(), scene);
+}
+
+/// Every block error is `L2375` (or a structure code) at the entry's pointer.
+#[test]
+fn render_layers_errors_are_located() {
+    let cases = [
+        (
+            "render_layers:\n  - name: \"\"\n",
+            "/render_layers/0/name",
+            "L2375",
+        ),
+        (
+            "render_layers:\n  - name: default\n",
+            "/render_layers/0/name",
+            "L2375",
+        ),
+        (
+            "render_layers:\n  - name: a\n  - name: a\n",
+            "/render_layers/1/name",
+            "L2375",
+        ),
+        ("render_layers: 3\n", "/render_layers", "L1009"),
+        ("render_layers:\n  - 3\n", "/render_layers/0", "L1009"),
+        ("render_layers:\n  - nme: a\n", "/render_layers/0", ""),
+    ];
+    for (block, pointer, wanted) in cases {
+        let text = format!("format: 1\n{block}entities: []\n");
+        let errors = parse(&text).unwrap_err();
+        let hit = errors
+            .iter()
+            .find(|d| d.path.as_deref() == Some(pointer))
+            .unwrap_or_else(|| panic!("no diagnostic at {pointer} for {block:?}: {errors:?}"));
+        if !wanted.is_empty() {
+            assert_eq!(hit.code.as_str(), wanted, "{block:?}");
+        }
+    }
+    let many: String = (0..32).map(|i| format!("  - name: l{i}\n")).collect();
+    let errors = parse(&format!("format: 1\nrender_layers:\n{many}entities: []\n")).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.path.as_deref() == Some("/render_layers") && d.code.as_str() == "L2375"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_prefab_document_refuses_render_layers() {
+    let errors =
+        parse_prefab("format: 1\nrender_layers:\n  - name: a\nentities: []\n").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.path.as_deref() == Some("/render_layers")),
         "{errors:?}"
     );
 }

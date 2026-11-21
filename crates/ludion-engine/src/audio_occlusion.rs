@@ -310,6 +310,11 @@ impl Occluded {
     /// A new result to slew toward over `smoothing_ticks` steps (`0` jumps).
     fn retarget(&mut self, frame: FrameIndex, result: Measure, smoothing_ticks: u32) {
         self.last_cast = frame;
+        // The same answer again must not restart the slew, or a re-cast every interval would keep
+        // the approach from ever landing.
+        if self.target_db == result.gain_db && self.target_blocked == result.blocked {
+            return;
+        }
         self.target_db = result.gain_db;
         self.target_blocked = result.blocked;
         if smoothing_ticks == 0 {

@@ -385,6 +385,8 @@ pub enum LoopId {
     Sound(String),
     /// A per-entity emitter, identified by its owner.
     Entity(crate::ids::EntityId),
+    /// Bed `i` of an `AudioZone` entity.
+    ZoneBed(crate::ids::EntityId, u8),
 }
 
 /// One request on the sim→playback channel: play a sound once, or keep a loop in sync.
@@ -438,7 +440,8 @@ pub enum AudioMessage {
     /// state lives only in the sink, so a rebuilt world has nothing to diff against — the blanket
     /// stop is what keeps a loop or a track from outliving the scene that started it. It also resets
     /// the [`MixLayer::Game`] gains to `1.0` and every bus pause, drops the voices held on a paused
-    /// bus, and keeps the [`MixLayer::User`] gains.
+    /// bus, and keeps the [`MixLayer::User`] gains. It also resets the reverb to dry and the zone
+    /// layer to `1.0`.
     StopAllLoops,
     /// Stream `track` as the music, or update the gain of the track already playing. Music is one
     /// voice: the same track again (not stopping) only takes the new `gain`, so resending it every
@@ -591,6 +594,115 @@ pub enum AudioMessage {
         /// The slew length in sim ticks.
         fade_frames: u32,
     },
+    /// Move the reverb the listener hears to `params` over `fade_frames` sim ticks (`0` still
+    /// slews click-free). The engine resolves it from the `AudioZone`s around the listener;
+    /// [`ReverbParams::DRY`] releases it.
+    ///
+    /// ```
+    /// use ludion_core::audio::{AudioMessage, ReverbParams};
+    ///
+    /// // "The listener walked into a hangar."
+    /// let message = AudioMessage::ReverbSet {
+    ///     params: ReverbParams { decay_s: 3.5, pre_delay_ms: 40.0, damping: 0.3, size: 0.9, wet: 0.3 },
+    ///     fade_frames: 0,
+    /// };
+    /// assert_ne!(message, AudioMessage::StopAllLoops);
+    /// ```
+    ReverbSet {
+        /// The target reverb.
+        params: ReverbParams,
+        /// The slew length in sim ticks.
+        fade_frames: u32,
+    },
+    /// Slew the engine-owned zone layer of a bus to `gain` over `fade_frames` sim ticks. It is
+    /// never a [`MixLayer`]: `BusGain` must not write state the engine owns, so the effective bus
+    /// gain is `authored x user x game x duck x zone x pause`. `gain` is linear, at least `0.0`;
+    /// `1.0` releases it.
+    ///
+    /// ```
+    /// use ludion_core::audio::{AudioMessage, Bus};
+    ///
+    /// // "The dock zone sits the ambient bus at 90%."
+    /// let message = AudioMessage::ZoneGain {
+    ///     bus: Bus::Ambient,
+    ///     gain: 0.9,
+    ///     fade_frames: 0,
+    /// };
+    /// assert_ne!(message, AudioMessage::StopAllLoops);
+    /// ```
+    ZoneGain {
+        /// The bus moved.
+        bus: Bus,
+        /// The target linear gain.
+        gain: f32,
+        /// The slew length in sim ticks.
+        fade_frames: u32,
+    },
+}
+
+/// The most beds one `AudioZone` plays.
+pub const AUDIO_ZONE_BEDS_MAX: usize = 8;
+
+/// The reverb a listener hears: a decay tail on a send bus. Ranges: `decay_s` `[0.1, 20]`,
+/// `pre_delay_ms` `[0, 200]`, `damping`, `size` and `wet` `[0, 1]`.
+///
+/// # Example
+///
+/// ```
+/// use ludion_core::audio::ReverbParams;
+///
+/// let hall = ReverbParams { decay_s: 1.8, pre_delay_ms: 20.0, damping: 0.4, size: 0.6, wet: 0.25 };
+/// assert!(hall.near(&hall));
+/// assert!(!hall.near(&ReverbParams::DRY));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReverbParams {
+    /// Seconds for the tail to fall 60 dB.
+    pub decay_s: f32,
+    /// Milliseconds before the tail starts.
+    pub pre_delay_ms: f32,
+    /// High-frequency absorption.
+    pub damping: f32,
+    /// Room size, small to large.
+    pub size: f32,
+    /// The mix of reverb against dry sound.
+    pub wet: f32,
+}
+
+impl ReverbParams {
+    /// No reverb.
+    pub const DRY: ReverbParams = ReverbParams {
+        decay_s: 1.0,
+        pre_delay_ms: 0.0,
+        damping: 0.5,
+        size: 0.5,
+        wet: 0.0,
+    };
+
+    /// These params clamped into range; a non-finite field becomes its [`DRY`](Self::DRY) value.
+    pub fn clamped(self) -> ReverbParams {
+        fn fix(v: f32, dry: f32, lo: f32, hi: f32) -> f32 {
+            if v.is_finite() { v.clamp(lo, hi) } else { dry }
+        }
+        let d = ReverbParams::DRY;
+        ReverbParams {
+            decay_s: fix(self.decay_s, d.decay_s, 0.1, 20.0),
+            pre_delay_ms: fix(self.pre_delay_ms, d.pre_delay_ms, 0.0, 200.0),
+            damping: fix(self.damping, d.damping, 0.0, 1.0),
+            size: fix(self.size, d.size, 0.0, 1.0),
+            wet: fix(self.wet, d.wet, 0.0, 1.0),
+        }
+    }
+
+    /// Whether every field is within `max(|other.field| x 0.01, 1e-3)` of `other`'s.
+    pub fn near(&self, other: &ReverbParams) -> bool {
+        let close = |a: f32, b: f32| (a - b).abs() <= (b.abs() * 0.01).max(1e-3);
+        close(self.decay_s, other.decay_s)
+            && close(self.pre_delay_ms, other.pre_delay_ms)
+            && close(self.damping, other.damping)
+            && close(self.size, other.size)
+            && close(self.wet, other.wet)
+    }
 }
 
 /// The identity of one attached voice (`AudioQueue::play_on`): a per-queue counter, reset when the

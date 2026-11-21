@@ -255,10 +255,10 @@ pub fn find_path_linked(
         }
         for edge in links.out_edges(NodeId(open.node)) {
             let l = edge.to.0;
-            if l as usize >= n {
+            if l as usize >= n || grid.is_blocked(NodeId(l)) {
                 continue;
             }
-            let ng = open.g + edge.cost;
+            let ng = open.g + edge.cost + grid.entry_cost(open.node, l);
             if ng > opts.max_cost || ng >= g[l as usize] {
                 continue;
             }
@@ -393,6 +393,14 @@ fn walk_trace(grid: &NavGrid, start: NodeId, from: [f32; 3], to: [f32; 3]) -> Op
                 complete: false,
             });
         };
+        // A line never walks into an `interact` region from outside: the crossing is its own leg.
+        if grid.stop_tag(next).is_some() && grid.stop_tag(node).is_none() {
+            return Some(WalkTrace {
+                node,
+                t: t.clamp(0.0, 1.0),
+                complete: false,
+            });
+        }
         node = next;
         ci += di;
         cj += dj;
@@ -486,17 +494,62 @@ pub fn string_pull(grid: &NavGrid, nodes: &[NodeId]) -> Vec<[f32; 3]> {
 /// on its own and the runs are concatenated. Returns the waypoints and, per link, `(waypoint index of the
 /// link start, tag)`; the link end is the next waypoint. With no links it equals `string_pull(grid, &path.nodes)`.
 pub fn string_pull_linked(grid: &NavGrid, path: &PathResult) -> (Vec<[f32; 3]>, Vec<(u32, u32)>) {
-    let mut points = Vec::new();
-    let mut starts = Vec::new();
+    let pulled = string_pull_marked(grid, path);
+    (pulled.points, pulled.links)
+}
+
+/// A node path pulled to waypoints, with where it must stop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PulledPath {
+    /// The waypoints, start first.
+    pub points: Vec<[f32; 3]>,
+    /// `(waypoint index of the link start, tag)` per off-mesh link; the link end is the next waypoint.
+    pub links: Vec<(u32, u32)>,
+    /// `(waypoint index of the node before the region, tag)` per entry into a stop region (an `interact`
+    /// blocker); the next waypoint is the first node inside it.
+    pub stops: Vec<(u32, u32)>,
+}
+
+/// [`string_pull_linked`] that also splits the path where it steps from a non-stop node into a
+/// [`NodeMark::Stop`](crate::NodeMark::Stop) node, so a pulled leg never crosses a stop region. A link step is
+/// never also a stop. With no stop marks `links` and `points` equal [`string_pull_linked`]'s.
+pub fn string_pull_marked(grid: &NavGrid, path: &PathResult) -> PulledPath {
+    let mut splits: Vec<(usize, Option<u32>, Option<u32>)> = path
+        .links
+        .iter()
+        .map(|&(i, t)| (i as usize, Some(t), None))
+        .collect();
+    if grid.has_overlay() {
+        for (k, pair) in path.nodes.windows(2).enumerate() {
+            let is_link = path.links.iter().any(|&(i, _)| i as usize == k);
+            if !is_link
+                && grid.stop_tag(pair[0]).is_none()
+                && let Some(tag) = grid.stop_tag(pair[1])
+            {
+                splits.push((k, None, Some(tag)));
+            }
+        }
+        splits.sort_by_key(|s| s.0);
+    }
+    let mut out = PulledPath {
+        points: Vec::new(),
+        links: Vec::new(),
+        stops: Vec::new(),
+    };
     let mut from = 0usize;
-    for &(i, tag) in &path.links {
-        let i = i as usize;
-        points.extend(string_pull(grid, &path.nodes[from..=i]));
-        starts.push((points.len() as u32 - 1, tag));
+    for (i, link, stop) in splits {
+        out.points.extend(string_pull(grid, &path.nodes[from..=i]));
+        let at = out.points.len() as u32 - 1;
+        if let Some(tag) = link {
+            out.links.push((at, tag));
+        }
+        if let Some(tag) = stop {
+            out.stops.push((at, tag));
+        }
         from = i + 1;
     }
-    points.extend(string_pull(grid, &path.nodes[from..]));
-    (points, starts)
+    out.points.extend(string_pull(grid, &path.nodes[from..]));
+    out
 }
 
 /// The node nearest `p` within `max_dist` (3D distance to the node position): the node under `p` when

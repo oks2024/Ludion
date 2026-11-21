@@ -1712,6 +1712,11 @@ pub struct RenderViewData {
     pub camera: RenderCamera,
     /// The layer mask the view draws; `u32::MAX` for a frame with no layers.
     pub layers: u32,
+    /// The light mask: the point and spot lights whose layer meets it light the view; `u32::MAX` for a
+    /// frame with no layers.
+    pub lights: u32,
+    /// Whether the sun lights the view.
+    pub sun: bool,
 }
 
 /// Everything the renderer needs to draw one frame — plain data, no ECS, no paths.

@@ -159,6 +159,38 @@ pub(crate) fn shape_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<Ui
     })
 }
 
+/// A sector about `origin_px` as `extract` draws it: `start_deg` and `sweep_deg` are clock degrees, a
+/// sweep of 360 or more is a full turn, and `stroke` is already in pixels. `rotation` and `clip` are
+/// left for the group and `hud::post` to apply.
+pub(crate) fn sector_instance(
+    origin_px: [f32; 2],
+    radius_outer: f32,
+    radius_inner: f32,
+    start_deg: f32,
+    sweep_deg: f32,
+    fill: Option<[f32; 4]>,
+    stroke: Option<UiShapeStroke>,
+) -> UiInstance {
+    let sweep = if sweep_deg >= 360.0 {
+        TAU
+    } else {
+        sweep_deg.to_radians()
+    };
+    UiInstance::Shape {
+        origin_px,
+        geometry: UiShapeGeometry::Sector {
+            radius_outer,
+            radius_inner,
+            start: start_deg.to_radians(),
+            sweep,
+        },
+        fill,
+        stroke,
+        clip: UiClip::NONE,
+        rotation: UiRotation::NONE,
+    }
+}
+
 /// Scales every length of `geometry` by `k` (angles are untouched).
 pub(crate) fn scale_geometry(geometry: &mut UiShapeGeometry, k: f32) {
     match geometry {

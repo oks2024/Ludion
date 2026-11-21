@@ -138,6 +138,7 @@ mod physics_layers;
 mod physics_surfaces;
 mod prefab;
 mod profile;
+mod render_layers;
 mod rig_blend;
 mod rig_ik;
 mod rig_mask;
@@ -154,6 +155,7 @@ mod yaml;
 
 pub use animation::{
     ANIMATION_FORMAT_VERSION, AnimationDocument, AnimationEvent, AnimationTrack, Ease, Keyframe,
+    ROOT_TRACK,
 };
 pub use assembly::{
     ASSEMBLY_FORMAT_VERSION, AssembledGrid, AssemblyClip, AssemblyDocument, AssemblyJoint,
@@ -217,6 +219,7 @@ pub use physics_layers::{DEFAULT_LAYER, LayerMatrix, MAX_LAYERS, SceneLayer};
 pub use physics_surfaces::MAX_SURFACES;
 pub use prefab::{PREFAB_FORMAT_VERSION, PrefabDocument};
 pub use profile::ProfileEnvelope;
+pub use render_layers::{DEFAULT_RENDER_LAYER, MAX_RENDER_LAYERS, SceneRenderLayer};
 pub use rig_blend::{BlendAt, BlendPoint, BlendSpace};
 pub use rig_ik::{
     DEFAULT_LOOK_FORWARD, DEFAULT_LOOK_LIMITS_DEG, IkEntry, IkGround, IkHinge, IkKind,
@@ -273,6 +276,10 @@ pub struct Scene {
     /// `sleep_after_ticks` resolves it against this block's value (else the pinned default) at
     /// body-creation time, in the solver, never by rewriting the authored component.
     pub physics: Option<ScenePhysics>,
+    /// The scene's `render_layers:` block (`Plan/secondary-views.md` D14): the render layer names it
+    /// authors, declared once. Validation only: `check-scene` reports `L2376` for an undeclared name,
+    /// extract still interns names per frame. Emitted after `physics`, omitted when empty.
+    pub render_layers: Vec<SceneRenderLayer>,
     /// Prefab paths (content-root relative) the engine readies at every load of this scene, so a
     /// later `spawn_prefab` of one reads no file. No meaning beyond that; document order is kept.
     pub preload: Vec<String>,

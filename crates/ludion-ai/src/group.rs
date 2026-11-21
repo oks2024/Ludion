@@ -1,7 +1,7 @@
 //! [`Group`] and [`GroupMember`]: squads as plain components.
 
 use ludion_core::ids::EntityId;
-use ludion_ecs::{EntityRefSchema, World};
+use ludion_ecs::{EntityRefCollection, EntityRefSchema, World};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +26,72 @@ pub struct GroupMember {
     /// `0`, flankers `1`…).
     #[serde(default)]
     pub role: u8,
+}
+
+/// Opt-in membership memory for a [`Group`]: with it, each tick's departures reach the remaining
+/// members through [`Machine::member_left`]. A group without it reports nothing. All fields are
+/// runtime state; author an empty `GroupRoster: {}`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GroupRoster {
+    /// The membership as of `seen`, in [`members`] order. A member despawned across a save or
+    /// carry reads `null`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(with = "EntityRefCollection<Vec<Option<EntityRefSchema>>>")]
+    pub members: Vec<Option<EntityId>>,
+    /// The departures found at `seen`, in the order of the previous `members`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(with = "EntityRefCollection<Vec<Option<EntityRefSchema>>>")]
+    pub left: Vec<Option<EntityId>>,
+    /// The gameplay tick of the last refresh.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub seen: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// Brings every [`GroupRoster`] up to the tick: departures are the previous members no longer in the
+/// group (a `None` entry counts as departed). The `seen` stamp makes a second machine's call in the
+/// same tick reuse the result.
+pub(crate) fn refresh_rosters(world: &mut World, now: u64) {
+    let groups: Vec<EntityId> = world
+        .query_ids::<(&Group, &GroupRoster)>()
+        .filter(|(_, (_, r))| r.seen != now)
+        .map(|(id, _)| id)
+        .collect();
+    for group in groups {
+        let current = members(world, group);
+        let Some(roster) = world.component_mut::<GroupRoster>(group) else {
+            continue;
+        };
+        roster.left = roster
+            .members
+            .iter()
+            .filter(|m| m.is_none_or(|id| !current.contains(&id)))
+            .copied()
+            .collect();
+        roster.members = current.into_iter().map(Some).collect();
+        roster.seen = now;
+    }
+}
+
+/// The groups whose roster was refreshed at `now` and saw departures, with the live members and the
+/// departures, in ascending group id.
+pub(crate) fn departures(
+    world: &mut World,
+    now: u64,
+) -> Vec<(Vec<EntityId>, Vec<Option<EntityId>>)> {
+    world
+        .query_ids::<(&Group, &GroupRoster)>()
+        .filter(|(_, (_, r))| r.seen == now && !r.left.is_empty())
+        .map(|(_, (_, r))| {
+            (
+                r.members.iter().flatten().copied().collect(),
+                r.left.clone(),
+            )
+        })
+        .collect()
 }
 
 /// The members of `group` that are alive, sorted by `(role, entity)`.

@@ -85,6 +85,9 @@ decoding (`ludion-assets` owns `load_wav`) or how a host wires the channel up (t
   `LoopSync` call `retarget`, which sweeps in log2 frequency over `ceil(ramp / MIX_BLOCK_FRAMES)` blocks, one
   step per `advance_into`, and drops a stage once it has swept open. Channels past `MAX_FILTER_CHANNELS` (8)
   pass unfiltered. `VoiceSpatial::send` is carried and not mixed.
+- **Occlusion is engine-side; the sink is unchanged.** `ludion-engine`'s `audio_occlusion.rs` casts listener-to-source
+  rays at the frame boundary and folds a gain and a low-pass cutoff into the messages it already sends (a new cutoff
+  goes out past `RESYNC_CUTOFF_RATIO`); the sink only sees a filter and a gain.
 - **The decode cache is keyed on the file, not the path, and holds failures too.** Every attempt is
   stamped with the file's `(len, mtime)` (`stamp_of`, re-read at most every `STAMP_RECHECK`, 500 ms), so
   a WAV regenerated under a running host is re-decoded on its next message after that; a failed decode
@@ -147,3 +150,4 @@ No golden covers audio — the frame-stamped `audio_log` is the replay-checkable
 - **This crate depends on `ludion-assets`, not the other way around**, and neither depends on
   `ludion-engine` — only a host wires the engine's sender to this crate's receiver. There is no
   engine-side playback API by design.
+- **`ReverbSet` and `ZoneGain` route to nothing in the sink.** The engine resolves `AudioZone`s (`ludion-engine/src/audio_zones.rs`) and sends both; the sink has no reverb bus or zone layer yet, and a zone bed is a loop like an emitter's (`LoopKey::ZoneBed`). The zone layer is engine-owned like the duck layer, never a `MixLayer`.

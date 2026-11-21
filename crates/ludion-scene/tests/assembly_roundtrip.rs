@@ -2017,3 +2017,9 @@ fn a_point_clip_without_the_sync_event_is_l1138() {
     )
     .is_empty());
 }
+
+#[test]
+fn a_part_named_root_track_is_l1138() {
+    let source = MINIMAL.replace("- name: body", "- name: $root");
+    assert!(has_code_at(&errors_for(&source), "L1138", "/parts/0/name"));
+}

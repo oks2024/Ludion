@@ -65,6 +65,9 @@ pub enum NavRouteStatus {
     Unreachable,
     /// Stopped at a link start, waiting for `nav_link_done`; `NavRoute.link` names the link.
     AtLink,
+    /// Stopped before an `interact` blocker; `NavRoute.blocker` names it. The walker continues once the
+    /// blocker is disabled or switched to `cost`.
+    AtBlocker,
 }
 
 /// The route `nav_steer` plans for a [`NavAgent`](crate::NavAgent) that carries a [`NavGoal`].
@@ -73,7 +76,9 @@ pub enum NavRouteStatus {
 /// node the route started from; `index` is the waypoint being walked to. A partial route (`partial`)
 /// ends at the reachable point nearest the goal; `cost` is the path length along the grid links. `links`
 /// lists the waypoint indices where a [`NavLink`](crate::NavLink) traversal starts (waypoint `i` is the
-/// link start, `i + 1` its end); at one the agent stops `at_link` until `nav_link_done`.
+/// link start, `i + 1` its end); at one the agent stops `at_link` until `nav_link_done`. `blockers` lists the
+/// waypoint indices whose next leg enters an `interact` [`NavBlocker`](crate::NavBlocker); there the agent
+/// stops `at_blocker` until the blocker is disabled or becomes `cost`.
 ///
 /// ```yaml
 /// components:
@@ -119,6 +124,14 @@ pub struct NavRoute {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
     pub link: Option<EntityId>,
+    /// Waypoint indices whose next leg enters an `interact` [`NavBlocker`](crate::NavBlocker) region
+    /// (default none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blockers: Vec<u32>,
+    /// The blocker being waited at; set only while `status` is `at_blocker` (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub blocker: Option<EntityId>,
 }
 
 fn is_zero_vec3(value: &[f32; 3]) -> bool {
@@ -231,6 +244,20 @@ impl SemanticValidate for NavRoute {
                 );
             }
         }
+        for (n, entry) in value
+            .get("blockers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if entry.as_u64().is_some_and(|i| i >= len) {
+                reject(
+                    format!("/blockers/{n}"),
+                    format!("the `NavRoute` blocker stop {entry} is past its {len} waypoints"),
+                );
+            }
+        }
         out
     }
 }
@@ -256,6 +283,8 @@ mod tests {
             cost: 3.5,
             links: vec![0],
             link: None,
+            blockers: vec![0],
+            blocker: None,
         };
         let back: NavRoute = serde_json::from_value(serde_json::to_value(&route).unwrap()).unwrap();
         assert_eq!(back, route);
@@ -288,8 +317,9 @@ mod tests {
         let found = NavRoute::validate_semantics(&json!({
             "waypoints": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
             "links": [0, 2],
+            "blockers": [1, 5],
         }));
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].path.as_deref(), Some("/links/1"));
+        let paths: Vec<_> = found.iter().filter_map(|d| d.path.as_deref()).collect();
+        assert_eq!(paths, ["/links/1", "/blockers/1"]);
     }
 }

@@ -843,6 +843,10 @@ pub mod code {
     /// runtime; only the lowest entity id is heard from.
     pub const AUDIO_LISTENER_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L1650");
 
+    /// `L1651` — an `AudioZone` field is invalid: a non-finite or non-positive extent or radius, a
+    /// negative or non-finite blend or gain, more than eight beds, or a reverb field out of range.
+    pub const AUDIO_ZONE_INVALID: DiagnosticCode = DiagnosticCode::new("L1651");
+
     /// `L1137` — an assembly document (`*.assembly.yaml`, `kind: assembly`) is malformed: a
     /// required key is missing or has the wrong type at any level, the document (or a part entry)
     /// has a key the assembly format does not define, `size`/`place`/`pivot` does not have exactly
@@ -1281,6 +1285,10 @@ pub mod code {
     /// `L1512` — a `Machine`'s `ALL` is empty, omits `ROOT`, or lists a variant twice. Raised by
     /// `ludion-ai`'s `register_machine`.
     pub const AI_MACHINE_VARIANTS: DiagnosticCode = DiagnosticCode::new("L1512");
+
+    /// `L1513` — a `Machine`'s `Event` type holds an entity reference that is not nullable. Raised by
+    /// `ludion-ai`'s `register_machine`.
+    pub const AI_EVENT_REF_NOT_NULLABLE: DiagnosticCode = DiagnosticCode::new("L1513");
 
     /// `L1188` — a `JointMotor` is structurally invalid: its `target` is not 1 or 3 numbers or holds
     /// a non-finite one, or its `stiffness`, `damping` or `max_force` is negative or non-finite. The
@@ -1943,6 +1951,9 @@ pub mod code {
     /// `L1526` — a `NavLink` has a non-finite `from` or `to`, a negative or non-finite `cost`, or a
     /// non-positive or non-finite `snap_radius`.
     pub const NAV_LINK_INVALID: DiagnosticCode = DiagnosticCode::new("L1526");
+    /// `L1527` — a `NavBlocker` has a non-finite or non-positive half-extent, a negative or non-finite
+    /// `cost`, or an empty `classes` entry.
+    pub const NAV_BLOCKER_INVALID: DiagnosticCode = DiagnosticCode::new("L1527");
     /// `L1570` — a `Perceiver` field is invalid: no or too many sight zones, a bad range or angle, a
     /// duplicate zone name, a bad sweep or a bad visibility clamp.
     pub const PERCEIVER_INVALID: DiagnosticCode = DiagnosticCode::new("L1570");
@@ -2283,6 +2294,10 @@ pub mod code {
     /// `L2375` — a `RenderLayers` list, `Camera.layers` or `RenderView.layers` is empty, holds an empty or
     /// repeated name, or the scene uses more than 31 layer names besides `default`.
     pub const RENDER_LAYERS_INVALID: DiagnosticCode = DiagnosticCode::new("L2375");
+
+    /// `L2376` — a layer name in `RenderLayers`, `Camera.layers`/`lights` or `RenderView.layers`/`lights` is not
+    /// declared under the scene's `render_layers:`.
+    pub const RENDER_LAYER_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L2376");
 
     /// `L2380` — a `Rain` field is non-finite or out of range.
     pub const RAIN_INVALID: DiagnosticCode = DiagnosticCode::new("L2380");
@@ -5733,6 +5748,19 @@ Fix: keep one `AudioListener`, on the entity the sound should be measured from (
 head height, say).",
     },
     CodeEntry {
+        code: code::AUDIO_ZONE_INVALID,
+        severity: Severity::Error,
+        title: "an audio zone is invalid",
+        explanation: "\
+An `AudioZone` field is out of range (pointer `/entities/{i}/components/AudioZone/{field}`): a box
+`half_extents` entry or a sphere `radius` that is not finite and above 0, a `blend_m` that is negative
+or not finite, more than eight `beds` (`/beds/8`), a bed `gain` or a `bus_gains` entry that is negative
+or not finite, or an explicit `reverb` field outside its range (`decay_s` 0.1..=20, `pre_delay_ms`
+0..=200, `damping`, `size` and `wet` 0..=1). A scene with one is refused.
+
+Fix: correct the named field. See `ludion docs audio-zones`.",
+    },
+    CodeEntry {
         code: code::MODEL_SHEET_INPUT,
         severity: Severity::Error,
         title: "model view harness input is not a renderable model",
@@ -7413,6 +7441,19 @@ of states, used to validate the hierarchy and an authored start state; a wrong o
 from every check. `register_machine` refuses it.
 
 Fix: list every variant of the enum exactly once, `ROOT` included.",
+    },
+    CodeEntry {
+        code: code::AI_EVENT_REF_NOT_NULLABLE,
+        severity: Severity::Error,
+        title: "a machine's event holds an entity reference that cannot be null",
+        explanation: "\
+A `Machine`'s `Event` type holds an entity reference that is not an `Option`. Events wait in an
+agent's inbox, which a scene save, a scene carry and a snapshot all remap. A target that despawns
+before the event is handled would make the save refuse (`L1018`) or drop the whole `Mind` on a
+carry (`L3043`); a nullable reference is written as `null` instead. `register_machine` refuses it.
+
+Fix: write the field as `Option<EntityId>` marked
+`#[schemars(with = \"Option<EntityRefSchema>\")]`, and treat `None` as a target that is gone.",
     },
     CodeEntry {
         code: code::AI_TRANSITION_CHAIN_CAPPED,
@@ -9739,6 +9780,16 @@ non-positive or non-finite `snap_radius` (pointers `/entities/{i}/components/Nav
 Fix: write finite endpoints, a `cost` of 0 or more metres and a `snap_radius` above 0.",
     },
     CodeEntry {
+        code: code::NAV_BLOCKER_INVALID,
+        severity: Severity::Error,
+        title: "a nav blocker is invalid",
+        explanation: "A `NavBlocker` has a non-finite or non-positive half-extent in `shape`, a negative or non-finite
+`cost`, or an empty `classes` entry (pointers `/entities/{i}/components/NavBlocker/shape/box/half_extents/{k}`,
+`/cost`, `/classes/{k}`). A scene with one is refused.
+
+Fix: write finite half-extents above 0, a `cost` of 0 or more metres and a named class in every `classes` entry.",
+    },
+    CodeEntry {
         code: code::PERCEIVER_INVALID,
         severity: Severity::Error,
         title: "a perceiver is invalid",
@@ -11206,9 +11257,27 @@ Fix: disable views that are not on screen (`enabled: false`) or merge them.",
 name (JSON Pointer `/layers` or `/layers/<i>`). Extract raises it too when a scene uses more than 31 layer
 names besides `default`; the extra names are ignored.
 
+The scene's top-level `render_layers:` block raises it too, at `/render_layers/<i>/name`, for an empty name, the
+reserved name `default`, a repeated name, or more than 31 entries (`/render_layers`).
+
 Fix: list each layer name once, at least one per list, and keep the scene to 31 names besides `default`.
 
     RenderLayers: { layers: [radar] }",
+    },
+    CodeEntry {
+        code: code::RENDER_LAYER_UNKNOWN,
+        severity: Severity::Error,
+        title: "render layer is not declared",
+        explanation: "A layer name in `RenderLayers`, `Camera.layers`, `Camera.lights`, `RenderView.layers` or
+`RenderView.lights` is not listed in the scene's top-level `render_layers:` block (JSON Pointer
+`/entities/<i>/components/<Component>/<field>/<j>`). `check-scene` and `scene.check` report it, with the nearest
+declared name when one is close; load and extract do not, so a name inserted at runtime still renders. `default` is
+implicit and needs no declaration.
+
+Fix: declare the layer once at the top of the scene, or correct the spelling.
+
+    render_layers:
+      - name: radar",
     },
     CodeEntry {
         code: code::RAIN_INVALID,
@@ -14260,6 +14329,7 @@ mod tests {
         code::AI_MACHINE_HIERARCHY,
         code::AI_MACHINE_INITIAL,
         code::AI_MACHINE_VARIANTS,
+        code::AI_EVENT_REF_NOT_NULLABLE,
         code::JOINT_MOTOR_INVALID,
         code::JOINT_ZERO_INVALID,
         code::POSE_SNAPSHOT_INVALID,
@@ -14417,12 +14487,14 @@ mod tests {
         code::PATROL_FOLLOWER_INVALID,
         code::PATROL_STATE_INVALID,
         code::NAV_LINK_INVALID,
+        code::NAV_BLOCKER_INVALID,
         code::PERCEIVER_INVALID,
         code::SIGHT_TARGET_INVALID,
         code::PERCEPTION_NAME_UNKNOWN,
         code::PERCEIVER_MEMORY_INVALID,
         code::STIMULUS_REPORT_INVALID,
         code::NOISE_ZONE_INVALID,
+        code::AUDIO_ZONE_INVALID,
         code::HEARING_INVALID,
         code::NOISE_INVALID,
         code::INPUT_BINDING_SOURCES,
@@ -14510,6 +14582,7 @@ mod tests {
         code::UI_RECT_VIEW_CONFLICT,
         code::RENDER_VIEW_BUDGET,
         code::RENDER_LAYERS_INVALID,
+        code::RENDER_LAYER_UNKNOWN,
         code::RAIN_INVALID,
         code::RAIN_DUPLICATE,
         code::RAIN_STREAK_BUDGET,

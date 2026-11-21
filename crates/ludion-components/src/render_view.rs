@@ -22,6 +22,7 @@ pub const RENDER_VIEW_SIZE_RANGE: std::ops::RangeInclusive<u32> = 16..=2048;
 /// assert_eq!(view.size, [256, 256]);
 /// assert!(view.enabled);
 /// assert_eq!(view.order, 0);
+/// assert!(view.sun && view.lights.is_none());
 /// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
 pub struct RenderView {
@@ -39,6 +40,14 @@ pub struct RenderView {
     /// The layers the view draws (default none, meaning `[default]`). Absent is omitted from the document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layers: Option<Vec<String>>,
+    /// The `PointLight`s and `SpotLight`s that light the view, by `RenderLayers` (default none, meaning the
+    /// view's own `layers`). A light the view drops casts no shadow in it. Absent is omitted from the document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lights: Option<Vec<String>>,
+    /// Whether the scene's `DirectionalLight` lights the view (default true). `false` drops the sun from the
+    /// view only; it needs no layer.
+    #[serde(default = "default_enabled", skip_serializing_if = "is_true")]
+    pub sun: bool,
 }
 
 fn default_size() -> [u32; 2] {
@@ -62,6 +71,9 @@ impl SemanticValidate for RenderView {
     /// outside `16..=2048`. A wrong *shape* is the schema's job.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = crate::render_layers::field_layer_diagnostics(value, "layers");
+        out.extend(crate::render_layers::field_layer_diagnostics(
+            value, "lights",
+        ));
         let mut reject = |path: String, what: String| {
             out.push(
                 Diagnostic::new(code::RENDER_VIEW_INVALID, format!("`RenderView` {what}"))
@@ -180,6 +192,20 @@ mod tests {
             ["/name", "/size/0", "/size/1"]
         );
         assert!(paths(json!({ "name": "a", "size": [16, 2048] })).is_empty());
+    }
+
+    #[test]
+    fn lights_and_sun_round_trip_and_validate() {
+        let value = json!({ "name": "p", "size": [64, 64], "layers": ["portrait"], "lights": ["portrait", "default"], "sun": false });
+        let v: RenderView = serde_json::from_value(value.clone()).unwrap();
+        assert!(!v.sun);
+        assert_eq!(serde_json::to_value(&v).unwrap(), value);
+        assert!(paths(value).is_empty());
+        assert_eq!(
+            paths(json!({ "name": "p", "lights": ["a", "a"] })),
+            ["/lights/1"]
+        );
+        assert_eq!(paths(json!({ "name": "p", "lights": [] })), ["/lights"]);
     }
 
     #[test]

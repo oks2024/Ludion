@@ -41,7 +41,7 @@ const PREFAB_KEYS: [&str; 6] = [
     "clips",
     "entities",
 ];
-const SCENE_ONLY_KEYS: [&str; 3] = ["seed", "physics", "preload"];
+const SCENE_ONLY_KEYS: [&str; 4] = ["seed", "physics", "render_layers", "preload"];
 
 /// A parsed `kind: prefab` document.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -403,7 +403,7 @@ pub(crate) fn parse(source: &str) -> Result<PrefabDocument, Vec<Diagnostic>> {
                 )
                 .with_path(format!("/{scene_only}"))
                 .with_help(
-                    "a prefab carries no seed/physics/preload: the scene that spawns it does; remove the key",
+                    "a prefab carries no seed/physics/render_layers/preload: the scene that spawns it does; remove the key",
                 ),
             ),
             unknown => diagnostics.push(envelope::unknown_key(

@@ -98,6 +98,8 @@ pub(crate) fn extract_views(
             size,
             camera: crate::extract::build_camera(world, &[], id, size),
             layers: layers.map_or(u32::MAX, |layers| layers.view_mask(view)),
+            lights: layers.map_or(u32::MAX, |layers| layers.view_lights_mask(view)),
+            sun: view.sun,
         });
     }
     table

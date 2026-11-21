@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::faults::fault;
-use crate::group::{Group, GroupMember};
+use crate::group::{Group, GroupMember, GroupRoster};
 use crate::machine::Machine;
 
 fn root<M: Machine>() -> M {
@@ -29,8 +29,10 @@ pub struct Mind<M: Machine> {
     /// The gameplay tick each active level was entered, root to leaf.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entered: Vec<u64>,
-    /// Events waiting for the next tick, oldest first.
+    /// Events waiting for the next tick, oldest first. An event may carry a nullable entity
+    /// reference (`L1513` otherwise); a save, carry or snapshot remaps it per element.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(with = "ludion_ecs::EntityRefCollection<Vec<M::Event>>")]
     pub inbox: Vec<M::Event>,
     /// How many events overflowed the inbox since the agent was created.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -188,8 +190,8 @@ fn refuse(code: ludion_core::diagnostics::DiagnosticCode, message: String) -> Di
 ///
 /// `L1512` for an `ALL` that is empty, lacks `ROOT` or repeats a variant; `L1510` for a parent
 /// chain that does not reach `ROOT` (or a `ROOT` with a parent); `L1511` for an `initial` that is
-/// not a child of its state; the registry's own refusals otherwise (`L0005` for a name taken,
-/// `L1392` for an event type holding a marked entity reference).
+/// not a child of its state; `L1513` for an event type holding an entity reference that is not an
+/// `Option`; the registry's own refusals otherwise (`L0005` for a name taken).
 ///
 /// # Example
 ///
@@ -212,11 +214,34 @@ fn refuse(code: ludion_core::diagnostics::DiagnosticCode, message: String) -> Di
 /// ```
 pub fn register_machine<M: Machine>(registry: &mut Registry) -> Result<(), Diagnostic> {
     validate::<M>()?;
+    validate_event_refs::<M>()?;
     if registry.get("Group").is_none() {
         registry.register::<Group>("Group")?;
         registry.register::<GroupMember>("GroupMember")?;
+        registry.register::<GroupRoster>("GroupRoster")?;
     }
     registry.register::<Mind<M>>(&format!("{}Mind", M::NAME))
+}
+
+fn validate_event_refs<M: Machine>() -> Result<(), Diagnostic> {
+    let schema = serde_json::to_value(schemars::schema_for!(Mind<M>))
+        .expect("a schemars JSON Schema always serializes to a JSON value");
+    let bad = ludion_ecs::entity_ref_fields(&schema)
+        .into_iter()
+        .find(|f| f.suffix.starts_with("/inbox/") && !f.nullable);
+    match bad {
+        Some(field) => Err(refuse(
+            code::AI_EVENT_REF_NOT_NULLABLE,
+            format!(
+                "machine `{}`: the event reference at `{}` is not nullable; a target that despawns \
+                 would refuse the save or drop the whole `Mind` on a carry. Write it as \
+                 `Option<EntityId>` with `#[schemars(with = \"Option<EntityRefSchema>\")]`",
+                M::NAME,
+                field.suffix.trim_start_matches('/')
+            ),
+        )),
+        None => Ok(()),
+    }
 }
 
 fn validate<M: Machine>() -> Result<(), Diagnostic> {

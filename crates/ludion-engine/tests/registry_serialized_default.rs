@@ -25,6 +25,10 @@ fn fixtures(name: &str) -> Vec<Value> {
         "PoseBlend" => vec![json!({ "pose": "a", "weight": 0.0 })],
         "ParentJoint" => vec![json!({ "joint": "j" })],
         "IgnoreCollisions" => vec![json!({ "with": entity_ref() })],
+        "NavBlocker" => vec![
+            json!({}),
+            json!({ "shape": { "box": { "half_extents": half3 } } }),
+        ],
         "PrefabInstance" => vec![json!({
             "source": "p.prefab.yaml",
             "part": "a",
@@ -60,6 +64,17 @@ fn fixtures(name: &str) -> Vec<Value> {
         "NoiseZone" => vec![
             json!({ "shape": { "sphere": { "radius": 1.0 } } }),
             json!({ "shape": { "box": { "half_extents": [1.0, 1.0, 1.0] } } }),
+        ],
+        "AudioZone" => vec![
+            json!({ "shape": { "sphere": { "radius": 1.0 } } }),
+            json!({
+                "shape": { "box": { "half_extents": [1.0, 1.0, 1.0] } },
+                "priority": 2,
+                "blend_m": 1.5,
+                "reverb": { "preset": "hangar_large", "wet": 0.5 },
+                "beds": [{ "sound": "a.wav", "gain": 0.5 }],
+                "bus_gains": { "ambient": 0.5 },
+            }),
         ],
         "PendingNoise" => vec![
             json!({ "id": 0, "at": [0.0, 0.0, 0.0], "radius": 1.0, "loudness": 1.0, "kind": "k" }),

@@ -828,6 +828,8 @@ impl AudioLogEntry {
             | AudioMessage::MusicStop { .. }
             | AudioMessage::BusGain { .. }
             | AudioMessage::Duck { .. }
+            | AudioMessage::ZoneGain { .. }
+            | AudioMessage::ReverbSet { .. }
             | AudioMessage::BusPause { .. }
             | AudioMessage::VoiceSync { .. }
             | AudioMessage::VoiceStop { .. } => None,
@@ -843,6 +845,7 @@ impl AudioLogEntry {
             | AudioMessage::MusicStemGain { gain, .. }
             | AudioMessage::BusGain { gain, .. }
             | AudioMessage::Duck { gain, .. }
+            | AudioMessage::ZoneGain { gain, .. }
             | AudioMessage::VoiceStart { gain, .. }
             | AudioMessage::VoiceSync { gain, .. } => Some(*gain),
             AudioMessage::LoopStop { .. }
@@ -850,6 +853,7 @@ impl AudioLogEntry {
             | AudioMessage::VoiceStop { .. }
             | AudioMessage::BusPause { .. }
             | AudioMessage::MusicSet { .. }
+            | AudioMessage::ReverbSet { .. }
             | AudioMessage::MusicStop { .. } => None,
         }
     }

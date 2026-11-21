@@ -3,6 +3,8 @@
 use core::f32::consts::SQRT_2;
 use ludion_core::math::{cos, sqrt};
 
+use crate::overlay::{NavOverlay, NodeMark};
+
 /// Marks an absent link in [`NavGrid`]'s link table.
 pub const NO_LINK: u32 = u32::MAX;
 
@@ -75,6 +77,9 @@ pub struct NavGrid {
     node_cell: Vec<u32>,
     links: Vec<[u32; 8]>,
     link_cost: Vec<[f32; 8]>,
+    base_links: Vec<[u32; 8]>,
+    base_cost: Vec<[f32; 8]>,
+    overlay: Option<NavOverlay>,
     generation: u64,
 }
 
@@ -96,6 +101,9 @@ impl NavGrid {
             node_cell: Vec::new(),
             links: Vec::new(),
             link_cost: Vec::new(),
+            base_links: Vec::new(),
+            base_cost: Vec::new(),
+            overlay: None,
             generation: 0,
         };
         let ncol = grid.column_count();
@@ -230,8 +238,97 @@ impl NavGrid {
                 }
             }
         }
-        self.links = links;
-        self.link_cost = link_cost;
+        self.links = links.clone();
+        self.link_cost = link_cost.clone();
+        self.base_links = links;
+        self.base_cost = link_cost;
+        if self.overlay.as_ref().is_some_and(|o| o.node_count() != n) {
+            self.overlay = None;
+        }
+        self.apply_overlay();
+    }
+
+    /// Rewrites `links` and `link_cost` from the pristine base under the current overlay.
+    fn apply_overlay(&mut self) {
+        self.links.clone_from(&self.base_links);
+        self.link_cost.clone_from(&self.base_cost);
+        let Some(overlay) = &self.overlay else {
+            return;
+        };
+        for a in 0..self.links.len() {
+            let from_cost = matches!(overlay.mark(a as u32), NodeMark::Cost(_));
+            for (dir, (offset, _)) in NEIGHBORS.into_iter().enumerate() {
+                let b = self.base_links[a][dir];
+                if b == NO_LINK {
+                    continue;
+                }
+                // A diagonal keeps the corner-cut rule of `derive` against the overlaid cardinals.
+                let corner_cut = offset.0 != 0 && offset.1 != 0 && {
+                    let card = |d: (i32, i32)| NEIGHBORS.iter().position(|(o, _)| *o == d);
+                    match (card((offset.0, 0)), card((0, offset.1))) {
+                        (Some(h), Some(v)) => {
+                            self.links[a][h] == NO_LINK || self.links[a][v] == NO_LINK
+                        }
+                        _ => true,
+                    }
+                };
+                match overlay.mark(b) {
+                    _ if corner_cut => self.links[a][dir] = NO_LINK,
+                    NodeMark::Block => self.links[a][dir] = NO_LINK,
+                    NodeMark::Cost(c) if !from_cost => self.link_cost[a][dir] += c,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Installs `overlay` over the base links and bumps [`generation`](NavGrid::generation) when it differs
+    /// from the current one; returns whether it did. An empty overlay is stored as `None`, so clearing an
+    /// already clear grid is a no-op. An overlay built for another node count is dropped.
+    pub fn set_overlay(&mut self, overlay: Option<NavOverlay>) -> bool {
+        let overlay = overlay.filter(|o| !o.is_empty() && o.node_count() == self.node_count());
+        if overlay == self.overlay {
+            return false;
+        }
+        self.overlay = overlay;
+        self.apply_overlay();
+        self.generation += 1;
+        true
+    }
+
+    /// Whether an overlay is installed.
+    pub fn has_overlay(&self) -> bool {
+        self.overlay.is_some()
+    }
+
+    /// The overlay mark on `n` ([`NodeMark::None`] with no overlay).
+    pub fn mark(&self, n: NodeId) -> NodeMark {
+        self.overlay
+            .as_ref()
+            .map_or(NodeMark::None, |o| o.mark(n.0))
+    }
+
+    /// Metres the overlay adds to a step from `from` into `to`: the entered node's cost, once per
+    /// crossing (nothing when `from` already carries a cost).
+    pub(crate) fn entry_cost(&self, from: u32, to: u32) -> f32 {
+        match (self.mark(NodeId(from)), self.mark(NodeId(to))) {
+            (NodeMark::Cost(_), _) => 0.0,
+            (_, NodeMark::Cost(c)) => c,
+            _ => 0.0,
+        }
+    }
+
+    /// Whether `n` is marked [`NodeMark::Block`].
+    pub fn is_blocked(&self, n: NodeId) -> bool {
+        self.mark(n) == NodeMark::Block
+    }
+
+    /// The tag of the stop on `n`, if it is marked [`NodeMark::Stop`].
+    pub fn stop_tag(&self, n: NodeId) -> Option<u32> {
+        match self.mark(n) {
+            NodeMark::Stop(tag) => Some(tag),
+            _ => None,
+        }
     }
 
     /// Bumps on every build and rebuild; a cache keyed by it knows when to drop its fields.
@@ -258,7 +355,7 @@ impl NavGrid {
     }
 
     /// The nodes of column `(i, j)` as an id range, ascending in height.
-    pub(crate) fn column_nodes(&self, i: u32, j: u32) -> core::ops::Range<u32> {
+    pub fn column_nodes(&self, i: u32, j: u32) -> core::ops::Range<u32> {
         let c = j as usize * self.params.nx as usize + i as usize;
         self.col_node_start[c]..self.col_node_start[c + 1]
     }

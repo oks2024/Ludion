@@ -97,3 +97,4 @@ Observe: `AudioMessage::Duck { bus, gain, fade_frames }` in `engine.audio_log()`
 
 - `ludion docs audio` — loops, emitters, music, authored category gains.
 - `ludion docs audio-space` — the listener: `AudioListener` and its orientation.
+- `ludion docs audio-zones` — `AudioZone`: beds, reverb and per-bus zone gains by listener position.

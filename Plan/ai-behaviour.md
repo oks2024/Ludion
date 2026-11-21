@@ -26,9 +26,12 @@
 6. **Gameplay time.** Timers and cooldowns store absolute `ctx.game_time` ticks, so they freeze under a
    held game and survive a snapshot restore (`GameClock` rides snapshots). Seconds convert to ticks
    rounding up after absorbing `f32` representation error (`0.3 s` at 60 Hz is 18 ticks, not 19).
-7. **Ref-free events, Wave 1.** The inbox is a list inside `Mind<M>`, so a marked entity ref in an event
-   fails registration with `L1392`, and an unmarked one fails a game's `assert_entity_refs_marked`;
-   existing gates enforce it. References travel in single marked blackboard fields.
+7. **Ref-carrying events (W3).** `Mind<M>::inbox` is an `EntityRefCollection` (decision 16), so an event
+   variant may carry `#[schemars(with = "Option<EntityRefSchema>")] body: Option<EntityId>`; scene load
+   range-checks it and `scene.save`, the carry and the snapshot remap it per inbox element. An event ref
+   that is not nullable is refused at registration with `L1513`: a target that despawned would refuse
+   the save (`L1018`) or drop the whole `Mind` on a carry (`L3043`). A marked ref inside a blackboard
+   list stays `L1392`. (Wave 1 shipped the events ref-free; decision 16 lifted that.)
 8. **Squads are components.** `Group { kind }` and `GroupMember { group, role }` (the group field is a
    marked, optional, drift-safe ref). `members` scans and sorts by `(role, entity)`, so a despawned member
    leaves with no list to go stale. `Cx::broadcast` reaches the other members in that order.
@@ -68,6 +71,19 @@
     dangling site becomes `null`, a non-nullable one refuses the save (`L1018`) or drops the component on carry
     (`L3043`). Nullable element refs (`Option<EntityRefSchema>`) are the drift-safe form. Any other list, map or
     tuple holding a marked ref stays `L1392`; tuples are never sanctioned.
+17. **`MemberLeft` is opt-in through `GroupRoster`.** A `GroupRoster` on a group entity remembers the
+    membership it last saw (`members`, in `members()` order), the departures found at the last refresh
+    (`left`) and the gameplay tick of that refresh (`seen`). A record on every `Group` would move the
+    squad fixture's per-tick `WorldHash`, and naming who left needs refs, not the request's count. `ai_tick`
+    refreshes each roster after the held-tick early return and before the agent loop: departures are the
+    previous members no longer in the group (a despawn or a retarget; a `None` entry counts), and the
+    `seen` stamp makes a second machine's `ai_tick` in the same tick reuse `left`. Delivery follows, in
+    ascending group id: for each departure in `left` order, the game's event goes to each current member
+    with a `Mind<M>`, in `members` order, so it is handled the same tick. Joins are not reported; a fresh
+    roster reports nothing. A group without a roster behaves byte-identically to before.
+18. **`Machine::member_left` builds the game's event.** The defaulted trait fn
+    `member_left(member: Option<EntityId>) -> Option<Self::Event>` returns `None` to send nothing. A
+    `None` member is a departure seen only after a save, carry or restore nulled the dead entity.
 
 ## Waves
 
@@ -78,8 +94,8 @@
   (`crates/ludion-ai/src/trace.rs`, `crates/ludion-engine/src/trace.rs`), the `engine.describe` `ai`
   section (`crates/ludion-engine/src/ai.rs`), the squad fixture and its committed traces, and the
   fault messages naming the entity once.
-- **W3 — not started.** A `MemberLeft` event and ref-carrying events, after the entity-ref collection
-  (decision 16) shipped.
+- **W3 — shipped** (decisions 7, 17, 18). Ref-carrying events with `L1513`, `GroupRoster` and
+  `Machine::member_left`.
 
 ## Out of scope
 
@@ -107,6 +123,8 @@
   trigger. Not built here.
 - Accepted, scheduled (R14 re-record round). **An `ai.describe` command.** It rides the next replay-corpus re-record, because a `Command` variant
   moves `replay_schema_hash`; until then `engine.describe`'s `ai` key serves.
+- Proposed — owner ruling owed: `MemberLeft` via an opt-in `GroupRoster` that names the member, instead of
+  the request's previous-membership count on `Group`.
 - Accepted. **Gallery placement of the squad scene.** A gallery scene needs a game-registered machine in the
   plain sweep, plus pinned goldens.
 - Accepted. **`broadcast` excludes the sender** (`Cx::broadcast`); the free `members` lists everyone. A game that
@@ -127,3 +145,9 @@
   Windows box, the M4 must reproduce both byte-identically), `ludion-ai` trace tests, `docs/ai.md`
   Tracing and describe. Deviations from the request: no `ai.describe` command and no gallery scene
   (decisions 14, 15; both ruled by the owner 2026-11-19). No pinned artifact moved.
+- **W3 shipped** (Neon Shroud request 0003): `Mind<M>::inbox` adopts `EntityRefCollection`; `L1513` for a
+  non-nullable event ref; `GroupRoster` with the refresh and delivery in `ai_tick`; `Machine::member_left`;
+  tests in `crates/ludion-ai/tests/machine.rs` and `crates/ludion-engine/tests/ai.rs` (save/reload,
+  snapshot/restore); `docs/ai.md`; the `ai_squad` example. Deviation from the request: a roster naming the
+  member, opt-in, instead of a count on `Group` (decision 17). The ai-squad fixture and every pinned
+  artifact are unmoved. A roster stamped at tick 0 is not refreshed until tick 1 (`seen` defaults to 0).

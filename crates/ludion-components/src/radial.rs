@@ -128,6 +128,15 @@ pub struct UiRadial {
     /// Linear RGBA of a disabled item's text; outranks `selected_color` (default a dimmed grey).
     #[serde(default = "crate::ui_list_disabled_color_default")]
     pub disabled_color: [f32; 4],
+    /// Linear RGBA of every item's wedge, drawn under its icon and text (default none: no wedge).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<[f32; 4]>,
+    /// Linear RGBA of the selected item's wedge (default `fill`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_fill: Option<[f32; 4]>,
+    /// An outline on every wedge (default none). A wedge draws when it has a fill or this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<crate::UiStroke>,
     /// Draw order: higher draws later (default `0`).
     #[serde(default)]
     pub order: i32,
@@ -179,6 +188,9 @@ impl Default for UiRadial {
             color: [1.0; 4],
             selected_color: crate::ui_list_selected_color_default(),
             disabled_color: crate::ui_list_disabled_color_default(),
+            fill: None,
+            selected_fill: None,
+            stroke: None,
             order: 0,
             visible: true,
             outline: None,
@@ -418,7 +430,8 @@ impl UiRadial {
 impl SemanticValidate for UiRadial {
     /// Rejects (`L1619`) a non-finite number; a `radius_inner` below 0 or a `radius_outer` not above it;
     /// a `gap_deg` or `hysteresis_deg` outside `[0, 360 / items)`; a `deadzone` outside `[0, 1)`; a
-    /// `size` or `icon_size` that is not positive and finite; and more than [`MAX_RADIAL_ITEMS`] items.
+    /// `size` or `icon_size` that is not positive and finite; a non-finite `fill` or `selected_fill`; a
+    /// `stroke` width that is not finite and above 0; and more than [`MAX_RADIAL_ITEMS`] items.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         let mut reject = |pointer: String, what: String| {
@@ -460,6 +473,8 @@ impl SemanticValidate for UiRadial {
             "color",
             "selected_color",
             "disabled_color",
+            "fill",
+            "selected_fill",
         ] {
             let Some(array) = value.get(key).and_then(Value::as_array) else {
                 continue;
@@ -475,6 +490,13 @@ impl SemanticValidate for UiRadial {
                         format!("the `UiRadial` {key} must have finite channels"),
                     );
                 }
+            }
+        }
+        if let Some(stroke) = value.get("stroke") {
+            let (stroke_finite, problems) = crate::ui_shape::stroke_problems(stroke, "UiRadial");
+            finite &= stroke_finite;
+            for (pointer, what) in problems {
+                reject(pointer, what);
             }
         }
         if !finite {
@@ -809,6 +831,25 @@ mod tests {
         assert_eq!(empty, UiRadial::default());
     }
 
+    #[test]
+    fn wedge_fields_skip_when_absent_and_round_trip_when_set() {
+        let absent = serde_json::to_value(UiRadial::default()).unwrap();
+        for key in ["fill", "selected_fill", "stroke"] {
+            assert!(absent.get(key).is_none(), "{key} serialized while absent");
+        }
+        let set = UiRadial {
+            fill: Some([0.1, 0.2, 0.3, 0.4]),
+            selected_fill: Some([0.5, 0.6, 0.7, 0.8]),
+            stroke: Some(crate::UiStroke {
+                width: 2.5,
+                color: [1.0, 1.0, 1.0, 1.0],
+            }),
+            ..UiRadial::default()
+        };
+        let json = serde_json::to_value(&set).unwrap();
+        assert_eq!(serde_json::from_value::<UiRadial>(json).unwrap(), set);
+    }
+
     fn pointers(value: Value) -> Vec<String> {
         UiRadial::validate_semantics(&value)
             .into_iter()
@@ -843,6 +884,23 @@ mod tests {
             (json!({ "start_deg": 1e300 }), "/start_deg"),
             (json!({ "offset": [0.0, 1e300] }), "/offset/1"),
             (json!({ "color": [1.0, 1.0, 1e300, 1.0] }), "/color/2"),
+            (json!({ "fill": [1e300, 0.0, 0.0, 1.0] }), "/fill/0"),
+            (
+                json!({ "selected_fill": [0.0, 0.0, 0.0, 1e300] }),
+                "/selected_fill/3",
+            ),
+            (
+                json!({ "stroke": { "width": 0.0, "color": [1.0, 1.0, 1.0, 1.0] } }),
+                "/stroke/width",
+            ),
+            (
+                json!({ "stroke": { "width": 1e300, "color": [1.0, 1.0, 1.0, 1.0] } }),
+                "/stroke/width",
+            ),
+            (
+                json!({ "stroke": { "width": 2.0, "color": [1.0, 1e300, 1.0, 1.0] } }),
+                "/stroke/color/1",
+            ),
         ];
         for (value, pointer) in cases {
             let got = pointers(value.clone());

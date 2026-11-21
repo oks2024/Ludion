@@ -23,6 +23,8 @@ fn scene() -> RenderScene {
         size: (VIEW_PX, VIEW_PX),
         camera: origin_camera(VIEW_PX, VIEW_PX),
         layers: u32::MAX,
+        lights: u32::MAX,
+        sun: true,
     }];
     scene
 }
@@ -141,6 +143,47 @@ fn needs_gpu_a_view_does_not_resolve_the_probes_again() {
     let without = second.render(&bare, size).expect("bare");
     assert_eq!(second.probe_resolve().resolve, 1);
     assert_eq!(with_view.rgba, without.rgba, "the main frame minus its UI");
+}
+
+/// A layered frame with a probe, a radar-only mesh and a view on `radar`: the view draws a different mesh
+/// list than the main frame, yet the probes resolve once, and again for no later frame. Skips with no GPU.
+#[test]
+fn needs_gpu_a_layered_view_does_not_resolve_the_probes_again() {
+    let probe = ProbeData {
+        entity: ludion_core::ids::EntityId::new(1, 0),
+        position: Vec3::new(0.0, 1.5, 0.0),
+        rotation: Quat::IDENTITY,
+        volume: ProbeVolume::Sphere { radius: 5.0 },
+        blend: 0.5,
+        priority: 0,
+    };
+    const RADAR: u32 = 2;
+    let mut full = scene();
+    full.probes = vec![probe];
+    full.meshes
+        .push(slab(Vec3::new(3.0, 0.0, -5.0), 1.0, [0.0, 0.0, 1.0]));
+    full.views[0].layers = RADAR;
+    let masks = crate::LayerMasks {
+        main: crate::DEFAULT_LAYER_BIT,
+        meshes: vec![crate::DEFAULT_LAYER_BIT, RADAR],
+        ..crate::LayerMasks::default()
+    };
+    let (layered, _) = crate::split_layers(full, masks);
+    assert_eq!(layered.meshes.len(), 1);
+    assert_eq!(view_scene(&layered, 0).meshes.len(), 1);
+
+    let Some(renderer) = skip_or_renderer("a_layered_view_does_not_resolve_the_probes_again")
+    else {
+        return;
+    };
+    let size = FrameSize::native(PX, PX);
+    renderer.render(&layered, size).expect("first frame");
+    renderer.render(&layered, size).expect("second frame");
+    assert_eq!(
+        renderer.probe_resolve().resolve,
+        1,
+        "the main frame and its view share one capture"
+    );
 }
 
 /// The view's GPU time at two sizes on a lit room: a measurement, not a gate. Run with

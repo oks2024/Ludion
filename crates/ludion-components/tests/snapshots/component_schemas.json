@@ -347,6 +347,250 @@
       }
     }
   },
+  "AudioZone": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "AudioZone",
+    "description": "A volume that sets the sound around the listener: ambient beds, a reverb and per-bus gains,\nresolved at every frame boundary from the listener point. Among overlapping zones the highest\n`priority` wins (ties to the lowest entity); inside `blend_m` of the edge it fades with the\nzone beneath. `ludion docs audio-zones` is the guide.\n\n```yaml\ncomponents:\n  AudioZone:\n    shape:\n      box:\n        half_extents: [30.0, 5.0, 20.0]\n    priority: 10\n    blend_m: 3.0\n    reverb:\n      preset: hall_medium\n      wet: 0.25\n    beds:\n      - sound: amb/machine_hum.wav\n        gain: 0.5\n    bus_gains:\n      ambient: 0.9\n```\n\n```\nuse ludion_components::AudioZone;\n\nlet zone: AudioZone = serde_json::from_value(serde_json::json!({\n    \"shape\": { \"sphere\": { \"radius\": 8.0 } },\n}))\n.unwrap();\nassert!(zone.beds.is_empty() && zone.reverb.is_none() && zone.priority == 0);\n```",
+    "type": "object",
+    "properties": {
+      "shape": {
+        "description": "The volume.",
+        "$ref": "#/$defs/AudioZoneShape"
+      },
+      "priority": {
+        "description": "The higher one wins where zones overlap; ties go to the lowest entity (default `0`).",
+        "type": "integer",
+        "format": "int32"
+      },
+      "blend_m": {
+        "description": "The edge band, metres: the zone's weight rises from 0 at the edge to 1 this far inside\n(default `0`, a hard edge; finite, not negative).",
+        "type": "number",
+        "format": "float"
+      },
+      "reverb": {
+        "description": "The reverb while inside; absent means dry.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/AudioZoneReverb"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "beds": {
+        "description": "Ambient loops played while inside, at most 8.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/AudioZoneBed"
+        }
+      },
+      "bus_gains": {
+        "description": "Per-bus gains while inside.",
+        "$ref": "#/$defs/AudioZoneBusGains"
+      }
+    },
+    "required": [
+      "shape"
+    ],
+    "$defs": {
+      "AudioZoneShape": {
+        "description": "The volume of an [`AudioZone`], in the zone entity's world pose (scale ignored).\n\n```\nuse ludion_components::AudioZoneShape;\n\nlet shape: AudioZoneShape =\n    serde_json::from_value(serde_json::json!({ \"sphere\": { \"radius\": 4.0 } })).unwrap();\nassert_eq!(shape, AudioZoneShape::Sphere { radius: 4.0 });\n```",
+        "oneOf": [
+          {
+            "description": "A box oriented by the entity's rotation.",
+            "type": "object",
+            "properties": {
+              "box": {
+                "type": "object",
+                "properties": {
+                  "half_extents": {
+                    "description": "Half the box's size along each local axis, metres (finite and above 0).",
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                  }
+                },
+                "required": [
+                  "half_extents"
+                ]
+              }
+            },
+            "required": [
+              "box"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "A sphere about the entity's origin.",
+            "type": "object",
+            "properties": {
+              "sphere": {
+                "type": "object",
+                "properties": {
+                  "radius": {
+                    "description": "Metres (finite and above 0).",
+                    "type": "number",
+                    "format": "float"
+                  }
+                },
+                "required": [
+                  "radius"
+                ]
+              }
+            },
+            "required": [
+              "sphere"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "AudioZoneReverb": {
+        "description": "The reverb an [`AudioZone`] applies: a preset with optional per-field overrides.\n\n```\nuse ludion_components::AudioZoneReverb;\n\nlet reverb: AudioZoneReverb =\n    serde_json::from_value(serde_json::json!({ \"preset\": \"hall_medium\", \"wet\": 0.5 })).unwrap();\nassert_eq!(reverb.params().wet, 0.5);\nassert_eq!(reverb.params().decay_s, 1.8);\n```",
+        "type": "object",
+        "properties": {
+          "preset": {
+            "description": "The starting point (default `room_small`).",
+            "$ref": "#/$defs/ReverbPreset"
+          },
+          "decay_s": {
+            "description": "Seconds for the tail to fall 60 dB, overriding the preset (0.1 to 20).",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "pre_delay_ms": {
+            "description": "Milliseconds before the tail starts, overriding the preset (0 to 200).",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "damping": {
+            "description": "High-frequency absorption, overriding the preset (0 to 1).",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "size": {
+            "description": "Room size, overriding the preset (0 to 1).",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "wet": {
+            "description": "The mix of reverb against dry sound, overriding the preset (0 to 1).",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          }
+        }
+      },
+      "ReverbPreset": {
+        "description": "A named reverb starting point; an [`AudioZoneReverb`]'s explicit fields override it.\n\n```\nuse ludion_components::ReverbPreset;\n\nassert_eq!(ReverbPreset::default(), ReverbPreset::RoomSmall);\nassert_eq!(ReverbPreset::HallMedium.params().decay_s, 1.8);\n```",
+        "oneOf": [
+          {
+            "description": "An open street: a short, damped tail.",
+            "type": "string",
+            "const": "outdoor_open"
+          },
+          {
+            "description": "A small room (the default).",
+            "type": "string",
+            "const": "room_small"
+          },
+          {
+            "description": "A medium hall.",
+            "type": "string",
+            "const": "hall_medium"
+          },
+          {
+            "description": "A large hangar: a long, wide tail.",
+            "type": "string",
+            "const": "hangar_large"
+          }
+        ]
+      },
+      "AudioZoneBed": {
+        "description": "One looping bed an [`AudioZone`] plays on the ambient bus, non-positional.\n\n```\nuse ludion_components::AudioZoneBed;\n\nlet bed: AudioZoneBed =\n    serde_json::from_value(serde_json::json!({ \"sound\": \"amb/hum.wav\" })).unwrap();\nassert_eq!(bed.gain, 1.0);\n```",
+        "type": "object",
+        "properties": {
+          "sound": {
+            "description": "The WAV, as a content-root-relative path.",
+            "type": "string"
+          },
+          "gain": {
+            "description": "A linear gain multiplier (default `1.0`; finite, not negative).",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "required": [
+          "sound"
+        ]
+      },
+      "AudioZoneBusGains": {
+        "description": "The gain a zone sets on each bus while the listener is inside; an absent bus is untouched.\n\n```\nuse ludion_components::AudioZoneBusGains;\nuse ludion_core::audio::Bus;\n\nlet gains: AudioZoneBusGains =\n    serde_json::from_value(serde_json::json!({ \"ambient\": 0.9 })).unwrap();\nassert_eq!(gains.gain(Bus::Ambient), Some(0.9));\nassert_eq!(gains.gain(Bus::Music), None);\n```",
+        "type": "object",
+        "properties": {
+          "sfx": {
+            "description": "The sound-effect bus.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "ambient": {
+            "description": "The ambient bus.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "voice": {
+            "description": "The dialogue bus.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "ui": {
+            "description": "The interface bus.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "music": {
+            "description": "The music bus.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          }
+        }
+      }
+    }
+  },
   "BlendClock": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "BlendClock",
@@ -490,6 +734,16 @@
       },
       "layers": {
         "description": "The layers the main camera draws (default none, meaning every layer). Absent is omitted from the\ndocument and the hash. See `ludion docs render-views`.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
+      },
+      "lights": {
+        "description": "The `PointLight`s and `SpotLight`s that light this camera's image, by `RenderLayers` (default none,\nmeaning the camera's own `layers`). Absent is omitted from the document and the hash. See\n`ludion docs render-views`.",
         "type": [
           "array",
           "null"
@@ -5508,6 +5762,93 @@
       }
     }
   },
+  "NavBlocker": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "NavBlocker",
+    "description": "A dynamic obstacle for the navigation grids. Every `nav_update` overlays the enabled blockers on each\nclass grid (without re-sampling physics): a node is covered when its position lies inside the posed box\ninflated by the class radius and the agent's body overlaps the box vertically. `block` beats `interact`\nbeats `cost` where blockers overlap. A moving blocker is followed tick by tick.\n\n`classes` lists the `NavConfig.classes` names the blocker applies to; empty is every class. A name no\nclass has is `L4147`. A routed walker stops `at_blocker` before an `interact` region and continues the\ntick after the blocker is disabled or becomes `cost`; there is no done call. Flow fields treat `interact`\nas blocked. Non-uniform scale is approximated per axis.\n\nA non-finite or non-positive half-extent, a negative or non-finite `cost` and an empty `classes` entry\nare rejected (`L1527`).\n\n```yaml\ncomponents:\n  NavBlocker:\n    shape:\n      box:\n        half_extents: [0.5, 1.0, 0.1]\n    mode: interact\n    classes: [walker]\n```\n\n```\nuse ludion_components::{NavBlocker, NavBlockerMode};\n\nlet b: NavBlocker = serde_json::from_value(serde_json::json!({ \"mode\": \"cost\", \"cost\": 3.0 })).unwrap();\nassert_eq!(b.mode, NavBlockerMode::Cost);\nassert!(b.enabled);\n```",
+    "type": "object",
+    "properties": {
+      "shape": {
+        "description": "The covered region (default a `[0.5; 3]` box).",
+        "$ref": "#/$defs/NavBlockerShape"
+      },
+      "mode": {
+        "description": "What the blocker does (default `block`).",
+        "$ref": "#/$defs/NavBlockerMode"
+      },
+      "cost": {
+        "description": "Metres added on entering a covered node in `cost` mode (default `0`).",
+        "type": "number",
+        "format": "float"
+      },
+      "classes": {
+        "description": "The agent classes the blocker applies to; empty is every class (default empty).",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "enabled": {
+        "description": "Whether the blocker is in effect (default `true`).",
+        "type": "boolean"
+      }
+    },
+    "$defs": {
+      "NavBlockerShape": {
+        "description": "The region a [`NavBlocker`] covers, in the entity's frame.",
+        "oneOf": [
+          {
+            "description": "An oriented box centred on the entity, posed by its world transform.",
+            "type": "object",
+            "properties": {
+              "box": {
+                "type": "object",
+                "properties": {
+                  "half_extents": {
+                    "description": "Half the box's size on each axis, metres, before the entity's scale (default `[0.5; 3]`).",
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                  }
+                },
+                "required": [
+                  "half_extents"
+                ]
+              }
+            },
+            "required": [
+              "box"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "NavBlockerMode": {
+        "description": "What a [`NavBlocker`] does to the nodes it covers.",
+        "oneOf": [
+          {
+            "description": "Agents cannot enter the covered nodes (default).",
+            "type": "string",
+            "const": "block"
+          },
+          {
+            "description": "Entering the covered nodes costs `cost` extra metres, once per crossing.",
+            "type": "string",
+            "const": "cost"
+          },
+          {
+            "description": "The nodes stay passable, but a routed walker stops `at_blocker` before them until the game\ndisables the blocker or switches it to `cost`.",
+            "type": "string",
+            "const": "interact"
+          }
+        ]
+      }
+    }
+  },
   "NavGoal": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "NavGoal",
@@ -5607,7 +5948,7 @@
   "NavRoute": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "NavRoute",
-    "description": "The route `nav_steer` plans for a [`NavAgent`](crate::NavAgent) that carries a [`NavGoal`].\n**Written by `nav_steer`**: a game reads it and never inserts one. It is hashed sim state, so a restored\nworld resumes the route it was on instead of planning again from elsewhere. `waypoints[0]` is the\nnode the route started from; `index` is the waypoint being walked to. A partial route (`partial`)\nends at the reachable point nearest the goal; `cost` is the path length along the grid links. `links`\nlists the waypoint indices where a [`NavLink`](crate::NavLink) traversal starts (waypoint `i` is the\nlink start, `i + 1` its end); at one the agent stops `at_link` until `nav_link_done`.\n\n```yaml\ncomponents:\n  NavRoute:\n    goal: [12.0, 0.0, -4.5]\n    waypoints: [[0.5, 0.0, 0.5], [6.5, 0.0, 3.5], [12.5, 0.0, -4.5]]\n    index: 1\n    status: following\n    cost: 14.2\n```\n\n```\nuse ludion_components::{NavRoute, NavRouteStatus};\n\nlet route: NavRoute = serde_json::from_value(serde_json::json!({})).unwrap();\nassert_eq!(route.status, NavRouteStatus::Planning);\nassert!(route.waypoints.is_empty());\n```",
+    "description": "The route `nav_steer` plans for a [`NavAgent`](crate::NavAgent) that carries a [`NavGoal`].\n**Written by `nav_steer`**: a game reads it and never inserts one. It is hashed sim state, so a restored\nworld resumes the route it was on instead of planning again from elsewhere. `waypoints[0]` is the\nnode the route started from; `index` is the waypoint being walked to. A partial route (`partial`)\nends at the reachable point nearest the goal; `cost` is the path length along the grid links. `links`\nlists the waypoint indices where a [`NavLink`](crate::NavLink) traversal starts (waypoint `i` is the\nlink start, `i + 1` its end); at one the agent stops `at_link` until `nav_link_done`. `blockers` lists the\nwaypoint indices whose next leg enters an `interact` [`NavBlocker`](crate::NavBlocker); there the agent\nstops `at_blocker` until the blocker is disabled or becomes `cost`.\n\n```yaml\ncomponents:\n  NavRoute:\n    goal: [12.0, 0.0, -4.5]\n    waypoints: [[0.5, 0.0, 0.5], [6.5, 0.0, 3.5], [12.5, 0.0, -4.5]]\n    index: 1\n    status: following\n    cost: 14.2\n```\n\n```\nuse ludion_components::{NavRoute, NavRouteStatus};\n\nlet route: NavRoute = serde_json::from_value(serde_json::json!({})).unwrap();\nassert_eq!(route.status, NavRouteStatus::Planning);\nassert!(route.waypoints.is_empty());\n```",
     "type": "object",
     "properties": {
       "goal": {
@@ -5684,6 +6025,39 @@
         "x-entity-ref": {
           "allow_self": false
         }
+      },
+      "blockers": {
+        "description": "Waypoint indices whose next leg enters an `interact` [`NavBlocker`](crate::NavBlocker) region\n(default none).",
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "blocker": {
+        "description": "The blocker being waited at; set only while `status` is `at_blocker` (default none).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
       }
     },
     "$defs": {
@@ -5714,6 +6088,11 @@
             "description": "Stopped at a link start, waiting for `nav_link_done`; `NavRoute.link` names the link.",
             "type": "string",
             "const": "at_link"
+          },
+          {
+            "description": "Stopped before an `interact` blocker; `NavRoute.blocker` names it. The walker continues once the\nblocker is disabled or switched to `cost`.",
+            "type": "string",
+            "const": "at_blocker"
           }
         ]
       }
@@ -7804,7 +8183,7 @@
   "RenderView": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "RenderView",
-    "description": "Renders the world through the `Camera` on this entity into its own texture of `size` texels, every\nframe it is `enabled`, in the same frame. A `UiRect` shows it by naming it in `view`. A `Camera`\nbeside a `RenderView` is never the main camera. At most 4 enabled views render per frame.\n\n```\nuse ludion_components::RenderView;\n\nlet view: RenderView = serde_json::from_value(serde_json::json!({ \"name\": \"radar\" })).unwrap();\nassert_eq!(view.size, [256, 256]);\nassert!(view.enabled);\nassert_eq!(view.order, 0);\n```",
+    "description": "Renders the world through the `Camera` on this entity into its own texture of `size` texels, every\nframe it is `enabled`, in the same frame. A `UiRect` shows it by naming it in `view`. A `Camera`\nbeside a `RenderView` is never the main camera. At most 4 enabled views render per frame.\n\n```\nuse ludion_components::RenderView;\n\nlet view: RenderView = serde_json::from_value(serde_json::json!({ \"name\": \"radar\" })).unwrap();\nassert_eq!(view.size, [256, 256]);\nassert!(view.enabled);\nassert_eq!(view.order, 0);\nassert!(view.sun && view.lights.is_none());\n```",
     "type": "object",
     "properties": {
       "name": {
@@ -7844,6 +8223,20 @@
         "items": {
           "type": "string"
         }
+      },
+      "lights": {
+        "description": "The `PointLight`s and `SpotLight`s that light the view, by `RenderLayers` (default none, meaning the\nview's own `layers`). A light the view drops casts no shadow in it. Absent is omitted from the document.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
+      },
+      "sun": {
+        "description": "Whether the scene's `DirectionalLight` lights the view (default true). `false` drops the sun from the\nview only; it needs no layer.",
+        "type": "boolean"
       }
     },
     "required": [
@@ -9631,6 +10024,43 @@
           1.0
         ]
       },
+      "fill": {
+        "description": "Linear RGBA of every item's wedge, drawn under its icon and text (default none: no wedge).",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4
+      },
+      "selected_fill": {
+        "description": "Linear RGBA of the selected item's wedge (default `fill`).",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4
+      },
+      "stroke": {
+        "description": "An outline on every wedge (default none). A wedge draws when it has a fill or this.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/UiStroke"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "order": {
         "description": "Draw order: higher draws later (default `0`).",
         "type": "integer",
@@ -9740,6 +10170,31 @@
             "type": "boolean"
           }
         }
+      },
+      "UiStroke": {
+        "description": "An outline centred on a [`UiShape`]'s edge.",
+        "type": "object",
+        "properties": {
+          "width": {
+            "description": "The width in canvas units, above 0.",
+            "type": "number",
+            "format": "float"
+          },
+          "color": {
+            "description": "Linear RGBA.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "width",
+          "color"
+        ]
       },
       "TextOutline": {
         "description": "An outline drawn under the glyphs of a [`UiText`](crate::UiText) or [`UiList`]. A `width` of `0`,\nor a `color` alpha of `0`, draws nothing.\n\n```\nuse ludion_components::TextOutline;\n\nlet outline: TextOutline =\n    serde_json::from_value(serde_json::json!({ \"width\": 2.0, \"color\": [0.0, 0.0, 0.0, 1.0] })).unwrap();\nassert_eq!(outline.width, 2.0);\n```",

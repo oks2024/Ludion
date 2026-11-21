@@ -1549,7 +1549,7 @@ pub fn scene_font_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnos
     diagnostics
 }
 
-/// Every `L1101`/`L1104` a checked scene's `AudioEmitter.sound` paths report: each is decoded with
+/// Every `L1101`/`L1104` a checked scene's `AudioEmitter.sound` and `AudioZone` bed sound paths report: each is decoded with
 /// [`ludion_assets::load_wav`], the call the audio sink makes, so a sound that checks clean cannot
 /// fail to play for a reason this pass could have named. An empty `sound` is `L1101` too. Check-time
 /// only: audio never moves the sim, so scene loading does not run it.
@@ -1579,36 +1579,53 @@ pub fn scene_audio_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagno
     let mut decoded: BTreeMap<String, Option<Diagnostic>> = BTreeMap::new();
     let mut diagnostics = Vec::new();
     for (index, entity) in scene.entities.iter().enumerate() {
-        let Some((_, emitter)) = entity
-            .components
-            .iter()
-            .find(|(name, _)| name == "AudioEmitter")
-        else {
-            continue;
-        };
-        let sound = emitter
-            .get("sound")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let pointer = format!("/entities/{index}/components/AudioEmitter/sound");
-        let fault = if sound.is_empty() {
-            Some(
-                Diagnostic::new(
-                    code::ASSET_FILE_IO,
-                    "this `AudioEmitter` names no sound, so it plays nothing",
+        let mut sounds: Vec<(String, &str, &str)> = Vec::new();
+        for (name, value) in &entity.components {
+            if name == "AudioEmitter" {
+                let sound = value
+                    .get("sound")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let pointer = format!("/entities/{index}/components/AudioEmitter/sound");
+                sounds.push((pointer, sound, "AudioEmitter"));
+            } else if name == "AudioZone" {
+                let beds = value.get("beds").and_then(serde_json::Value::as_array);
+                for (bed, entry) in beds.into_iter().flatten().enumerate() {
+                    let sound = entry
+                        .get("sound")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let pointer =
+                        format!("/entities/{index}/components/AudioZone/beds/{bed}/sound");
+                    sounds.push((pointer, sound, "AudioZone"));
+                }
+            }
+        }
+        for (pointer, sound, owner) in sounds {
+            let fault = if sound.is_empty() {
+                Some(
+                    Diagnostic::new(
+                        code::ASSET_FILE_IO,
+                        format!("this `{owner}` names no sound, so it plays nothing"),
+                    )
+                    .with_help(
+                        "set `sound` to a WAV file under the content root, e.g. `sfx/hum.wav`",
+                    ),
                 )
-                .with_help("set `sound` to a WAV file under the content root, e.g. `sfx/hum.wav`"),
-            )
-        } else {
-            decoded
-                .entry(sound.to_string())
-                .or_insert_with(|| {
-                    ludion_assets::load_wav(ludion_assets::AssetRoot::content(project_root), sound)
+            } else {
+                decoded
+                    .entry(sound.to_string())
+                    .or_insert_with(|| {
+                        ludion_assets::load_wav(
+                            ludion_assets::AssetRoot::content(project_root),
+                            sound,
+                        )
                         .err()
-                })
-                .clone()
-        };
-        diagnostics.extend(fault.map(|d| d.with_path(pointer)));
+                    })
+                    .clone()
+            };
+            diagnostics.extend(fault.map(|d| d.with_path(pointer)));
+        }
     }
     diagnostics
 }
@@ -1651,6 +1668,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(scene_light_exposure_diagnostics(scene));
     diagnostics.extend(crate::perception_check::scene_perception_diagnostics(scene));
     diagnostics.extend(crate::secondary_view::scene_render_view_diagnostics(scene));
+    diagnostics.extend(crate::render_layers::scene_render_layer_diagnostics(scene));
     diagnostics.extend(crate::rain::scene_rain_diagnostics(scene));
     diagnostics.extend(scene_ground_marker_clip_diagnostics(scene));
     diagnostics.extend(scene_lens_and_sun_disc_diagnostics(scene));
@@ -2950,6 +2968,40 @@ entities:
                 "/entities/0/components/AudioEmitter/sound",
                 "/entities/2/components/AudioEmitter/sound"
             ]
+        );
+    }
+
+    #[test]
+    fn a_zone_bed_sound_is_checked_like_an_emitters() {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "ludion-scene-check-zone-audio-{}-{n}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        std::fs::write(dir.join("good.wav"), tiny_wav()).expect("good.wav");
+        let source = "format: 1
+seed: 1
+entities:
+  - components:
+      AudioZone:
+        shape:
+          sphere:
+            radius: 4.0
+        beds:
+          - sound: good.wav
+          - sound: gone.wav
+";
+        let scene = ludion_scene::check(source, &crate::builtin_registry())
+            .unwrap_or_else(|errors| panic!("fixture scene invalid: {errors:?}"));
+        let found = scene_audio_diagnostics(&dir, &scene);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, code::ASSET_FILE_IO);
+        assert_eq!(
+            found[0].path.as_deref(),
+            Some("/entities/0/components/AudioZone/beds/1/sound")
         );
     }
 

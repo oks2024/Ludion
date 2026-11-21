@@ -883,3 +883,94 @@ fn unknown_event_key_is_l1141_with_suggestion() {
     assert_eq!(d.code.as_str(), "L1141");
     assert!(d.help.as_deref().unwrap().contains("name"), "{d:?}");
 }
+
+// --- The reserved `$root` track (root motion) -----------------------------------------------
+
+const ROOT_CLIP: &str = "\
+format: 1
+kind: animation
+duration: 1.0
+loop: false
+tracks:
+  $root:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 90.0
+          - 0.0
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - -8.0
+";
+
+#[test]
+fn a_valid_root_track_passes_and_round_trips_byte_identically() {
+    let doc = check_animation(ROOT_CLIP).expect("a valid $root clip");
+    let emitted = emit_animation(&doc);
+    assert_eq!(emit_animation(&parse_animation(&emitted).unwrap()), emitted);
+    assert_eq!(
+        emitted,
+        ROOT_CLIP.replace("  $root:", "  \"$root\":"),
+        "the emitter quotes the `$root` key"
+    );
+}
+
+#[test]
+fn a_root_scale_channel_is_l1142() {
+    let source = ROOT_CLIP.replace(
+        "    translation:",
+        "    scale:\n      - t: 0.0\n        v:\n          - 1.0\n          - 1.0\n          - 1.0\n    translation:",
+    );
+    assert!(has_code_at(
+        &errors_for(&source),
+        "L1142",
+        "/tracks/$root/scale"
+    ));
+}
+
+#[test]
+fn a_root_translation_y_is_l1142() {
+    let source = ROOT_CLIP.replacen(
+        "          - 0.0\n          - 0.0\n          - -8.0",
+        "          - 0.0\n          - 2.0\n          - -8.0",
+        1,
+    );
+    assert!(has_code_at(
+        &errors_for(&source),
+        "L1142",
+        "/tracks/$root/translation/1/v/1"
+    ));
+}
+
+#[test]
+fn a_root_rotation_off_the_vertical_axis_is_l1142() {
+    let source = ROOT_CLIP.replace(
+        "          - 0.0\n          - 90.0\n          - 0.0",
+        "          - 10.0\n          - 90.0\n          - 5.0",
+    );
+    let errors = errors_for(&source);
+    assert!(has_code_at(
+        &errors,
+        "L1142",
+        "/tracks/$root/rotation/1/v/0"
+    ));
+    assert!(has_code_at(
+        &errors,
+        "L1142",
+        "/tracks/$root/rotation/1/v/2"
+    ));
+}

@@ -35,9 +35,9 @@ use ludion_core::par;
 use ludion_core::rng::DeterministicRng;
 use ludion_ecs::{SystemCtx, World};
 use ludion_nav::{
-    ColumnSource, FloorSample, FlowCache, GridParams, NavGrid, NavLinks, NodeId, OffMeshLink,
-    PathOptions, PathStatus, find_path_linked, line_exit, nearest_node, reachable_within,
-    string_pull_linked, walkable_line,
+    ColumnSource, FloorSample, FlowCache, GridParams, NavGrid, NavLinks, NodeId, NodeMark,
+    OffMeshLink, PathOptions, PathStatus, find_path_linked, line_exit, nearest_node,
+    reachable_within, string_pull_marked, walkable_line,
 };
 use ludion_physics::{LayerSet, PhysicsError, PhysicsWorld, QueryFilter, StaticBody};
 use ludion_renderer::DebugSegment;
@@ -48,6 +48,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::{offender_key, report_full};
 use crate::hierarchy::world_transform;
+use crate::nav_blockers::{BlockerTable, build_blockers};
 
 /// Agents per parallel steering chunk.
 const STEER_CHUNK: usize = 64;
@@ -403,6 +404,7 @@ pub struct Nav {
     rebuilds: u64,
     cells: Vec<[u32; 2]>,
     tables: Vec<LinkTable>,
+    blocker_tables: Vec<BlockerTable>,
 }
 
 /// One enabled `NavLink` as the table holds it; its index in [`LinkTable::entries`] is the edge's tag.
@@ -447,6 +449,7 @@ impl Nav {
                 .map(|_| FlowCache::new(config.flow_radius))
                 .collect(),
             tables: classes.iter().map(|_| LinkTable::default()).collect(),
+            blocker_tables: classes.iter().map(|_| BlockerTable::default()).collect(),
             classes,
             config,
             grids: Vec::new(),
@@ -513,6 +516,8 @@ impl Nav {
         self.grids.truncate(n);
         self.tables.truncate(n);
         self.tables.resize_with(n, LinkTable::default);
+        self.blocker_tables.clear();
+        self.blocker_tables.resize_with(n, BlockerTable::default);
         self.config = config;
         self.full_rebuild = true;
         Ok(())
@@ -758,13 +763,20 @@ pub fn nav_update(world: &mut World, _ctx: &SystemCtx) {
         Some(physics) => update(&mut nav, physics),
         None => Ok(()),
     };
-    let (unsnapped, unknown) = if !nav.grids.is_empty() && nav.grids.len() == nav.classes.len() {
-        let (tables, unsnapped, unknown) = build_links(world, &nav.grids, &nav.classes);
-        nav.tables = tables;
-        (unsnapped, unknown)
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    let (unsnapped, unknown, unknown_blockers) =
+        if !nav.grids.is_empty() && nav.grids.len() == nav.classes.len() {
+            let (overlays, blocker_tables, unknown_blockers) =
+                build_blockers(world, &nav.grids, &nav.classes);
+            for (grid, overlay) in nav.grids.iter_mut().zip(overlays) {
+                grid.set_overlay(overlay);
+            }
+            nav.blocker_tables = blocker_tables;
+            let (tables, unsnapped, unknown) = build_links(world, &nav.grids, &nav.classes);
+            nav.tables = tables;
+            (unsnapped, unknown, unknown_blockers)
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        };
     let names = nav.config.class_names();
     world.insert_resource(nav);
     for (entity, index, name) in unknown {
@@ -777,6 +789,19 @@ pub fn nav_update(world: &mut World, _ctx: &SystemCtx) {
                 format!("the `NavLink` `classes` entry `{name}` is not a nav class, so it permits nothing"),
             )
             .with_path(format!("/components/NavLink/classes/{index}"))
+            .with_help(format!("use one of: {names}; `ludion explain L4147`")),
+        );
+    }
+    for (entity, index, name) in unknown_blockers {
+        let key = format!("{}/blocker/classes/{index}", offender_key(world, entity));
+        report_full(
+            world,
+            key,
+            Diagnostic::new(
+                code::NAV_CLASS_UNKNOWN,
+                format!("the `NavBlocker` `classes` entry `{name}` is not a nav class, so it applies to nothing"),
+            )
+            .with_path(format!("/components/NavBlocker/classes/{index}"))
             .with_help(format!("use one of: {names}; `ludion explain L4147`")),
         );
     }
@@ -1019,6 +1044,8 @@ pub struct NavPath {
     pub expanded: u32,
     /// Waypoint indices where a `NavLink` traversal starts: waypoint `i` is the link start, `i + 1` its end.
     pub links: Vec<u32>,
+    /// Waypoint indices whose next leg enters an `interact` `NavBlocker` region: a routed walker stops there.
+    pub blockers: Vec<u32>,
 }
 
 impl NavPath {
@@ -1029,6 +1056,7 @@ impl NavPath {
             waypoints: Vec::new(),
             expanded,
             links: Vec::new(),
+            blockers: Vec::new(),
         }
     }
 }
@@ -1152,7 +1180,8 @@ fn plan(grid: &NavGrid, table: &LinkTable, req: &PathRequest, project_start: boo
     if found.status == PathStatus::Unreachable {
         return NavPath::unreachable(found.expanded);
     }
-    let (mut waypoints, marks) = string_pull_linked(grid, &found);
+    let pulled = string_pull_marked(grid, &found);
+    let mut waypoints = pulled.points;
     if let Some(first) = waypoints.first_mut() {
         *first = if project_start {
             project(grid, req.from, start)
@@ -1170,7 +1199,8 @@ fn plan(grid: &NavGrid, table: &LinkTable, req: &PathRequest, project_start: boo
         cost: found.cost,
         waypoints,
         expanded: found.expanded,
-        links: marks.into_iter().map(|(i, _)| i).collect(),
+        links: pulled.links.into_iter().map(|(i, _)| i).collect(),
+        blockers: pulled.stops.into_iter().map(|(i, _)| i).collect(),
     }
 }
 
@@ -1373,18 +1403,25 @@ enum RouteWrite {
 
 /// Whether the stored leg (the previous waypoint to the one being walked) is still walkable. It was at
 /// plan time, so only a grid change can break it; the agent's own drift off the line never does.
+///
+/// With blockers on the grid every remaining leg is tested, since a blocker can close a leg anywhere ahead.
+/// A leg that starts at a link or blocker waypoint is the traversal or the wait, not a line to walk.
 fn leg_walkable(grid: &NavGrid, route: &NavRoute) -> bool {
     let index = route.index as usize;
-    // A leg that starts at a link start is the traversal, not a line to walk.
-    if index > 0 && route.links.contains(&(index as u32 - 1)) {
-        return true;
-    }
+    let last = route.waypoints.len().saturating_sub(1);
+    let through = if grid.has_overlay() { last } else { index };
     // The route was pulled between node centres; the goal end sits off-centre, so test the centre.
     let centre = |p: [f32; 3]| grid.node_at(p).map_or(p, |n| grid.node_pos(n));
-    match (index.checked_sub(1), route.waypoints.get(index)) {
-        (Some(prev), Some(&wp)) => walkable_line(grid, centre(route.waypoints[prev]), centre(wp)),
-        _ => true,
-    }
+    (index.max(1)..=through.min(last)).all(|to| {
+        let prev = to - 1;
+        route.links.contains(&(prev as u32))
+            || route.blockers.contains(&(prev as u32))
+            || walkable_line(
+                grid,
+                centre(route.waypoints[prev]),
+                centre(route.waypoints[to]),
+            )
+    })
 }
 
 /// Whether the first link traversal still ahead on `route` no longer resolves to an enabled link.
@@ -1413,11 +1450,17 @@ fn plan_route(
         None => true,
         // A walker stopped at a link waits for `nav_link_done`; nothing replans it.
         Some(route) if route.status == NavRouteStatus::AtLink => false,
+        // A walker stopped at a blocker waits for the game to open it; only a blocked region (or a goal
+        // that moved on) plans again.
+        Some(route) if route.status == NavRouteStatus::AtBlocker => {
+            cell(goal.at) != cell(route.goal) || pending_blocker_blocked(grid, route)
+        }
         Some(route) => {
             route.status == NavRouteStatus::Planning
                 || cell(goal.at) != cell(route.goal)
                 || (route.status == NavRouteStatus::Following
-                    && pending_link_missing(grid, table, route))
+                    && (pending_link_missing(grid, table, route)
+                        || pending_blocker_blocked(grid, route)))
                 || (goal.replan == NavReplan::OnChange
                     && route.status == NavRouteStatus::Following
                     && !route.partial
@@ -1453,13 +1496,14 @@ fn plan_route(
         *budget -= 1;
         let path = plan(grid, table, &PathRequest::new(steer.pos, goal.at), false);
         if path.status != PathStatus::Unreachable {
-            // A route that opens on a link start must stop there, not walk past it.
-            route.index = if path.links.first() == Some(&0) {
+            // A route that opens on a link start or a blocker must stop there, not walk past it.
+            route.index = if path.links.first() == Some(&0) || path.blockers.first() == Some(&0) {
                 0
             } else {
                 1.min(path.waypoints.len().saturating_sub(1)) as u32
             };
             route.links = path.links;
+            route.blockers = path.blockers;
             route.status = NavRouteStatus::Following;
             route.partial = path.status == PathStatus::Partial;
             route.cost = path.cost;
@@ -1580,6 +1624,7 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
                 grid: n.grids.get(i),
                 cache: &n.caches[i],
                 table: &n.tables[i],
+                blockers: &n.blocker_tables[i],
             })
             .collect()
     });
@@ -1639,6 +1684,7 @@ struct ClassView<'a> {
     grid: Option<&'a NavGrid>,
     cache: &'a FlowCache,
     table: &'a LinkTable,
+    blockers: &'a BlockerTable,
 }
 
 /// Tells a routed agent its game-played link traversal is finished: the route continues from the link's
@@ -1679,8 +1725,37 @@ pub fn nav_link_done(world: &mut World, agent: EntityId) -> Result<(), Diagnosti
     Ok(())
 }
 
-/// A route's `(index, status, link)` after this tick's steering.
-type Advance = (u32, NavRouteStatus, Option<EntityId>);
+/// A route's `index`, `status`, `link` and `blocker` after this tick's steering.
+#[derive(Clone, Copy, PartialEq)]
+struct Advance {
+    index: u32,
+    status: NavRouteStatus,
+    link: Option<EntityId>,
+    blocker: Option<EntityId>,
+}
+
+/// The lowest `interact` blocker whose region the leg from waypoint `at` enters, `None` once the waypoint after
+/// `at` is no longer inside one.
+fn blocker_at(
+    grid: &NavGrid,
+    table: &BlockerTable,
+    route: &NavRoute,
+    at: usize,
+) -> Option<EntityId> {
+    let node = grid.node_at(*route.waypoints.get(at + 1)?)?;
+    table.entries.get(grid.stop_tag(node)? as usize).copied()
+}
+
+/// Whether the first blocker stop still ahead on `route` now enters a blocked region.
+fn pending_blocker_blocked(grid: &NavGrid, route: &NavRoute) -> bool {
+    route
+        .blockers
+        .iter()
+        .find(|&&i| i >= route.index)
+        .and_then(|&i| route.waypoints.get(i as usize + 1))
+        .and_then(|&p| grid.node_at(p))
+        .is_some_and(|n| grid.mark(n) == NodeMark::Block)
+}
 
 /// Applies the plan phase's change and the steering advance to the stored [`NavRoute`].
 fn write_route(world: &mut World, steer: &mut Steer, advance: Option<Advance>) {
@@ -1692,10 +1767,12 @@ fn write_route(world: &mut World, steer: &mut Steer, advance: Option<Advance>) {
         return;
     };
     let mut store = steer.route_write == RouteWrite::Store;
-    if let Some((index, status, link)) = advance
-        && (route.index, route.status, route.link) != (index, status, link)
+    if let Some(next) = advance
+        && (route.index, route.status, route.link, route.blocker)
+            != (next.index, next.status, next.link, next.blocker)
     {
-        (route.index, route.status, route.link) = (index, status, link);
+        (route.index, route.status, route.link, route.blocker) =
+            (next.index, next.status, next.link, next.blocker);
         store = true;
     }
     if !store {
@@ -1730,18 +1807,18 @@ fn steer_one(
         let target = steer.goal.map_or(agent.target, |g| g.at);
         seek_flying(agent, target, *pos)
     } else if steer.goal.is_some() {
-        let (velocity, adv) = seek_routed(steer, grid, table);
+        let (velocity, adv) = seek_routed(steer, grid, table, view.map(|v| v.blockers));
         advance = adv;
         velocity
     } else {
         seek_walking(steer, grid, cache)
     };
-    // An agent traversing a link stands exactly still.
-    let at_link = steer
-        .route
-        .as_ref()
-        .is_some_and(|r| r.status == NavRouteStatus::AtLink)
-        || advance.is_some_and(|(_, status, _)| status == NavRouteStatus::AtLink);
+    // An agent traversing a link, or waiting at a blocker, stands exactly still.
+    let waiting = |status| matches!(status, NavRouteStatus::AtLink | NavRouteStatus::AtBlocker);
+    let at_link = match advance {
+        Some(a) => waiting(a.status),
+        None => steer.route.as_ref().is_some_and(|r| waiting(r.status)),
+    };
     if agent.neighbor_layers != 0 && agent.separation_neighbors > 0 && !at_link {
         let filter = Filter::new(agent.neighbor_layers).excluding(Handle::entity(*entity));
         index.k_nearest(
@@ -1773,13 +1850,34 @@ fn seek_routed(
     steer: &Steer,
     grid: Option<&NavGrid>,
     table: Option<&LinkTable>,
+    blockers: Option<&BlockerTable>,
 ) -> ([f32; 3], Option<Advance>) {
     let (Some(grid), Some(route)) = (grid, &steer.route) else {
         return ([0.0; 3], None);
     };
     let waypoints = &route.waypoints;
-    if route.status != NavRouteStatus::Following || waypoints.is_empty() {
+    if !matches!(
+        route.status,
+        NavRouteStatus::Following | NavRouteStatus::AtBlocker
+    ) || waypoints.is_empty()
+    {
         return ([0.0; 3], None);
+    }
+    let at_blocker = |at: usize| {
+        let entity = blocker_at(grid, blockers?, route, at)?;
+        Some(Advance {
+            index: at as u32,
+            status: NavRouteStatus::AtBlocker,
+            link: None,
+            blocker: Some(entity),
+        })
+    };
+    // A walker stopped at a blocker stays while its region is still an `interact` blocker; otherwise it
+    // continues as a following route from the same waypoint.
+    if route.status == NavRouteStatus::AtBlocker
+        && let Some(stay) = at_blocker((route.index as usize).min(waypoints.len() - 1))
+    {
+        return ([0.0; 3], Some(stay));
     }
     let (agent, pos) = (&steer.agent, steer.pos);
     let last = waypoints.len() - 1;
@@ -1790,7 +1888,15 @@ fn seek_routed(
     };
     let mut at = (route.index as usize).min(last);
     if at == last && dist(last) <= agent.arrive_radius {
-        return ([0.0; 3], Some((at as u32, NavRouteStatus::Arrived, None)));
+        return (
+            [0.0; 3],
+            Some(Advance {
+                index: at as u32,
+                status: NavRouteStatus::Arrived,
+                link: None,
+                blocker: None,
+            }),
+        );
     }
     let pass = agent.arrive_radius.max(0.5 * grid.params().cell_size);
     while at < last && dist(at) <= pass {
@@ -1800,13 +1906,28 @@ fn seek_routed(
         {
             return (
                 [0.0; 3],
-                Some((at as u32, NavRouteStatus::AtLink, Some(link))),
+                Some(Advance {
+                    index: at as u32,
+                    status: NavRouteStatus::AtLink,
+                    link: Some(link),
+                    blocker: None,
+                }),
             );
+        }
+        if route.blockers.contains(&(at as u32))
+            && let Some(stop) = at_blocker(at)
+        {
+            return ([0.0; 3], Some(stop));
         }
         at += 1;
     }
     let d = dist(at);
-    let advance = Some((at as u32, NavRouteStatus::Following, None));
+    let advance = Some(Advance {
+        index: at as u32,
+        status: NavRouteStatus::Following,
+        link: None,
+        blocker: None,
+    });
     if d <= 0.0 {
         return ([0.0; 3], advance);
     }

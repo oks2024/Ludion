@@ -109,6 +109,26 @@ mod tests {
     }
 
     #[test]
+    fn a_camera_validates_its_layers_and_lights() {
+        use crate::Camera;
+        let found =
+            Camera::validate_semantics(&json!({ "layers": ["a", "a"], "lights": ["b", ""] }));
+        let paths: Vec<_> = found.iter().map(|d| d.path.clone().unwrap()).collect();
+        assert_eq!(paths, ["/layers/1", "/lights/1"]);
+        let camera: Camera = serde_json::from_value(json!({ "lights": ["portrait"] })).unwrap();
+        assert_eq!(
+            camera.lights.as_deref(),
+            Some(&["portrait".to_string()][..])
+        );
+        assert_eq!(
+            serde_json::to_value(Camera::default())
+                .unwrap()
+                .get("lights"),
+            None
+        );
+    }
+
+    #[test]
     fn the_diagnostic_is_l2375() {
         let d = RenderLayers::validate_semantics(&json!({ "layers": [] }));
         assert_eq!(d[0].code, code::RENDER_LAYERS_INVALID);

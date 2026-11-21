@@ -984,3 +984,74 @@ fn ui_hit_misses_a_child_cut_by_a_rotated_clip() {
         "inside the unturned box, outside the turned one"
     );
 }
+
+fn filled_wheel(group: EntityId) -> ludion_engine::components::UiRadial {
+    ludion_engine::components::UiRadial {
+        anchor: Anchor::Center,
+        group: Some(group),
+        items: vec![ludion_engine::components::UiRadialItem::default(); 4],
+        fill: Some([0.2, 0.4, 0.6, 0.8]),
+        ..Default::default()
+    }
+}
+
+fn wedges(scene: &RenderScene) -> Vec<&UiInstance> {
+    scene
+        .ui
+        .iter()
+        .filter(|i| matches!(i, UiInstance::Shape { .. }))
+        .collect()
+}
+
+#[test]
+fn a_filled_wheel_in_a_rotated_group_turns_every_wedge_about_the_wheel_centre() {
+    let mut engine = engine();
+    let g = group(
+        &mut engine,
+        UiGroup {
+            rotation: 30.0,
+            ..top_right_group()
+        },
+    );
+    spawn(&mut engine, filled_wheel(g));
+    let scene = extract(&mut engine);
+    let b = resolve_ui_rect(
+        Anchor::TopRight,
+        [-24.0, 24.0],
+        [360.0, 360.0],
+        engine.render_size(),
+    );
+    let centre = [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5];
+    let drawn = wedges(&scene);
+    assert_eq!(drawn.len(), 4);
+    for wedge in drawn {
+        let UiInstance::Shape {
+            origin_px,
+            rotation,
+            ..
+        } = wedge
+        else {
+            unreachable!()
+        };
+        assert!((rotation.radians - 30.0f32.to_radians()).abs() < 1e-5);
+        assert_eq!(rotation.pivot_px, *origin_px);
+        assert!((origin_px[0] - centre[0]).abs() < 1e-2 && (origin_px[1] - centre[1]).abs() < 1e-2);
+    }
+}
+
+#[test]
+fn a_group_opacity_tween_multiplies_the_wedge_fill_alpha() {
+    let mut engine = engine();
+    let g = group(&mut engine, top_right_group());
+    add(&mut engine, g, constant(UiTweenField::Opacity, &[0.5]));
+    spawn(&mut engine, filled_wheel(g));
+    let scene = extract(&mut engine);
+    let drawn = wedges(&scene);
+    assert_eq!(drawn.len(), 4);
+    for wedge in drawn {
+        let UiInstance::Shape { fill, .. } = wedge else {
+            unreachable!()
+        };
+        assert_eq!(fill.map(|f| f[3]), Some(0.4));
+    }
+}

@@ -42,9 +42,30 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
     and portrait rigs.
 12. **Statics.** Dropping a static mesh recomputes the static prefix (`StaticRange::of`); only then. A view whose kept
     static set differs from the main frame's (`statics.key`) draws its statics as dynamics, so it never swaps the
-    renderer's one persistent static slot. GI voxelization and probe captures ignore layers.
+    renderer's one persistent static slot. GI voxelization ignores layers. Probes capture the main frame's world, and
+    views reuse it: `split_layers` freezes the filtered main scene as the `probe_world` when probes exist, and
+    `view_scene` hands every view that same world, so a view resolves to the main frame's store key (a cache hit)
+    instead of recapturing every probe each frame.
 13. **API break:** `Camera` loses `Copy` (`layers: Option<Vec<String>>` is heap data). Absent `layers` is omitted from the
     document and the hash.
+
+14. **The declaration is validation only.** `Scene.render_layers: Vec<SceneRenderLayer { name }>`. Parse errors are `L2375` at
+    `/render_layers/<i>/name`: an empty name, the reserved `default`, a duplicate, or more than 31 entries. Extract still
+    interns names per frame (D8): the world does not carry the block (restore is text-free), so a runtime-inserted
+    undeclared name still renders. `L2376` is static, as `L2372` is. A scene that authors no layer name needs no block.
+15. **The block lives in a scene file only.** It is not overridable, not allowed in a prefab, and `generate-map` writes none.
+    Canonical key order: `format`, `name`, `generated_from`, `seed`, `physics`, `render_layers` (omitted when empty),
+    `preload`, `entities`. `Engine::save_live` carries the authored block.
+16. **Light masks.** A light's mask is its entity's `RenderLayers`, else its nearest ancestor's, else `default`. It lights an
+    image when it meets that image's light mask. `Camera.lights` defaults to the camera's own `layers` mask, and so does
+    `RenderView.lights`. A light removed from an image casts no shadow there. `editor_view` gives every layer.
+17. **`RenderView.sun: bool = true`.** `false` drops the sun from the view; it needs no layer. There is no main-camera sun
+    switch.
+18. **GI follows the main frame.** The GI bake and inject are keyed on the light list and the sun, so a view whose `lights`
+    or `sun` differ from the main frame's draws without GI and never rebakes the main volume. Probes keep the main frame's
+    capture (D12): a lit view near a probe reflects the main frame's lights.
+19. **The main frame filters by `Camera.lights` too,** so a portrait key light on `portrait` stays out of a main camera on
+    `[default]`.
 
 ## Waves
 
@@ -52,10 +73,10 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   `render-view-radar`.
 - **W2a** (shipped): `RenderLayers` with `Parent` inheritance, `Camera.layers`, `RenderView.layers`, layer-filtered
   meshes, sprites, markers, shadows, decals, particles and text, `L2375`, the gallery scene `render-view-layers`.
-- **W2b:** the scene-level `render_layers:` declaration (declare-once, like `physics.layers`) and `L2376` for an
-  undeclared name from check-scene and load.
-- **W2c:** `RenderLayers` on `PointLight`/`SpotLight`, `Camera.lights`, `RenderView.lights` and `sun`, and the portrait
-  gallery.
+- **W2b** (shipped): the scene-level `render_layers:` declaration (declare-once, like `physics.layers`) and `L2376` for an
+  undeclared name from check-scene and `scene.check`.
+- **W2c** (shipped): lights join layers through `RenderLayers`, `Camera.lights`, `RenderView.lights` and `sun`, and the
+  portrait gallery.
 - **W3:** `background`, `shading: unlit`, `fog`, `PostProfile`/`post`, and `L2125`.
 - **W4:** `ludion render --view`/`--views-sheet`, `render.view {view}`, `render.bounds {camera}`, the `golden(view=)`
   test hook, `dump-graph` sub-graphs, a profile `views` section with a budget file, and presenter interpolation of

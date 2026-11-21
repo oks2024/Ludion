@@ -15,15 +15,17 @@ use serde_json::Value;
 
 use crate::envelope;
 use crate::physics;
+use crate::render_layers;
 use crate::yaml::{self, Node, NodeValue};
 use crate::{FORMAT_VERSION, Scene, SceneEntity};
 
-const SCENE_KEYS: [&str; 7] = [
+const SCENE_KEYS: [&str; 8] = [
     "format",
     "name",
     "generated_from",
     "seed",
     "physics",
+    "render_layers",
     "preload",
     "entities",
 ];
@@ -99,6 +101,11 @@ pub(crate) fn parse(source: &str) -> Result<Scene, Vec<Diagnostic>> {
             }
             "physics" => {
                 scene.physics = physics::parse_physics(&entry.node, &mut diagnostics);
+            }
+            "render_layers" => {
+                if let Some(layers) = render_layers::parse_render_layers(&entry.node, &mut diagnostics) {
+                    scene.render_layers = layers;
+                }
             }
             "preload" => match &entry.node.value {
                 NodeValue::Sequence(items) => {

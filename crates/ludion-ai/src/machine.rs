@@ -63,9 +63,10 @@ pub trait Machine:
     /// Per-agent state the callbacks share, stored as a component on the agent. `()` stores
     /// nothing. Must be registered by the game when it is not `()`.
     type Blackboard: Component + Default;
-    /// What other systems and agents can send an agent. Keep it free of entity references: a
-    /// reference inside the inbox list is refused at registration (`L1392`); carry a reference in
-    /// a single blackboard field instead.
+    /// What other systems and agents can send an agent. A variant may carry an entity reference
+    /// written `Option<EntityId>` with `#[schemars(with = "Option<EntityRefSchema>")]`: a scene save,
+    /// a carry and a snapshot remap it, and a target gone by then reads `None`. A reference that is
+    /// not an `Option` is refused at registration (`L1513`).
     type Event: Clone + Debug + Serialize + DeserializeOwned + JsonSchema + Send + Sync + 'static;
 
     /// The component registers as `"{NAME}Mind"`.
@@ -97,6 +98,12 @@ pub trait Machine:
     /// Runs for each inbox event, for each active level.
     fn on_event(_cx: &mut Cx<'_, Self>, _s: Self, _e: &Self::Event) -> Step<Self> {
         Step::Stay
+    }
+    /// The event a group's remaining members receive when `member` leaves a group that carries a
+    /// [`GroupRoster`](crate::GroupRoster); `None` sends nothing. `member` is `None` when the
+    /// member was despawned across a save, carry or restore before the departure was seen.
+    fn member_left(_member: Option<EntityId>) -> Option<Self::Event> {
+        None
     }
 }
 

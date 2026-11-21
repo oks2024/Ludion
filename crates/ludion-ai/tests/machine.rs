@@ -1,8 +1,8 @@
 //! The dispatch contract of `ai_tick`, on a bare `World`.
 
 use ludion_ai::{
-    AiFaults, Cx, Group, GroupMember, Machine, Mind, Step, active_path, ai_tick, members,
-    register_machine, send,
+    AiFaults, Cx, Group, GroupMember, GroupRoster, Machine, Mind, Step, active_path, ai_tick,
+    members, register_machine, send,
 };
 use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
@@ -628,5 +628,200 @@ fn an_event_holding_a_marked_entity_ref_is_refused() {
             None
         }
     }
-    assert_eq!(refused::<Watcher>().as_str(), "L1392");
+    assert_eq!(refused::<Watcher>(), code::AI_EVENT_REF_NOT_NULLABLE);
+    assert_eq!(refused::<Watcher>().as_str(), "L1513");
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+enum Pe {
+    Saw {
+        #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+        body: Option<EntityId>,
+    },
+    Left(#[schemars(with = "Option<ludion_ecs::EntityRefSchema>")] Option<EntityId>),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+struct Heard {
+    events: Vec<(u64, String)>,
+}
+
+macro_rules! pack_machine {
+    ($name:ident) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+        enum $name {
+            Root,
+        }
+        impl Machine for $name {
+            type Blackboard = Heard;
+            type Event = Pe;
+            const NAME: &'static str = stringify!($name);
+            const ROOT: Self = $name::Root;
+            const ALL: &'static [Self] = &[$name::Root];
+            fn parent(_: Self) -> Option<Self> {
+                None
+            }
+            fn on_event(cx: &mut Cx<'_, Self>, _: Self, e: &Pe) -> Step<Self> {
+                let now = cx.ctx.game_time.ticks();
+                cx.bb.events.push((now, format!("{e:?}")));
+                Step::Stay
+            }
+            fn member_left(member: Option<EntityId>) -> Option<Pe> {
+                Some(Pe::Left(member))
+            }
+        }
+    };
+}
+pack_machine!(Pk);
+pack_machine!(Pq);
+
+/// A group of three `Pk` members (roles 0, 1, 2), with `roster` when asked, after the first tick.
+fn pack(roster: bool) -> (World, EntityId, [EntityId; 3]) {
+    let mut world = World::new();
+    let squad = world.spawn();
+    world.insert(squad, Group::default()).unwrap();
+    if roster {
+        world.insert(squad, GroupRoster::default()).unwrap();
+    }
+    let mut agents = [squad; 3];
+    for (role, slot) in agents.iter_mut().enumerate() {
+        let e = spawn(&mut world, Mind::<Pk>::default());
+        let role = u8::try_from(role).unwrap();
+        world
+            .insert(
+                e,
+                GroupMember {
+                    group: Some(squad),
+                    role,
+                },
+            )
+            .unwrap();
+        *slot = e;
+    }
+    ai_tick::<Pk>(&mut world, &ctx(1));
+    (world, squad, agents)
+}
+
+fn heard(world: &World, e: EntityId) -> Vec<(u64, String)> {
+    world.component::<Heard>(e).unwrap().events.clone()
+}
+
+#[test]
+fn an_option_ref_event_registers_and_lists_its_inbox_refs_as_a_collection() {
+    let mut registry = Registry::new();
+    register_machine::<Pk>(&mut registry).unwrap();
+    let refs = registry.get("PkMind").unwrap().entity_refs();
+    assert!(!refs.is_empty());
+    assert!(
+        refs.iter()
+            .all(|f| f.suffix.starts_with("/inbox/") && f.collection && f.nullable),
+        "{refs:?}"
+    );
+    assert!(registry.get("GroupRoster").is_some());
+}
+
+#[test]
+fn a_marked_ref_in_a_blackboard_list_is_still_refused() {
+    #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+    struct Bag {
+        #[schemars(with = "Vec<ludion_ecs::EntityRefSchema>")]
+        targets: Vec<EntityId>,
+    }
+    assert_eq!(
+        Registry::new()
+            .register::<Bag>("Bag")
+            .unwrap_err()
+            .code
+            .as_str(),
+        "L1392"
+    );
+}
+
+#[test]
+fn a_despawned_member_reaches_each_remaining_member_the_same_tick_in_role_order() {
+    let (mut world, squad, [a, b, c]) = pack(true);
+    world.despawn(b).unwrap();
+    ai_tick::<Pk>(&mut world, &ctx(2));
+    let left = format!("{:?}", Pe::Left(Some(b)));
+    assert_eq!(heard(&world, a), [(2, left.clone())]);
+    assert_eq!(heard(&world, c), [(2, left)]);
+    let roster = world.component::<GroupRoster>(squad).unwrap();
+    assert_eq!(
+        (roster.members.clone(), roster.left.clone(), roster.seen),
+        (vec![Some(a), Some(c)], vec![Some(b)], 2)
+    );
+}
+
+#[test]
+fn retargeting_a_member_delivers_too() {
+    let (mut world, _, [a, b, c]) = pack(true);
+    world.component_mut::<GroupMember>(c).unwrap().group = None;
+    ai_tick::<Pk>(&mut world, &ctx(2));
+    let left = format!("{:?}", Pe::Left(Some(c)));
+    assert_eq!(heard(&world, a), [(2, left.clone())]);
+    assert_eq!(heard(&world, b), [(2, left)]);
+    assert!(world.component::<Heard>(c).unwrap().events.is_empty());
+}
+
+#[test]
+fn a_group_without_a_roster_delivers_nothing() {
+    let (mut world, _, [a, b, _]) = pack(false);
+    world.despawn(b).unwrap();
+    ai_tick::<Pk>(&mut world, &ctx(2));
+    assert!(heard(&world, a).is_empty());
+}
+
+#[test]
+fn two_machines_on_one_group_both_deliver_and_the_roster_refreshes_once() {
+    let (mut world, squad, [a, b, _]) = pack(true);
+    let p = spawn(&mut world, Mind::<Pq>::default());
+    world
+        .insert(
+            p,
+            GroupMember {
+                group: Some(squad),
+                role: 3,
+            },
+        )
+        .unwrap();
+    ai_tick::<Pk>(&mut world, &ctx(2)); // p joins: a join is not reported
+    ai_tick::<Pq>(&mut world, &ctx(2));
+    assert!(heard(&world, a).is_empty());
+    world.despawn(b).unwrap();
+    ai_tick::<Pk>(&mut world, &ctx(3));
+    let roster = world.component::<GroupRoster>(squad).unwrap().clone();
+    assert_eq!((roster.left.clone(), roster.seen), (vec![Some(b)], 3));
+    ai_tick::<Pq>(&mut world, &ctx(3));
+    assert_eq!(
+        world.component::<GroupRoster>(squad).unwrap(),
+        &roster,
+        "the second machine reuses the refresh"
+    );
+    let left = format!("{:?}", Pe::Left(Some(b)));
+    assert_eq!(heard(&world, a), [(3, left.clone())]);
+    assert_eq!(heard(&world, p), [(3, left)]);
+}
+
+#[test]
+fn a_held_tick_neither_refreshes_nor_delivers() {
+    let (mut world, squad, [a, b, _]) = pack(true);
+    world.despawn(b).unwrap();
+    let mut clock = GameClock::default();
+    clock.hold();
+    let advanced = clock.advance();
+    ai_tick::<Pk>(&mut world, &ctx(2).with_clock(&clock, advanced));
+    assert!(heard(&world, a).is_empty());
+    assert_eq!(world.component::<GroupRoster>(squad).unwrap().seen, 1);
+    ai_tick::<Pk>(&mut world, &ctx(3));
+    assert_eq!(heard(&world, a).len(), 1);
+}
+
+#[test]
+fn a_none_roster_entry_delivers_left_none() {
+    let (mut world, squad, [a, _, c]) = pack(true);
+    world.component_mut::<GroupRoster>(squad).unwrap().members[1] = None;
+    ai_tick::<Pk>(&mut world, &ctx(2));
+    let none = format!("{:?}", Pe::Left(None));
+    assert_eq!(heard(&world, a), [(2, none.clone())]);
+    assert_eq!(heard(&world, c), [(2, none)]);
 }

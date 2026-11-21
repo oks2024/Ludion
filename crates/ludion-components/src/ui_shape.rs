@@ -125,6 +125,42 @@ pub struct UiStroke {
     pub color: [f32; 4],
 }
 
+/// What is wrong with a stroke's JSON, as `(pointer, message)` pairs under `base` (`/stroke`), and whether
+/// every number was finite: a non-finite `width` or `color` channel, and a `width` not above 0 (only
+/// judged when all is finite). `owner` names the component in the messages. Shared by `UiShape` and
+/// `UiRadial`, each filing the problems under its own code.
+pub(crate) fn stroke_problems(stroke: &Value, owner: &str) -> (bool, Vec<(String, String)>) {
+    let mut problems = Vec::new();
+    let bad = |n: &Value| n.as_f64().is_some_and(|n| !engine_number(n).is_finite());
+    for key in ["width", "color"] {
+        let Some(v) = stroke.get(key) else { continue };
+        let at = match v.as_array() {
+            Some(array) => array
+                .iter()
+                .position(bad)
+                .map(|i| format!("/stroke/{key}/{i}")),
+            None => bad(v).then(|| format!("/stroke/{key}")),
+        };
+        if let Some(at) = at {
+            problems.push((at, format!("the `{owner}` stroke {key} must be finite")));
+        }
+    }
+    let finite = problems.is_empty();
+    if finite
+        && let Some(width) = stroke
+            .get("width")
+            .and_then(Value::as_f64)
+            .map(engine_number)
+        && width <= 0.0
+    {
+        problems.push((
+            "/stroke/width".into(),
+            format!("the stroke `width` ({width}) must be above 0"),
+        ));
+    }
+    (finite, problems)
+}
+
 /// An analytic screen-space shape: one SDF-drawn primitive with a fill and a stroke. Screen space, like
 /// [`UiRect`](crate::UiRect): the 1080-unit canvas, `anchor` + `offset`, `group`, `UiTween` and
 /// `UiWorldAnchor`.
@@ -234,18 +270,6 @@ impl SemanticValidate for UiShape {
                 check_finite(&format!("/{key}"), key, v, &mut reject);
             }
         }
-        if let Some(stroke) = value.get("stroke") {
-            for key in ["width", "color"] {
-                if let Some(v) = stroke.get(key) {
-                    check_finite(
-                        &format!("/stroke/{key}"),
-                        &format!("stroke {key}"),
-                        v,
-                        &mut reject,
-                    );
-                }
-            }
-        }
         let shape = value.get("shape");
         if let Some(shape) = shape {
             for key in [
@@ -262,6 +286,13 @@ impl SemanticValidate for UiShape {
                 if let Some(v) = shape.get(key) {
                     check_finite(&format!("/shape/{key}"), key, v, &mut reject);
                 }
+            }
+        }
+        if let Some(stroke) = value.get("stroke") {
+            let (stroke_finite, problems) = stroke_problems(stroke, "UiShape");
+            finite &= stroke_finite;
+            for (pointer, what) in problems {
+                reject(pointer, what);
             }
         }
         if !finite {
@@ -335,18 +366,6 @@ impl SemanticValidate for UiShape {
             }
         }
         let stroke = value.get("stroke").filter(|s| !s.is_null());
-        if let Some(stroke) = stroke
-            && let Some(width) = stroke
-                .get("width")
-                .and_then(Value::as_f64)
-                .map(engine_number)
-            && width <= 0.0
-        {
-            reject(
-                "/stroke/width".into(),
-                format!("the stroke `width` ({width}) must be above 0"),
-            );
-        }
         if matches!(kind, "line" | "arc") {
             if value.get("fill").is_some_and(|f| !f.is_null()) {
                 reject(
