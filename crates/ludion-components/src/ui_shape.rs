@@ -95,12 +95,54 @@ pub enum UiShapeType {
         #[serde(default, skip_serializing_if = "is_zero")]
         corner_radius: f32,
     },
-    /// A simple polygon (concave allowed, either winding), filled with `fill`; takes no `stroke`.
-    /// A self-intersecting or degenerate polygon draws nothing and warns once (`L2305`).
+    /// A simple polygon (concave allowed, either winding), filled with `fill` and/or outlined with
+    /// `stroke` (drawn over the fill). A self-intersecting or degenerate polygon draws nothing and warns
+    /// once (`L2305`).
     Polygon {
         /// 3 to 256 points relative to the origin, +Y down. Fewer than 3 draws nothing (`L2305`).
         points: Vec<[f32; 2]>,
+        /// How the stroke turns at a corner (default miter).
+        #[serde(default, skip_serializing_if = "UiLineJoin::is_miter")]
+        join: UiLineJoin,
     },
+    /// An open or closed path drawn as its stroke only. Self-crossing is allowed.
+    Polyline {
+        /// 2 to 256 points relative to the origin, +Y down. Fewer than 2 distinct points draws nothing
+        /// (`L2305`).
+        points: Vec<[f32; 2]>,
+        /// Whether the last point joins back to the first (default `false`; a closed path has no caps).
+        #[serde(default, skip_serializing_if = "is_false")]
+        closed: bool,
+        /// How the stroke turns at a corner (default miter).
+        #[serde(default, skip_serializing_if = "UiLineJoin::is_miter")]
+        join: UiLineJoin,
+        /// How an open path's ends are drawn (default butt).
+        #[serde(default, skip_serializing_if = "UiLineCap::is_butt")]
+        cap: UiLineCap,
+    },
+}
+
+/// How a stroke turns at a corner of a polygon or polyline.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiLineJoin {
+    /// A sharp corner; a corner sharper than the miter limit (4 half-widths) falls back to a bevel.
+    #[default]
+    Miter,
+    /// A circular arc about the corner point.
+    Round,
+    /// A flat cut across the corner.
+    Bevel,
+}
+
+impl UiLineJoin {
+    fn is_miter(&self) -> bool {
+        *self == UiLineJoin::Miter
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Default for UiShapeType {
@@ -239,8 +281,8 @@ impl SemanticValidate for UiShape {
     /// Rejects (`L1621`) a non-finite number; a `radius` not above 0; a ring `thickness` outside
     /// `(0, radius]`; a wedge `inner_radius` outside `[0, radius)`; a `sweep_deg` outside `[0, 360]`; a
     /// negative `size` or `corner_radius`; a stroke `width` not above 0; and a `fill` on, or no `stroke`
-    /// for, a `line` or `arc`. A `polygon` with a non-finite point, over 256 points or a `stroke` is
-    /// rejected too (fewer than 3 points is not an error). A non-finite `rotation` is `L1620`.
+    /// for, a `line`, `arc` or `polyline`. A `polygon` or `polyline` with a non-finite point or over 256
+    /// points is rejected too (too few points is not an error). A non-finite `rotation` is `L1620`.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         crate::ui::validate_rotation(value, &mut out);
@@ -290,7 +332,11 @@ impl SemanticValidate for UiShape {
                 reject(
                     "/shape/points".into(),
                     format!(
-                        "a `polygon` takes at most {MAX_POLYGON_POINTS} points, got {}",
+                        "a `{}` takes at most {MAX_POLYGON_POINTS} points, got {}",
+                        shape
+                            .and_then(|s| s.get("type"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("polygon"),
                         points.len()
                     ),
                 );
@@ -404,13 +450,7 @@ impl SemanticValidate for UiShape {
             }
         }
         let stroke = value.get("stroke").filter(|s| !s.is_null());
-        if kind == "polygon" && stroke.is_some() {
-            reject(
-                "/stroke".into(),
-                "a `polygon` takes a fill only; remove `stroke`".into(),
-            );
-        }
-        if matches!(kind, "line" | "arc") {
+        if matches!(kind, "line" | "arc" | "polyline") {
             if value.get("fill").is_some_and(|f| !f.is_null()) {
                 reject(
                     "/fill".into(),
@@ -550,10 +590,51 @@ mod tests {
             "shape": { "type": "polygon", "points": [[0, 0], [4, 0], [0, 4]] },
             "stroke": { "width": 2, "color": [1, 1, 1, 1] }
         }));
-        assert_eq!(got, vec![l1621("/stroke")]);
+        assert!(got.is_empty(), "{got:?}");
         let got = codes_at(json!({
             "shape": { "type": "polygon", "points": [[0, 0], [4, 0]] },
             "fill": [1, 1, 1, 1]
+        }));
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn polylines_and_joined_polygons_round_trip_with_defaults_omitted() {
+        for shape in [
+            json!({ "type": "polyline", "points": [[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]] }),
+            json!({
+                "type": "polyline", "points": [[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]],
+                "closed": true, "join": "round", "cap": "round"
+            }),
+            json!({ "type": "polygon", "points": [[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]], "join": "bevel" }),
+        ] {
+            let kind: UiShapeType = serde_json::from_value(shape.clone()).unwrap();
+            assert_eq!(serde_json::to_value(kind).unwrap(), shape);
+        }
+    }
+
+    #[test]
+    fn a_polyline_is_stroke_only_with_finite_bounded_points() {
+        let l1621 = |at: &str| ("L1621".to_string(), at.to_string());
+        let stroke = json!({ "width": 2, "color": [1, 1, 1, 1] });
+        let points = json!([[0, 0], [4, 0], [0, 4]]);
+        let got = codes_at(json!({
+            "shape": { "type": "polyline", "points": points },
+            "fill": [1, 1, 1, 1], "stroke": stroke
+        }));
+        assert_eq!(got, vec![l1621("/fill")]);
+        let got = codes_at(json!({ "shape": { "type": "polyline", "points": points } }));
+        assert_eq!(got, vec![l1621("/stroke")]);
+        let got = codes_at(json!({
+            "shape": { "type": "polyline", "points": [[0, 0], [0, 1e300]] }, "stroke": stroke
+        }));
+        assert_eq!(got, vec![l1621("/shape/points/1/1")]);
+        let many: Vec<Value> = (0..257).map(|i| json!([i, 0])).collect();
+        let got =
+            codes_at(json!({ "shape": { "type": "polyline", "points": many }, "stroke": stroke }));
+        assert_eq!(got, vec![l1621("/shape/points")]);
+        let got = codes_at(json!({
+            "shape": { "type": "polyline", "points": [[0, 0]], "closed": true }, "stroke": stroke
         }));
         assert!(got.is_empty(), "{got:?}");
     }

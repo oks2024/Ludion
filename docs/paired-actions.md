@@ -86,16 +86,18 @@ if fit.fits { /* the action can start */ }
 
 `paired_fit(world, path, cast, max_warp)` reads the document at its content-root `path` (loaded on first
 use, kept until the next world build; `asset.reload` does not reach it) and changes nothing. It takes
-exactly two roles and a cast naming each once. Each cast entity must be alive, unparented, have a
+two to five roles (a motor looks through at most four partners) and a cast naming each once. Each cast entity must be alive, unparented, have a
 `Transform`, draw the role's assembly (`Mesh` `assembly:`) and have the role's uniform `scale`.
 
-- **The aligned pose.** The reference's offset is applied to the current poses, planar (feet height is
-  kept). A yaw is the heading of the entity's `-Z` axis, radians about `+Y`. `moves: <role>` puts that
-  role onto the other; `split` meets at the midpoint of the two feet, turning each half of the way.
+- **The aligned pose.** Each role's offset is applied in the reference's frame, planar (feet height is
+  kept). A yaw is the heading of the entity's `-Z` axis, radians about `+Y`. With `moves: <role>` (not the
+  reference) the frame is the reference's current pose: that role goes to its offset and every other role
+  holds. With `moves: <reference>` the frame is the mean pose the other roles imply, and only the reference
+  moves. `split` uses the mean of every role's implied pose, and every role moves.
 - **The warp** of a moving role is its planar distance and its absolute yaw change, checked against
   `Warp { distance, yaw_deg }`: `over_warp` names the first role (by name) that exceeds either.
 - **Fit.** A role with a `CharacterMotor` is tested standing at its target in the role's `posture`
-  (`character_fit_ignoring`, ignoring its partner: two capsules at a 0.5 m offset overlap). `blocked_by`
+  (`character_fit_ignoring`, ignoring every other participant: capsules at a 0.5 m offset overlap). `blocked_by`
   is the first role and the lowest-id collider in the way. A role with no motor is not tested.
 - `PairedFit { fits, blocked_by, over_warp, roles }`: `roles` holds every role's target `feet`, `yaw`,
   `distance` and `yaw_deg`, sorted by role name. `fits` is true when nothing blocks and the warp is
@@ -118,12 +120,15 @@ Engine::builder()
 - **Start.** `start_paired(world, path, cast, fade, ctx.game_instant)` after a `paired_fit` that fits.
   It refuses with the same codes, and with `L4371` for a cast entity that already ignores another
   collider or whose role `posture` is blocked (earlier postures are restored; nothing is mutated). It sets
-  each motor role's posture, stamps a `PairedAction` and an `IgnoreCollisions` on both, and crossfades
+  each motor role's posture, stamps a `PairedAction` on every participant and an `IgnoreCollisions` listing every other, and crossfades
   each clip role to its clip over `fade` seconds at speed 1, both `Animation.started` equal. An
   `align_only` role's `Animation` is left alone.
 - **Motion.** `paired_motion(world, entity, ctx)` returns `Some(PairedMotion { displacement, yaw, warping })`
   for a participant: a smoothstep warp over `align.ticks`, closed-loop toward the aligned pose
-  recomputed from both current `Transform`s, holding the relative pose afterwards. Feed it to the motor
+  recomputed from every present participant's current `Transform`, holding the relative pose afterwards. A role whose
+  clip carries a `$root` track (`docs/voxel-animation.md`) is driven by it whenever it is not warping: a role that
+  does not move from the first tick, a mover from the tick after its warp (travel inside the warp is dropped).
+  **Do not also apply `root_motion_delta` to a paired entity.** Feed it to the motor
   each tick: `move_character(world, e, step.displacement)`, `turn_character(world, e, step.yaw)`. A plain
   `Transform` entity applies the same two numbers itself (add `displacement`, set the heading). A
   role that does not move, a missing partner and a held frame give a zero step; off an action it is `None`.
@@ -133,12 +138,14 @@ Engine::builder()
 - **End.** The longest clip role's duration (`align.ticks` for a document of `align_only` roles) ends it:
   the remaining events and an implicit `end` fire, and every participant's `PairedAction` and
   `IgnoreCollisions` go on that tick. `end` is not an authorable event name.
-- **Abort.** `abort_paired(world, entity)` ends every participant now and returns the cast as
-  `(role, entity)`; crossfade each to the clip you want. `L4375` for an entity not in an action.
+- **Abort.** `abort_paired(world, entity, to, fade, game_time)` ends every participant now and returns the cast as
+  `(role, entity)`. `to` is a list of `(role, clip)`: those roles crossfade to the clip over `fade` seconds in the
+  same call (an empty list leaves the clips alone). An unknown or repeated role in `to` is `L4371` and nothing
+  is mutated. `L4375` for an entity not in an action.
 - **Lockstep.** A game write that changes a clip role's `clip`, `started` or `speed` aborts the whole
   action and warns `L4374` once per entity. End the action with `abort_paired` before writing.
 - **Ragdoll.** A participant whose `Animation` or assembly `Mesh` is gone (`switch_to_ragdoll`, a
-  despawn) ends only its own role; its partner plays on to `end` and stops ignoring it.
+  despawn) ends only its own role; the other roles play on to `end` and stop ignoring it. A despawned participant is pruned from the others' lists on the next tick.
 - **Chaining.** Starting an action with an entity already in one ends that entity's role in the old
   action; the old partner plays on to its own `end`.
 - **Witnesses.** `PairedAction { document, action, role, reference, started, fired }` is hashed state on
@@ -160,6 +167,26 @@ event release @ 0.9
 contact instigator/lower-arm-r -> target/head @ hold (t 0.5): gap 6.828 cells (0.8535 m), max 8
 ```
 
+## Looking at it
+
+`ludion render --paired <doc>.paired.yaml` draws the roles at their aligned pose, one cell per phase, and
+needs a GPU adapter. The phases are the document's events by default, `--strip N` (2 to 16) evenly over
+`[0, end]`, or one `--time T`; `end` is the longest clip role's duration. The camera is `iso` unless one
+`--views` value names another. Each cell is labelled `t <seconds> <events>`.
+
+```
+ludion render --paired examples/gallery/voxels/choke.paired.yaml --strip 6
+```
+
+It prints a `phase i: t X s [events]` line per phase, then the same contact lines `check-scene` does (and
+the `L1755` warnings). `--out` defaults to `<name>.paired-events.png`, `.paired-strip.png` or
+`.paired-t<seconds>.png`. A `--strip` outside 2 to 16, a `--time` that is negative or past `end`, or both
+flags together is `L1756`.
+
+The gallery scene `examples/gallery/paired-takedown.yaml` plays a takedown: two motor figures are fit,
+started and warped, the guard ragdolls on `quiet` (`LimitsFrom::Rest`) and gets up. Its game half is
+`takedown_builder` in `crates/ludion-testkit/tests/common/mod.rs`.
+
 ## Codes
 
 | Code | Raised for |
@@ -168,10 +195,12 @@ contact instigator/lower-arm-r -> target/head @ hold (t 0.5): gap 6.828 cells (0
 | `L1753` | fewer than 2 roles, an unknown `reference`/`moves` role, a missing, extra or reference offset, `ticks: 0`, a non-finite number, `scale` of 0 or less, a role with both or neither of `clip` and `align_only`, an empty name, events out of order or repeated, an event named `end`, a bad contact side, both sides on one role, an unknown `at`, a negative `max_gap` |
 | `L1754` | a role's assembly does not load, an unknown clip (nearest suggested), an event past a clip's duration, a contact part the assembly lacks |
 | `L1755` | warning: a contact's gap exceeds its `max_gap` |
+| `L1756` | `render --paired`: a `--strip` outside 2 to 16, a `--time` that is not finite, is negative or is past `end`, or both flags |
 | `L4370` | `paired_fit`: no `kind: paired` document loads at the path (the loader's diagnostics follow); an engine without a project |
 | `L4371` | `paired_fit`, `start_paired`: an unknown, repeated or missing cast role, or an entity that is dead, has no `Transform`, is parented, draws another assembly, or whose motor cannot be tested (unknown `posture`) |
 | `L4372` | `paired_fit`: a cast entity's scale is non-uniform or not the role's `scale` |
-| `L4373` | `paired_fit`: more than two roles |
+| `L1759` | `IgnoreCollisions` lists more than 4 entities (a motor looks through at most 4) |
+| `L4373` | `paired_fit`: more than five roles (a motor looks through at most four partners) |
 | `L4374` | warning: a game write to a playing role's `Animation` broke lockstep; the action was aborted |
 | `L4375` | `abort_paired`: the entity is not in a paired action |
 

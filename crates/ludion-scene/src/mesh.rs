@@ -2713,6 +2713,25 @@ indices:
         assert!(validate(&doc).is_empty());
     }
 
+    /// A `porosity` list round-trips between `metallic` and `roughness` positions, an absent one writes
+    /// no key, and a wrong length or out-of-range value is a validation error.
+    #[test]
+    fn porosity_list_round_trips_and_validates() {
+        let with = |list: &str| format!("{CUBE_TRI}porosity:\n{list}");
+        let doc = parse(&with("  - 0.0\n  - 0.5\n  - 1.0\n")).expect("porosity parses");
+        assert_eq!(doc.porosity, Some(vec![0.0, 0.5, 1.0]));
+        assert!(validate(&doc).is_empty());
+        let text = emit(&doc);
+        assert_eq!(parse(&text).unwrap().porosity, doc.porosity);
+        assert!(!emit(&parse(CUBE_TRI).unwrap()).contains("porosity"));
+
+        let short = parse(&with("  - 0.5\n")).expect("a short list still parses");
+        assert!(!validate(&short).is_empty(), "one value for three vertices");
+        let high =
+            parse(&with("  - 0.5\n  - 0.5\n  - 1.5\n")).expect("an out-of-range list parses");
+        assert!(!validate(&high).is_empty(), "1.5 is outside [0, 1]");
+    }
+
     const CUBE_TRI_WITH_ORIGIN: &str = "\
 format: 1
 kind: mesh

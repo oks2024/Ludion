@@ -1,0 +1,239 @@
+format: 1
+kind: assembly
+name: guard
+size:
+  - 8
+  - 16
+  - 2
+palette:
+  B:
+    color:
+      - 0.62
+      - 0.42
+      - 0.16
+      - 1.0
+  H:
+    color:
+      - 0.72
+      - 0.52
+      - 0.42
+      - 1.0
+  L:
+    color:
+      - 0.2
+      - 0.21
+      - 0.19
+      - 1.0
+parts:
+  - name: torso
+    file: parts/ragdoll-torso.part.yaml
+    place:
+      - 2
+      - 8
+      - 0
+  - name: head
+    file: parts/ragdoll-head.part.yaml
+    parent: torso
+    place:
+      - 3
+      - 14
+      - 0
+    pivot:
+      - 1.0
+      - 0.0
+      - 1.0
+  - name: upper-arm-l
+    file: parts/ragdoll-upper-arm.part.yaml
+    parent: torso
+    place:
+      - 0
+      - 10
+      - 0
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+  - name: upper-arm-r
+    file: parts/ragdoll-upper-arm.part.yaml
+    parent: torso
+    place:
+      - 6
+      - 10
+      - 0
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+    mirror: x
+  - name: lower-arm-l
+    file: parts/ragdoll-lower-arm.part.yaml
+    parent: upper-arm-l
+    place:
+      - 0
+      - 6
+      - 0
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+  - name: lower-arm-r
+    file: parts/ragdoll-lower-arm.part.yaml
+    parent: upper-arm-r
+    place:
+      - 6
+      - 6
+      - 0
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+    mirror: x
+  - name: upper-leg-l
+    file: parts/ragdoll-upper-leg.part.yaml
+    parent: torso
+    place:
+      - 2
+      - 4
+      - 0
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+  - name: upper-leg-r
+    file: parts/ragdoll-upper-leg.part.yaml
+    parent: torso
+    place:
+      - 4
+      - 4
+      - 0
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+    mirror: x
+  - name: lower-leg-l
+    file: parts/ragdoll-lower-leg.part.yaml
+    parent: upper-leg-l
+    place:
+      - 2
+      - 0
+      - 0
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+  - name: lower-leg-r
+    file: parts/ragdoll-lower-leg.part.yaml
+    parent: upper-leg-r
+    place:
+      - 4
+      - 0
+      - 0
+    pivot:
+      - 1.0
+      - 4.0
+      - 1.0
+    mirror: x
+joints:
+  head:
+    kind: ball
+    limits:
+      -
+        - -20.0
+        - 20.0
+      -
+        - -30.0
+        - 30.0
+      -
+        - -20.0
+        - 20.0
+  lower-arm-l:
+    kind: hinge
+    axis:
+      - 1.0
+      - 0.0
+      - 0.0
+    limits:
+      - 0.0
+      - 120.0
+  lower-arm-r:
+    kind: hinge
+    axis:
+      - 1.0
+      - 0.0
+      - 0.0
+    limits:
+      - 0.0
+      - 120.0
+  lower-leg-l:
+    kind: hinge
+    axis:
+      - 1.0
+      - 0.0
+      - 0.0
+    limits:
+      - -120.0
+      - 0.0
+  lower-leg-r:
+    kind: hinge
+    axis:
+      - 1.0
+      - 0.0
+      - 0.0
+    limits:
+      - -120.0
+      - 0.0
+  upper-arm-l:
+    kind: ball
+    limits:
+      -
+        - -90.0
+        - 90.0
+      -
+        - -45.0
+        - 45.0
+      -
+        - -90.0
+        - 45.0
+  upper-arm-r:
+    kind: ball
+    limits:
+      -
+        - -90.0
+        - 90.0
+      -
+        - -45.0
+        - 45.0
+      -
+        - -90.0
+        - 45.0
+  upper-leg-l:
+    kind: ball
+    limits:
+      -
+        - -90.0
+        - 45.0
+      -
+        - -30.0
+        - 30.0
+      -
+        - -45.0
+        - 45.0
+  upper-leg-r:
+    kind: ball
+    limits:
+      -
+        - -90.0
+        - 45.0
+      -
+        - -30.0
+        - 30.0
+      -
+        - -45.0
+        - 45.0
+clips:
+  carry: anims/humanoid-carry.anim.yaml
+  idle: anims/humanoid-idle.anim.yaml
+  lean: anims/humanoid-lean.anim.yaml
+  run: anims/humanoid-run.anim.yaml
+  walk: anims/humanoid-walk.anim.yaml

@@ -81,7 +81,7 @@ pub use ik_targets::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_t
 pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
 pub use mesh_blend::MeshBlend;
-pub use nav_avoid::{NAV_AVOIDANCE_MAX_NEIGHBORS, NavAvoidance};
+pub use nav_avoid::{NAV_AVOIDANCE_MAX_NEIGHBORS, NavAvoidance, NavObstacle, NavObstacleState};
 pub use nav_blocker::{NavBlocker, NavBlockerMode, NavBlockerShape};
 pub use nav_link::NavLink;
 pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
@@ -111,7 +111,7 @@ pub use ui::{
     TextOutline, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav,
     UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
 };
-pub use ui_shape::{UiLineCap, UiShape, UiShapeType, UiStroke};
+pub use ui_shape::{UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
 
 /// An entity's human-readable name — the world-side home of a scene entity's `name:` field.
 ///
@@ -7072,6 +7072,13 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<ScreenEffect>("ScreenEffect")
         .expect("unique");
+    // The avoidance obstacle and its engine-written motion, appended after `ScreenEffect`: read by `nav_steer`.
+    registry
+        .register_validated::<NavObstacle>("NavObstacle")
+        .expect("unique");
+    registry
+        .register::<NavObstacleState>("NavObstacleState")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7080,7 +7087,7 @@ pub fn builtin_registry() -> Registry {
 }
 
 /// The built-ins whose engine-owned consumer is a sim-phase system.
-const SIM_ONLY_COMPONENTS: [&str; 35] = [
+const SIM_ONLY_COMPONENTS: [&str; 37] = [
     "Collider",
     "Velocity",
     "Joint",
@@ -7116,6 +7123,8 @@ const SIM_ONLY_COMPONENTS: [&str; 35] = [
     "NavLink",
     "IgnoreCollisions",
     "NavBlocker",
+    "NavObstacle",
+    "NavObstacleState",
 ];
 
 #[cfg(test)]
@@ -7181,6 +7190,8 @@ mod tests {
             "NavLink",
             "IgnoreCollisions",
             "NavBlocker",
+            "NavObstacle",
+            "NavObstacleState",
         ];
         expected.sort_unstable();
         assert_eq!(marked, expected);
@@ -7629,12 +7640,14 @@ mod tests {
                 "AudioZone",
                 "PairedAction",
                 "ScreenEffect",
+                "NavObstacle",
+                "NavObstacleState",
             ]
         );
         assert_eq!(
             registry.len(),
-            92,
-            "appending `ScreenEffect` grows the registry to 92"
+            94,
+            "appending `NavObstacleState` grows the registry to 94"
         );
     }
 

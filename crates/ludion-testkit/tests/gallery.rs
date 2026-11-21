@@ -691,6 +691,76 @@ fn needs_gpu_ragdoll_skin_switch_driven_matches_committed_golden_at_exactly_one(
     }
 }
 
+/// The `paired-takedown` scene driven by `common::takedown_builder` to `frames`: the golden `name`.
+/// The bare discovered `paired-takedown.png` is the frame before the action starts.
+fn paired_takedown_test(name: &str, frames: u64) -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery.join("paired-takedown.yaml"),
+        os_goldens().join(name),
+    )
+    .with_builder(common::takedown_builder)
+    .with_frames(frames);
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// Compares (or, under `LUDION_BLESS`, writes) one driven paired-takedown golden at exactly SSIM 1.0.
+/// Skips gracefully with no GPU adapter.
+fn check_paired_takedown(name: &str, frames: u64) {
+    let test = paired_takedown_test(name, frames);
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!("SKIPPED {name} (bless): {}", skip_note(&diagnostics));
+            }
+            Err(diagnostics) => panic!("blessing {name} failed: {diagnostics:?}"),
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir(&format!("{}_out", name.trim_end_matches(".png")));
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => assert_eq!(
+            report.ssim,
+            Some(1.0),
+            "{name} must be byte-identical to its freshly-blessed golden"
+        ),
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!("the {name} golden failed: {}", report.summary)
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!("SKIPPED {name}: {}", skip_note(&diagnostics));
+        }
+        Err(diagnostics) => panic!("the {name} render failed: {diagnostics:?}"),
+    }
+}
+
+/// The first frame after `grab`: the instigator has warped onto its aligned pose and holds the guard.
+#[test]
+fn needs_gpu_paired_takedown_grab_matches_committed_golden_at_exactly_one() {
+    check_paired_takedown("paired-takedown-grab.png", common::TAKEDOWN_GRAB_TICK + 1);
+}
+
+/// The first frame after the ragdoll switch: the guard's parts stand at the rest pose, limp.
+#[test]
+fn needs_gpu_paired_takedown_ragdoll_matches_committed_golden_at_exactly_one() {
+    check_paired_takedown(
+        "paired-takedown-ragdoll.png",
+        common::TAKEDOWN_SWITCH_TICK + 1,
+    );
+}
+
+/// Mid get-up fade: the guard folds back into its assembly and crossfades to `idle`.
+#[test]
+fn needs_gpu_paired_takedown_getup_matches_committed_golden_at_exactly_one() {
+    check_paired_takedown("paired-takedown-getup.png", common::TAKEDOWN_GETUP_FRAME);
+}
+
 /// The `camera-rig` scene driven by `common::rig_builder` to the middle of the switch blend: the
 /// rail camera is half behind the hero, half side-on, with the `camera` debug category on. The bare
 /// discovered `camera-rig.png` is the authored pose at frame 0, before the rig's first tick.

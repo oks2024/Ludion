@@ -687,6 +687,15 @@ fn instance_layout_carries_material_and_selection_flag() {
         rim: [0.0; 4],
     };
     assert_eq!(instance_material(&base), [0.3, 0.7, 2.0, 0.0]);
+    // Porosity rides the medium lane's `.z`: `.y` is the cull pass's scatter slot.
+    let porous = MeshInstance {
+        porosity: 0.25,
+        ..base
+    };
+    assert_eq!(
+        super::mesh_batch::instance_raw(&porous, &[]).medium,
+        [1.0, 0.0, 0.25, 0.0]
+    );
     assert_eq!(
         instance_material(&MeshInstance {
             use_vertex_material: true,

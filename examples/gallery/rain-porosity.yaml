@@ -1,0 +1,142 @@
+# Feature: Rain porosity - one grey voxel slab in three porosity stripes (0, 0.5, 1, left to right) and a cube whose
+# Mesh.porosity is 0.1, on the wet street of rain-wet under one sodium spot. The stripes darken in order and all three
+# gloss; the cube is a primitive, so its Mesh.porosity applies. ludion docs weather.
+format: 1
+name: "rain-porosity - Authored porosity: three palette stripes and a low-porosity cube"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 6.0
+        rotation:
+          - -14.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.015
+          - 0.03
+        sky_horizon:
+          - 0.03
+          - 0.04
+          - 0.06
+        sky_ground:
+          - 0.005
+          - 0.006
+          - 0.01
+        ibl_intensity: 0.4
+      PostProcess:
+        bloom_threshold: 0.8
+        bloom_strength: 0.1
+        exposure: 1.0
+        tonemap: aces
+        fog_density: 0.02
+        fog_color:
+          - 0.03
+          - 0.04
+          - 0.06
+        fog_start: 4.0
+        ssr: 1.0
+        vignette: 0.4
+        vignette_radius: 0.9
+  - name: moon
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.8
+          - -0.5
+        color:
+          - 0.4
+          - 0.5
+          - 0.8
+        intensity: 0.15
+  - name: lamp
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.6
+          - 4.0
+      SpotLight:
+        color:
+          - 1.0
+          - 0.7
+          - 0.35
+        intensity: 5.0
+        range: 14.0
+        direction:
+          - 0.0
+          - -0.9
+          - -0.45
+        inner_angle: 28.0
+        outer_angle: 55.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.25
+          - 0.0
+        scale:
+          - 0.125
+          - 0.125
+          - 0.125
+      Mesh:
+        shape:
+          voxel: voxels/rain-ground.voxel.yaml
+  - name: slab
+    components:
+      Transform:
+        translation:
+          - -0.4
+          - 0.0
+          - -0.5
+        scale:
+          - 0.125
+          - 0.125
+          - 0.125
+      Mesh:
+        shape:
+          voxel: voxels/rain-porosity.voxel.yaml
+  - name: cube
+    components:
+      Transform:
+        translation:
+          - 3.6
+          - 0.5
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.4
+          - 0.4
+          - 0.42
+          - 1.0
+        roughness: 0.6
+        porosity: 0.1
+  - name: weather
+    presentation: true
+    components:
+      Rain:
+        wetness: 1.0
+        wind:
+          - 1.2
+          - 0.0
+          - 0.4
+        color:
+          - 0.75
+          - 0.8
+          - 0.9
+          - 0.6

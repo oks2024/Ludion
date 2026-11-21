@@ -206,6 +206,16 @@ head-on pass, priority, classes, a blocker wall, identity for non-avoiders, 1- a
 restore. Only the component schema snapshot moved. A 1% right-hand bias on the preferred velocity breaks the exact
 head-on symmetry deterministically (each agent steers to its own right, so a pair parts to opposite sides).
 
+Wave 5b (request 0004 §6), by commit subject: `NavObstacle` — `NavObstacle { radius, enabled }` and the engine-written,
+hashed `NavObstacleState { position, velocity }`. `nav_steer`'s serial pre-pass reads every obstacle's pose in
+ascending entity order (enabled or not) and sets the velocity from the last step's motion (zero on the first tick); an
+avoiding agent treats each enabled obstacle in reach (xz within the query radius, `|dy|` within the class height) as a
+neighbour with responsibility 1, after the agents; separation ignores obstacles. `L1528` covers a non-positive radius;
+`ludion docs nav` §Avoidance > Obstacles; the `nav_avoidance` example drives a forklift through the crossing. Tests:
+yield with the state velocity pinned, a disabled obstacle that keeps tracking, 1- and 8-thread traces, a mid-pass restore,
+identity for separation-only crowds with a far obstacle and the `L1528` cases. A world without `NavObstacle` is
+unchanged; only the component schema snapshot moved. The obstacle's velocity comes from its pose, not physics `Velocity`.
+
 ## Waves (Neon Shroud request 0004)
 
 The request asks for paths, patrols, off-mesh links, dynamic blockers and avoidance. Each wave is
@@ -226,9 +236,9 @@ independently shippable; later ones add fields and components, never reshape ear
   (decisions 14–16).
 - **4 — dynamic blockers (shipped):** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics; `L1527`
   (decisions 20–23). Amends decision 1 (statics only) — **accepted 2026-11-19**.
-- **5a — agent avoidance (this):** `NavAgent.avoidance`, ORCA in `ludion-nav`; `L1528` (decisions 24–26, 28).
+- **5a — agent avoidance (shipped):** `NavAgent.avoidance`, ORCA in `ludion-nav`; `L1528` (decisions 24–26, 28).
   Brings "Avoidance beyond separation" into scope and subsumes Serious Isaac draft 0029 — **accepted 2026-11-19**.
-- **5b — `NavObstacle`:** non-agent moving bodies as avoidance obstacles (decisions 25, 27).
+- **5b — `NavObstacle` (shipped):** non-agent moving bodies as avoidance obstacles (decisions 25, 27).
 
 **Open questions, answered.** Planning is synchronous with a per-tick cap, not async (the cap bounds the
 cost and keeps the result a function of the tick). Waypoint entity references wait for wave 3: `NavRoute`

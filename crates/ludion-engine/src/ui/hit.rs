@@ -14,7 +14,7 @@ use ludion_renderer::{SpriteInstance, UiClip, UiInstance, UiRotation};
 
 use super::group::{UiGroups, clip_contains, cos_sin};
 use super::hud::{self, Grouping, HudElement, HudFrame, UiEntry};
-use super::polygon::polygon_contains;
+use super::shape::path_contains;
 use super::shape::{shape_contains, shape_instance};
 use super::{FontFace, radial_hit, radial_layout, ui_list_draw, ui_text_draw};
 use crate::components::{Anchor, UiList, UiRadial, UiRect, UiShape, UiText};
@@ -304,14 +304,22 @@ impl Probe<'_> {
         if let UiInstance::Polygon {
             origin_px,
             points,
+            closed,
+            fill,
+            stroke,
             clip,
             rotation,
             ..
         } = &entries[0].2
         {
             let [x, y] = unrotate(self.cursor, rotation);
-            return polygon_contains(points, [x - origin_px[0], y - origin_px[1]])
-                && clip_contains(clip, self.cursor);
+            return path_contains(
+                points,
+                *closed,
+                fill.is_some(),
+                stroke.as_ref(),
+                [x - origin_px[0], y - origin_px[1]],
+            ) && clip_contains(clip, self.cursor);
         }
         let (UiInstance::Rect { clip, rotation, .. }
         | UiInstance::Text { clip, rotation, .. }

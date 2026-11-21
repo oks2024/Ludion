@@ -183,7 +183,7 @@ meshed surface is translated so its box's minimum `y` is `0` and its `x`/`z` ext
 
 Parts fold left to right: the running field starts at `+inf`; `union` is a polynomial smooth `min`,
 `subtract` a smooth `max` of the negated part, `intersect` a smooth `max`, each exact at `blend: 0`.
-Each `union` part contributes its palette color and `(roughness, metallic, emissive)` weighted by the
+Each `union` part contributes its palette color and `(roughness, metallic, emissive)` and `porosity` weighted by the
 smooth-min share it won at each point; a `subtract`/`intersect` contributes no material but
 re-weights the parts it passed through. A smoothed seam between two `union` parts therefore blends
 their colors — a glowing vein fades into flesh instead of cutting hard.
@@ -219,7 +219,7 @@ bones:
 
 Every numeric field is a `--set`/`--sweep` pointer (`ludion render --model`, `ludion docs
 sculpt-authoring`): `/resolution`, `/triangles`, `/palette/<glyph>/color/<0..3>`,
-`/palette/<glyph>/emissive|metallic|roughness`, `/parts/<i>/blend`, `/parts/<i>/at/<0..2>`,
+`/palette/<glyph>/emissive|metallic|porosity|roughness`, `/parts/<i>/blend`, `/parts/<i>/at/<0..2>`,
 `/parts/<i>/rotation/<0..2>`, `/parts/<i>/repeat/count`, `/parts/<i>/repeat/step/<0..2>`, and a
 part's own shape fields (`radius`, `tube`, `height`, `round`, `radii/<0..2>`, `size/<0..2>`,
 `from/<0..2>`, `to/<0..2>`, a `voxel`/`mesh` part's `size` — `ludion docs sculpt-format-sources` has

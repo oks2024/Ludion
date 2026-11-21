@@ -1108,6 +1108,30 @@ pub struct UiShapeStroke {
     pub color: [f32; 4],
 }
 
+/// How a [`UiPathStroke`] turns at a corner.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UiPathJoin {
+    /// A sharp corner, falling back to a bevel past a miter limit of 4 half-widths.
+    Miter,
+    /// A circular arc about the corner.
+    Round,
+    /// A flat cut across the corner.
+    Bevel,
+}
+
+/// The stroke of a [`UiInstance::Polygon`], centred on the path.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct UiPathStroke {
+    /// The width in pixels, above 0.
+    pub width_px: f32,
+    /// Linear RGBA, straight alpha.
+    pub color: [f32; 4],
+    /// The corner style.
+    pub join: UiPathJoin,
+    /// Whether an open path's ends are half-discs (otherwise flush); ignored when closed.
+    pub round_cap: bool,
+}
+
 /// One resolved screen-space UI element: a colored/textured rect, or a run of screen-space
 /// text. `ludion-engine`'s `extract()` resolves anchor + offset + size/measured-text into this plain
 /// pixel-space data — the renderer never sees an anchor or a canvas (boundary rule,
@@ -1172,17 +1196,23 @@ pub enum UiInstance {
         /// The element's rotation; when rotated `pivot_px == origin_px`.
         rotation: UiRotation,
     },
-    /// A filled simple polygon, tessellated: `triangles` fill the interior and the renderer adds a
-    /// one-pixel feathered fringe at the final pixel size.
+    /// A polygonal path, tessellated at the final pixel size with a one-pixel feathered fringe: a
+    /// filled simple polygon (`closed`, with `triangles`), an outline over it, or a stroke-only open or
+    /// closed polyline (no `triangles`, no `fill`).
     Polygon {
-        /// The polygon's local `(0, 0)` in screen pixels.
+        /// The path's local `(0, 0)` in screen pixels.
         origin_px: [f32; 2],
-        /// The outline points in pixels relative to `origin_px`, consecutive duplicates dropped.
+        /// The path points in pixels relative to `origin_px`, consecutive duplicates dropped.
         points: Vec<[f32; 2]>,
+        /// Whether the last point joins back to the first.
+        closed: bool,
         /// Triangles of indices into `points`; unchanged by translation, uniform scale and rotation.
+        /// Empty without a `fill`.
         triangles: Vec<[u16; 3]>,
-        /// Linear RGBA interior, straight alpha.
-        fill: [f32; 4],
+        /// Linear RGBA interior, straight alpha, or `None`.
+        fill: Option<[f32; 4]>,
+        /// The path outline, drawn over the fill, or `None`.
+        stroke: Option<UiPathStroke>,
         /// The fragment clip from the element's `UiGroup` chain.
         clip: UiClip,
         /// The element's rotation; when rotated `pivot_px == origin_px`.

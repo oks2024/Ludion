@@ -6,12 +6,14 @@
 //! here uses `ludion_core::math` for roots and trig.
 
 use ludion_core::math::{hypot, sin_cos};
-use ludion_renderer::{UiClip, UiInstance, UiRotation, UiShapeGeometry, UiShapeStroke};
+use ludion_renderer::{
+    UiClip, UiInstance, UiPathJoin, UiPathStroke, UiRotation, UiShapeGeometry, UiShapeStroke,
+};
 
 use super::group::cos_sin;
-use super::polygon::{PolygonFault, dedup_points, polygon_contains, triangulate};
+use super::polygon::{PolygonFault, dedup_points, polygon_contains, stroke_contains, triangulate};
 use super::{canvas_anchor_px, pixel_scale};
-use crate::components::{UiLineCap, UiShape, UiShapeType};
+use crate::components::{UiLineCap, UiLineJoin, UiShape, UiShapeType};
 
 const TAU: f32 = std::f32::consts::TAU;
 
@@ -25,38 +27,108 @@ pub(crate) fn shape_instance(
     shape: &UiShape,
     viewport: (u32, u32),
 ) -> Result<Option<UiInstance>, PolygonFault> {
-    if let UiShapeType::Polygon { points } = &shape.shape {
-        return polygon_instance(shape, points, viewport);
+    match &shape.shape {
+        UiShapeType::Polygon { points, join } => {
+            path_instance(shape, points, None, *join, UiLineCap::Butt, viewport)
+        }
+        UiShapeType::Polyline {
+            points,
+            closed,
+            join,
+            cap,
+        } => path_instance(shape, points, Some(*closed), *join, *cap, viewport),
+        _ => Ok(analytic_instance(shape, viewport)),
     }
-    Ok(analytic_instance(shape, viewport))
 }
 
-/// A `polygon` as `extract` draws it before tweens and groups act: the deduplicated points in pixels
-/// about the origin and their ear-clipped triangles. `Ok(None)` when it has no fill or is invisible;
-/// `Err` when it cannot be filled (decision 70).
-fn polygon_instance(
+/// The kind name a path fault is reported under.
+pub(crate) fn path_kind(shape: &UiShapeType) -> &'static str {
+    match shape {
+        UiShapeType::Polyline { .. } => "polyline",
+        _ => "polygon",
+    }
+}
+
+/// Whether `local` (relative to the path's origin) is on a polygonal path: inside its fill, or on its
+/// stroke. The one test the draw's hit check and `ui_hit` share (decision 79).
+pub(crate) fn path_contains(
+    points: &[[f32; 2]],
+    closed: bool,
+    has_fill: bool,
+    stroke: Option<&UiPathStroke>,
+    local: [f32; 2],
+) -> bool {
+    (has_fill && polygon_contains(points, local))
+        || stroke.is_some_and(|s| {
+            // A stroke under 1 px draws at 1 px, so it hits as one.
+            let half = s.width_px.max(1.0) * 0.5;
+            stroke_contains(points, closed, half, s.join, s.round_cap, local)
+        })
+}
+
+/// A `polygon` (`polyline` is `Some(closed)`) as `extract` draws it before tweens and groups act: the
+/// points in pixels about the origin, the ear-clipped triangles of a fill and the outline. `Ok(None)`
+/// when it is invisible or has neither; `Err` when it cannot be drawn (decisions 70, 75, 76).
+fn path_instance(
     shape: &UiShape,
     points: &[[f32; 2]],
+    polyline: Option<bool>,
+    join: UiLineJoin,
+    cap: UiLineCap,
     viewport: (u32, u32),
 ) -> Result<Option<UiInstance>, PolygonFault> {
-    let Some(fill) = shape.fill.filter(|_| shape.visible) else {
+    let closed = polyline.unwrap_or(true);
+    let fill = shape.fill.filter(|_| polyline.is_none());
+    if !shape.visible || (fill.is_none() && shape.stroke.is_none()) {
         return Ok(None);
-    };
+    }
     let ps = pixel_scale(viewport);
     let anchor = canvas_anchor_px(shape.anchor, viewport);
-    let points: Vec<[f32; 2]> = dedup_points(points)
-        .iter()
-        .map(|p| [p[0] * ps, p[1] * ps])
-        .collect();
-    let triangles = triangulate(&points)?;
+    let distinct = if closed || polyline.is_none() {
+        dedup_points(points)
+    } else {
+        let mut open: Vec<[f32; 2]> = Vec::with_capacity(points.len());
+        for &p in points {
+            if open.last() != Some(&p) {
+                open.push(p);
+            }
+        }
+        open
+    };
+    let points: Vec<[f32; 2]> = distinct.iter().map(|p| [p[0] * ps, p[1] * ps]).collect();
+    let triangles = if polyline.is_some() {
+        if points.len() < 2 {
+            return Err(PolygonFault::TooFew { needed: 2 });
+        }
+        Vec::new()
+    } else {
+        let triangles = triangulate(&points)?;
+        if fill.is_some() {
+            triangles
+        } else {
+            Vec::new()
+        }
+    };
+    let stroke = shape.stroke.map(|s| UiPathStroke {
+        width_px: s.width * ps,
+        color: s.color,
+        join: match join {
+            UiLineJoin::Miter => UiPathJoin::Miter,
+            UiLineJoin::Round => UiPathJoin::Round,
+            UiLineJoin::Bevel => UiPathJoin::Bevel,
+        },
+        round_cap: cap == UiLineCap::Round && !closed,
+    });
     Ok(Some(UiInstance::Polygon {
         origin_px: [
             anchor[0] + shape.offset[0] * ps,
             anchor[1] + shape.offset[1] * ps,
         ],
         points,
+        closed,
         triangles,
         fill,
+        stroke,
         clip: UiClip::NONE,
         rotation: UiRotation::NONE,
     }))
@@ -187,7 +259,7 @@ fn analytic_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<UiInstance
                 stroke,
             )
         }
-        UiShapeType::Polygon { .. } => return None,
+        UiShapeType::Polygon { .. } | UiShapeType::Polyline { .. } => return None,
     };
     if fill.is_none() && stroke.is_none() {
         return None;
@@ -390,7 +462,13 @@ pub fn ui_shape_hit(shape: &UiShape, viewport: (u32, u32), cursor: [f32; 2]) -> 
             stroke,
             ..
         } => shape_contains(geometry, fill.is_some(), stroke.map(|s| s.width_px), local),
-        UiInstance::Polygon { points, .. } => polygon_contains(points, local),
+        UiInstance::Polygon {
+            points,
+            closed,
+            fill,
+            stroke,
+            ..
+        } => path_contains(points, *closed, fill.is_some(), stroke.as_ref(), local),
         _ => false,
     }
 }

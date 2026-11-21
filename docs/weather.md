@@ -69,8 +69,18 @@ casters); it grows with the casters in the volume, like the sun's shadow pass.
 `wetness` (default 1) darkens and glosses every opaque mesh surface the rain reaches. Per fragment the scene pass
 computes `w = wetness x exposure x facing` and applies it: the albedo is multiplied by `mix(1, 0.6, w x porosity)` and
 the roughness goes to `mix(r, 0.08, w x (1 - metallic))`, so metal stays dry-looking and the screen-space and probe
-reflections then show the wet ground with no extra wiring. Porosity is 0.5 for every surface, so a voxel palette
-(world models, assemblies), a sculpt, a primitive and an asset mesh all get wet with nothing authored.
+reflections then show the wet ground with no extra wiring. Porosity is `[0, 1]` and 0.5 when nothing authors it, so a voxel palette
+(world models, assemblies), a sculpt, a primitive and an asset mesh all get wet with nothing authored. Author it where
+the material lives, with the same selection rule as `roughness` (`ludion docs materials`): geometry that authors any
+material field wins, and `Mesh.porosity` is inert on it.
+
+| Surface | Where |
+| --- | --- |
+| Voxel, assembly or sculpt model | `porosity` on a palette entry, beside `metallic` |
+| `.mesh.yaml` asset | a per-vertex `porosity:` list, one float per vertex; authoring it alone selects the vertex material |
+| Primitive or plain asset mesh | `Mesh.porosity`, not inherited down `Parent` |
+
+`porosity: 0` keeps the albedo dry-looking while the roughness still drops; `1` darkens the most.
 
 **Exposure** is read from the `rain_occlusion` map (`## Roofs`): a surface at its column's top is wet, and one more
 than 20 cm below the nearest caster is dry, so the ground under an awning, the inside of a doorway and a figure

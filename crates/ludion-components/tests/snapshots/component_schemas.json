@@ -6049,6 +6049,51 @@
       }
     }
   },
+  "NavObstacle": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "NavObstacle",
+    "description": "A non-agent moving body (a forklift, a rolling boss) that agents with `NavAgent.avoidance` yield to. Its\nvelocity is its last-step motion, read from its pose by `nav_steer` into [`NavObstacleState`], so it may be\nkinematic, motor-driven or moved by the game. Agents without `avoidance` ignore it. A non-finite or\nnon-positive `radius` is `L1528`.\n\n```yaml\ncomponents:\n  NavObstacle:\n    radius: 1.2\n```",
+    "type": "object",
+    "properties": {
+      "radius": {
+        "description": "Body radius for avoidance, metres (default `0.5`).",
+        "type": "number",
+        "format": "float"
+      },
+      "enabled": {
+        "description": "A disabled obstacle is ignored but keeps tracking its pose (default `true`).",
+        "type": "boolean"
+      }
+    }
+  },
+  "NavObstacleState": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "NavObstacleState",
+    "description": "The motion `nav_steer` read from a [`NavObstacle`]'s pose: where it was last tick and its velocity, metres\nper second. Engine-written and hashed like `NavSteering`, so a restore resumes exactly. Defaults to zero.\n\n```yaml\ncomponents:\n  NavObstacleState: {}\n```",
+    "type": "object",
+    "properties": {
+      "position": {
+        "description": "The pose read last tick, world axes (default zero).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "velocity": {
+        "description": "Velocity from the last two poses, world axes (default zero).",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      }
+    }
+  },
   "NavRoute": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "NavRoute",
@@ -11503,7 +11548,7 @@
             ]
           },
           {
-            "description": "A simple polygon (concave allowed, either winding), filled with `fill`; takes no `stroke`.\nA self-intersecting or degenerate polygon draws nothing and warns once (`L2305`).",
+            "description": "A simple polygon (concave allowed, either winding), filled with `fill` and/or outlined with\n`stroke` (drawn over the fill). A self-intersecting or degenerate polygon draws nothing and warns\nonce (`L2305`).",
             "type": "object",
             "properties": {
               "points": {
@@ -11519,9 +11564,52 @@
                   "maxItems": 2
                 }
               },
+              "join": {
+                "description": "How the stroke turns at a corner (default miter).",
+                "$ref": "#/$defs/UiLineJoin"
+              },
               "type": {
                 "type": "string",
                 "const": "polygon"
+              }
+            },
+            "required": [
+              "type",
+              "points"
+            ]
+          },
+          {
+            "description": "An open or closed path drawn as its stroke only. Self-crossing is allowed.",
+            "type": "object",
+            "properties": {
+              "points": {
+                "description": "2 to 256 points relative to the origin, +Y down. Fewer than 2 distinct points draws nothing\n(`L2305`).",
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "closed": {
+                "description": "Whether the last point joins back to the first (default `false`; a closed path has no caps).",
+                "type": "boolean"
+              },
+              "join": {
+                "description": "How the stroke turns at a corner (default miter).",
+                "$ref": "#/$defs/UiLineJoin"
+              },
+              "cap": {
+                "description": "How an open path's ends are drawn (default butt).",
+                "$ref": "#/$defs/UiLineCap"
+              },
+              "type": {
+                "type": "string",
+                "const": "polyline"
               }
             },
             "required": [
@@ -11543,6 +11631,26 @@
             "description": "A half disc past each end point, as wide as the stroke.",
             "type": "string",
             "const": "round"
+          }
+        ]
+      },
+      "UiLineJoin": {
+        "description": "How a stroke turns at a corner of a polygon or polyline.",
+        "oneOf": [
+          {
+            "description": "A sharp corner; a corner sharper than the miter limit (4 half-widths) falls back to a bevel.",
+            "type": "string",
+            "const": "miter"
+          },
+          {
+            "description": "A circular arc about the corner point.",
+            "type": "string",
+            "const": "round"
+          },
+          {
+            "description": "A flat cut across the corner.",
+            "type": "string",
+            "const": "bevel"
           }
         ]
       },

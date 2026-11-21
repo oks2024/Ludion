@@ -2088,7 +2088,7 @@ pub mod code {
     pub const UI_CLIP_NESTING: DiagnosticCode = DiagnosticCode::new("L2303");
     /// `L2304` — a UI text outline wider than the face can draw; clamped.
     pub const UI_TEXT_OUTLINE_CLAMPED: DiagnosticCode = DiagnosticCode::new("L2304");
-    /// `L2305` — a `UiShape` polygon is degenerate or self-intersecting; it draws nothing.
+    /// `L2305` — a `UiShape` polygon or polyline is degenerate or self-intersecting; it draws nothing.
     pub const UI_POLYGON_DEGENERATE: DiagnosticCode = DiagnosticCode::new("L2305");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
@@ -10498,13 +10498,15 @@ Fix: lower `outline.width` to the stated maximum, or bake the face with a larger
     CodeEntry {
         code: code::UI_POLYGON_DEGENERATE,
         severity: Severity::Warning,
-        title: "a UiShape polygon is degenerate",
+        title: "a UiShape polygon or polyline is degenerate",
         explanation: "\
 A `UiShape` `polygon` has fewer than 3 distinct points, zero area, or edges that cross or touch, so it
-cannot be filled and draws nothing that frame. Reported once per entity as a degraded warning at render
-time; the message names the fault and, for a self-intersection, the two edge indices.
+cannot be filled or outlined; a `polyline` has fewer than 2 distinct points. It draws nothing that
+frame. Reported once per entity as a degraded warning at render time; the message names the fault and,
+for a polygon self-intersection, the two edge indices.
 
-Fix: write a simple polygon of 3+ distinct points whose edges do not cross.",
+Fix: write a simple polygon of 3+ distinct points whose edges do not cross, or a polyline of 2+ distinct
+points (a polyline may cross itself).",
     },
     CodeEntry {
         code: code::STATIC_INELIGIBLE,

@@ -17,7 +17,8 @@
 > (`ui/hud.rs`; the component and schema snapshots moved once, no golden, replay or protocol hash);
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
 > component schema snapshot moved); W3c-1: filled `polygon` (decisions 67–73, `L2305`, `ui_polygon.wgsl`; the `ui-polygons`
-> golden is blessed on the RTX 3090, the macOS golden is owed on the M4). Waves 3c-2, 3c-3, 5b and 7 are recorded below and not started. Owed: the
+> golden is blessed on the RTX 3090, the macOS golden is owed on the M4); W3c-2: polygon strokes and `polyline` (decisions 74–80, `UiLineJoin`,
+> `push_ui_stroke_verts` on the polygon pipeline; the `ui-strokes` golden is blessed on the RTX 3090, the macOS golden is owed on the M4). Waves 3c-3, 5b and 7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -293,8 +294,8 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 **Proposed — owner ruling owed (W6b):** no `disabled_fill`; `selected_fill` falling back to `fill`; the stroke on every wedge rather
 than a selected-only stroke; overlapping strokes at small gaps left to `gap_deg`. Request differences: none beyond the fallbacks.
 
-67. **`polygon { points: [[x, y], …] }`**: canvas units relative to the origin, +Y down, either winding. Filled only in W3c-1. A
-    `stroke` on a polygon is `L1621` at `/stroke` ("a polygon takes a fill only"); W3c-2 lifts that. A polygon with no `fill`
+67. **`polygon { points: [[x, y], …] }`**: canvas units relative to the origin, +Y down, either winding. Filled in W3c-1; W3c-2 lets it
+    take a `stroke` too (decision 74). A polygon with neither `fill` nor `stroke`
     draws nothing, as every shape does. `UiShapeType` loses `Copy` (still `Clone`), because `points` is a `Vec`.
 68. **Validation `L1621`**: a non-finite point is reported at `/shape/points/<i>/<j>`; more than 256 points at `/shape/points`,
     naming the cap. Fewer than 3 points is **not** an error: a game writes `points` live (wall-clipped cones), so too few is a
@@ -305,7 +306,7 @@ than a selected-only stroke; overlapping strokes at small gaps left to `gap_deg`
     touch; ear clipping in point order from a cursor, wrapping round, clipping the first strictly convex corner whose triangle
     holds no other remaining vertex (inside or on it), then continuing from the next vertex. A collinear corner is removed without
     a triangle. A full lap with no ear is `NoEar`. Indices refer to the deduplicated points, which the instance carries.
-    `PolygonFault { TooFew, ZeroArea, SelfIntersecting { a, b }, NoEar }`.
+    `PolygonFault { TooFew { needed }, ZeroArea, SelfIntersecting { a, b }, NoEar }`.
 70. **`L2305 UI_POLYGON_DEGENERATE`** (Warning): extract records it in `degraded` keyed `"{offender_key}/ui-polygon"` (the `L2304`
     latch pattern), so each entity reports once. It names the fault, and the edge indices for a self-intersection. The polygon
     draws nothing that frame.
@@ -327,6 +328,38 @@ fewer than 3 points as a runtime warning, not a field error; the miter fringe ca
 60° and wider; sharper tips are cut back, so the GPU agreement test uses ~78° tips); a polygon stroke as `L1621` until W3c-2. Request differences: `type: polygon`; no stroke or dash yet; `polyline` is
 W3c-2.
 
+74. **`UiLineJoin { miter (default), round, bevel }`** (`ui_shape.rs`, snake_case, skipped when miter). `polygon` gains `join`; its
+    `stroke` is now allowed (lifts decision 67's `L1621`). A polygon with fill and stroke draws the stroke over the fill; a
+    stroke alone draws the outline.
+75. **`polyline { points, closed = false, join = miter, cap = butt }`** (`cap` is W3b's `UiLineCap`; skipped at default).
+    Stroke-only like `line`: a `fill` or a missing `stroke` is `L1621`; `closed` ignores `cap`. At most 256 finite points
+    (`L1621`, same pointers as polygon). Self-crossing is allowed. After dropping consecutive duplicates (and a repeated closing
+    point when `closed`), fewer than 2 points draws nothing and warns `L2305` once per entity, as a degenerate polygon does:
+    `PolygonFault::TooFew { needed }` is 3 for a polygon, 2 for a polyline.
+76. **Polygon degeneracy is unchanged:** a polygon (fill and/or stroke) is still triangulated and its fault draws nothing and
+    warns `L2305` once (decision 70). Triangles are kept only when it has a fill.
+77. **Renderer data.** `UiInstance::Polygon` is the one tessellated-path instance: `{ origin_px, points, closed, triangles,
+    fill: Option<[f32; 4]>, stroke: Option<UiPathStroke>, clip, rotation }`, with `UiPathStroke { width_px, color, join:
+    UiPathJoin, round_cap }` and `UiPathJoin { Miter, Round, Bevel }` in `ludion-renderer/src/scene.rs` (the renderer never names
+    component types). A polygon is `closed: true`; a polyline has empty `triangles` and no fill.
+78. **Stroke tessellation** (`render/ui_polygon.rs`, `push_ui_stroke_verts`), the fill's vertex format and pipeline (no shader
+    change), CPU-rotated like the fill. Half width `h = w/2`; a stroke under 1 px draws at `w = 1` with its alpha scaled by `w`.
+    Per segment a strip of four rails, coverage 0, 1, 1, 0 at `±(h + 0.5)`, `±(h − 0.5)`, so the 0.5 contour is the stroke edge.
+    Miter keeps the shared point while the miter vector is at most 4 (SVG's limit), else bevels; bevel and round fan the outer
+    side from one edge normal to the other (round: `n = clamp(ceil(θ / (2·acos(1 − 0.25/(h + 0.5)))), 1, 32)`); the inner side
+    uses the miter point clamped to the shorter adjacent segment. A butt end is flush with a ±0.5 px fringe along the segment; a
+    round cap is a half-disc fan. Fill vertices first, then stroke, in one instance. Translucent self-crossings darken where they
+    cross (accepted, documented).
+79. **Hit** (`ui/polygon.rs`, `stroke_contains`): within `h` of a segment, the outer join wedge (round: within `h` of the vertex;
+    bevel: the triangle; miter within the limit: the quad), round caps within `h` of an end. A shape hits when the fill test or the
+    stroke test does; `ui_hit` adds `clip_contains`. A stroke under 1 px hits as 1 px.
+80. **Tweens and groups.** Scale multiplies the points and `width_px`; opacity multiplies fill and stroke alpha; a colour tween
+    replaces `fill` (the stroke colour on a stroke-only `polyline`, like `line`/`arc`).
+
+**Proposed — owner ruling owed (W3c-2):** miter as the default join; the fixed miter limit 4 (no field; trigger: a request);
+`polyline` `cap` reusing `UiLineCap`; the thin-stroke alpha rule; translucent self-crossings darkening; W3c-3 (dashes) kept
+separate. Request differences: `cap` on polyline (the request lists only `join`).
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -342,7 +375,8 @@ W3c-2.
   `ui_shape.wgsl`, `ui_shape_hit`, the `ui-shapes` golden.
 - **W3c-1 — filled `polygon`** by ear clipping with a feathered fringe and a degenerate warning (decisions 67–73, `L2305`,
   `ui_polygon.wgsl`, the `ui-polygons` golden).
-- **W3c-2 — strokes as tessellated paths** on the same pipeline: a polygon `stroke`, and `polyline { points, closed, join }`.
+- **W3c-2 — strokes as tessellated paths** on the same pipeline: a polygon `stroke`, and `polyline { points, closed, join, cap }`
+  (decisions 74–80, `L2305` for both kinds, the `ui-strokes` golden).
 - **W3c-3 — `dash: { on, off }`** on any stroke.
 - **W4a — `UiGroup`:** origin, scale, opacity and visibility, CPU only (decisions 18-24;
   `ui/group.rs`, `hud.rs::post`). Docs `ui-groups`; example `ui_groups`. An element without `group`
@@ -380,7 +414,7 @@ and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 ## Out of scope (triggers recorded)
 
-polyline and polygon strokes (W3c-2), dashes (W3c-3), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
+dashes (W3c-3), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
 when stretched), slicing `UiList`/`UiText`, text shadow (W5b), a wedge `disabled_fill` or per-item colour, sub-wheels, item-level `ui_hit`,
 anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see

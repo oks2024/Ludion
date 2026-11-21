@@ -893,6 +893,27 @@ mod tests {
         assert_eq!(mesh(&model, 0), expected(&quads, 0));
     }
 
+    /// Each quad carries its palette entry's porosity (0.5 unauthored), and a palette that authors
+    /// only `porosity` takes the vertex material.
+    #[test]
+    fn palette_porosity_is_per_vertex_and_selects_the_vertex_material() {
+        let mut porous = entry("A", RED);
+        porous.porosity = Some(0.0);
+        let model = doc([2, 1, 1], vec![porous, entry("B", GREEN)], &[&["AB"]]);
+        let data = mesh(&model, 0);
+        let vertices = data.positions.len() / 3;
+        assert_eq!(data.porosity.len(), vertices);
+        assert!(data.authored_material, "porosity alone authors a material");
+        assert!(data.porosity.contains(&0.0) && data.porosity.contains(&0.5));
+        for (colors, porosity) in data.colors.chunks_exact(4).zip(&data.porosity) {
+            let expected = if colors[0] == 1.0 { 0.0 } else { 0.5 };
+            assert_eq!(*porosity, expected);
+        }
+        let bare = mesh(&doc([1, 1, 1], vec![entry("A", RED)], &[&["A"]]), 0);
+        assert!(!bare.authored_material);
+        assert!(bare.porosity.iter().all(|&p| p == 0.5));
+    }
+
     /// A single 1×1×1 cell is a full box: 6 quads, 24 verts, 12 tris.
     #[test]
     fn single_voxel_counts() {

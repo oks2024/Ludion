@@ -1,8 +1,10 @@
-//! [`NavAvoidance`]: the opt-in agent-vs-agent avoidance settings carried by `NavAgent.avoidance`.
+//! [`NavAvoidance`], the opt-in agent-vs-agent avoidance settings carried by `NavAgent.avoidance`, and
+//! [`NavObstacle`], a non-agent moving body that avoiding agents yield to.
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::number::engine_number;
+use ludion_ecs::SemanticValidate;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -128,6 +130,97 @@ pub(crate) fn validate_avoidance(agent: &Value) -> Vec<Diagnostic> {
     out
 }
 
+/// A non-agent moving body (a forklift, a rolling boss) that agents with `NavAgent.avoidance` yield to. Its
+/// velocity is its last-step motion, read from its pose by `nav_steer` into [`NavObstacleState`], so it may be
+/// kinematic, motor-driven or moved by the game. Agents without `avoidance` ignore it. A non-finite or
+/// non-positive `radius` is `L1528`.
+///
+/// ```yaml
+/// components:
+///   NavObstacle:
+///     radius: 1.2
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct NavObstacle {
+    /// Body radius for avoidance, metres (default `0.5`).
+    #[serde(
+        default = "default_obstacle_radius",
+        skip_serializing_if = "is_default_obstacle_radius"
+    )]
+    pub radius: f32,
+    /// A disabled obstacle is ignored but keeps tracking its pose (default `true`).
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enabled: bool,
+}
+
+const DEFAULT_OBSTACLE_RADIUS: f32 = 0.5;
+
+impl Default for NavObstacle {
+    fn default() -> Self {
+        NavObstacle {
+            radius: DEFAULT_OBSTACLE_RADIUS,
+            enabled: true,
+        }
+    }
+}
+
+fn default_obstacle_radius() -> f32 {
+    DEFAULT_OBSTACLE_RADIUS
+}
+fn is_default_obstacle_radius(value: &f32) -> bool {
+    value.to_bits() == DEFAULT_OBSTACLE_RADIUS.to_bits()
+}
+fn default_true() -> bool {
+    true
+}
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+impl SemanticValidate for NavObstacle {
+    /// Rejects a non-finite or non-positive `radius` (`L1528`, pointer `/radius`).
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        if let Some(n) = value
+            .get("radius")
+            .and_then(Value::as_f64)
+            .map(engine_number)
+            && !(n.is_finite() && n > 0.0)
+        {
+            out.push(
+                Diagnostic::new(
+                    code::NAV_AVOIDANCE_INVALID,
+                    "the `NavObstacle` `radius` must be finite and above 0",
+                )
+                .with_path("/radius")
+                .with_help("write a positive radius in metres; `ludion explain L1528`"),
+            );
+        }
+        out
+    }
+}
+
+/// The motion `nav_steer` read from a [`NavObstacle`]'s pose: where it was last tick and its velocity, metres
+/// per second. Engine-written and hashed like `NavSteering`, so a restore resumes exactly. Defaults to zero.
+///
+/// ```yaml
+/// components:
+///   NavObstacleState: {}
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq)]
+pub struct NavObstacleState {
+    /// The pose read last tick, world axes (default zero).
+    #[serde(default, skip_serializing_if = "is_zero_vec3")]
+    pub position: [f32; 3],
+    /// Velocity from the last two poses, world axes (default zero).
+    #[serde(default, skip_serializing_if = "is_zero_vec3")]
+    pub velocity: [f32; 3],
+}
+
+fn is_zero_vec3(value: &[f32; 3]) -> bool {
+    value.iter().all(|c| c.to_bits() == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +264,27 @@ mod tests {
             validate_avoidance(&json!({ "avoidance": { "max_neighbors": 0 } })).len(),
             1
         );
+    }
+
+    #[test]
+    fn obstacle_defaults_round_trip_and_validate() {
+        let obstacle: NavObstacle = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(obstacle, NavObstacle::default());
+        assert_eq!(serde_json::to_value(obstacle).unwrap(), json!({}));
+        let state = NavObstacleState {
+            position: [1.0, 0.0, 2.0],
+            velocity: [0.0, 0.0, 3.0],
+        };
+        let back: NavObstacleState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        assert_eq!(back, state);
+        assert_eq!(
+            serde_json::to_value(NavObstacleState::default()).unwrap(),
+            json!({})
+        );
+        let found = NavObstacle::validate_semantics(&json!({ "radius": 0.0 }));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path.as_deref(), Some("/radius"));
+        assert!(NavObstacle::validate_semantics(&json!({ "radius": 1.0 })).is_empty());
     }
 }

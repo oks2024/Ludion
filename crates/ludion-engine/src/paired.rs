@@ -1183,6 +1183,38 @@ fn play_group(
         }
     }
 
+    // A despawned participant leaves no `PairedAction` to end, so its partners stop looking through it
+    // here; the component is written only when an entry is dead.
+    for (id, _) in &live {
+        let dead: Vec<EntityId> = world
+            .get_unrecorded::<IgnoreCollisions>(*id)
+            .ok()
+            .flatten()
+            .map(|ignore| {
+                ignore
+                    .with
+                    .iter()
+                    .copied()
+                    .filter(|other| !world.is_alive(*other))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if dead.is_empty() {
+            continue;
+        }
+        let emptied = world
+            .get_mut::<IgnoreCollisions>(*id)
+            .ok()
+            .flatten()
+            .is_some_and(|ignore| {
+                ignore.with.retain(|other| !dead.contains(other));
+                ignore.with.is_empty()
+            });
+        if emptied {
+            let _ = world.remove::<IgnoreCollisions>(*id);
+        }
+    }
+
     // 2. A game write to a role's clip, start or speed breaks lockstep: the whole action ends.
     let mut broken = false;
     for (id, role) in &live {

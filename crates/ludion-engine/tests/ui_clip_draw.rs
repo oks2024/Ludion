@@ -362,3 +362,137 @@ fn needs_gpu_ui_hit_agrees_with_drawn_polygons() {
     };
     assert_hit_agrees_with_pixels(&image, &world, &[ids[2]], (960, 540), 5_000);
 }
+
+/// A white zigzag with mitred corners, a round-capped, round-joined polyline and a stroked concave star
+/// outline (stroke only), each inside a rect-clipped group turned 20 degrees.
+const STROKES_SCENE: &str = "format: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - components:
+      UiGroup:
+        offset:
+          - 300.0
+          - 150.0
+        size:
+          - 360.0
+          - 360.0
+        clip: rect
+        rotation: 20.0
+  - components:
+      UiShape:
+        anchor: center
+        group:
+          index: 1
+          generation: 0
+        offset:
+          - 0
+          - -90
+        shape:
+          type: polyline
+          points:
+          - - -100
+            - -40
+          - - -40
+            - -40
+          - - -40
+            - 20
+          - - 20
+            - 20
+          - - 20
+            - -40
+          - - 80
+            - -40
+        stroke:
+          width: 10.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        rotation: 0
+  - components:
+      UiShape:
+        anchor: center
+        group:
+          index: 1
+          generation: 0
+        offset:
+          - 0
+          - 90
+        shape:
+          type: polyline
+          join: round
+          cap: round
+          points:
+          - - -110
+            - 0
+          - - -40
+            - 40
+          - - 40
+            - -30
+          - - 110
+            - 10
+        stroke:
+          width: 10.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        rotation: 0
+  - components:
+      UiShape:
+        anchor: center
+        group:
+          index: 1
+          generation: 0
+        offset:
+          - 0
+          - 20
+        shape:
+          type: polygon
+          points:
+          - - 0
+            - -90
+          - - 34.38
+            - -47.33
+          - - 85.59
+            - -27.81
+          - - 55.64
+            - 18.08
+          - - 52.9
+            - 72.81
+          - - 0
+            - 58.5
+          - - -52.9
+            - 72.81
+          - - -55.64
+            - 18.08
+          - - -85.59
+            - -27.81
+          - - -34.38
+            - -47.33
+        stroke:
+          width: 10.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        rotation: 25
+";
+
+#[test]
+fn needs_gpu_ui_hit_agrees_with_drawn_strokes() {
+    let Some((image, world, ids)) = render(STROKES_SCENE) else {
+        return;
+    };
+    assert_hit_agrees_with_pixels(&image, &world, &[ids[2], ids[3], ids[4]], (960, 540), 2_000);
+}

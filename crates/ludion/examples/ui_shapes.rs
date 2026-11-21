@@ -48,6 +48,7 @@ fn main() {
                 [30.0, 200.0],
                 [0.0, 200.0],
             ],
+            join: UiLineJoin::default(),
         },
         fill: Some([0.2, 0.9, 0.5, 1.0]),
         ..UiShape::default()
@@ -55,4 +56,23 @@ fn main() {
     assert!(ui_shape_hit(&bracket, viewport, [10.0, 100.0]));
     assert!(!ui_shape_hit(&bracket, viewport, [50.0, 120.0]));
     println!("polygon: arm hit, notch miss");
+
+    // A stroke-only polyline: a zigzag with mitred joins hits on its band, not inside its bends.
+    let zigzag = UiShape {
+        shape: UiShapeType::Polyline {
+            points: vec![[0.0, 0.0], [60.0, 0.0], [60.0, 60.0], [120.0, 60.0]],
+            closed: false,
+            join: UiLineJoin::Miter,
+            cap: UiLineCap::Butt,
+        },
+        stroke: Some(UiStroke {
+            width: 10.0,
+            color: [1.0, 0.8, 0.2, 1.0],
+        }),
+        ..UiShape::default()
+    };
+    assert!(ui_shape_hit(&zigzag, viewport, [30.0, 2.0]));
+    assert!(ui_shape_hit(&zigzag, viewport, [60.0, 30.0]));
+    assert!(!ui_shape_hit(&zigzag, viewport, [30.0, 30.0]));
+    println!("polyline: band hit, bend miss");
 }

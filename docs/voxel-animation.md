@@ -426,6 +426,7 @@ tracks:
 - Base clip and its crossfade only: the incoming side counts at the fade weight, the outgoing `from` at the
   rest, and `weight` is their sum (scale your own code-driven move by `1 - weight`). Layers and blends
   contribute nothing; `None` when no side carries `$root`.
+- A paired entity (`docs/paired-actions.md`) takes its root motion from `paired_motion`, never also from this.
 - The motor idiom: `move_character(world, id, rm.translation)`, then `turn_character(world, id, current_yaw + rm.yaw)`
   (the turn is absolute). `ludion-engine/examples/root_motion.rs` runs it.
 

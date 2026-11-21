@@ -26,7 +26,7 @@
 //! with `NavRoute.status = at_link` until the game calls [`nav_link_done`]. The engine never moves the body.
 
 use ludion_components::nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
-use ludion_components::{NavAgent, NavLink, NavSteering};
+use ludion_components::{NavAgent, NavLink, NavObstacle, NavObstacleState, NavSteering};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
@@ -1402,9 +1402,17 @@ struct AvoidBody {
     priority: u32,
 }
 
-/// The walking agents by ascending entity, built only when some agent has `avoidance`.
+/// One enabled [`NavObstacle`] as avoiding agents see it: its pose and last-step motion.
+struct ObstacleBody {
+    position: [f32; 3],
+    velocity: [f32; 3],
+    radius: f32,
+}
+
+/// The walking agents and enabled obstacles by ascending entity, built only when some agent has `avoidance`.
 struct AvoidTable {
     bodies: Vec<(EntityId, AvoidBody)>,
+    obstacles: Vec<ObstacleBody>,
     max_body_radius: f32,
     dt: f32,
 }
@@ -1581,6 +1589,7 @@ fn plan_route(
 /// # let _ = engine;
 /// ```
 pub fn nav_steer(world: &mut World, ctx: &SystemCtx) {
+    let obstacles = update_obstacles(world, ctx);
     let mut agents: Vec<(EntityId, NavAgent)> = world
         .query_ids::<(&NavAgent,)>()
         .map(|(id, (agent,))| (id, agent.clone()))
@@ -1692,9 +1701,13 @@ pub fn nav_steer(world: &mut World, ctx: &SystemCtx) {
                     )
                 })
                 .collect();
-            let max_body_radius = bodies.iter().fold(0.0f32, |m, (_, b)| m.max(b.radius));
+            let max_body_radius = obstacles.iter().map(|o| o.radius).fold(
+                bodies.iter().fold(0.0f32, |m, (_, b)| m.max(b.radius)),
+                f32::max,
+            );
             AvoidTable {
                 bodies,
+                obstacles,
                 max_body_radius,
                 dt: ctx.dt.max(1e-4),
             }
@@ -1866,6 +1879,46 @@ fn write_route(world: &mut World, steer: &mut Steer, advance: Option<Advance>) {
     }
 }
 
+/// Reads every [`NavObstacle`] pose (ascending entity, enabled or not) into its [`NavObstacleState`] and returns
+/// the enabled ones. Velocity is the motion since the last tick, zero on the first.
+fn update_obstacles(world: &mut World, ctx: &SystemCtx) -> Vec<ObstacleBody> {
+    let mut found: Vec<(EntityId, NavObstacle)> = world
+        .query_ids::<(&NavObstacle,)>()
+        .map(|(id, (obstacle,))| (id, *obstacle))
+        .collect();
+    found.sort_by_key(|(entity, _)| *entity);
+    let mut out = Vec::new();
+    for (entity, obstacle) in found {
+        let Some(position) = world_transform(world, entity).map(|t| t.trs.translation) else {
+            continue;
+        };
+        let previous = world
+            .get::<NavObstacleState>(entity)
+            .ok()
+            .flatten()
+            .copied();
+        let velocity = match previous {
+            Some(state) if ctx.dt > 0.0 => {
+                let mut v = [0.0f32; 3];
+                for (axis, c) in v.iter_mut().enumerate() {
+                    *c = (position[axis] - state.position[axis]) / ctx.dt;
+                }
+                v
+            }
+            _ => [0.0; 3],
+        };
+        let _ = world.insert(entity, NavObstacleState { position, velocity });
+        if obstacle.enabled {
+            out.push(ObstacleBody {
+                position,
+                velocity,
+                radius: obstacle.radius,
+            });
+        }
+    }
+    out
+}
+
 fn steer_one(
     steer: &Steer,
     view: Option<&ClassView>,
@@ -1937,6 +1990,20 @@ fn steer_one(
                 velocity: body.velocity,
                 radius: body.radius,
                 responsibility,
+            });
+        }
+        let reach = steer.radius + table.max_body_radius + agent.speed * avoidance.horizon_s;
+        for obstacle in &table.obstacles {
+            let dx = obstacle.position[0] - pos[0];
+            let dz = obstacle.position[2] - pos[2];
+            if dx * dx + dz * dz > reach * reach || (obstacle.position[1] - pos[1]).abs() > height {
+                continue;
+            }
+            avoid_scratch.neighbors.push(AvoidNeighbor {
+                position: [obstacle.position[0], obstacle.position[2]],
+                velocity: [obstacle.velocity[0], obstacle.velocity[2]],
+                radius: obstacle.radius,
+                responsibility: 1.0,
             });
         }
         let me = AvoidAgent {

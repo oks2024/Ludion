@@ -235,7 +235,7 @@ pub(crate) fn pre_shape<'a>(
     if let Some(color) = s.color {
         let stroke_only = matches!(
             out.shape,
-            UiShapeType::Line { .. } | UiShapeType::Arc { .. }
+            UiShapeType::Line { .. } | UiShapeType::Arc { .. } | UiShapeType::Polyline { .. }
         );
         match (&mut out.fill, &mut out.stroke) {
             (fill @ Some(_), _) if !stroke_only => *fill = Some(color),
@@ -376,10 +376,17 @@ pub(crate) fn bounds(instances: &[UiEntry]) -> Option<[f32; 4]> {
             UiInstance::Polygon {
                 origin_px: o,
                 points,
+                stroke,
                 ..
             } => {
+                let pad = stroke.map_or(0.0, |s| s.width_px * 0.5 + 1.0);
                 for p in points {
-                    grow([o[0] + p[0], o[1] + p[1], o[0] + p[0], o[1] + p[1]]);
+                    grow([
+                        o[0] + p[0] - pad,
+                        o[1] + p[1] - pad,
+                        o[0] + p[0] + pad,
+                        o[1] + p[1] + pad,
+                    ]);
                 }
             }
         }
@@ -437,11 +444,15 @@ pub(crate) fn transform_instances(
             UiInstance::Polygon {
                 origin_px,
                 points,
+                stroke,
                 rotation,
                 ..
             } => {
                 *origin_px = [x(origin_px[0]), y(origin_px[1])];
                 scale_points(points, scale);
+                if let Some(stroke) = stroke {
+                    stroke.width_px *= scale;
+                }
                 turn(rotation);
             }
         }
@@ -473,7 +484,14 @@ fn multiply_alpha(instances: &mut [UiEntry], opacity: f32) {
                     stroke.color[3] *= opacity;
                 }
             }
-            UiInstance::Polygon { fill, .. } => fill[3] *= opacity,
+            UiInstance::Polygon { fill, stroke, .. } => {
+                if let Some(fill) = fill {
+                    fill[3] *= opacity;
+                }
+                if let Some(stroke) = stroke {
+                    stroke.color[3] *= opacity;
+                }
+            }
         }
     }
 }
@@ -728,10 +746,16 @@ fn rotate_into_group(instances: &mut [UiEntry], xf: &GroupXf) {
                 }
             }
             UiInstance::Polygon {
-                origin_px, points, ..
+                origin_px,
+                points,
+                stroke,
+                ..
             } => {
                 *origin_px = moved;
                 scale_points(points, xf.scale);
+                if let Some(stroke) = stroke {
+                    stroke.width_px *= xf.scale;
+                }
             }
         }
     }

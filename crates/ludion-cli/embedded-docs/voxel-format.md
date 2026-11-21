@@ -214,7 +214,8 @@ are **not** connected.
   any one palette entry authors any material field — color always tints, material never blends across
   the two surfaces.
 - **Rain wets every palette.** Under a `Rain` (`ludion docs weather`) a voxel model's exposed faces darken
-  and gloss with a porosity of 0.5, whatever the palette authors; there is no porosity field yet.
+  and gloss by the palette entry's `porosity` (`[0, 1]`, default 0.5). Authoring `porosity` alone makes the entry
+  author a material, so `Mesh.roughness`/`metallic`/`emissive`/`porosity` go inert like they do for any material field.
 
 ## Gotchas
 

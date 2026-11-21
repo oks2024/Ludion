@@ -23,7 +23,7 @@ use ludion_physics::IgnoreCollisions;
 use ludion_protocol::command::EngineRestoreParams;
 use ludion_protocol::{Command, ResponseBody};
 
-use crate::paired_fit::{copy_dir, gallery, named, scene};
+use crate::paired_fit::{copy_dir, gallery, motor_entity, named, scene};
 
 const RUN: &str = "voxels/run.paired.yaml";
 const START: u64 = 5;
@@ -525,4 +525,439 @@ fn a_game_that_never_starts_an_action_hashes_like_one_without_the_system() {
             .collect::<Vec<_>>()
     };
     assert_eq!(hashes(true), hashes(false));
+}
+
+// ---- N roles, root motion after the warp, abort to clips (W5b) ----
+
+const TRI: &str = "voxels/tri.paired.yaml";
+
+fn tri_doc(a_assembly: &str, b_assembly: &str, moves: &str) -> String {
+    format!(
+        "format: 1
+kind: paired
+name: tri
+roles:
+  a:
+    assembly: {a_assembly}
+    clip: carry
+    scale: 0.125
+  b:
+    assembly: {b_assembly}
+    clip: idle
+    scale: 0.125
+  c:
+    assembly: humanoid.assembly.yaml
+    clip: idle
+    scale: 0.125
+align:
+  reference: a
+  moves: {moves}
+  ticks: 8
+  offsets:
+    b:
+      translation:
+        - 0.0
+        - 0.0
+        - -0.5
+      yaw_deg: 180.0
+    c:
+      translation:
+        - 0.5
+        - 0.0
+        - 0.0
+      yaw_deg: 90.0
+events:
+  - name: e1
+    t: 0.25
+"
+    )
+}
+
+/// Three motor figures, already on the document's pose except `a`: 0.4 m and 20 degrees off.
+fn tri_scene(a_assembly: &str, b_assembly: &str) -> String {
+    let plain = "assembly: voxels/humanoid.assembly.yaml";
+    let (a_shape, b_shape) = (
+        format!("assembly: voxels/{a_assembly}"),
+        format!("assembly: voxels/{b_assembly}"),
+    );
+    let floor = scene("");
+    let floor = floor.split("  - name: instigator").next().unwrap();
+    format!(
+        "{floor}{}{}{}",
+        motor_entity("a", [3.4, 0.0, 1.5], 160.0, 0.125, &a_shape),
+        motor_entity("b", [3.0, 0.0, 2.0], 0.0, 0.125, &b_shape),
+        motor_entity("c", [2.5, 0.0, 1.5], -90.0, 0.125, plain),
+    )
+}
+
+struct Tri {
+    engine: Engine,
+    root: PathBuf,
+    log: Log,
+    ids: [EntityId; 3],
+}
+
+fn tri_driver(start_at: u64, doc: &'static str) -> impl Fn(&mut World, &SystemCtx) + Send + Sync {
+    move |world, ctx| {
+        let (Some(a), Some(b), Some(c)) = (find(world, "a"), find(world, "b"), find(world, "c"))
+        else {
+            return;
+        };
+        if ctx.frame.as_u64() == start_at {
+            start_paired(
+                world,
+                doc,
+                &[("a", a), ("b", b), ("c", c)],
+                0.0,
+                ctx.game_instant,
+            )
+            .expect("the action starts");
+        }
+        for e in [a, b, c] {
+            if let Some(step) = paired_motion(world, e, ctx) {
+                let _ = move_character(world, e, step.displacement);
+                let _ = turn_character(world, e, step.yaw);
+            }
+        }
+    }
+}
+
+/// `files` are written under the temp root before the engine boots.
+fn tri(name: &str, doc_text: &str, files: &[(&str, String)], assemblies: (&str, &str)) -> Tri {
+    let root =
+        std::env::temp_dir().join(format!("ludion-paired-tri-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    copy_dir(&gallery().join("voxels"), &root.join("voxels"));
+    std::fs::write(root.join(TRI), doc_text).unwrap();
+    for (rel, text) in files {
+        std::fs::write(root.join(rel), text).unwrap();
+    }
+    let log: Log = Arc::default();
+    let sink = Arc::clone(&log);
+    let mut engine = Engine::builder()
+        .project_root(&root)
+        .system("driver", tri_driver(START, TRI))
+        .system("animation_events", animation_events)
+        .system("paired_update", paired_update)
+        .system("recorder", move |world: &mut World, ctx: &SystemCtx| {
+            if let Some(events) = world.resource::<ludion_engine::AnimationEvents>() {
+                let mut log = sink.lock().unwrap();
+                for event in events.iter().filter(|e| e.clip.starts_with("paired:")) {
+                    log.push((ctx.frame.as_u64(), event.clone()));
+                }
+            }
+        })
+        .build()
+        .expect("the game builds");
+    engine
+        .load_inline_scene(&tri_scene(assemblies.0, assemblies.1))
+        .expect("the scene loads");
+    let ids = ["a", "b", "c"].map(|n| named(&mut engine, n));
+    Tri {
+        engine,
+        root,
+        log,
+        ids,
+    }
+}
+
+impl Tri {
+    fn until(&mut self, frame: u64) {
+        while self.engine.frame().as_u64() <= frame {
+            assert!(
+                self.engine.advance_live(),
+                "the sim stopped (a system panicked?)"
+            );
+        }
+    }
+    fn transform(&self, id: EntityId) -> Transform {
+        self.engine
+            .world()
+            .get::<Transform>(id)
+            .unwrap()
+            .cloned()
+            .unwrap()
+    }
+    fn action(&self, id: EntityId) -> Option<PairedAction> {
+        self.engine
+            .world()
+            .get::<PairedAction>(id)
+            .ok()
+            .flatten()
+            .cloned()
+    }
+    fn with(&self, id: EntityId) -> Option<Vec<EntityId>> {
+        self.engine
+            .world()
+            .get::<IgnoreCollisions>(id)
+            .ok()
+            .flatten()
+            .map(|i| i.with.clone())
+    }
+    fn events(&self) -> Vec<(u64, EntityId, String)> {
+        self.log
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(t, e)| (*t, e.entity, e.name.clone()))
+            .collect()
+    }
+    fn done(self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn plain_tri(name: &str) -> Tri {
+    tri(
+        name,
+        &tri_doc("humanoid.assembly.yaml", "humanoid.assembly.yaml", "a"),
+        &[],
+        ("humanoid.assembly.yaml", "humanoid.assembly.yaml"),
+    )
+}
+
+fn yaw_of(rotation: [f32; 3]) -> f32 {
+    let [x, y, z, w] = ludion_core::math::euler_xyz_degrees_to_quat(rotation);
+    ludion_core::math::atan2(2.0 * (x * z + w * y), 1.0 - 2.0 * (x * x + y * y))
+}
+
+#[test]
+fn three_roles_warp_play_and_end_together() {
+    let mut r = plain_tri("three");
+    let [a, b, c] = r.ids;
+    r.until(START);
+    assert_eq!(r.with(a), Some(vec![b, c]));
+    assert_eq!(r.with(b), Some(vec![a, c]));
+    assert_eq!(r.with(c), Some(vec![a, b]));
+    r.until(START + 13);
+    let (ta, tb, tc) = (r.transform(a), r.transform(b), r.transform(c));
+    assert!(
+        (ta.translation[0] - 3.0).abs() < 1e-4 && (ta.translation[2] - 1.5).abs() < 1e-4,
+        "{:?}",
+        ta.translation
+    );
+    let off = (yaw_of(ta.rotation) - std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
+    assert!(
+        off < 1e-4 || std::f32::consts::TAU - off < 1e-4,
+        "yaw off by {off}"
+    );
+    assert!(
+        (tb.translation[0] - 3.0).abs() < 1e-5 && (tb.translation[2] - 2.0).abs() < 1e-5,
+        "{:?}",
+        tb.translation
+    );
+    assert!((tc.translation[0] - 2.5).abs() < 1e-5 && (tc.translation[2] - 1.5).abs() < 1e-5);
+    r.until(START + CLIP_TICKS + 4);
+    let events = r.events();
+    let e1: Vec<_> = events.iter().filter(|(_, _, n)| n == "e1").collect();
+    assert_eq!(e1.len(), 3, "{events:?}");
+    assert!(e1.iter().all(|(t, _, _)| *t == e1[0].0), "one tick: {e1:?}");
+    for id in [a, b, c] {
+        assert!(r.action(id).is_none() && r.with(id).is_none());
+        assert!(
+            events.iter().any(|(_, e, n)| *e == id && n == "end"),
+            "{events:?}"
+        );
+    }
+    r.done();
+}
+
+#[test]
+fn a_ragdoll_switch_leaves_two_roles_playing_and_a_despawn_is_pruned() {
+    let mut r = plain_tri("three-leave");
+    let [a, b, c] = r.ids;
+    r.until(START + 10);
+    let data = load_assembly(
+        ludion_assets::AssetRoot::content(&r.root),
+        "voxels/humanoid.assembly.yaml",
+    )
+    .unwrap();
+    let frame = r.engine.frame().as_u64();
+    switch_to_ragdoll(r.engine.world_mut(), c, &data, at(frame)).expect("a valid switch");
+    r.until(frame + 2);
+    assert!(r.action(c).is_none(), "the ragdolled role ended");
+    assert!(r.action(a).is_some() && r.action(b).is_some());
+    assert_eq!(r.with(a), Some(vec![b]));
+    assert_eq!(r.with(b), Some(vec![a]));
+    r.engine.world_mut().despawn(b).unwrap();
+    r.until(frame + 4);
+    assert!(
+        r.with(a).is_none_or(|w| w.is_empty()),
+        "the dead member is pruned: {:?}",
+        r.with(a)
+    );
+    r.done();
+}
+
+#[test]
+fn abort_to_crossfades_only_the_named_roles_and_an_unknown_one_mutates_nothing() {
+    let mut r = plain_tri("abort-to");
+    let [a, b, c] = r.ids;
+    r.until(START + 3);
+    let t = at(START + 3);
+    let refused = abort_paired(r.engine.world_mut(), a, &[("zzz", "walk")], 0.2, t).unwrap_err();
+    assert_eq!(refused.code, code::PAIRED_CAST_INVALID);
+    assert!(r.action(a).is_some(), "nothing was mutated");
+    let twice = abort_paired(
+        r.engine.world_mut(),
+        a,
+        &[("b", "walk"), ("b", "run")],
+        0.2,
+        t,
+    )
+    .unwrap_err();
+    assert_eq!(twice.code, code::PAIRED_CAST_INVALID);
+    let cast = abort_paired(r.engine.world_mut(), a, &[("b", "walk")], 0.2, t).expect("aborts");
+    assert_eq!(cast.len(), 3);
+    let anim = |r: &Tri, id| {
+        r.engine
+            .world()
+            .get::<Animation>(id)
+            .unwrap()
+            .cloned()
+            .unwrap()
+    };
+    let ab = anim(&r, b);
+    assert_eq!((ab.clip.as_str(), ab.from.as_str()), ("walk", "idle"));
+    assert_eq!(ab.fade, 0.2);
+    assert_eq!(anim(&r, a).clip, "carry");
+    assert_eq!(anim(&r, c).clip, "idle");
+    assert!(anim(&r, a).fade == 0.0 && anim(&r, c).fade == 0.0);
+    for id in [a, b, c] {
+        assert!(r.action(id).is_none() && r.with(id).is_none());
+    }
+    r.done();
+}
+
+/// `humanoid.assembly.yaml` as `rooted`, whose `carry` clip also travels along `-Z`.
+fn rooted_files() -> Vec<(&'static str, String)> {
+    let voxels = gallery().join("voxels");
+    let carry = std::fs::read_to_string(voxels.join("anims/humanoid-carry.anim.yaml")).unwrap();
+    let rooted_clip = format!(
+        "{carry}  \"$root\":\n    translation:\n      - t: 0.0\n        v:\n          - 0.0\n          - 0.0\n          - 0.0\n      - t: 1.0\n        v:\n          - 0.0\n          - 0.0\n          - -8.0\n"
+    );
+    let assembly = std::fs::read_to_string(voxels.join("humanoid.assembly.yaml"))
+        .unwrap()
+        .replace("name: humanoid", "name: rooted")
+        .replace(
+            "anims/humanoid-carry.anim.yaml",
+            "anims/rooted-carry.anim.yaml",
+        );
+    vec![
+        ("voxels/anims/rooted-carry.anim.yaml", rooted_clip),
+        ("voxels/rooted.assembly.yaml", assembly),
+    ]
+}
+
+#[test]
+fn a_non_movers_root_travel_applies_from_the_start_and_the_mover_follows() {
+    let doc = tri_doc("rooted.assembly.yaml", "humanoid.assembly.yaml", "b");
+    let mut r = tri(
+        "root-ref",
+        &doc,
+        &rooted_files(),
+        ("rooted.assembly.yaml", "humanoid.assembly.yaml"),
+    );
+    let [a, b, _] = r.ids;
+    r.until(START);
+    let start = r.transform(a).translation;
+    r.until(START + 20);
+    let moved = r.transform(a).translation;
+    let travel = ludion_core::math::sqrt(
+        (moved[0] - start[0]) * (moved[0] - start[0])
+            + (moved[2] - start[2]) * (moved[2] - start[2]),
+    );
+    assert!(
+        travel > 0.1,
+        "the reference travelled from the start: {travel}"
+    );
+    r.until(START + 40);
+    let (ta, tb) = (r.transform(a), r.transform(b));
+    // b holds a's offset (0, 0, -0.5) in a's frame.
+    let yaw = yaw_of(ta.rotation);
+    let (s, co) = (ludion_core::math::sin(yaw), ludion_core::math::cos(yaw));
+    let want = [ta.translation[0] - 0.5 * s, ta.translation[2] - 0.5 * co];
+    assert!(
+        (tb.translation[0] - want[0]).abs() < 0.05 && (tb.translation[2] - want[1]).abs() < 0.05,
+        "b {:?} wants {want:?}",
+        tb.translation
+    );
+    r.done();
+}
+
+#[test]
+fn a_movers_root_travel_waits_for_its_warp_and_no_root_is_the_plain_step() {
+    let voxels = gallery().join("voxels");
+    let idle = std::fs::read_to_string(voxels.join("anims/humanoid-idle.anim.yaml")).unwrap();
+    let rooted_idle = format!(
+        "{idle}  \"$root\":\n    translation:\n      - t: 0.0\n        v:\n          - 0.0\n          - 0.0\n          - 0.0\n      - t: 1.2\n        v:\n          - 0.0\n          - 0.0\n          - -8.0\n"
+    );
+    let assembly = std::fs::read_to_string(voxels.join("humanoid.assembly.yaml"))
+        .unwrap()
+        .replace("name: humanoid", "name: rooted-idle")
+        .replace(
+            "anims/humanoid-idle.anim.yaml",
+            "anims/rooted-idle.anim.yaml",
+        );
+    let files = vec![
+        ("voxels/anims/rooted-idle.anim.yaml", rooted_idle),
+        ("voxels/rooted-idle.assembly.yaml", assembly),
+    ];
+    let positions = |files: &[(&str, String)], b_assembly: &str| {
+        let doc = tri_doc("humanoid.assembly.yaml", b_assembly, "b");
+        let mut r = tri(
+            "root-mover",
+            &doc,
+            files,
+            ("humanoid.assembly.yaml", b_assembly),
+        );
+        let b = r.ids[1];
+        let out: Vec<[f32; 3]> = (START..START + 30)
+            .map(|tick| {
+                r.until(tick);
+                r.transform(b).translation
+            })
+            .collect();
+        r.done();
+        out
+    };
+    let plain = positions(&[], "humanoid.assembly.yaml");
+    let rooted = positions(&files, "rooted-idle.assembly.yaml");
+    // The warp is 8 ticks long: those ticks match the plain run exactly.
+    assert_eq!(plain[..8], rooted[..8], "root travel waits for the warp");
+    let (dx, dz) = (plain[29][0] - rooted[29][0], plain[29][2] - rooted[29][2]);
+    let apart = ludion_core::math::sqrt(dx * dx + dz * dz);
+    assert!(apart > 0.05, "root travel applies after the warp: {apart}");
+}
+
+#[test]
+fn the_three_role_run_replays_identically_after_a_restore_and_at_every_thread_count() {
+    let trace = |split: Option<u64>| {
+        let mut r = plain_tri("tri-trace");
+        let mut hashes = Vec::new();
+        while r.engine.frame().as_u64() < START + CLIP_TICKS + 4 {
+            r.engine.advance_live();
+            hashes.push(r.engine.world_hash().unwrap().as_u64());
+            if Some(r.engine.frame().as_u64()) == split {
+                let snapshot = match r.engine.execute(Command::EngineSnapshot).unwrap().body {
+                    ResponseBody::Snapshot { snapshot } => snapshot,
+                    other => panic!("expected a snapshot, got {other:?}"),
+                };
+                r.engine
+                    .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+                    .unwrap();
+            }
+        }
+        r.done();
+        hashes
+    };
+    let whole = trace(None);
+    assert_eq!(trace(Some(START + 20)), whole);
+    for n in [2, 8] {
+        assert_eq!(
+            ludion_core::par::with_threads(n, || trace(None)),
+            whole,
+            "{n} threads"
+        );
+    }
 }

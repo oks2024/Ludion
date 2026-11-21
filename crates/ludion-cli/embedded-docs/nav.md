@@ -243,6 +243,23 @@ NavAgent:
 - A `radius` or `horizon_s` not above 0, or `max_neighbors` outside 1 to 16, is `L1528`. An agent without the field
   steers, and hashes, as before.
 
+### Obstacles
+
+A non-agent moving body (a forklift, a rolling boss) that avoiding agents yield to carries `NavObstacle`:
+
+```yaml
+NavObstacle: { radius: 1.2 }   # enabled: false is ignored but keeps tracking its pose
+```
+
+- **Motion is read from the pose.** `nav_steer` writes `NavObstacleState { position, velocity }` (engine-written,
+  hashed) from the entity's world position each tick, velocity being the last step's motion, so a kinematic,
+  motor-driven or game-moved body all work.
+- **Schedule:** the state lags one tick, so run the mover after `nav_steer`. Obstacles are seen only by agents
+  with `avoidance`, with full responsibility (the agent steers around them); separation ignores them.
+- **Range:** an obstacle counts when it is within the agent's query reach on xz and within the class height in y.
+- A `radius` not above 0 is `L1528`. A world without `NavObstacle` steers, and hashes, as before.
+- Covers Serious Isaac draft 0029: give the boss a `NavObstacle` and the horde `avoidance`.
+
 `cargo run -p ludion --example nav_avoidance` crosses two crowds.
 
 ## Feeding the motor

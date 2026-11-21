@@ -128,7 +128,9 @@ pub struct Request<'a> {
     pub atlas: Option<&'a Path>,
     /// `--font`: compose one `kind: font` document's specimen sheet, CPU-only.
     pub font: Option<&'a Path>,
-    /// `--out`; defaulted in model, sprite, atlas and font modes.
+    /// `--paired`: render one `kind: paired` document's phases as a contact sheet.
+    pub paired: Option<&'a Path>,
+    /// `--out`; defaulted in model, sprite, atlas, font and paired modes.
     pub out: Option<&'a Path>,
     /// `--width`.
     pub width: u32,
@@ -215,6 +217,9 @@ pub fn run(request: &Request) -> ExitCode {
     }
     if let Some(doc) = request.font {
         return run_font(doc, request.out);
+    }
+    if let Some(doc) = request.paired {
+        return run_paired(request, doc);
     }
     match (request.scene, request.models.first()) {
         (Some(scene), None) => {
@@ -1363,6 +1368,70 @@ fn run_atlas_clip(request: &Request, doc: &Path, clip: &str) -> ExitCode {
             for phase in &outcome.phases {
                 println!("  {phase}");
             }
+            ExitCode::SUCCESS
+        }
+        Err(diagnostics) => report(doc, &diagnostics),
+    }
+}
+
+/// The default `--out` for paired mode: `<name>.paired-<kind>.png` in the current directory, where
+/// `<name>` is the document's file stem with `.paired` stripped and the kind says which phases.
+fn default_paired_out(doc: &Path, request: &Request) -> PathBuf {
+    let stem = doc.file_stem().and_then(|s| s.to_str()).unwrap_or("paired");
+    let name = stem.strip_suffix(".paired").unwrap_or(stem);
+    let kind = match (request.strip, request.time) {
+        (Some(_), _) => "strip".to_string(),
+        (None, Some(time)) => format!("t{time}"),
+        (None, None) => "events".to_string(),
+    };
+    PathBuf::from(format!("{name}.paired-{kind}.png"))
+}
+
+/// `--paired`: one cell per phase of a `kind: paired` document, then the phases and the contact
+/// lines `check-scene` prints, so a session that never opens the PNG still reads the pose.
+fn run_paired(request: &Request, doc: &Path) -> ExitCode {
+    let out = request
+        .out
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_paired_out(doc, request));
+    let view = request.views.first().copied().unwrap_or(ModelView::Iso);
+    if request.views.len() > 1 {
+        return crate::diagnostic::usage_error(
+            "`--paired` draws one camera angle: pass one `--views` value, such as `--views game`",
+        );
+    }
+    match ludion_engine::render_paired_sheet(&ludion_engine::PairedSheetRequest {
+        document: doc,
+        view,
+        time: request.time,
+        strip: request.strip,
+        width: request.width,
+        height: request.height,
+    }) {
+        Ok(outcome) => {
+            if let Err(diagnostic) = outcome.image.write_png(&out) {
+                eprintln!("{diagnostic}");
+                return ExitCode::FAILURE;
+            }
+            println!(
+                "wrote {} ({}x{}) on {}",
+                out.display(),
+                outcome.image.width,
+                outcome.image.height,
+                outcome.adapter
+            );
+            for (index, phase) in outcome.phases.iter().enumerate() {
+                let events = if phase.events.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", phase.events.join(", "))
+                };
+                println!("phase {index}: t {} s{events}", phase.time);
+            }
+            for warning in &outcome.report.warnings {
+                eprintln!("{warning}");
+            }
+            crate::paired_report::print_contacts(&outcome.report);
             ExitCode::SUCCESS
         }
         Err(diagnostics) => report(doc, &diagnostics),

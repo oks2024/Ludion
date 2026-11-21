@@ -367,7 +367,7 @@ enum Command {
     /// `kind: font` document's specimen sheet (atlas, metric band, kerning, charset, pangram).
     #[command(group(
         ArgGroup::new("render_target")
-            .args(["scene", "model", "sprite", "atlas", "font"])
+            .args(["scene", "model", "sprite", "atlas", "font", "paired"])
             .required(true)
     ))]
     Render {
@@ -451,17 +451,32 @@ enum Command {
             "channel",
         ])]
         font: Option<PathBuf>,
+        /// Contact sheet of a `kind: paired` document: the roles at their aligned pose, one cell per
+        /// phase, the camera `iso` unless `--views` names one view. The phases are the document's
+        /// events by default, `--strip N` (2 to 16) evenly spaced over the clips' length, or one
+        /// `--time T`. Prints each phase and the same contact lines `check-scene` does. Needs a GPU
+        /// adapter. Example: `ludion render --paired examples/gallery/voxels/choke.paired.yaml
+        /// --strip 6`.
+        #[arg(long, value_name = "DOC", conflicts_with_all = [
+            "scene", "model", "sprite", "atlas", "font", "rig", "set", "sweep", "clip", "crossfade",
+            "blend", "layer", "look", "ik", "hold", "part", "isolate", "channel", "true_size",
+            "onion", "frames", "dump_timings", "dump_voxels", "dump_gi", "dump_probes", "steps",
+            "frame",
+        ])]
+        paired: Option<PathBuf>,
         /// Where to write the rendered PNG. Required with `--scene`, unless `--dump-voxels`/
         /// `--dump-gi`/`--dump-probes` is the only thing being asked for; with one `--model` or `--sprite` it
         /// defaults to `<name>.sheet.png` in the current directory (the document's file stem,
         /// `.voxel`/`.mesh`/`.assembly`/`.sprite` suffix stripped) and with `--atlas` to
         /// `<name>.atlas-sheet.png` (`.atlas` stripped), with `--font` to `<name>.font-sheet.png`
         /// (`.font` stripped), or `<name>.atlas-frame.png` /
-        /// `.atlas-strip.png` / `.atlas-onion.png` for the three `--clip` instruments — a sprite
+        /// `.atlas-strip.png` / `.atlas-onion.png` for the three `--clip` instruments, and with
+        /// `--paired` to `<name>.paired-events.png`, `.paired-strip.png` or `.paired-t<seconds>.png`
+        /// (`.paired` stripped) — a sprite
         /// document and the atlas packed from it share a stem, so their sheets must not share a
         /// name. A lineup names no single model, so it requires this.
         #[arg(long, required_unless_present_any = [
-            "model", "dump_voxels", "dump_gi", "dump_probes", "sprite", "atlas", "font",
+            "model", "dump_voxels", "dump_gi", "dump_probes", "sprite", "atlas", "font", "paired",
         ])]
         out: Option<PathBuf>,
         /// Output width in pixels (the sheet width in `--model` mode; integer cell division may
@@ -2337,6 +2352,7 @@ fn main() -> std::process::ExitCode {
             sprite,
             atlas,
             font,
+            paired,
             out,
             width,
             height,
@@ -2459,6 +2475,7 @@ fn main() -> std::process::ExitCode {
                 sprite: sprite.as_deref(),
                 atlas: atlas.as_deref(),
                 font: font.as_deref(),
+                paired: paired.as_deref(),
                 out: out.as_deref(),
                 width,
                 height,

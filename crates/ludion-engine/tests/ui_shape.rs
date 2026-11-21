@@ -9,7 +9,9 @@ use ludion_components::ui::{
 use ludion_core::ids::EntityId;
 use ludion_core::time::{SimTime, TickRate};
 use ludion_engine::Engine;
-use ludion_engine::components::{Anchor, UiRect, UiShape, UiShapeType, UiStroke};
+use ludion_engine::components::{
+    Anchor, UiLineCap, UiLineJoin, UiRect, UiShape, UiShapeType, UiStroke,
+};
 use ludion_engine::ui::{ui_hit, ui_tween_sample};
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
@@ -381,6 +383,7 @@ fn polygon(points: &[[f32; 2]], order: i32) -> UiShape {
     UiShape {
         shape: UiShapeType::Polygon {
             points: points.to_vec(),
+            join: UiLineJoin::default(),
         },
         fill: Some([1.0; 4]),
         offset: [100.0, 100.0],
@@ -513,4 +516,167 @@ fn a_polygon_follows_its_groups_scale_and_rotation() {
     };
     assert_eq!(points[1], [100.0 * ps * 2.0, 0.0]);
     assert!((rotation.radians - 30.0f32.to_radians()).abs() < 1e-5);
+}
+
+// --- strokes and polylines (`Plan/ui-hud.md` decisions 74-80) ---
+
+const ZIGZAG: [[f32; 2]; 4] = [[0.0, 0.0], [60.0, 0.0], [60.0, 60.0], [120.0, 60.0]];
+
+fn polyline(points: &[[f32; 2]], width: f32) -> UiShape {
+    UiShape {
+        shape: UiShapeType::Polyline {
+            points: points.to_vec(),
+            closed: false,
+            join: UiLineJoin::default(),
+            cap: UiLineCap::Butt,
+        },
+        stroke: Some(UiStroke {
+            width,
+            color: [1.0, 0.5, 0.25, 1.0],
+        }),
+        offset: [100.0, 100.0],
+        ..UiShape::default()
+    }
+}
+
+fn reported_degenerate(engine: &Engine) -> usize {
+    engine
+        .world()
+        .resource::<ludion_engine::Diagnostics>()
+        .map_or(0, |d| {
+            d.reported(ludion_core::codes::code::UI_POLYGON_DEGENERATE)
+                .count()
+        })
+}
+
+#[test]
+fn a_polyline_emits_one_stroke_only_open_instance() {
+    let mut engine = engine();
+    spawn(&mut engine, polyline(&ZIGZAG, 10.0));
+    let scene = extract(&mut engine);
+    let ps = engine.render_size().1 as f32 / 1080.0;
+    let UiInstance::Polygon {
+        points,
+        closed,
+        triangles,
+        fill,
+        stroke,
+        ..
+    } = &scene.ui[0]
+    else {
+        panic!("a polyline draws as a path");
+    };
+    assert_eq!(points.len(), ZIGZAG.len());
+    assert!(!closed);
+    assert!(triangles.is_empty());
+    assert!(fill.is_none());
+    assert_eq!(stroke.map(|s| s.width_px), Some(10.0 * ps));
+}
+
+#[test]
+fn a_polygon_with_a_stroke_keeps_its_fill_triangles_and_a_stroke_only_one_has_none() {
+    let mut engine = engine();
+    let mut both = polygon(&NOTCHED, 0);
+    both.stroke = Some(UiStroke {
+        width: 6.0,
+        color: [0.0, 1.0, 0.0, 1.0],
+    });
+    let mut outline = both.clone();
+    outline.fill = None;
+    outline.order = 1;
+    spawn(&mut engine, both);
+    spawn(&mut engine, outline);
+    let scene = extract(&mut engine);
+    let paths = polygons(&scene);
+    assert_eq!(paths.len(), 2);
+    let UiInstance::Polygon {
+        triangles,
+        fill,
+        stroke,
+        closed,
+        ..
+    } = paths[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(triangles.len(), NOTCHED.len() - 2);
+    assert!(fill.is_some() && stroke.is_some() && *closed);
+    let UiInstance::Polygon {
+        triangles, fill, ..
+    } = paths[1]
+    else {
+        unreachable!()
+    };
+    assert!(triangles.is_empty() && fill.is_none());
+}
+
+#[test]
+fn a_one_point_polyline_draws_nothing_and_warns_once() {
+    let mut engine = engine();
+    spawn(&mut engine, polyline(&[[5.0, 5.0], [5.0, 5.0]], 4.0));
+    for _ in 0..3 {
+        let scene = extract(&mut engine);
+        assert!(scene.ui.is_empty());
+    }
+    assert_eq!(reported_degenerate(&engine), 1);
+}
+
+#[test]
+fn a_stroked_bow_tie_still_warns_once() {
+    let mut engine = engine();
+    let mut bow = polygon(&BOW_TIE, 0);
+    bow.fill = None;
+    bow.stroke = Some(UiStroke {
+        width: 4.0,
+        color: [1.0; 4],
+    });
+    spawn(&mut engine, bow);
+    for _ in 0..3 {
+        assert!(extract(&mut engine).ui.is_empty());
+    }
+    assert_eq!(reported_degenerate(&engine), 1);
+}
+
+#[test]
+fn ui_hit_follows_a_polyline_band_and_a_group_scales_its_width() {
+    let mut engine = engine();
+    let id = spawn(&mut engine, polyline(&ZIGZAG, 10.0));
+    let ps = engine.render_size().1 as f32 / 1080.0;
+    let now = SimTime::from_ticks(0, TickRate::DEFAULT);
+    let at = |x: f32, y: f32| [(100.0 + x) * ps, (100.0 + y) * ps];
+    let hit = |p: [f32; 2]| ui_hit(engine.world(), id, engine.render_size(), p, now);
+    assert!(hit(at(30.0, 3.0)), "on the first leg");
+    assert!(hit(at(60.0, 30.0)), "on the riser");
+    assert!(!hit(at(30.0, 12.0)), "beside the band");
+    assert!(!hit(at(30.0, 30.0)), "inside the zigzag");
+
+    let group = engine.world_mut().spawn_presentation();
+    engine
+        .world_mut()
+        .insert(
+            group,
+            UiGroup {
+                size: [400.0, 400.0],
+                scale: 2.0,
+                ..UiGroup::default()
+            },
+        )
+        .unwrap();
+    let mut shape = polyline(&ZIGZAG, 10.0);
+    shape.group = Some(group);
+    spawn(&mut engine, shape);
+    let scene = extract(&mut engine);
+    let stroke = scene
+        .ui
+        .iter()
+        .find_map(|i| match i {
+            UiInstance::Polygon { stroke, .. }
+                if stroke.is_some_and(|s| s.width_px > 10.0 * ps * 1.5) =>
+            {
+                *stroke
+            }
+            _ => None,
+        })
+        .expect("the grouped polyline's stroke doubles");
+    assert!((stroke.width_px - 20.0 * ps).abs() < 1e-3);
 }

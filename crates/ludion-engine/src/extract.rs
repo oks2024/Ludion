@@ -1347,11 +1347,12 @@ fn extract_inner(
                     Diagnostic::new(
                         code::UI_POLYGON_DEGENERATE,
                         format!(
-                            "{id} has a `polygon` that cannot be filled: {fault}; it draws nothing"
+                            "{id} has a `{}` that cannot be drawn: {fault}; it draws nothing",
+                            ui::shape::path_kind(&shape.shape)
                         ),
                     )
                     .with_help(
-                        "write a simple polygon of 3+ distinct points; `ludion explain L2305`",
+                        "write a simple polygon of 3+ distinct points or a polyline of 2+; `ludion explain L2305`",
                     ),
                 )),
             }

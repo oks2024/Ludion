@@ -143,6 +143,11 @@ fn print(path: &Path, report: &PairedReport) {
     for event in &doc.events {
         println!("event {} @ {}", event.name, event.t);
     }
+    print_contacts(report);
+}
+
+/// One line per measured contact, the same text `check-scene` and `render --paired` print.
+pub(crate) fn print_contacts(report: &PairedReport) {
     for contact in &report.contacts {
         println!(
             "contact {} -> {} @ {} (t {}): gap {:.3} cells ({:.4} m), max {}",

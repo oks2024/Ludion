@@ -697,6 +697,27 @@ mod tests {
         assert_eq!(decode(&untangented, 0).tangents, DEFAULT_TANGENT.repeat(3));
     }
 
+    /// An authored `porosity` list narrows per vertex and alone makes the document author a material;
+    /// without it every vertex takes 0.5 and the document authors none.
+    #[test]
+    fn decode_carries_porosity_and_selects_the_vertex_material() {
+        let doc = MeshDocument {
+            positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            indices: vec![0, 1, 2],
+            ..Default::default()
+        };
+        let bare = decode(&doc, 0);
+        assert_eq!(bare.porosity, vec![DEFAULT_POROSITY; 3]);
+        assert!(!bare.authored_material);
+        let porous = MeshDocument {
+            porosity: Some(vec![0.0, 0.25, 1.0]),
+            ..doc
+        };
+        let data = decode(&porous, 0);
+        assert_eq!(data.porosity, vec![0.0, 0.25, 1.0]);
+        assert!(data.authored_material, "porosity alone authors a material");
+    }
+
     /// `decode` preserves authored normals verbatim (narrowed), never recomputing.
     #[test]
     fn decode_keeps_authored_normals() {

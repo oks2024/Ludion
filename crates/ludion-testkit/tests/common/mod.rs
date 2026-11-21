@@ -677,3 +677,129 @@ pub fn pose_blend_parts(world: &mut World) -> Vec<EntityId> {
     parts.sort();
     parts
 }
+
+/// The paired-takedown document, relative to the gallery root.
+pub const TAKEDOWN_DOC: &str = "voxels/takedown.paired.yaml";
+/// The tick the driver fits, warps and starts the action.
+pub const TAKEDOWN_START: u64 = 5;
+/// The tick `grab` fires (0.25 s after the start).
+pub const TAKEDOWN_GRAB_TICK: u64 = TAKEDOWN_START + 15;
+/// The tick `quiet` fires and the guard switches to its ragdoll (0.6 s after the start).
+pub const TAKEDOWN_SWITCH_TICK: u64 = TAKEDOWN_START + 36;
+/// The tick the guard's ragdoll folds back into its assembly, crossfading to `idle`.
+pub const TAKEDOWN_GETUP_TICK: u64 = TAKEDOWN_SWITCH_TICK + 90;
+/// The mid-fade frame of the get-up's half-second crossfade.
+pub const TAKEDOWN_GETUP_FRAME: u64 = TAKEDOWN_GETUP_TICK + 15;
+const TAKEDOWN_GUARD_ASSEMBLY: &str = "voxels/guard.assembly.yaml";
+
+fn named_entity(world: &World, name: &str) -> Option<EntityId> {
+    world.entities().find(|id| {
+        world
+            .get_unrecorded::<ludion_engine::components::Name>(*id)
+            .ok()
+            .flatten()
+            .is_some_and(|n| n.0 == name)
+    })
+}
+
+fn takedown_cast(world: &World) -> Option<[(&'static str, EntityId); 2]> {
+    Some([
+        ("instigator", named_entity(world, "player")?),
+        ("target", named_entity(world, "guard")?),
+    ])
+}
+
+/// The game's driver: on [`TAKEDOWN_START`] it fits the action (a warp of 0.6 m and 45 degrees) and starts
+/// it; every tick it feeds each participant's `paired_motion` step to the motor.
+fn takedown_driver(world: &mut World, ctx: &SystemCtx) {
+    let Some(cast) = takedown_cast(world) else {
+        return;
+    };
+    if ctx.frame.as_u64() == TAKEDOWN_START {
+        let warp = ludion_engine::Warp {
+            distance: 0.6,
+            yaw_deg: 45.0,
+        };
+        let fit = ludion_engine::paired_fit(world, TAKEDOWN_DOC, &cast, warp)
+            .expect("the takedown document resolves");
+        assert!(fit.fits, "the takedown fits: {fit:?}");
+        ludion_engine::start_paired(world, TAKEDOWN_DOC, &cast, 0.1, ctx.game_instant)
+            .expect("a fitting cast starts");
+    }
+    for (_, entity) in cast {
+        if let Some(step) = ludion_engine::paired_motion(world, entity, ctx) {
+            let _ = ludion_engine::move_character(world, entity, step.displacement);
+            let _ = ludion_engine::turn_character(world, entity, step.yaw);
+        }
+    }
+}
+
+/// Every part of the guard's ragdoll, in the assembly's authored order (spawn order).
+fn guard_parts(world: &mut World) -> Vec<EntityId> {
+    let mut parts: Vec<EntityId> = world
+        .query_ids::<(&Mesh,)>()
+        .filter(|(_, (mesh,))| {
+            matches!(&mesh.shape, ludion_engine::components::MeshSource::AssemblyPart { assembly, .. }
+                if assembly == TAKEDOWN_GUARD_ASSEMBLY)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    parts.sort();
+    parts
+}
+
+fn guard_assembly() -> AssemblyData {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+    load_assembly(
+        ludion_assets::AssetRoot::content(&root),
+        TAKEDOWN_GUARD_ASSEMBLY,
+    )
+    .expect("the guard assembly loads")
+}
+
+/// The reaction: the guard falls limp on `quiet` (joint zeros at the rest pose) and gets up at
+/// [`TAKEDOWN_GETUP_TICK`], the game's two calls around the action.
+fn takedown_reaction(world: &mut World, ctx: &SystemCtx) {
+    let Some(guard) = named_entity(world, "guard") else {
+        return;
+    };
+    let quiet = world.resource::<AnimationEvents>().is_some_and(|events| {
+        events
+            .iter()
+            .any(|e| e.entity == guard && e.clip == "paired:takedown" && e.name == "quiet")
+    });
+    if quiet {
+        let mut switch = ludion_engine::RagdollSwitch::default();
+        switch.limits_from = ludion_engine::LimitsFrom::Rest;
+        ludion_engine::switch_to_ragdoll_with(
+            world,
+            guard,
+            &guard_assembly(),
+            ctx.game_instant,
+            switch,
+        )
+        .expect("the guard switches to its ragdoll");
+    }
+    if ctx.frame.as_u64() == TAKEDOWN_GETUP_TICK {
+        let parts = guard_parts(world);
+        ludion_engine::switch_ragdoll_to_assembly(
+            world,
+            guard,
+            &parts,
+            &guard_assembly(),
+            "idle",
+            0.5,
+            ctx.game_instant,
+        )
+        .expect("the ragdoll folds back");
+    }
+}
+
+/// The paired-takedown engine: driver, `animation_events`, `paired_update`, then the reaction.
+pub fn takedown_builder() -> EngineBuilder {
+    Engine::builder()
+        .system("takedown_driver", takedown_driver)
+        .system("animation_events", animation_events)
+        .system("paired_update", ludion_engine::paired_update)
+        .system("takedown_reaction", takedown_reaction)
+}

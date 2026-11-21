@@ -1,6 +1,6 @@
 # Plan: Paired animations and a posed ragdoll — rest-relative zeros, part velocity, the way back, `kind: paired`
 
-> Status: **W1–W4 mechanized; W5a mechanized (fit: 0008-05; run: 0008-06); W5b, W6 not started.** Driver: Neon Shroud request 0008
+> Status: **W1–W4 mechanized; W5a mechanized (fit: 0008-05; run: 0008-06); W5b and W6 mechanized (0008-08, 0008-07).** Driver: Neon Shroud request 0008
 > (`engine-requests/0008-paired-animations-and-posed-ragdoll.md`). A takedown aligns two voxel assemblies,
 > plays one clip on both, and ends with the target ragdolled at the pose it died in; the way back
 > (get-up) re-poses an assembly from a ragdoll. The design below was written from the tree on 2026-11-18,
@@ -204,14 +204,14 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
 22. **`IgnoreCollisions { with }`.** A hashed `ludion-physics` component: the motor's casts and fit tests
     ignore `with`'s collider. It is read at query time and is not in the physics blob. Absent means
     bit-identical. The solver pair filter for dynamic bodies rides `Plan/character-controller.md` decision 28
-    (carry). It holds one ref; N roles need the L1392 collection (W5b).
+    (carry). It holds a list of at most four entities (`EntityRefCollection`, decision 37).
 23. **Document resolution (answers decision 18).** `paired_fit` and `start_paired` take the document's
     content-root path. A non-hashed `PairedLibrary` loads it lazily through `check_paired_files` (the
     `AnimationLibrary` rule: rebuilt at every world build; `asset.reload` does not reach it). There is no
     builder opt-in, and the `KINDS` row stays `doc_store: false`.
 24. **The aligned pose.** `moves: <role>` moves that role onto the other; `split` meets at the pair's
     midpoint, preserving the mean feet position and the mean yaw. Planar only: feet height is kept.
-25. **`paired_fit`.** The cast must be exactly the document's roles; W5a takes two roles, more is `L4373`.
+25. **`paired_fit`.** The cast must be exactly the document's roles; two to five roles; more is `L4373` (decision 41).
     Entity checks are `L4371`, the scale check `L4372`. Warp: each moving role's planar distance and absolute
     yaw change against `max_warp`. Every motor role is fit-tested at its target pose and role `posture`,
     ignoring its partner; a role without a motor is not fit-tested. Nothing is mutated.
@@ -243,6 +243,38 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
     which rewrites `AnimationEvents`, and before any reader. A default system would change every game's
     schedule and traces, including games that never pair (the `animation_events` and `play_patterns` precedent).
 
+33. **`render --paired <doc>`.** The roles stand at their aligned pose (decision 21), one cell per phase.
+    A phase is an instant: the document events by default (`[0]` with none), `--strip N` (2 to 16) evenly over
+    `[0, end]`, or `--time T`. A clip role is posed statically through `Animation { started: 0, speed: 1 }`
+    extracted at `quantize(t)`. The refusals are `L1756`, and the default view is `iso` (one `--views` value).
+34. **Framing.** The union of each role's assembly AABB under its `T·R·S`, padded 15% for posed limbs, normalized
+    through `Subject::from_box`, so every cell shares one camera and the roles keep their relative scale.
+35. **The gallery takedown.** `paired-takedown.yaml` fits, warps and starts `takedown.paired.yaml` (events `grab`
+    0.25, `quiet` 0.6, `release` 0.9) on two motor figures, the instigator 0.4 m and 20° off. On `quiet` the
+    guard ragdolls with `LimitsFrom::Rest` and gets up 90 ticks later through `switch_ragdoll_to_assembly`
+    (`idle`, 0.5 s). The game half is `takedown_builder` in `ludion-testkit/tests/common/mod.rs`.
+36. **No `render --paired` golden.** Trigger: the first regression the driven goldens miss.
+
+37. **`IgnoreCollisions.with` is a list of at most 4 entities** (`MAX_PARTNERS`; inline, no allocation, no lifetime on
+    `SweepFilter`, which stays `Copy`). Each participant ignores every other. `SemanticValidate` refuses more than four
+    with `L1759`; at runtime the first four count. `end_role` removes the leaver from every member's list and drops
+    an emptied component; `paired_update` prunes dead entries, writing only when one is dead.
+38. **The N-role frame rule.** `moves: X`, X not the reference: the frame is the reference's current pose, X goes
+    to its offset and the rest hold. `moves: <reference>`: the frame is the mean implied reference pose of every
+    other role (yaw by wrapped mean around the first voter's yaw), and only the reference moves. `split`: the mean
+    of every role's implied pose, every role moves. One voter is exact, so two-role results are unchanged. A role
+    that left drops out of the mean; with no voter left every present role holds.
+39. **Root motion.** A role whose clip carries `$root` is driven by it whenever it is not warping: a non-mover from the
+    first tick, a mover from the tick after its warp (travel inside the warp is dropped); no `$root` keeps the hold.
+    `paired_motion` reads unrecorded through `root_motion_of`; a paired entity takes motion only from it.
+40. **`abort_paired(world, entity, to, fade, game_time)`.** `to` is `(role, clip)` pairs validated before any mutation
+    (unknown or repeated role: `L4371`); those roles crossfade in the same call. An empty `to` is W5a's behaviour.
+41. **`L4373` stays**, re-worded: more than five roles (a motor looks through at most four partners).
+42. **Deferred, with triggers.** The lockstep guard naming the writer system (needs an ECS write-attribution hook;
+    trigger: a lockstep abort a game cannot trace from the `L4374` entity alone). `moves` as a list of roles (trigger:
+    a document where two non-reference roles travel while the reference holds). Prop roles (16) and blend roles (17)
+    are unchanged: a locker is a `kind: assembly` clip role today.
+
 ## Waves
 
 - **W1 (shipped).** `JointZero`, `LimitsFrom`, `RagdollSwitch`, `switch_to_ragdoll_with`, layers in the
@@ -255,10 +287,9 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
   `check-scene` contacts and warp report (decisions 15–21). 0008's runtime range L4370–89 stays for W5.
 - **W5a.** Fit (0008-05): `IgnoreCollisions`, `PairedLibrary`, `paired_fit`. Run (0008-06): `PairedAction`,
   `start_paired`, `paired_motion`, `abort_paired`, `paired_update` with events, end and the lockstep guard.
-- **W5b.** N roles, after the L1392 collection; prefab and blend roles (decisions 16–17 stay deferred,
-  triggers unchanged); 0007 root motion after the warp, which does not exist yet; `abort_paired` crossfading
-  to a clip; the guard naming the writer system.
-- **W6.** `render --paired`, the `paired-takedown` gallery scene and goldens.
+- **W5b (mechanized).** N roles (2 to 5), `$root` motion after the warp, `abort_paired` crossfading to clips
+  (decisions 37–42); prefab and blend roles and the writer-naming guard stay deferred.
+- **W6 (mechanized).** `render --paired`, the `paired-takedown` gallery scene and goldens (decisions 33–36).
 
 ## Open questions, with the game's answers
 
@@ -294,3 +325,31 @@ when it died, so a knee switched at −40° has −40° as its zero. Request 000
 - A quaternion zero beyond a limit snaps on the first step; a game that wants no snap clamps its switch
   pose first.
 - The M4 cross-arch twin of the new tests is owed.
+
+### W5b — N roles, `$root` motion, `abort_paired` to clips, L1759
+
+| file | role |
+|---|---|
+| `crates/ludion-physics/src/motor/ignore.rs` and `mover.rs`, `resize.rs`, `suspend.rs`, `posture.rs`, `turn.rs`, `queries.rs`, `sweep.rs` | `IgnoreCollisions.with: Vec<EntityId>`, `MAX_PARTNERS`, inline `Partners` on `SweepFilter`, `character_fit_ignoring(.., Option<&[EntityId]>)`, `L1759` |
+| `crates/ludion-engine/src/paired.rs`, `root_motion.rs` | N-role `aligned_targets`, `resolve` (five roles), `start_paired`, `end_role`, dead-entry pruning in `play_group`, `paired_motion` root travel, `abort_paired(.., to, ..)` |
+| `crates/ludion-core/src/codes.rs` | `L1759`, `L4373` re-worded |
+| `crates/ludion-engine/tests/paired_run.rs` | three roles, a leaver and a despawn, abort to clips, root travel of a non-mover and a mover, restore and thread counts |
+| `docs/paired-actions.md`, `motor.md`, `voxel-animation.md` (+ mirrors) | N roles, the frame rule, root motion, abort `to`, the codes |
+
+No `WorldHash` of existing content, replay, protocol schema, `PHYSICS_BLOB_VERSION` or golden moved. Only `component_schemas.json` re-blessed. The M4 twin of the N-role warp test is owed.
+
+### W6 — `render --paired`, the `paired-takedown` gallery scene and goldens, L1756
+
+| file | role |
+|---|---|
+| `crates/ludion-engine/src/paired_sheet.rs`, `model_sheet.rs`, `lib.rs` | `render_paired_sheet`, `PairedSheetRequest`/`Outcome`/`Phase`; the model-sheet pieces widened to `pub(crate)` |
+| `crates/ludion-core/src/codes.rs` | `PAIRED_RENDER_INPUT` (`L1756`), explain entry and list row |
+| `crates/ludion-cli/src/main.rs`, `render.rs`, `paired_report.rs` | `--paired`, `run_paired`, `print_contacts` shared with `check-scene` |
+| `crates/ludion-cli/tests/render_paired.rs` | phases, strip, time, contact line, `L1756`, the clap conflict |
+| `examples/gallery/paired-takedown.yaml`, `voxels/takedown.paired.yaml`, `voxels/guard.assembly.yaml` | the scene, its document and the khaki guard |
+| `crates/ludion-testkit/tests/common/mod.rs`, `paired_takedown.rs`, `gallery.rs` | `takedown_builder`, the CPU proof, three driven goldens |
+| `examples/gallery/paired-takedown.trace.txt`, `goldens/windows/paired-takedown{,-grab,-ragdoll,-getup}.png` | the committed trace and four new goldens, blessed on the 3090 |
+| `docs/paired-actions.md` (+ mirror) | §Looking at it, the `L1756` row |
+
+No sim, component, wire-schema, replay or existing-golden change. Owed: the macOS twins of the four goldens
+and the M4 run of the trace; the 0018 porosity change moves these goldens along with the existing assembly ones.

@@ -193,13 +193,14 @@ pub use components::{
     DecalReceiverSet, DirectionalLight, DropShadow, EmitShape, Environment, Fade, GiDynamic,
     GiVolume, GroundMarker, GroundMarkerGrid, GroundMarkerShape, GroundMarkerStyle, MapWrap, Mesh,
     MeshGrid, MeshSource, Name, NavAgent, NavAvoidance, NavBlocker, NavBlockerMode,
-    NavBlockerShape, NavGoal, NavLink, NavReplan, NavRoute, NavRouteStatus, NavSteering,
-    PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend, ParticleEmitter, Perceiver,
-    PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe, Require, Residue, SightPoint,
-    SightTarget, SightZone, SkinBone, SpotLight, Sprite, SpriteBlend, Static, Text, TextOutline,
-    TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase,
-    UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat,
-    UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility, builtin_registry, crossfade,
+    NavBlockerShape, NavGoal, NavLink, NavObstacle, NavObstacleState, NavReplan, NavRoute,
+    NavRouteStatus, NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend,
+    ParticleEmitter, Perceiver, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe,
+    Require, Residue, SightPoint, SightTarget, SightZone, SkinBone, SpotLight, Sprite, SpriteBlend,
+    Static, Text, TextOutline, TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow,
+    UiClipShape, UiClock, UiEase, UiGroup, UiList, UiListItem, UiRect, UiText, UiTween,
+    UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility,
+    builtin_registry, crossfade,
 };
 pub use components::{AnimGraphState, PoseSnapshot, SnapshotPart};
 pub use components::{
@@ -215,7 +216,7 @@ pub use components::{
     PerceptionState, Sense, SightSampleRecord, StimulusRecord, SweepShape, ZoneSweep,
 };
 pub use components::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_target_weight_at};
-pub use components::{UiLineCap, UiShape, UiShapeType, UiStroke};
+pub use components::{UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};

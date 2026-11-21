@@ -24,15 +24,15 @@ texture map (below). A material is always exactly these three numbers, flat or s
 
 ## The three author surfaces
 
-The same three fields exist in four places, always named and ranged identically:
+The same three fields exist in four places, always named and ranged identically. A further field, `porosity` (`[0, 1]`, default 0.5; how far rain darkens the surface, `ludion docs weather`), follows the same surfaces and the same selection rule, as `Mesh.porosity`, a palette key and a `porosity:` list:
 
 1. **`Mesh` component fields** — `roughness`, `metallic`, `emissive` (the built-in component table is
    `ludion docs components`). The only surface for a primitive (`cube`/`plane`/`sphere`) or a plain
    imported asset mesh, since neither has per-vertex or per-palette-entry material of its own.
-2. **Voxel palette entry keys** — optional `emissive`/`metallic`/`roughness` alongside `color`, one
+2. **Voxel palette entry keys** — optional `emissive`/`metallic`/`porosity`/`roughness` alongside `color`, one
    value per glyph (every quad of that color gets it). See
    `ludion docs voxel-format --section Palette`.
-3. **`.mesh.yaml` per-vertex lists** — optional `emissive:`/`metallic:`/`roughness:` flat lists, one
+3. **`.mesh.yaml` per-vertex lists** — optional `emissive:`/`metallic:`/`porosity:`/`roughness:` flat lists, one
    float per vertex, alongside `positions`/`normals`/`uvs`, for a hand-authored mesh asset that wants
    per-vertex material (`ludion devdocs scene-kind-documents --section "Mesh documents (\`kind: mesh\`)"` has the exact format).
 4. **Sculpt palette entry keys** — the same shape as a voxel palette entry, one per part's

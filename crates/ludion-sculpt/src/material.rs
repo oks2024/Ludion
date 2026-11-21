@@ -106,6 +106,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn blend_mixes_porosity_by_weight() {
+        let part = |porosity| {
+            Some(Channels {
+                color: [1.0; 4],
+                material: [1.0, 0.0, 0.0],
+                porosity,
+            })
+        };
+        let (mut colors, mut materials, mut porosities) = (Vec::new(), Vec::new(), Vec::new());
+        let channels = [part(0.0), part(1.0)];
+        blend(
+            &[0.25, 0.75],
+            &channels,
+            &mut colors,
+            &mut materials,
+            &mut porosities,
+        );
+        assert_eq!(porosities, vec![0.75]);
+    }
+
+    #[test]
     fn dominant_part_breaks_ties_low_and_ignores_zero() {
         assert_eq!(dominant_part(&[0.25, 0.5, 0.5]), Some(1));
         assert_eq!(dominant_part(&[0.0, 0.0]), None);

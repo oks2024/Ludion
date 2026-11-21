@@ -4197,6 +4197,45 @@ fn medium_reaches_the_instance_inherits_and_a_childs_own_wins() {
     );
 }
 
+/// `Mesh.porosity` reaches `MeshInstance.porosity` (absent is 0.5), and is not inherited down `Parent`.
+#[test]
+fn mesh_porosity_reaches_its_instance() {
+    let mut world = World::new();
+    let mut spawn = |parent: Option<ludion_core::ids::EntityId>, porosity: Option<f32>| {
+        let e = world.spawn();
+        world.insert(e, Transform::default()).unwrap();
+        if let Some(parent) = parent {
+            world.insert(e, ludion_ecs::Parent(parent)).unwrap();
+        }
+        world
+            .insert(
+                e,
+                Mesh {
+                    porosity,
+                    ..Mesh::default()
+                },
+            )
+            .unwrap();
+        e
+    };
+    spawn(None, None);
+    let root = spawn(None, Some(0.0));
+    spawn(Some(root), None);
+    spawn(None, Some(1.0));
+    let scene = extract(
+        &world,
+        (320, 180),
+        ludion_assets::AssetRoot::content(Path::new(".")),
+    )
+    .unwrap();
+    let lanes: Vec<f32> = scene.meshes.iter().map(|m| m.porosity).collect();
+    assert_eq!(
+        lanes,
+        [0.5, 0.0, 0.5, 1.0],
+        "default, own, not inherited, own"
+    );
+}
+
 /// `Sprite.medium` reaches `SpriteInstance.medium` (absent is 1.0); `ParticleEmitter.medium` reaches
 /// every `ParticleInstance` it draws.
 #[test]

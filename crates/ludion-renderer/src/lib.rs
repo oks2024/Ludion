@@ -147,6 +147,7 @@ pub use scene::{
     TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance, UiRotation, UiShapeGeometry,
     UiShapeStroke, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
 };
+pub use scene::{UiPathJoin, UiPathStroke};
 pub use screen_effect::{MAX_SCREEN_EFFECTS, ScreenEffectData, ScreenMask};
 pub use shader_reload::{check_shader_reload, is_renderer_shader};
 pub use sun_cascade::{

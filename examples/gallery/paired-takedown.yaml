@@ -1,0 +1,155 @@
+# Feature: a paired action driven by game code (`ludion docs paired-actions`). Bare, this scene shows the
+# frame before the action: two motor-driven figures face each other, the instigator (blue) 0.4 m and
+# 20 degrees off its aligned pose, the guard (olive) waiting. The game half is
+# `crates/ludion-testkit/tests/common/mod.rs` (`takedown_builder`): it fits the action, starts it, warps the
+# instigator onto the authored pose, ragdolls the guard on the `quiet` event and gets it up again.
+format: 1
+name: "paired-takedown - a paired action warps two figures together, then the guard drops and recovers"
+seed: 1
+physics:
+  space: free
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.03
+          - 0.045
+          - 0.09
+        sky_horizon:
+          - 0.08
+          - 0.1
+          - 0.16
+        sky_ground:
+          - 0.05
+          - 0.05
+          - 0.06
+        ibl_intensity: 0.3
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 4.6
+          - 1.3
+          - 0.9
+        rotation:
+          - -3.7
+          - 82.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 36.0
+  - name: key-light
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - -0.35
+          - -0.6
+          - -0.75
+        color:
+          - 1.0
+          - 0.94
+          - 0.84
+        intensity: 0.9
+  - name: fill-light
+    components:
+      Transform:
+        translation:
+          - 2.8
+          - 1.0
+          - 0.2
+      PointLight:
+        color:
+          - 0.55
+          - 0.7
+          - 1.0
+        intensity: 1.0
+        range: 9.0
+  - name: rim-light
+    components:
+      Transform:
+        translation:
+          - -1.6
+          - 2.2
+          - -1.9
+      PointLight:
+        color:
+          - 0.8
+          - 0.9
+          - 1.0
+        intensity: 2.0
+        range: 9.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 8.0
+          - 1.0
+          - 8.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.17
+          - 0.18
+          - 0.2
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 8.0
+              - 0.5
+              - 8.0
+        body: static
+  - name: guard
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 180.0
+          - 0.0
+        scale:
+          - 0.125
+          - 0.125
+          - 0.125
+      Mesh:
+        shape:
+          assembly: voxels/guard.assembly.yaml
+      CharacterMotor:
+        radius: 0.35
+        height: 1.7
+  - name: player
+    components:
+      Transform:
+        translation:
+          - 0.4
+          - 0.0
+          - 0.5
+        rotation:
+          - 0.0
+          - 20.0
+          - 0.0
+        scale:
+          - 0.125
+          - 0.125
+          - 0.125
+      Mesh:
+        shape:
+          assembly: voxels/humanoid.assembly.yaml
+      CharacterMotor:
+        radius: 0.35
+        height: 1.7

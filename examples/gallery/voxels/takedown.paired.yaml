@@ -1,0 +1,35 @@
+format: 1
+kind: paired
+name: takedown
+roles:
+  instigator:
+    assembly: humanoid.assembly.yaml
+    clip: carry
+    scale: 0.125
+  target:
+    assembly: guard.assembly.yaml
+    clip: idle
+    scale: 0.125
+align:
+  reference: instigator
+  moves: instigator
+  ticks: 8
+  offsets:
+    target:
+      translation:
+        - 0.0
+        - 0.0
+        - -0.5
+      yaw_deg: 180.0
+events:
+  - name: grab
+    t: 0.25
+  - name: quiet
+    t: 0.6
+  - name: release
+    t: 0.9
+contacts:
+  - a: instigator/lower-arm-r
+    b: target/head
+    at: grab
+    max_gap: 7.0

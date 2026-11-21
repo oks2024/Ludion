@@ -2,7 +2,7 @@
 
 > Status: **W1a, W1b, W2a and W2b mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
 > roof occlusion, mesh wetness, authored porosity and the `rain-open`, `rain-awning`, `rain-wet` and `rain-porosity` goldens. Usage is `ludion docs weather`; the gallery scenes are
-> `examples/gallery/rain-open.yaml`, `rain-awning.yaml` and `rain-wet.yaml`.
+> `examples/gallery/rain-open.yaml`, `rain-awning.yaml`, `rain-wet.yaml` and `rain-porosity.yaml`.
 
 ## Why
 
@@ -124,3 +124,10 @@ for the whole arc; W1a ships the streak field.
   new default after a `wetness: 0` render of both proved byte-equal to the W1b output. The scene pass costs 0.124 ms at
   wetness 0 and 0.135 ms at 1 on `rain-wet` at 1080p on the RTX 3090. Rain-free frames keep the same graph and pixels.
   No replay content hash, `WorldHash` or protocol schema moved.
+- **W2b mechanized (2026-11-21):** `porosity` (`[0, 1]`, absent 0.5) on a voxel/sculpt/assembly palette entry, as a per-vertex
+  `.mesh.yaml` list and as `Mesh.porosity`; it is part of `authored_material`, so a palette that authors only porosity takes
+  the vertex material. `MeshVertex.material` is `[f32; 4]` (w = porosity) and the instance porosity rides
+  `MeshInstanceRaw.medium[2]` (`.y` is the cull pass's scatter slot); no new attribute. `WET_POROSITY_DEFAULT` is gone.
+  `rain-porosity` is new (stripes at 0, 0.5 and 1 darken in order, all gloss; a `Mesh.porosity: 0.1` cube); the other 110
+  gallery goldens passed unblessed. No replay content hash, `WorldHash` or protocol schema moved. Owed: the macOS twin of
+  `rain-porosity`. W2c (`RainOccluder`, `rain_occlusion` debug view, `rain_density`) is next.

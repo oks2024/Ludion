@@ -1,8 +1,10 @@
 //! Agent avoidance: `NavAgent.avoidance` swaps separation for an ORCA velocity. Head-on passes, priority,
-//! classes, blockers, identity for agents without it, thread-count invariance, restore and `L1528`.
+//! classes, blockers, obstacles, identity for agents without it, thread-count invariance, restore and `L1528`.
 
 use ludion_core::par;
-use ludion_engine::{Engine, Nav, NavAgent, NavClass, NavConfig, Transform};
+use ludion_engine::{
+    Engine, Nav, NavAgent, NavClass, NavConfig, NavObstacle, NavObstacleState, Transform,
+};
 use ludion_nav::NodeMark;
 use ludion_protocol::Command;
 use ludion_protocol::command::EngineRestoreParams;
@@ -220,6 +222,167 @@ fn invalid_avoidance_is_refused_with_l1528() {
     ] {
         let yaml = format!(
             "{}  - name: bad\n    components:\n      NavAgent:\n{bad}",
+            scene(&[ground()])
+        );
+        let mut engine = steering_builder().nav(config()).build().unwrap();
+        let error = engine.load_inline_scene(&yaml).unwrap_err();
+        assert!(format!("{error:?}").contains("L1528"), "{bad}: {error:?}");
+    }
+}
+
+/// Metres per second the test drives a [`NavObstacle`] along +z.
+const OBSTACLE_SPEED: f32 = 1.5;
+
+/// The test's own mover for obstacles: constant speed along +z, after `nav_steer` like any game mover.
+fn obstacle_mover(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+    let ids: Vec<_> = world
+        .query_ids::<(&NavObstacle,)>()
+        .map(|(id, _)| id)
+        .collect();
+    for id in ids {
+        if let Ok(Some(transform)) = world.get_mut::<Transform>(id) {
+            transform.translation[2] += OBSTACLE_SPEED * ctx.dt;
+        }
+    }
+}
+
+fn obstacle_yaml(at: [f32; 3], extra: &str) -> String {
+    format!(
+        "  - name: forklift
+    components:
+      Transform:
+        translation:
+{}      NavObstacle:
+{extra}",
+        seq(at, 10)
+    )
+}
+
+/// One avoider walking east along z = 12.5 while a forklift obstacle drives north across its lane.
+fn obstacle_crossing(avoider_fields: &str) -> Engine {
+    let walker = avoider(0, LEFT, RIGHT, 2.5, avoider_fields);
+    let yaml = open_room(
+        &(walker
+            + &obstacle_yaml(
+                [12.0, 0.0, 5.0],
+                "        radius: 1.0
+",
+            )),
+    );
+    let mut engine = steering_builder()
+        .nav(config())
+        .system("mover", mover)
+        .system("obstacle_mover", obstacle_mover)
+        .build()
+        .expect("boots");
+    engine.load_inline_scene(&yaml).unwrap();
+    engine
+}
+
+fn obstacle_state(engine: &mut Engine) -> NavObstacleState {
+    let id = engine
+        .world_mut()
+        .query_ids::<(&NavObstacle,)>()
+        .map(|(id, _)| id)
+        .next()
+        .unwrap();
+    *engine
+        .world()
+        .get::<NavObstacleState>(id)
+        .unwrap()
+        .expect("nav_steer wrote the state")
+}
+
+#[test]
+fn an_avoider_yields_to_a_moving_obstacle() {
+    let mut engine = obstacle_crossing("");
+    let mut min = f32::MAX;
+    for tick in 0..300 {
+        engine.advance_live();
+        let agent = positions(&mut engine)[0];
+        let at = engine
+            .world_mut()
+            .query_ids::<(&Transform, &NavObstacle)>()
+            .map(|(_, (t, _))| t.translation)
+            .next()
+            .unwrap();
+        min = min.min(dist_xz(agent, at));
+        if tick >= 2 {
+            let v = obstacle_state(&mut engine).velocity;
+            assert!(
+                (v[2] - OBSTACLE_SPEED).abs() < 1e-4 && v[0].abs() < 1e-4,
+                "tick {tick}: state velocity {v:?}"
+            );
+        }
+    }
+    assert!(min >= 1.5 - 0.05, "minimum centre distance {min}");
+}
+
+#[test]
+fn a_disabled_obstacle_is_ignored_but_keeps_tracking() {
+    let mut engine = obstacle_crossing("");
+    let id = engine
+        .world_mut()
+        .query_ids::<(&NavObstacle,)>()
+        .map(|(id, _)| id)
+        .next()
+        .unwrap();
+    engine
+        .world_mut()
+        .get_mut::<NavObstacle>(id)
+        .unwrap()
+        .unwrap()
+        .enabled = false;
+    run(&mut engine, 60);
+    let v = obstacle_state(&mut engine).velocity;
+    assert!((v[2] - OBSTACLE_SPEED).abs() < 1e-4, "{v:?}");
+}
+
+#[test]
+fn an_obstacle_crossing_is_the_same_at_any_thread_count() {
+    let one = par::with_threads(1, || trace(&mut obstacle_crossing(""), 200));
+    let many = par::with_threads(8, || trace(&mut obstacle_crossing(""), 200));
+    assert_eq!(one, many);
+}
+
+#[test]
+fn a_restore_mid_pass_keeps_the_obstacle_state() {
+    let whole = trace(&mut obstacle_crossing(""), 160);
+    let mut first = obstacle_crossing("");
+    trace(&mut first, 70);
+    let state = obstacle_state(&mut first);
+    let snapshot = snapshot_of(&mut first);
+    let mut resumed = obstacle_crossing("");
+    resumed
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    assert_eq!(obstacle_state(&mut resumed), state);
+    assert_eq!(trace(&mut resumed, 90), whole[70..]);
+}
+
+#[test]
+fn a_far_obstacle_leaves_separation_only_agents_unchanged() {
+    let far = obstacle_yaml(
+        [22.0, 0.0, 22.0],
+        "        radius: 1.0
+",
+    );
+    let mut alone = build_with(config(), &crowd(""));
+    let mut with = build_with(config(), &crowd(&far));
+    run(&mut alone, 120);
+    run(&mut with, 120);
+    assert_eq!(positions(&mut alone), positions(&mut with));
+}
+
+#[test]
+fn an_invalid_obstacle_radius_is_refused_with_l1528() {
+    for bad in ["radius: 0.0", "radius: -1.0"] {
+        let yaml = format!(
+            "{}  - name: bad
+    components:
+      NavObstacle:
+        {bad}
+",
             scene(&[ground()])
         );
         let mut engine = steering_builder().nav(config()).build().unwrap();
