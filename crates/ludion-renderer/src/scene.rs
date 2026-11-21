@@ -759,6 +759,8 @@ pub struct PostData {
     pub grain: f32,
     /// Film emulation: the grain cell's side, as a fraction of the frame's **height**.
     pub grain_size: f32,
+    /// Film emulation: the game tick folded into the grain's cell hash (`None` = a static pattern).
+    pub grain_tick: Option<u32>,
     /// Screen-space reflections: the strength that scales the trace's confidence, so `0.0` is exactly
     /// the sky fill (`0.0` = off, and the gate).
     pub ssr: f32,
@@ -828,6 +830,7 @@ impl Default for PostData {
             anamorphic_threshold: None,
             grain: 0.0,
             grain_size: 0.002,
+            grain_tick: None,
             ssr: 0.0,
             ssr_fade: [0.45, 0.65],
             ssr_max_distance: 30.0,

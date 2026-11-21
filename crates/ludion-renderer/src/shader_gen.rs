@@ -364,8 +364,8 @@ pub struct Composite {
     pub lut_scale: [f32; 3],
     pub lut_strength: f32,
     pub metered: u32,
-    pub metered_pad0: u32,
-    pub metered_pad1: u32,
+    pub grain_animated: u32,
+    pub grain_tick: u32,
     pub metered_pad2: u32,
 }
 const _: () = assert!(core::mem::size_of::<Composite>() == 672);
@@ -418,8 +418,8 @@ const _: () = assert!(core::mem::offset_of!(Composite, lut) == 636);
 const _: () = assert!(core::mem::offset_of!(Composite, lut_scale) == 640);
 const _: () = assert!(core::mem::offset_of!(Composite, lut_strength) == 652);
 const _: () = assert!(core::mem::offset_of!(Composite, metered) == 656);
-const _: () = assert!(core::mem::offset_of!(Composite, metered_pad0) == 660);
-const _: () = assert!(core::mem::offset_of!(Composite, metered_pad1) == 664);
+const _: () = assert!(core::mem::offset_of!(Composite, grain_animated) == 660);
+const _: () = assert!(core::mem::offset_of!(Composite, grain_tick) == 664);
 const _: () = assert!(core::mem::offset_of!(Composite, metered_pad2) == 668);
 
 /// WGSL `struct CullBox`.
@@ -1124,14 +1124,22 @@ pub struct ResolveParams {
     pub grain_size: f32,
     pub dither: u32,
     pub output_height: f32,
+    pub grain_animated: u32,
+    pub grain_tick: u32,
+    pub pad0: u32,
+    pub pad1: u32,
 }
-const _: () = assert!(core::mem::size_of::<ResolveParams>() == 32);
+const _: () = assert!(core::mem::size_of::<ResolveParams>() == 48);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, source_extent) == 0);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, ratio) == 8);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, grain) == 16);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, grain_size) == 20);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, dither) == 24);
 const _: () = assert!(core::mem::offset_of!(ResolveParams, output_height) == 28);
+const _: () = assert!(core::mem::offset_of!(ResolveParams, grain_animated) == 32);
+const _: () = assert!(core::mem::offset_of!(ResolveParams, grain_tick) == 36);
+const _: () = assert!(core::mem::offset_of!(ResolveParams, pad0) == 40);
+const _: () = assert!(core::mem::offset_of!(ResolveParams, pad1) == 44);
 
 /// WGSL `struct ScatterBlurParams`.
 ///
@@ -1302,14 +1310,22 @@ pub struct SmaaBlendParams {
     pub grain: f32,
     pub grain_size: f32,
     pub dither: u32,
-    pub pad: u32,
+    pub grain_animated: u32,
+    pub grain_tick: u32,
+    pub pad0: u32,
+    pub pad1: u32,
+    pub pad2: u32,
 }
-const _: () = assert!(core::mem::size_of::<SmaaBlendParams>() == 32);
+const _: () = assert!(core::mem::size_of::<SmaaBlendParams>() == 48);
 const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, rt_metrics) == 0);
 const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, grain) == 16);
 const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, grain_size) == 20);
 const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, dither) == 24);
-const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, pad) == 28);
+const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, grain_animated) == 28);
+const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, grain_tick) == 32);
+const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, pad0) == 36);
+const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, pad1) == 40);
+const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, pad2) == 44);
 
 /// WGSL `struct SmaaEdgesParams`.
 ///
@@ -1497,14 +1513,22 @@ pub struct UpscaleParams {
     pub grain_size: f32,
     pub dither: u32,
     pub output_height: f32,
+    pub grain_animated: u32,
+    pub grain_tick: u32,
+    pub pad0: u32,
+    pub pad1: u32,
 }
-const _: () = assert!(core::mem::size_of::<UpscaleParams>() == 32);
+const _: () = assert!(core::mem::size_of::<UpscaleParams>() == 48);
 const _: () = assert!(core::mem::offset_of!(UpscaleParams, source_extent) == 0);
 const _: () = assert!(core::mem::offset_of!(UpscaleParams, ratio) == 8);
 const _: () = assert!(core::mem::offset_of!(UpscaleParams, grain) == 16);
 const _: () = assert!(core::mem::offset_of!(UpscaleParams, grain_size) == 20);
 const _: () = assert!(core::mem::offset_of!(UpscaleParams, dither) == 24);
 const _: () = assert!(core::mem::offset_of!(UpscaleParams, output_height) == 28);
+const _: () = assert!(core::mem::offset_of!(UpscaleParams, grain_animated) == 32);
+const _: () = assert!(core::mem::offset_of!(UpscaleParams, grain_tick) == 36);
+const _: () = assert!(core::mem::offset_of!(UpscaleParams, pad0) == 40);
+const _: () = assert!(core::mem::offset_of!(UpscaleParams, pad1) == 44);
 
 // --- Binding indices (@group / @binding per WGSL resource) ---------------------------------------
 
@@ -4245,7 +4269,7 @@ pub fn create_resolve_src_resolve_samp_resolve_params_bgl(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(32),
+                    min_binding_size: wgpu::BufferSize::new(48),
                 },
                 count: None,
             },
@@ -4707,7 +4731,7 @@ pub fn create_smaa_blend_src_smaa_blend_weights_smaa_blend_samp_smaa_blend_param
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(32),
+                    min_binding_size: wgpu::BufferSize::new(48),
                 },
                 count: None,
             },
@@ -5205,7 +5229,7 @@ pub fn create_upscale_src_upscale_samp_upscale_params_bgl(
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(32),
+                    min_binding_size: wgpu::BufferSize::new(48),
                 },
                 count: None,
             },

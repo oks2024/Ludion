@@ -28,7 +28,12 @@ struct SmaaBlendParams {
     grain_size: f32,
     // Nonzero enables the ordered output dither.
     dither: u32,
-    pad: u32,
+    // Nonzero folds `grain_tick` (the game tick) into the grain hash.
+    grain_animated: u32,
+    grain_tick: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 };
 
 @group(0) @binding(0) var smaa_blend_src: texture_2d<f32>;
@@ -98,6 +103,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             smaa_blend_params.grain_size,
             smaa_blend_params.dither,
             f32(textureDimensions(smaa_blend_src).y),
+            smaa_blend_params.grain_animated,
+            smaa_blend_params.grain_tick,
         );
     }
     return vec4<f32>(color, 1.0);

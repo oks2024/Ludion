@@ -219,8 +219,12 @@ anisotropy.
 - **`grain`** / **`grain_size`** — monochrome additive grain in the **sRGB-encoded** domain, `[0, 1]`
   (default `0.0` — off, and the gate), with a cell side as a fraction of the frame's height `[0, 1]`
   (default `0.002`, about two output pixels at 1080p; the cell is the same fraction of the frame at
-  any render scale). The pattern is a deterministic integer hash and static — it carries no frame
-  index, so a moving camera moves through a fixed field.
+  any render scale). The pattern is a deterministic integer hash. **`grain_motion`** is `static`
+  (default, and skipped when serialized) or `animated`: static carries no frame index, so a moving
+  camera moves through a fixed field; animated folds the game tick (`GameClock` time, as the rain and
+  particles read it) into the hash, so the field re-rolls once per tick, holds while the clock is held,
+  and reproduces across processes. A single-frame `ludion render` is tick 0; `--frames 0,1,2` shows the
+  motion. Inert while `grain` is `0`.
 - **`ssr`** — screen-space reflections, `[0, 1]` (default `0.0` — off, and the gate): the strength
   that scales the trace's confidence, so `0.0` is exactly the sky reflection. It is opt-in per
   scene. **`ssr_fade`** is the roughness band `[start, end]` (default `[0.45, 0.65]`) over which the

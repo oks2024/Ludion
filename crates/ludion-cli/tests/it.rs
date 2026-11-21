@@ -30,6 +30,7 @@ mod exposure_pan;
 mod r#gen;
 mod generate_atlas;
 mod generate_atlas_font;
+mod grain_motion;
 mod hierarchy_render;
 mod image_stats;
 mod import;

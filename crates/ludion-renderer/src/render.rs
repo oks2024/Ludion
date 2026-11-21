@@ -4446,8 +4446,8 @@ impl PassRecorder for FrameRecorder<'_> {
                     lut_scale: self.lut_params.map_or([0.0; 3], |p| p.scale),
                     lut_strength: self.lut_params.map_or(0.0, |p| p.strength),
                     metered: u32::from(self.exposure_meter.is_some()),
-                    metered_pad0: 0,
-                    metered_pad1: 0,
+                    grain_animated: u32::from(self.post.grain_tick.is_some()),
+                    grain_tick: self.post.grain_tick.unwrap_or(0),
                     metered_pad2: 0,
                 };
                 // The composite's three optional inputs, each at the binding the WGSL itself declares,
@@ -6825,7 +6825,11 @@ impl FrameRecorder<'_> {
             },
             grain_size: self.post.grain_size,
             dither: u32::from(self.post.dither && !self.resample_owns_output),
-            pad: 0,
+            grain_animated: u32::from(self.post.grain_tick.is_some()),
+            grain_tick: self.post.grain_tick.unwrap_or(0),
+            pad0: 0,
+            pad1: 0,
+            pad2: 0,
         };
         self.fullscreen_effect(pass, ShaderId::SmaaBlend, &[], bytemuck::bytes_of(&params));
     }
@@ -6844,6 +6848,10 @@ impl FrameRecorder<'_> {
             grain_size: self.post.grain_size,
             dither: u32::from(owns && self.post.dither),
             output_height: target.height as f32,
+            grain_animated: u32::from(self.post.grain_tick.is_some()),
+            grain_tick: self.post.grain_tick.unwrap_or(0),
+            pad0: 0,
+            pad1: 0,
         };
         self.fullscreen_effect(pass, ShaderId::Resolve, &[], bytemuck::bytes_of(&params));
     }
@@ -6866,6 +6874,10 @@ impl FrameRecorder<'_> {
             grain_size: self.post.grain_size,
             dither: u32::from(owns && self.post.dither),
             output_height: target.height as f32,
+            grain_animated: u32::from(self.post.grain_tick.is_some()),
+            grain_tick: self.post.grain_tick.unwrap_or(0),
+            pad0: 0,
+            pad1: 0,
         };
         self.fullscreen_effect(pass, ShaderId::Upscale, &[], bytemuck::bytes_of(&params));
     }

@@ -34,6 +34,11 @@ struct UpscaleParams {
     grain_size: f32,
     dither: u32,
     output_height: f32,
+    // Nonzero folds `grain_tick` (the game tick) into the grain hash.
+    grain_animated: u32,
+    grain_tick: u32,
+    pad0: u32,
+    pad1: u32,
 };
 
 @group(0) @binding(0) var upscale_src: texture_2d<f32>;
@@ -70,6 +75,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             upscale_params.grain_size,
             upscale_params.dither,
             upscale_params.output_height,
+            upscale_params.grain_animated,
+            upscale_params.grain_tick,
         );
     }
     return vec4<f32>(color, 1.0);

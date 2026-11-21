@@ -29,6 +29,11 @@ struct ResolveParams {
     grain_size: f32,
     dither: u32,
     output_height: f32,
+    // Nonzero folds `grain_tick` (the game tick) into the grain hash.
+    grain_animated: u32,
+    grain_tick: u32,
+    pad0: u32,
+    pad1: u32,
 };
 
 @group(0) @binding(0) var resolve_src: texture_2d<f32>;
@@ -70,6 +75,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             resolve_params.grain_size,
             resolve_params.dither,
             resolve_params.output_height,
+            resolve_params.grain_animated,
+            resolve_params.grain_tick,
         );
     }
     return vec4<f32>(color, 1.0);

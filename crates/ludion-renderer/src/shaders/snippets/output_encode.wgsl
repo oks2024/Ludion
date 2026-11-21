@@ -43,20 +43,31 @@ fn hash32(seed: u32) -> u32 {
 // night gradients, which is a *deep shadow* problem, so weighting it toward the midtones would remove
 // the benefit exactly where it is wanted.
 //
-// **The pattern is static — no frame index — and that is a decision, not an omission.** `RenderScene`
-// carries no frame counter and `extract()` has no access to one, and `ludion render` is single-frame
-// regardless. Animating it wants a `frame` on `RenderScene` fed by the live loop (0 for a single-frame
-// render), which is deterministic world state and therefore is *not* what decision 5's anti-TAA
-// argument rules out. Trigger: the first live build that authors grain and reads as fixed-pattern
-// dirt in motion.
+// **Two modes, one integer hash.** Static (`animated == 0`) is a function of the cell alone, so a
+// single-frame render reproduces exactly and a moving camera moves through a fixed field. Animated
+// folds the game tick into the row seed with one more `hash32` round, so the whole field re-rolls
+// once per tick and holds while the game clock is held; a single-frame render is tick 0. Neither
+// mode reads a transcendental or a frame counter of its own, which is what keeps both reproducible
+// across backends and processes — the tick is data on `RenderScene`, not renderer state.
 //
 // The hash's top 23 bits become a value in (0, 1) by an exact power-of-two divide, offset by half a
 // step the way the Bayer tile is, so the mapping to [-grain, grain] has a mean of exactly zero and
 // grain adds no net brightness.
-fn grain_offset(frag: vec2<f32>, grain: f32, grain_size: f32, height: f32) -> f32 {
+fn grain_offset(
+    frag: vec2<f32>,
+    grain: f32,
+    grain_size: f32,
+    height: f32,
+    animated: u32,
+    tick: u32,
+) -> f32 {
     let cell_px = max(grain_size * height, MIN_GRAIN_CELL);
     let cell = vec2<u32>(floor(frag / cell_px));
-    let noise = f32(hash32(cell.x ^ hash32(cell.y)) >> 9u) + 0.5;
+    var row = hash32(cell.y);
+    if (animated != 0u) {
+        row = hash32(row ^ tick);
+    }
+    let noise = f32(hash32(cell.x ^ row) >> 9u) + 0.5;
     return (noise * (1.0 / 4194304.0) - 1.0) * grain;
 }
 
@@ -87,10 +98,12 @@ fn encoded_output(
     grain_size: f32,
     dither: u32,
     height: f32,
+    animated: u32,
+    tick: u32,
 ) -> vec3<f32> {
     var offset = 0.0;
     if (grain != 0.0) {
-        offset = offset + grain_offset(frag, grain, grain_size, height);
+        offset = offset + grain_offset(frag, grain, grain_size, height, animated, tick);
     }
     if (dither != 0u) {
         let bx = u32(frag.x) % 4u;

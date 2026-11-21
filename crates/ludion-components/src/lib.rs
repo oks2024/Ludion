@@ -1710,6 +1710,18 @@ pub enum ExposureMode {
     Metered,
 }
 
+/// Whether [`PostProcess::grain`] moves between ticks (default [`GrainMotion::Static`]).
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GrainMotion {
+    /// The pattern is a fixed field: no frame index, so a moving camera moves through it.
+    #[default]
+    Static,
+    /// The game tick is folded into the pattern, so it re-rolls every tick and holds while the
+    /// `GameClock` is held.
+    Animated,
+}
+
 /// Which pixels count most when [`ExposureMode::Metered`] meters the frame (default
 /// [`Metering::Center`]).
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -2464,9 +2476,9 @@ pub struct PostProcess {
     /// problem, and a midtone weighting would remove the benefit exactly where it is wanted.
     ///
     /// The pattern is deterministic (an integer hash of the cell's coordinates — no transcendental,
-    /// so it reproduces bit-for-bit across backends and processes) and **static**: it carries no frame
-    /// index, so a single-frame render reproduces exactly and a moving camera moves through a fixed
-    /// field.
+    /// so it reproduces bit-for-bit across backends and processes) and **static** unless
+    /// [`PostProcess::grain_motion`] is `animated`: then it carries the game tick and nothing else
+    /// that moves.
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub grain: f32,
@@ -2483,6 +2495,14 @@ pub struct PostProcess {
     #[schemars(range(min = 0.0, max = 1.0))]
     #[schemars(extend("x-ui-range" = [0.0, 0.01]))]
     pub grain_size: f32,
+    /// Film emulation: whether the grain re-rolls (default `static`, and inert while `grain` is zero).
+    ///
+    /// `animated` folds the game tick (`GameClock`'s whole ticks, truncated to 32 bits) into the
+    /// cell hash in every pass that applies grain, so the stipple changes once per tick and a held
+    /// clock holds it. The pattern stays an integer hash: the same tick renders the same grain in
+    /// any process. A single-frame render is tick 0.
+    #[serde(default, skip_serializing_if = "is_default_grain_motion")]
+    pub grain_motion: GrainMotion,
     /// Screen-space reflections: the strength that scales the trace's confidence, validated `[0, 1]`
     /// (default `0.0` — off, and the gate).
     ///
@@ -2785,6 +2805,7 @@ impl Default for PostProcess {
             anamorphic_threshold: None,
             grain: 0.0,
             grain_size: grain_size_default(),
+            grain_motion: GrainMotion::Static,
             ssr: 0.0,
             ssr_fade: ssr_fade_default(),
             ssr_max_distance: ssr_max_distance_default(),
@@ -6662,6 +6683,9 @@ fn exposure_range_default() -> [f32; 2] {
 fn is_default_exposure_mode(value: &ExposureMode) -> bool {
     *value == ExposureMode::Manual
 }
+fn is_default_grain_motion(value: &GrainMotion) -> bool {
+    *value == GrainMotion::Static
+}
 fn is_default_metering(value: &Metering) -> bool {
     *value == Metering::Center
 }
@@ -10313,6 +10337,21 @@ mod tests {
         }
     }
 
+    /// An unauthored `grain_motion` serializes no key, and an authored one round-trips.
+    #[test]
+    fn grain_motion_is_skipped_at_static_and_round_trips() {
+        let json = serde_json::to_value(PostProcess::default()).unwrap();
+        assert!(json.get("grain_motion").is_none(), "leaked into {json}");
+        let authored = serde_json::to_value(PostProcess {
+            grain_motion: GrainMotion::Animated,
+            ..PostProcess::default()
+        })
+        .unwrap();
+        assert_eq!(authored["grain_motion"], "animated");
+        let back: PostProcess = serde_json::from_value(authored).unwrap();
+        assert_eq!(back.grain_motion, GrainMotion::Animated);
+    }
+
     /// `L1760` names the offending pointer for each rule, and a valid authored setup passes.
     #[test]
     fn invalid_metering_fields_reach_l1760() {
@@ -10423,6 +10462,7 @@ mod tests {
             anamorphic_threshold: Some(1.5),
             grain: 0.015,
             grain_size: 0.004,
+            grain_motion: GrainMotion::Animated,
             ssr: 0.8,
             ssr_fade: [0.3, 0.5],
             ssr_max_distance: 12.0,

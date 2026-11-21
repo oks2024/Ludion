@@ -1,6 +1,6 @@
 # Plan: film post and screen effects
 
-> Status: **PLANNED** (Neon Shroud request 0019, `engine-requests/0019-post-anamorphic-lut-autoexposure-ui-effects.md`,
+> Status: **IN PROGRESS** (Neon Shroud request 0019, `engine-requests/0019-post-anamorphic-lut-autoexposure-ui-effects.md`,
 > read-only; audited at engine r2369, re-checked at Lore 2399). Six additions, all engine-owned and off by default:
 > anamorphic streaks, `.cube` LUT grading, metered exposure, animated grain, an authorable halation colour, and
 > `ScreenEffect` presets scoped to a UI region, the whole screen or a secondary view. Related: `Plan/post-process-pipeline.md`
@@ -131,8 +131,9 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
 ### D — animated grain
 
 21. **`grain_motion: static | animated`** (default `static`). Animated folds the game tick (`u32`, from extract's
-    `now`) into the `triple32` cell hash as a third coordinate; the static path is untouched. The tick travels in
-    `PostData`, and every pass that owns grain (`composite`, `smaa_blend`, `resolve`, `upscale`) receives it. The external
+    `now`, truncated to `u32`) into the grain's cell hash; the static path is the exact prior expression. The tick travels
+    in `PostData.grain_tick: Option<u32>` (`None` = static) and every pass that owns grain (`composite`, `smaa_blend`,
+    `resolve`, `upscale`) receives it; animated adds one `hash32` round on the row seed (`hash32(row ^ tick)`). The external
     game confirms the motion trigger (`Plan/post-process-pipeline.md` decision on static grain) at a live sitting; the
     field ships opt-in either way.
 
@@ -192,9 +193,11 @@ The rest of both ranges is reserved for this plan.
   pass, the composite's optional input, `[post_groups] exposure`; **W3b** the `exposure_meter` view, the render-summary
   EV (the `ProfileReport` field is an R14 item, decision 20), a bright-to-dark pan check as a CLI test (`image-stats`
   measures defects, not brightness, so it is not an `image-stats` metric).
-- **W4 — animated grain and region/fill effects** (D, F): the tick in `PostData`, `grain_motion`, `ScreenEffect`,
-  `L1761`/`L2392`, the overlay split, `[post_groups] screen_fx`, gallery `screen-effects.yaml` with a `--frames 0,1,2`
-  strip, `docs/screen-effects.md`. May split into W4a (D) and W4b (F) at planning. Needs no 0018 field (decision 3).
+- **W4 — animated grain and region/fill effects** (D, F), split three ways. Needs no 0018 field (decision 3).
+  - **W4a** (D): the tick in `PostData`, `grain_motion`.
+  - **W4b** (F, shipped): `ScreenEffect`, presets, `L1761`/`L2392`, extract into `RenderScene.screen_effects`.
+  - **W4c** (F): the `ScreenEffect` pass, the overlay split, `[post_groups] screen_fx`, `docs/screen-effects.md`, gallery
+    `screen-effects.yaml` with a `--frames 0,1,2` strip.
 - **W5 — view targets** (F): `target: { view }` once request 0017's view chain closes.
 
 Goldens for every new scene are blessed on the pinned machines; budget twins are owed per pinned OS.
@@ -237,3 +240,4 @@ before the silhouette (decision 13); codes renumbered.
 - W3a (`exposure_mode`, `exposure_compensation`, `metering*`, `exposure_range`, `L1760`, the `exposure_meter` pass) mechanized on the M5 2026-11-21; goldens, the scratch scene `post-metered-exposure` and the `exposure` budget are owed on the pinned machines.
 - W3b (`--debug-view exposure_meter`, the metered EV in the `ludion render` summary and `--frames` strip, the pan check `exposure_pan`) mechanized on the M5 2026-11-21: a metered frame and its manual twin render byte-identical with the readback armed or not, and manual scenes' graphs are unmoved. The `ProfileReport` EV field is an R14 item (it moves the protocol schema and `replay_schema_hash`). The view's look is judged by a human at the next sitting.
 - W4b (`ScreenEffect` component, presets, `L1761`/`L2392`, extract into `RenderScene.screen_effects`, check-scene's cap warning) mechanized on the M5 2026-11-21; no pass reads it yet, so every frame and `dump-graph` is unchanged.
+- W4a (`grain_motion`) mechanized on the RTX 3090 2026-11-21: absent/static left 25 renders and `dump-graph` dumps (seven gallery scenes plain and SMAA, `post-full` at both resamples) byte-identical; animated grain moves per tick in all four owning passes. The M4 check is owed.

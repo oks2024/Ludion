@@ -8090,7 +8090,7 @@
         "minimum": 0.0
       },
       "grain": {
-        "description": "Film emulation: monochrome additive grain amplitude, as a signed offset in the **sRGB-encoded**\n`[0, 1]` range, validated `[0, 1]` (default `0.0` — off, and the gate).\n\n`0.02` is a fine film-ish stipple — about ±5 of the 255 output steps. The encoded domain is\nthe point: the output is 8-bit sRGB and the hardware encodes on store, so a fixed *linear*\noffset would be worth wildly different numbers of output steps at different luminances, most\nwrong in the deep shadows.\n\nThe amplitude is **uniform, not weighted toward the midtones** the way real emulsion grain is.\nGrain is in the roster because it breaks up 8-bit night gradients, which is a deep-shadow\nproblem, and a midtone weighting would remove the benefit exactly where it is wanted.\n\nThe pattern is deterministic (an integer hash of the cell's coordinates — no transcendental,\nso it reproduces bit-for-bit across backends and processes) and **static**: it carries no frame\nindex, so a single-frame render reproduces exactly and a moving camera moves through a fixed\nfield.",
+        "description": "Film emulation: monochrome additive grain amplitude, as a signed offset in the **sRGB-encoded**\n`[0, 1]` range, validated `[0, 1]` (default `0.0` — off, and the gate).\n\n`0.02` is a fine film-ish stipple — about ±5 of the 255 output steps. The encoded domain is\nthe point: the output is 8-bit sRGB and the hardware encodes on store, so a fixed *linear*\noffset would be worth wildly different numbers of output steps at different luminances, most\nwrong in the deep shadows.\n\nThe amplitude is **uniform, not weighted toward the midtones** the way real emulsion grain is.\nGrain is in the roster because it breaks up 8-bit night gradients, which is a deep-shadow\nproblem, and a midtone weighting would remove the benefit exactly where it is wanted.\n\nThe pattern is deterministic (an integer hash of the cell's coordinates — no transcendental,\nso it reproduces bit-for-bit across backends and processes) and **static** unless\n[`PostProcess::grain_motion`] is `animated`: then it carries the game tick and nothing else\nthat moves.",
         "type": "number",
         "format": "float",
         "minimum": 0.0,
@@ -8108,6 +8108,10 @@
           0.0,
           0.01
         ]
+      },
+      "grain_motion": {
+        "description": "Film emulation: whether the grain re-rolls (default `static`, and inert while `grain` is zero).\n\n`animated` folds the game tick (`GameClock`'s whole ticks, truncated to 32 bits) into the\ncell hash in every pass that applies grain, so the stipple changes once per tick and a held\nclock holds it. The pattern stays an integer hash: the same tick renders the same grain in\nany process. A single-frame render is tick 0.",
+        "$ref": "#/$defs/GrainMotion"
       },
       "ssr": {
         "description": "Screen-space reflections: the strength that scales the trace's confidence, validated `[0, 1]`\n(default `0.0` — off, and the gate).\n\n`0.0` is exactly the sky reflection; `1.0` takes the traced hit wherever one is found.",
@@ -8230,6 +8234,21 @@
         },
         "required": [
           "path"
+        ]
+      },
+      "GrainMotion": {
+        "description": "Whether [`PostProcess::grain`] moves between ticks (default [`GrainMotion::Static`]).",
+        "oneOf": [
+          {
+            "description": "The pattern is a fixed field: no frame index, so a moving camera moves through it.",
+            "type": "string",
+            "const": "static"
+          },
+          {
+            "description": "The game tick is folded into the pattern, so it re-rolls every tick and holds while the\n`GameClock` is held.",
+            "type": "string",
+            "const": "animated"
+          }
         ]
       }
     }

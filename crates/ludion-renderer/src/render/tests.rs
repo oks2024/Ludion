@@ -10,6 +10,7 @@ mod exposure;
 mod exposure_view;
 mod film;
 mod gpu_cull;
+mod grain_motion;
 mod lit_additive;
 mod lut;
 mod medium_scatter;
@@ -4156,6 +4157,7 @@ fn needs_gpu_a_fully_neutral_post_process_is_byte_identical_to_none() {
         anamorphic_threshold: None,
         grain: 0.0,
         grain_size: 0.002,
+        grain_tick: None,
         ssr: 0.0,
         ssr_fade: [0.45, 0.65],
         ssr_max_distance: 30.0,

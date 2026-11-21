@@ -1338,7 +1338,7 @@ fn needs_gpu_halation_bleeds_warm_around_a_bright_source_with_no_bloom_mix() {
 /// The grain fixture: one emissive slab far larger than the frustum, at a mid-grey clear of both
 /// clipping ends, so every pixel of the frame carries the same colour and the only spread a probe
 /// can find is the grain's.
-fn grain_scene(w: u32, h: u32) -> RenderScene {
+pub(super) fn grain_scene(w: u32, h: u32) -> RenderScene {
     let mut scene = RenderScene::empty((w, h));
     scene.camera = origin_camera(w, h);
     scene.ambient = [0.0, 0.0, 0.0];
@@ -1355,7 +1355,7 @@ fn grain_scene(w: u32, h: u32) -> RenderScene {
 /// it would put a step of spread on the baseline the grain's spread is measured against. The two
 /// share one encode round trip in the shader, so switching one off changes nothing about the
 /// other.
-fn grain_post(grain: f32, cell_px: f32, h: u32) -> PostData {
+pub(super) fn grain_post(grain: f32, cell_px: f32, h: u32) -> PostData {
     PostData {
         grain,
         // `grain_size` is a fraction of the frame's height, so a cell of a stated number of

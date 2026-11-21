@@ -57,7 +57,7 @@ use crate::components::{
     UiList, UiRadial, UiRect, UiShape, UiText,
 };
 use crate::components::{AnimationLayer, AnimationLayers, BlendClock, LayerMode, layer_weight_at};
-use crate::components::{ExposureMode, Metering};
+use crate::components::{ExposureMode, GrainMotion, Metering};
 use crate::dialogue::Subtitles;
 use crate::docs::DocStore;
 use crate::extract_observer::{ExtractPhase, SkinCounts};
@@ -1876,7 +1876,7 @@ fn extract_inner(
     let spot_lights = extract_spot_lights(placed.spot_lights);
     let probes = extract_probes(world, &ids, &mut poses);
     let sun = extract_sun(world, &ids);
-    let post = extract_post(world, &ids);
+    let post = extract_post(world, &ids, now);
     let lut = extract_lut(world, &ids, project_root, assets)?;
     assets.extract_end(ExtractPhase::Lights);
     let mut scene = RenderScene {
@@ -2329,7 +2329,7 @@ fn extract_environment(world: &World, ids: &[EntityId]) -> Option<EnvironmentDat
 /// wins, the rest are ignored, and absence is meaningful (the renderer falls back to its own shipped
 /// post defaults, which are field for field the ones `PostProcess::default()` carries — a test in
 /// `ludion-renderer` pins the two together).
-fn extract_post(world: &World, ids: &[EntityId]) -> Option<PostData> {
+fn extract_post(world: &World, ids: &[EntityId], now: GameTime) -> Option<PostData> {
     let post = ids.iter().find_map(|&id| get::<PostProcess>(world, id))?;
     Some(PostData {
         bloom_threshold: post.bloom_threshold,
@@ -2386,6 +2386,7 @@ fn extract_post(world: &World, ids: &[EntityId]) -> Option<PostData> {
         anamorphic_threshold: post.anamorphic_threshold,
         grain: post.grain,
         grain_size: post.grain_size,
+        grain_tick: (post.grain_motion == GrainMotion::Animated).then(|| now.ticks_floor() as u32),
         ssr: post.ssr,
         ssr_fade: post.ssr_fade,
         ssr_max_distance: post.ssr_max_distance,
@@ -9062,6 +9063,59 @@ mod tests {
         assert!(extract_environment(&empty, &empty_ids).is_none());
     }
 
+    fn game_tick(ticks: u64) -> GameTime {
+        GameTime::from_ticks(ticks, TickRate::DEFAULT)
+    }
+
+    /// Animated grain's tick is gameplay time: a running clock yields consecutive ticks and a held
+    /// one yields the same tick at two sim times. Static grain carries none.
+    #[test]
+    fn grain_tick_follows_the_game_clock() {
+        use crate::components::PostProcess;
+        use ludion_ecs::World;
+
+        let mut world = World::new();
+        let entity = world.spawn();
+        world
+            .insert(
+                entity,
+                PostProcess {
+                    grain: 0.05,
+                    grain_motion: GrainMotion::Animated,
+                    ..PostProcess::default()
+                },
+            )
+            .unwrap();
+        let ids: Vec<EntityId> = world.entities().collect();
+        let tick = |now: GameTime| extract_post(&world, &ids, now).unwrap().grain_tick;
+        assert_eq!(tick(game_tick(4)), Some(4));
+        assert_eq!(tick(game_tick(5)), Some(5));
+
+        // One held frame: sim tick 6 reads as the game tick 5 the unheld clock gave at sim tick 5.
+        let running = GameClock::default();
+        let mut held = GameClock::default();
+        held.hold();
+        held.advance();
+        let sim = |ticks: u64| SimTime::from_ticks(ticks, TickRate::DEFAULT);
+        assert_eq!(tick(running.game_instant(sim(5))), Some(5));
+        assert_eq!(tick(held.game_instant(sim(6))), Some(5));
+        assert_eq!(tick(held.game_instant(sim(7))), Some(6));
+
+        world
+            .insert(
+                entity,
+                PostProcess {
+                    grain: 0.05,
+                    ..PostProcess::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            extract_post(&world, &ids, game_tick(4)).unwrap().grain_tick,
+            None
+        );
+    }
+
     /// With multiple `PostProcess` components, extract takes the lowest live `EntityId` (first in
     /// the pinned ascending-slot walk) and ignores the rest — the `extract_environment` posture. A
     /// world with no `PostProcess` yields `None`, which is what makes the renderer fall back to its
@@ -9094,7 +9148,7 @@ mod tests {
             .unwrap();
 
         let ids: Vec<EntityId> = world.entities().collect();
-        let post = extract_post(&world, &ids).expect("a post-process is present");
+        let post = extract_post(&world, &ids, game_tick(0)).expect("a post-process is present");
         assert_eq!(
             post.bloom_strength, 0.25,
             "the lowest-EntityId PostProcess wins"
@@ -9103,7 +9157,7 @@ mod tests {
 
         let empty = World::new();
         let empty_ids: Vec<EntityId> = empty.entities().collect();
-        assert!(extract_post(&empty, &empty_ids).is_none());
+        assert!(extract_post(&empty, &empty_ids, game_tick(0)).is_none());
     }
 
     /// **The other half of the byte-identity claim.** A default `PostProcess` extracts to exactly
@@ -9124,7 +9178,7 @@ mod tests {
         let ids: Vec<EntityId> = world.entities().collect();
 
         assert_eq!(
-            extract_post(&world, &ids),
+            extract_post(&world, &ids, game_tick(0)),
             Some(PostData::default()),
             "the component's defaults and the renderer's fallback must be one set of numbers",
         );
@@ -9187,6 +9241,7 @@ mod tests {
                     anamorphic_threshold: Some(2.0),
                     grain: 0.02,
                     grain_size: 0.005,
+                    grain_motion: GrainMotion::Animated,
                     ssr: 0.7,
                     ssr_fade: [0.3, 0.5],
                     ssr_max_distance: 12.0,
@@ -9195,7 +9250,7 @@ mod tests {
             )
             .unwrap();
         let ids: Vec<EntityId> = world.entities().collect();
-        let post = extract_post(&world, &ids).expect("a post-process is present");
+        let post = extract_post(&world, &ids, game_tick(0)).expect("a post-process is present");
         assert_eq!(
             post,
             PostData {
@@ -9243,6 +9298,7 @@ mod tests {
                 anamorphic_threshold: Some(2.0),
                 grain: 0.02,
                 grain_size: 0.005,
+                grain_tick: Some(0),
                 ssr: 0.7,
                 ssr_fade: [0.3, 0.5],
                 ssr_max_distance: 12.0,
@@ -9253,7 +9309,7 @@ mod tests {
         // The authored defaults are the renderer's own, field for field.
         world.insert(entity, PostProcess::default()).unwrap();
         assert_eq!(
-            extract_post(&world, &ids),
+            extract_post(&world, &ids, game_tick(0)),
             Some(PostData::default()),
             "a default `PostProcess` is the renderer's default `PostData`"
         );
@@ -9283,7 +9339,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                extract_post(&world, &ids).unwrap().tonemap,
+                extract_post(&world, &ids, game_tick(0)).unwrap().tonemap,
                 expected,
                 "{authored:?} must map across the boundary"
             );

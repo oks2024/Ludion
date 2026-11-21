@@ -319,10 +319,11 @@ struct Composite {
     lut: u32,
     lut_scale: vec3<f32>,
     lut_strength: f32,
-    // Nonzero when `exposure_tex` is real; the three pads keep the block whole.
+    // Nonzero when `exposure_tex` is real; the pad keeps the block whole. `grain_animated` is nonzero
+    // when the grain folds `grain_tick` (the game tick) into its hash.
     metered: u32,
-    metered_pad0: u32,
-    metered_pad1: u32,
+    grain_animated: u32,
+    grain_tick: u32,
     metered_pad2: u32,
 };
 @group(0) @binding(14) var<uniform> composite: Composite;
@@ -1017,6 +1018,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             composite.grain_size,
             composite.dither,
             f32(textureDimensions(scene_tex).y),
+            composite.grain_animated,
+            composite.grain_tick,
         );
     }
     return vec4<f32>(color, 1.0);

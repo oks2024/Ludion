@@ -84,6 +84,7 @@ A golden suite pins the mode per scene with the `goldens/manifest.json` key `ant
 - **Chain order:** with SMAA on, composite writes grain 0 and dither 0, and `smaa_blend` applies grain
   then dither: `… vignette → SMAA → grain → dither`. Under a render scale the resample applies them instead, at
   the output size, after the SMAA blend.
+  Animated grain (`grain_motion: animated`) rides the same owning pass, so it holds under SMAA and any scale.
 - **A budget refuses an SMAA report** with `L4020`, as it refuses a non-`full` preset: an SMAA capture
   pays passes the budget never measured. Re-measure with `--aa off`.
 
