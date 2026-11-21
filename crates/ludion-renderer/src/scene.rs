@@ -1137,6 +1137,22 @@ pub enum UiInstance {
         /// The element's rotation; when rotated `pivot_px == origin_px`.
         rotation: UiRotation,
     },
+    /// A filled simple polygon, tessellated: `triangles` fill the interior and the renderer adds a
+    /// one-pixel feathered fringe at the final pixel size.
+    Polygon {
+        /// The polygon's local `(0, 0)` in screen pixels.
+        origin_px: [f32; 2],
+        /// The outline points in pixels relative to `origin_px`, consecutive duplicates dropped.
+        points: Vec<[f32; 2]>,
+        /// Triangles of indices into `points`; unchanged by translation, uniform scale and rotation.
+        triangles: Vec<[u16; 3]>,
+        /// Linear RGBA interior, straight alpha.
+        fill: [f32; 4],
+        /// The fragment clip from the element's `UiGroup` chain.
+        clip: UiClip,
+        /// The element's rotation; when rotated `pivot_px == origin_px`.
+        rotation: UiRotation,
+    },
 }
 
 /// An asset mesh's CPU-side vertex data — the mesh analog of [`TextureImage`]: plain data (flat

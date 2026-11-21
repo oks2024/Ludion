@@ -5707,7 +5707,7 @@
   "NavAgent": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "NavAgent",
-    "description": "A navigating agent. A game writes `target` each tick; `nav_steer` (in `ludion-engine`) writes the\ndesired velocity into [`NavSteering`]. A walking agent follows the shared flow field toward its\ntarget; a flying one seeks it in 3D. Both add separation from their `spatial3d` neighbours. The\ngame's own mover applies the velocity. Every field defaults and is omitted from text at its\ndefault; `NavAgent: {}` is the default agent.\n\n`speed`, `arrive_radius`, `separation_radius` and `separation_strength` are finite and not\nnegative; `separation_neighbors` is at most 16. A field out of range is `L1340`. `neighbor_layers`\nis the `Index3d` layer mask the neighbours are read from; `0` turns separation off. `class` names\nthe `NavConfig.classes` entry whose grid the agent walks (empty is the first class).\n\n```yaml\ncomponents:\n  NavAgent:\n    speed: 3.5\n    neighbor_layers: 2\n    class: forklift\n```",
+    "description": "A navigating agent. A game writes `target` each tick; `nav_steer` (in `ludion-engine`) writes the\ndesired velocity into [`NavSteering`]. A walking agent follows the shared flow field toward its\ntarget; a flying one seeks it in 3D. Both add separation from their `spatial3d` neighbours. The\ngame's own mover applies the velocity. Every field defaults and is omitted from text at its\ndefault; `NavAgent: {}` is the default agent.\n\n`speed`, `arrive_radius`, `separation_radius` and `separation_strength` are finite and not\nnegative; `separation_neighbors` is at most 16. A field out of range is `L1340`. `neighbor_layers`\nis the `Index3d` layer mask the neighbours are read from; `0` turns separation off. `class` names\nthe `NavConfig.classes` entry whose grid the agent walks (empty is the first class). `avoidance`\n(walkers only, `L1528`) swaps the separation push for ORCA avoidance; see [`NavAvoidance`].\n\n```yaml\ncomponents:\n  NavAgent:\n    speed: 3.5\n    neighbor_layers: 2\n    class: forklift\n    avoidance: { priority: 1 }\n```",
     "type": "object",
     "properties": {
       "target": {
@@ -5759,6 +5759,50 @@
       "class": {
         "description": "The `NavConfig.classes` entry this agent walks; empty is the first class (default empty).",
         "type": "string"
+      },
+      "avoidance": {
+        "description": "Opt-in ORCA avoidance for walkers, replacing the separation push (default absent).",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NavAvoidance"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "$defs": {
+      "NavAvoidance": {
+        "description": "Velocity-obstacle avoidance for a walking `NavAgent`. When present it replaces the agent's separation\npush with an ORCA velocity computed from its `Index3d` neighbours (other walking agents), capped at the\nagent's `speed`. Absent, the agent steers exactly as before. A flyer cannot have it.\n\n`radius` is the agent's body radius for avoidance; absent, it is its nav class radius. `horizon_s` is how\nfar ahead, in seconds, a predicted collision is avoided. `max_neighbors` (1 to 16) bounds the neighbours\nconsidered. Between two avoiding agents the one with the higher `priority` keeps its course and the other\ntakes all the avoidance; equal priorities share it. An agent without `avoidance` is dodged fully. An\ninvalid value is `L1528`.\n\n```yaml\ncomponents:\n  NavAgent:\n    avoidance:\n      horizon_s: 2\n      priority: 1\n```",
+        "type": "object",
+        "properties": {
+          "radius": {
+            "description": "Avoidance radius, metres; absent is the class radius.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "horizon_s": {
+            "description": "Look-ahead, seconds (default `1.5`).",
+            "type": "number",
+            "format": "float"
+          },
+          "max_neighbors": {
+            "description": "Most neighbours considered, 1 to 16 (default `6`).",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "priority": {
+            "description": "The higher priority yields less (default `0`).",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
       }
     }
   },
@@ -6285,6 +6329,67 @@
         ]
       }
     }
+  },
+  "PairedAction": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PairedAction",
+    "description": "One participant's state in a playing paired action, written by `start_paired` and removed when the\naction ends.\n\nThe partners of an action are the entities carrying the same `(document, reference, started)`; each\nholds one ref, so a witness reads the whole action from either side. `fired` counts the document\nevents this participant has already fired, so a snapshot restore neither loses nor repeats one.\n\n```yaml\ncomponents:\n  PairedAction:\n    document: voxels/choke.paired.yaml\n    action: choke\n    role: target\n    reference: { index: 4, generation: 0 }\n    started: 120\n    fired: 1\n```",
+    "type": "object",
+    "properties": {
+      "document": {
+        "description": "The document's normalized content-root path.",
+        "type": "string"
+      },
+      "action": {
+        "description": "The document's `name`: events fire as `paired:<action>`.",
+        "type": "string"
+      },
+      "role": {
+        "description": "The role this entity plays.",
+        "type": "string"
+      },
+      "reference": {
+        "description": "The entity cast in the document's `align.reference` role.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
+      },
+      "started": {
+        "description": "The frame the action started at: both clips' `Animation.started`.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "fired": {
+        "description": "How many document events this participant has fired (default `0`).",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "document",
+      "action",
+      "role",
+      "reference",
+      "started"
+    ]
   },
   "Parent": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -10901,6 +11006,33 @@
             "required": [
               "type",
               "size"
+            ]
+          },
+          {
+            "description": "A simple polygon (concave allowed, either winding), filled with `fill`; takes no `stroke`.\nA self-intersecting or degenerate polygon draws nothing and warns once (`L2305`).",
+            "type": "object",
+            "properties": {
+              "points": {
+                "description": "3 to 256 points relative to the origin, +Y down. Fewer than 3 draws nothing (`L2305`).",
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "type": {
+                "type": "string",
+                "const": "polygon"
+              }
+            },
+            "required": [
+              "type",
+              "points"
             ]
           }
         ]

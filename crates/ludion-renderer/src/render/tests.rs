@@ -13510,6 +13510,10 @@ fn vertex_inputs_match_generated_reflection() {
         crate::shader_gen::UI_RECT_VS_MAIN_INPUTS,
     );
     assert_eq!(
+        locs_formats(&UI_POLYGON_VERTEX_ATTRS).as_slice(),
+        crate::shader_gen::UI_POLYGON_VS_MAIN_INPUTS,
+    );
+    assert_eq!(
         locs_formats(&UI_SHAPE_INSTANCE_ATTRS).as_slice(),
         crate::shader_gen::UI_SHAPE_VS_MAIN_INPUTS,
     );

@@ -6,7 +6,7 @@ description: The kind: paired document and check-scene: roles, align offsets, ev
 
 **Scope:** a two-or-more-role choreography authored as text (`kind: paired`): which assemblies take
 part, where each ends up relative to the reference, the named moments, and the part contacts that must
-meet. A game can ask whether one can start (§Can it start?) but cannot play one yet;
+meet. A game can ask whether one can start (§Can it start?) and play a two-role one (§Playing it);
 `ludion docs voxel-assemblies` §Ragdolls covers the switches a finished action hands the target to.
 Clips are `ludion docs voxel-animation`.
 
@@ -48,7 +48,7 @@ align:
       yaw_deg: 180.0         # default 0
 events:                      # strictly ascending t, unique names
   - name: grab
-    t: 0.25                  # gameplay seconds since the start, at speed 1
+    t: 0.25                  # gameplay seconds since the start, at speed 1; `end` is reserved
 contacts:
   - a: instigator/lower-arm-r
     b: target/head
@@ -101,7 +101,51 @@ exactly two roles and a cast naming each once. Each cast entity must be alive, u
   `distance` and `yaw_deg`, sorted by role name. `fits` is true when nothing blocks and the warp is
   within bounds.
 
-Playing the action arrives with `start_paired`.
+## Playing it
+
+> **Register `paired_update` after `animation_events` and before anything that reads
+> `AnimationEvents`.** `animation_events` rewrites the resource every tick and `paired_update` appends
+> the `paired:` events to it. Registered earlier, the events are wiped before anyone reads them. The
+> engine schedules neither system, so a game that never pairs keeps its schedule and hashes.
+
+```rust
+Engine::builder()
+    .system("pair_driver", pair_driver)        // start, then paired_motion -> move/turn
+    .system("animation_events", animation_events)
+    .system("paired_update", paired_update)    // after animation_events, before readers
+```
+
+- **Start.** `start_paired(world, path, cast, fade, ctx.game_instant)` after a `paired_fit` that fits.
+  It refuses with the same codes, and with `L4371` for a cast entity that already ignores another
+  collider or whose role `posture` is blocked (earlier postures are restored; nothing is mutated). It sets
+  each motor role's posture, stamps a `PairedAction` and an `IgnoreCollisions` on both, and crossfades
+  each clip role to its clip over `fade` seconds at speed 1, both `Animation.started` equal. An
+  `align_only` role's `Animation` is left alone.
+- **Motion.** `paired_motion(world, entity, ctx)` returns `Some(PairedMotion { displacement, yaw, warping })`
+  for a participant: a smoothstep warp over `align.ticks`, closed-loop toward the aligned pose
+  recomputed from both current `Transform`s, holding the relative pose afterwards. Feed it to the motor
+  each tick: `move_character(world, e, step.displacement)`, `turn_character(world, e, step.yaw)`. A plain
+  `Transform` entity applies the same two numbers itself (add `displacement`, set the heading). A
+  role that does not move, a missing partner and a held frame give a zero step; off an action it is `None`.
+- **Events.** Each document event fires once per participant as a `ClipEvent` with `clip` `paired:<name>`
+  and the event's `name`, in ascending entity order after the clip events: `events.fired(e, "paired:choke", "grab")`.
+  A `t: 0` event fires on the start tick when `start_paired` runs before the system, otherwise one tick later.
+- **End.** The longest clip role's duration (`align.ticks` for a document of `align_only` roles) ends it:
+  the remaining events and an implicit `end` fire, and every participant's `PairedAction` and
+  `IgnoreCollisions` go on that tick. `end` is not an authorable event name.
+- **Abort.** `abort_paired(world, entity)` ends every participant now and returns the cast as
+  `(role, entity)`; crossfade each to the clip you want. `L4375` for an entity not in an action.
+- **Lockstep.** A game write that changes a clip role's `clip`, `started` or `speed` aborts the whole
+  action and warns `L4374` once per entity. End the action with `abort_paired` before writing.
+- **Ragdoll.** A participant whose `Animation` or assembly `Mesh` is gone (`switch_to_ragdoll`, a
+  despawn) ends only its own role; its partner plays on to `end` and stops ignoring it.
+- **Chaining.** Starting an action with an entity already in one ends that entity's role in the old
+  action; the old partner plays on to its own `end`.
+- **Witnesses.** `PairedAction { document, action, role, reference, started, fired }` is hashed state on
+  each participant and rides snapshots. The partners are the entities sharing `(document, reference,
+  started)`; `fired` counts the document events already fired.
+
+`cargo run -p ludion-engine --example paired_action` plays one headless.
 
 ## The check-scene report
 
@@ -121,12 +165,14 @@ contact instigator/lower-arm-r -> target/head @ hold (t 0.5): gap 6.828 cells (0
 | Code | Raised for |
 |---|---|
 | `L1752` | empty or non-mapping root, envelope, wrong type, unknown key (nearest suggested), a role, offset, event or contact of the wrong shape |
-| `L1753` | fewer than 2 roles, an unknown `reference`/`moves` role, a missing, extra or reference offset, `ticks: 0`, a non-finite number, `scale` of 0 or less, a role with both or neither of `clip` and `align_only`, an empty name, events out of order or repeated, a bad contact side, both sides on one role, an unknown `at`, a negative `max_gap` |
+| `L1753` | fewer than 2 roles, an unknown `reference`/`moves` role, a missing, extra or reference offset, `ticks: 0`, a non-finite number, `scale` of 0 or less, a role with both or neither of `clip` and `align_only`, an empty name, events out of order or repeated, an event named `end`, a bad contact side, both sides on one role, an unknown `at`, a negative `max_gap` |
 | `L1754` | a role's assembly does not load, an unknown clip (nearest suggested), an event past a clip's duration, a contact part the assembly lacks |
 | `L1755` | warning: a contact's gap exceeds its `max_gap` |
 | `L4370` | `paired_fit`: no `kind: paired` document loads at the path (the loader's diagnostics follow); an engine without a project |
-| `L4371` | `paired_fit`: an unknown, repeated or missing cast role, or an entity that is dead, has no `Transform`, is parented, draws another assembly, or whose motor cannot be tested (unknown `posture`) |
+| `L4371` | `paired_fit`, `start_paired`: an unknown, repeated or missing cast role, or an entity that is dead, has no `Transform`, is parented, draws another assembly, or whose motor cannot be tested (unknown `posture`) |
 | `L4372` | `paired_fit`: a cast entity's scale is non-uniform or not the role's `scale` |
 | `L4373` | `paired_fit`: more than two roles |
+| `L4374` | warning: a game write to a playing role's `Animation` broke lockstep; the action was aborted |
+| `L4375` | `abort_paired`: the entity is not in a paired action |
 
 `ludion explain L1752` and the others print the full text.

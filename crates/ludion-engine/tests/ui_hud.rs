@@ -130,7 +130,7 @@ fn rects(scene: &RenderScene) -> Vec<[f32; 4]> {
         .iter()
         .filter_map(|instance| match instance {
             UiInstance::Rect { rect_px, .. } => Some(*rect_px),
-            UiInstance::Text { .. } | UiInstance::Shape { .. } => None,
+            UiInstance::Text { .. } | UiInstance::Shape { .. } | UiInstance::Polygon { .. } => None,
         })
         .collect()
 }

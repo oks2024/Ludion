@@ -155,7 +155,8 @@
 //!   `Animation.clip` or layer clip names a blend space, so its footstep events fire once per
 //!   stride at any speed (`ludion docs animation-layers`). [`AnimGraph`] is a game's `static` table of
 //!   [`AnimState`]s and [`AnimEdge`]s (with an [`AnimGate`] each): [`AnimGraph::step`] crossfades and fades
-//!   layers on a transition only, recording the state in [`AnimGraphState`].
+//!   layers on a transition only, recording the state in [`AnimGraphState`]. [`root_motion_delta`] reads a
+//!   clip's reserved `$root` track as this tick's [`RootMotion`] (travel, yaw, weight) for a motor to apply.
 //! - **Ragdolls** — [`switch_to_ragdoll`] (or [`switch_to_ragdoll_with`], whose
 //!   [`LimitsFrom::Rest`] measures joint limits and targets from the rig rest pose) promotes a posed
 //!   `Mesh.shape: assembly` entity into one `rigid` body entity per part, joined by [`Joint`]s (fixed
@@ -320,6 +321,7 @@ pub use ludion_engine::{
     world_transform,
 };
 pub use ludion_engine::{AnimEdge, AnimGate, AnimGraph, AnimGraphState, AnimState};
+pub use ludion_engine::{RootMotion, root_motion_delta};
 
 pub use ludion_engine::AudioOcclusion;
 pub use ludion_engine::MeshBlend;
@@ -339,7 +341,10 @@ pub use ludion_engine::{
 };
 pub use ludion_engine::{LimitsFrom, RagdollSwitch, switch_to_ragdoll_with};
 pub use ludion_engine::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
-pub use ludion_engine::{PairedFit, PairedRoleFit, Warp, paired_fit};
+pub use ludion_engine::{
+    PairedAction, PairedFit, PairedMotion, PairedRoleFit, Warp, abort_paired, paired_fit,
+    paired_motion, paired_update, start_paired,
+};
 pub use ludion_engine::{
     PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
     patrol_update,

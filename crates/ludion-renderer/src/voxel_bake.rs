@@ -82,6 +82,16 @@ impl VoxelBake {
         }
     }
 
+    /// [`resolve`](VoxelBake::resolve) for a derived frame that may draw without GI: no grid leaves the
+    /// main frame's cached textures alone.
+    pub(crate) fn resolve_keeping(
+        &self,
+        gpu: &Gpu,
+        voxel: Option<&WorldVoxelGrid>,
+    ) -> Option<ResolvedVoxel> {
+        voxel.and_then(|_| self.resolve(gpu, voxel))
+    }
+
     /// Resolves `voxel` for this frame, handing back both textures the GI bake reads (the returned
     /// handles are refcount bumps, not copies). `None` (no `GiVolume`, the overwhelming common case)
     /// drops any cached textures and returns `None`. `Some(grid)` compares the grid's stamped

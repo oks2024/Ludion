@@ -83,6 +83,8 @@ holds `rotation`, `translation` and/or `scale`, each a sequence of keyframes:
 | `v` | yes | `[x, y, z]` — Euler XYZ **degrees** for `rotation`, part-local **voxel units** for `translation`, a per-axis multiplier (`> 0`) for `scale` |
 | `ease` | no | `linear` (default), `smooth` (smoothstep), or `step` |
 
+The target `$root` is reserved for root motion (§Root motion), not a part.
+
 ```yaml
 format: 1
 kind: animation
@@ -377,6 +379,51 @@ ground:
   switch or `kind: character` skins. Sockets on a grounded part follow it; the sim keeps the rest socket.
 - `check-scene` ends a grounded chain's row with `, ground` and prints `ground: max_adjust 3, root_drop`.
 - Cost: the budget is at most 0.5 ms of extract for 32 grounded, layered, IK'd assemblies; `cargo test -p ludion-engine --release --test it -- assembly_anim_bench --ignored --nocapture` prints it by feature.
+
+### Root motion
+
+A clip may carry a reserved `$root` track: the displacement the character travels. It is never drawn, and
+nothing applies it for you.
+
+```yaml
+tracks:
+  "$root":
+    translation:            # voxel units; v[1] must be 0
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - -8.0
+    rotation:               # yaw only: v[0] and v[2] must be 0
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 90.0
+          - 0.0
+```
+
+- Rules (`L1142`): no `scale`, every translation `v[1]` is 0, every rotation `v[0]`/`v[2]` is 0. A part named `$root` is `L1138`.
+- `root_motion_delta(&World, entity, &SystemCtx) -> Option<RootMotion>` is a pure sim read of clip data:
+  `translation` (world-frame metres, `y` 0), `yaw` (radians) and `weight`. Declare
+  `.query::<(&Animation, &Mesh, &Transform)>()`.
+- It reads the exact gameplay clock over this tick's window: a one-shot clamps, a loop wraps, a held frame reads 0,
+  and a scaled clock tiles. Keys are in the entity's frame at the clip start, forward is `-Z`; travel is scaled
+  by the entity's `Transform.scale` (x, z) and rotated by its `Transform.rotation`.
+- Base clip and its crossfade only: the incoming side counts at the fade weight, the outgoing `from` at the
+  rest, and `weight` is their sum (scale your own code-driven move by `1 - weight`). Layers and blends
+  contribute nothing; `None` when no side carries `$root`.
+- The motor idiom: `move_character(world, id, rm.translation)`, then `turn_character(world, id, current_yaw + rm.yaw)`
+  (the turn is absolute). `ludion-engine/examples/root_motion.rs` runs it.
 
 ### Live editing
 

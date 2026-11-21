@@ -85,6 +85,10 @@ fn probe_seed(name: &str) -> Value {
         }),
         "NoiseZone" => json!({ "shape": { "sphere": { "radius": 1.0 } } }),
         "AudioZone" => json!({ "shape": { "sphere": { "radius": 1.0 } } }),
+        "PairedAction" => json!({
+            "document": "d", "action": "a", "role": "r",
+            "reference": { "index": 0, "generation": 0 }, "started": 0,
+        }),
         "PendingNoise" => json!({
             "id": 0,
             "at": [0.0, 0.0, 0.0],

@@ -15,8 +15,10 @@
 //!
 //! The generated `Cargo.toml`'s engine dependencies come in two flavors, chosen at runtime:
 //! - **Checkout flow:** the running CLI's baked engine root (derived at build time from
-//!   `CARGO_MANIFEST_DIR`) exists and contains `crates/ludion`, so the deps point at that checkout by
-//!   absolute path — move the project anywhere and it still builds against the engine here. Because
+//!   `CARGO_MANIFEST_DIR`) exists and contains `crates/ludion`, so the deps are relative paths through
+//!   `.ludion/engine`, a gitignored link to that checkout which `new` creates by running
+//!   `node scripts/ludion.mjs link-engine` (`L4393` if that fails) — the committed project names no
+//!   absolute path, and a clone on another machine relinks with the same verb. Because
 //!   the repo workspace's `members = ["crates/*", "games/*"]` would claim any project scaffolded under
 //!   those globs — making it a member of two workspaces — `new` refuses to scaffold there (`L0011`).
 //! - **Installed flow:** the binary was `cargo install`ed, so the baked engine root is absent; the
@@ -167,8 +169,8 @@ pub fn run(name: &str) -> ExitCode {
         )
         .with_help(
             "create the project outside the engine checkout (a sibling directory, or anywhere not \
-             under the engine's `crates/` or `games/`); its Cargo.toml points at this engine by \
-             absolute path, so it still builds from anywhere. See `ludion explain L0011`",
+             under the engine's `crates/` or `games/`); it links `.ludion/engine` to this engine, \
+             so it still builds from anywhere. See `ludion explain L0011`",
         );
         eprintln!("{diagnostic}");
         return ExitCode::FAILURE;
@@ -191,9 +193,6 @@ pub fn run(name: &str) -> ExitCode {
     // A bundle identifier allows no `_`.
     let name_bundle = name.replace('_', "-");
     let deps = engine_dependencies(&engine_root);
-    // A JSON string literal is a valid JS string literal, so a quote in the path cannot break the script.
-    let engine_root_literal = serde_json::to_string(&forward_slash_root(&engine_root))
-        .expect("a string serializes to JSON");
 
     let substitute = |body: &str| -> String {
         body.replace("{{name_ident}}", &name_ident)
@@ -201,7 +200,15 @@ pub fn run(name: &str) -> ExitCode {
             .replace("{{ludion_dep}}", &deps.ludion)
             .replace("{{ludion_testkit_dep}}", &deps.ludion_testkit)
             .replace("{{ludion_engine_dep}}", &deps.ludion_engine)
-            .replace("{{engine_root}}", &engine_root_literal)
+            .replace("{{code_link_missing}}", code::ENGINE_LINK_MISSING.as_str())
+            .replace(
+                "{{code_link_target}}",
+                code::ENGINE_LINK_TARGET_INVALID.as_str(),
+            )
+            .replace(
+                "{{code_link_occupied}}",
+                code::ENGINE_LINK_OCCUPIED.as_str(),
+            )
             .replace("{{name}}", name)
     };
 
@@ -236,10 +243,45 @@ pub fn run(name: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
         written.push(WRAPPER.rel_path);
+        if let Err(diagnostic) = link_engine(&project_dir, &engine_root) {
+            eprintln!("{diagnostic}");
+            return ExitCode::FAILURE;
+        }
     }
 
-    print_summary(name, &project_dir, &written, wrapper);
+    print_summary(name, &project_dir, &written, wrapper, &engine_root);
     ExitCode::SUCCESS
+}
+
+/// Creates the project's `.ludion/engine` link by running its wrapper's `link-engine` verb (Node owns
+/// link creation: one call makes a junction on Windows and a symlink elsewhere).
+fn link_engine(project_dir: &Path, engine_root: &Path) -> Result<(), Diagnostic> {
+    let manual = "install Node, then run `node scripts/ludion.mjs link-engine <engine checkout>` \
+                  from the new project";
+    let output = std::process::Command::new("node")
+        .arg("scripts/ludion.mjs")
+        .arg("link-engine")
+        .arg(engine_root)
+        .current_dir(project_dir)
+        .output()
+        .map_err(|err| {
+            Diagnostic::new(
+                code::NEW_ENGINE_LINK_FAILED,
+                format!("could not run `node` to link the engine: {err}"),
+            )
+            .with_help(manual)
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(Diagnostic::new(
+        code::NEW_ENGINE_LINK_FAILED,
+        format!(
+            "`node scripts/ludion.mjs link-engine` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    )
+    .with_help(manual))
 }
 
 /// The `L1038` diagnostic for a scaffold file or directory that could not be written.
@@ -395,8 +437,7 @@ fn engine_dependencies(engine_root: &Path) -> EngineDeps {
         if installed_mode(engine_root) {
             format!("{{ version = \"{}\"{tail} }}", env!("CARGO_PKG_VERSION"))
         } else {
-            let root = forward_slash_root(engine_root);
-            format!("{{ path = \"{root}/crates/{crate_name}\"{tail} }}")
+            format!("{{ path = \".ludion/engine/crates/{crate_name}\"{tail} }}")
         }
     };
     EngineDeps {
@@ -404,11 +445,6 @@ fn engine_dependencies(engine_root: &Path) -> EngineDeps {
         ludion_testkit: crate_spec("ludion-testkit", ""),
         ludion_engine: crate_spec("ludion-engine", ""),
     }
-}
-
-/// `root` with forward slashes, the form generated manifests and scripts embed.
-fn forward_slash_root(root: &Path) -> String {
-    root.to_string_lossy().replace('\\', "/")
 }
 
 /// Whether to scaffold in installed flow (version deps). True when forced by `LUDION_NEW_INSTALLED`,
@@ -543,7 +579,13 @@ fn strip_frontmatter(md: &str) -> String {
 }
 
 /// Prints the created file tree and next steps.
-fn print_summary(name: &str, project_dir: &Path, written: &[&str], wrapper: bool) {
+fn print_summary(
+    name: &str,
+    project_dir: &Path,
+    written: &[&str],
+    wrapper: bool,
+    engine_root: &Path,
+) {
     println!("created `{}` — a Ludion game", project_dir.display());
     println!();
     println!("{name}/");
@@ -552,6 +594,9 @@ fn print_summary(name: &str, project_dir: &Path, written: &[&str], wrapper: bool
     paths.sort_unstable();
     for path in paths {
         println!("  {path}");
+    }
+    if wrapper {
+        println!("  .ludion/engine -> {}", engine_root.display());
     }
     println!();
     println!("next:");

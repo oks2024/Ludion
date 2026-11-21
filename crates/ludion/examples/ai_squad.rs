@@ -13,7 +13,7 @@
 //! cargo run -p ludion --example ai_squad
 //! ```
 
-use ludion::ai::{Cx, Machine, Mind, Step, Timer};
+use ludion::ai::{Cx, GroupRoster, Machine, Mind, Step, Timer};
 use ludion::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,7 @@ struct Memory {
     timer: Timer,
     /// Who the squad lost, as the `Heard::Down` events named them.
     #[serde(default)]
+    #[schemars(with = "EntityRefCollection<Vec<Option<EntityRefSchema>>>")]
     lost: Vec<Option<EntityId>>,
 }
 
@@ -80,11 +81,12 @@ impl Machine for Guard {
     fn on_event(cx: &mut Cx<'_, Self>, s: Self, e: &Heard) -> Step<Self> {
         match e {
             Heard::Noise if s == Guard::Patrol => Step::Go(Guard::Investigate),
-            Heard::Down { who } => {
+            // Offered at every active level; record it once, at the root.
+            Heard::Down { who } if s == Guard::Root => {
                 cx.bb.lost.push(*who);
                 Step::Stay
             }
-            Heard::Noise => Step::Stay,
+            Heard::Noise | Heard::Down { .. } => Step::Stay,
         }
     }
     fn member_left(member: Option<EntityId>) -> Option<Heard> {
@@ -173,6 +175,12 @@ fn main() -> ExitCode {
         }
         return ExitCode::FAILURE;
     }
+    let rosters = engine
+        .world()
+        .entities()
+        .filter(|&id| engine.world().component::<GroupRoster>(id).is_some())
+        .count();
+    println!("squads with a roster: {rosters}");
     let mut last: Vec<Vec<Guard>> = Vec::new();
     let mut gone = None;
     for tick in 0..110 {

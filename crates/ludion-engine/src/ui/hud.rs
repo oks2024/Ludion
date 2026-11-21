@@ -373,6 +373,15 @@ pub(crate) fn bounds(instances: &[UiEntry]) -> Option<[f32; 4]> {
                 let [l, t, r, b] = geometry.local_bounds(stroke.map_or(0.0, |s| s.width_px));
                 grow([o[0] + l, o[1] + t, o[0] + r, o[1] + b]);
             }
+            UiInstance::Polygon {
+                origin_px: o,
+                points,
+                ..
+            } => {
+                for p in points {
+                    grow([o[0] + p[0], o[1] + p[1], o[0] + p[0], o[1] + p[1]]);
+                }
+            }
         }
     }
     out
@@ -425,7 +434,24 @@ pub(crate) fn transform_instances(
                 }
                 turn(rotation);
             }
+            UiInstance::Polygon {
+                origin_px,
+                points,
+                rotation,
+                ..
+            } => {
+                *origin_px = [x(origin_px[0]), y(origin_px[1])];
+                scale_points(points, scale);
+                turn(rotation);
+            }
         }
+    }
+}
+
+/// Scales polygon `points` (pixels relative to the polygon's origin) by `k`.
+fn scale_points(points: &mut [[f32; 2]], k: f32) {
+    for p in points {
+        *p = [p[0] * k, p[1] * k];
     }
 }
 
@@ -447,6 +473,7 @@ fn multiply_alpha(instances: &mut [UiEntry], opacity: f32) {
                     stroke.color[3] *= opacity;
                 }
             }
+            UiInstance::Polygon { fill, .. } => fill[3] *= opacity,
         }
     }
 }
@@ -512,7 +539,10 @@ pub(crate) fn post(
     };
     // A shape scales and turns about its origin, not its bounds centre (decision 55).
     let centre = match (element, &entries[start].2) {
-        (HudElement::Shape, UiInstance::Shape { origin_px, .. }) => *origin_px,
+        (
+            HudElement::Shape,
+            UiInstance::Shape { origin_px, .. } | UiInstance::Polygon { origin_px, .. },
+        ) => *origin_px,
         _ => [(b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5],
     };
     let mut delta = [0.0, 0.0];
@@ -541,7 +571,8 @@ pub(crate) fn post(
             match instance {
                 UiInstance::Rect { rotation: r, .. }
                 | UiInstance::Text { rotation: r, .. }
-                | UiInstance::Shape { rotation: r, .. } => {
+                | UiInstance::Shape { rotation: r, .. }
+                | UiInstance::Polygon { rotation: r, .. } => {
                     *r = rotation;
                 }
             }
@@ -616,7 +647,8 @@ fn apply_group(entries: &mut [UiEntry], start: usize, group: Option<GroupXf>) {
         match instance {
             UiInstance::Rect { clip, .. }
             | UiInstance::Text { clip, .. }
-            | UiInstance::Shape { clip, .. } => *clip = xf.clip,
+            | UiInstance::Shape { clip, .. }
+            | UiInstance::Polygon { clip, .. } => *clip = xf.clip,
         }
     }
     if xf.rotation != 0.0 {
@@ -655,6 +687,11 @@ fn rotate_into_group(instances: &mut [UiEntry], xf: &GroupXf) {
                 origin_px,
                 rotation,
                 ..
+            }
+            | UiInstance::Polygon {
+                origin_px,
+                rotation,
+                ..
             } => (rotation, *origin_px),
         };
         let moved = map(pivot);
@@ -689,6 +726,12 @@ fn rotate_into_group(instances: &mut [UiEntry], xf: &GroupXf) {
                 if let Some(stroke) = stroke {
                     stroke.width_px *= xf.scale;
                 }
+            }
+            UiInstance::Polygon {
+                origin_px, points, ..
+            } => {
+                *origin_px = moved;
+                scale_points(points, xf.scale);
             }
         }
     }

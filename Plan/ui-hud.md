@@ -16,7 +16,8 @@
 > `UiTween` and `UiWorldAnchor`, resolved in `extract`
 > (`ui/hud.rs`; the component and schema snapshots moved once, no golden, replay or protocol hash);
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
-> component schema snapshot moved). Waves 3c, 5b and 7 are recorded below and not started. Owed: the
+> component schema snapshot moved); W3c-1: filled `polygon` (decisions 67–73, `L2305`, `ui_polygon.wgsl`; the `ui-polygons`
+> golden is blessed on the RTX 3090, the macOS golden is owed on the M4). Waves 3c-2, 3c-3, 5b and 7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -292,6 +293,40 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 **Proposed — owner ruling owed (W6b):** no `disabled_fill`; `selected_fill` falling back to `fill`; the stroke on every wedge rather
 than a selected-only stroke; overlapping strokes at small gaps left to `gap_deg`. Request differences: none beyond the fallbacks.
 
+67. **`polygon { points: [[x, y], …] }`**: canvas units relative to the origin, +Y down, either winding. Filled only in W3c-1. A
+    `stroke` on a polygon is `L1621` at `/stroke` ("a polygon takes a fill only"); W3c-2 lifts that. A polygon with no `fill`
+    draws nothing, as every shape does. `UiShapeType` loses `Copy` (still `Clone`), because `points` is a `Vec`.
+68. **Validation `L1621`**: a non-finite point is reported at `/shape/points/<i>/<j>`; more than 256 points at `/shape/points`,
+    naming the cap. Fewer than 3 points is **not** an error: a game writes `points` live (wall-clipped cones), so too few is a
+    runtime degeneracy (decision 70).
+69. **Triangulation** (`ludion-engine/src/ui/polygon.rs`, `triangulate(&[[f32; 2]]) -> Result<Vec<[u16; 3]>, PolygonFault>`),
+    deterministic, pure IEEE arithmetic (no transcendentals, orientation tests in `f64`): drop consecutive duplicate points
+    (including last == first); reject fewer than 3 points, `|signed area| <= 1e-6`, and two non-adjacent edges that intersect or
+    touch; ear clipping in point order from a cursor, wrapping round, clipping the first strictly convex corner whose triangle
+    holds no other remaining vertex (inside or on it), then continuing from the next vertex. A collinear corner is removed without
+    a triangle. A full lap with no ear is `NoEar`. Indices refer to the deduplicated points, which the instance carries.
+    `PolygonFault { TooFew, ZeroArea, SelfIntersecting { a, b }, NoEar }`.
+70. **`L2305 UI_POLYGON_DEGENERATE`** (Warning): extract records it in `degraded` keyed `"{offender_key}/ui-polygon"` (the `L2304`
+    latch pattern), so each entity reports once. It names the fault, and the edge indices for a self-intersection. The polygon
+    draws nothing that frame.
+71. **Renderer data.** `UiInstance::Polygon { origin_px, points, triangles, fill, clip, rotation }`: `points` are px relative to
+    `origin_px`, already scaled; `triangles` index `points` and are invariant under translation, uniform scale and rotation, so
+    `hud` maps only the points; when rotated, `rotation.pivot_px == origin_px` (decision 55).
+72. **The feathered fringe is built in the renderer, at the final pixel size** (`render/ui_polygon.rs`), so a group scale never
+    widens it. With `s` the sign of the signed area and `n` the unit outward edge normals, each vertex's miter is
+    `m = (n_prev + n_next)/2` divided by `max(dot(m, m), 0.25)` (capped at 2×); `inner = p − 0.5·m` has coverage 1 and
+    `outer = p + 0.5·m` coverage 0; the interior is `triangles` over the inner points; the fringe is a quad per edge. The vertex
+    colour is premultiplied `fill.rgb·fill.a·cov, fill.a·cov`; rotation turns positions on the CPU about the pivot; the clip is
+    packed per vertex. The fragment returns `color · clip_cov` under `premultiplied_blend`, so the 0.5-coverage contour is the
+    authored outline, the contour the hit test uses.
+73. **Hit.** `ui_shape_hit` and `ui_hit` treat a polygon as an even-odd point-in-polygon test on the deduplicated points in
+    origin-relative px, after `unrotate`; `ui_hit` adds `clip_contains`. A degenerate polygon never hits.
+
+**Proposed — owner ruling owed (W3c-1):** the W3c-1/2/3 split; `L2305` as a once-per-entity warning rather than per change;
+fewer than 3 points as a runtime warning, not a field error; the miter fringe capped at 2× (spikes sharper than about 30° soften by
+under a pixel); a polygon stroke as `L1621` until W3c-2. Request differences: `type: polygon`; no stroke or dash yet; `polyline` is
+W3c-2.
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -305,7 +340,10 @@ than a selected-only stroke; overlapping strokes at small gaps left to `gap_deg`
   `ui_rect_corners`/`ui_point_in`; the `ui-rotation` golden. Unrotated UI renders byte-identically.
 - **W3b — `UiShape` analytic kinds** `line circle ring arc wedge rounded_rect`, fill and stroke, `UiInstance::Shape`,
   `ui_shape.wgsl`, `ui_shape_hit`, the `ui-shapes` golden.
-- **W3c — polygon** by ear clipping with a feathered fringe and a degenerate warning, polyline joins, dashes.
+- **W3c-1 — filled `polygon`** by ear clipping with a feathered fringe and a degenerate warning (decisions 67–73, `L2305`,
+  `ui_polygon.wgsl`, the `ui-polygons` golden).
+- **W3c-2 — strokes as tessellated paths** on the same pipeline: a polygon `stroke`, and `polyline { points, closed, join }`.
+- **W3c-3 — `dash: { on, off }`** on any stroke.
 - **W4a — `UiGroup`:** origin, scale, opacity and visibility, CPU only (decisions 18-24;
   `ui/group.rs`, `hud.rs::post`). Docs `ui-groups`; example `ui_groups`. An element without `group`
   extracts byte-identically.
@@ -342,7 +380,7 @@ and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 ## Out of scope (triggers recorded)
 
-polygon, polyline and dashes (W3c), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
+polyline and polygon strokes (W3c-2), dashes (W3c-3), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
 when stretched), slicing `UiList`/`UiText`, text shadow (W5b), a wedge `disabled_fill` or per-item colour, sub-wheels, item-level `ui_hit`,
 anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see

@@ -186,6 +186,74 @@ fn needs_gpu_a_layered_view_does_not_resolve_the_probes_again() {
     );
 }
 
+/// A `GiVolume` scene whose view lights by its own set: the view draws without GI, so two frames bake
+/// the main frame's volume once and the view never rebakes it. Skips with no GPU.
+#[test]
+fn needs_gpu_a_view_on_its_own_light_set_never_rebakes_the_gi() {
+    use crate::scene::{GiData, PointLightData, WorldVoxelGrid};
+    const PORTRAIT: u32 = 2;
+    let total = 8 * 8 * 8;
+    let grid = std::sync::Arc::new(
+        WorldVoxelGrid {
+            origin: Vec3::ZERO,
+            cell_size: 1.0,
+            extent: [8, 8, 8],
+            occupancy: (0..total).map(|i| i % 9 == 0).collect(),
+            albedo: vec![[1.0, 0.1, 0.1, 1.0]; total],
+            emissive: vec![0.0; total],
+            hash: 0,
+        }
+        .sealed(),
+    );
+    let light = |x: f32| PointLightData {
+        position: Vec3::new(x, 4.0, 4.0),
+        color: Vec3::ONE,
+        intensity: 1.0,
+        range: 6.0,
+        dynamic: false,
+        shadow: None,
+        scatter: 0.0,
+    };
+    let mut full = scene();
+    full.lights = vec![light(2.0), light(6.0)];
+    full.voxel = Some(grid);
+    full.gi = Some(GiData {
+        probe_spacing: 1.0,
+        normal_bias: 0.25,
+        sky_visibility: 1.0,
+        bounce: 1.0,
+        count: [9; 3],
+        origin: Vec3::ZERO,
+        span: Vec3::splat(8.0),
+    });
+    full.views[0].layers = crate::DEFAULT_LAYER_BIT;
+    full.views[0].lights = PORTRAIT;
+    let masks = crate::LayerMasks {
+        main: crate::DEFAULT_LAYER_BIT,
+        main_lights: crate::DEFAULT_LAYER_BIT,
+        meshes: vec![crate::DEFAULT_LAYER_BIT],
+        lights: vec![crate::DEFAULT_LAYER_BIT, PORTRAIT],
+        ..crate::LayerMasks::default()
+    };
+    let (layered, _) = crate::split_layers(full, masks);
+    assert_eq!(layered.lights.len(), 1);
+    let derived = view_scene(&layered, 0);
+    assert!(derived.gi.is_none() && derived.voxel.is_none());
+
+    let Some(renderer) = skip_or_renderer("a_view_on_its_own_light_set_never_rebakes_the_gi")
+    else {
+        return;
+    };
+    let size = FrameSize::native(PX, PX);
+    renderer.render(&layered, size).expect("first frame");
+    renderer.render(&layered, size).expect("second frame");
+    assert_eq!(
+        renderer.gi_bake.bake_count(),
+        1,
+        "the main frame bakes once; the view draws without GI"
+    );
+}
+
 /// The view's GPU time at two sizes on a lit room: a measurement, not a gate. Run with
 /// `cargo test -p ludion-renderer --release -- --ignored --nocapture needs_gpu_bench_view_gpu_ms`.
 #[test]

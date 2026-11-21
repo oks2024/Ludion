@@ -36,6 +36,7 @@
 pub(crate) mod group;
 pub(crate) mod hit;
 pub mod hud;
+pub(crate) mod polygon;
 pub(crate) mod radial;
 pub(crate) mod shape;
 

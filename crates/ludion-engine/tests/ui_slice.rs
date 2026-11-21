@@ -125,7 +125,7 @@ fn rows(scene: &RenderScene) -> Vec<([f32; 4], [f32; 4])> {
         .iter()
         .filter_map(|instance| match instance {
             UiInstance::Rect { rect_px, uv, .. } => Some((*rect_px, *uv)),
-            UiInstance::Text { .. } | UiInstance::Shape { .. } => None,
+            UiInstance::Text { .. } | UiInstance::Shape { .. } | UiInstance::Polygon { .. } => None,
         })
         .collect()
 }

@@ -83,6 +83,22 @@ pub mod code {
     /// Raised by `ludion-cli`.
     pub const NEW_TARGET_IN_WORKSPACE: DiagnosticCode = DiagnosticCode::new("L0011");
 
+    /// `L4390` — a scaffolded project's `.ludion/engine` link is missing, dangling, or not an engine
+    /// checkout. Raised by the project's `scripts/ludion.mjs`.
+    pub const ENGINE_LINK_MISSING: DiagnosticCode = DiagnosticCode::new("L4390");
+
+    /// `L4391` — `link-engine` was given a path that is not an engine checkout. Raised by the
+    /// project's `scripts/ludion.mjs`.
+    pub const ENGINE_LINK_TARGET_INVALID: DiagnosticCode = DiagnosticCode::new("L4391");
+
+    /// `L4392` — `.ludion/engine` exists and is not a link, so `link-engine` refuses to replace it.
+    /// Raised by the project's `scripts/ludion.mjs`.
+    pub const ENGINE_LINK_OCCUPIED: DiagnosticCode = DiagnosticCode::new("L4392");
+
+    /// `L4393` — `ludion new` scaffolded the files but could not create the `.ludion/engine` link.
+    /// Raised by `ludion-cli`.
+    pub const NEW_ENGINE_LINK_FAILED: DiagnosticCode = DiagnosticCode::new("L4393");
+
     /// `L0012` — `ludion dev` was run from a directory that is not a runnable game project (no
     /// `Cargo.toml`, or one with no binary target to host). Raised by `ludion-cli` (`ludion dev`).
     pub const DEV_NOT_A_GAME: DiagnosticCode = DiagnosticCode::new("L0012");
@@ -685,6 +701,11 @@ pub mod code {
     pub const PAIRED_SCALE_MISMATCH: DiagnosticCode = DiagnosticCode::new("L4372");
     /// `L4373` — a paired document has a shape the runtime does not play yet: more than two roles.
     pub const PAIRED_UNSUPPORTED: DiagnosticCode = DiagnosticCode::new("L4373");
+    /// `L4374` — warning: a game write to a playing paired role's `Animation` (`clip`, `started` or
+    /// `speed`) broke lockstep, so the whole action was aborted.
+    pub const PAIRED_LOCKSTEP_BROKEN: DiagnosticCode = DiagnosticCode::new("L4374");
+    /// `L4375` — `abort_paired` was given an entity that is not in a paired action.
+    pub const PAIRED_NOT_PLAYING: DiagnosticCode = DiagnosticCode::new("L4375");
     /// `L4290` — `AnimGraph::step` found no `AnimGraphState`, a state name the graph does not declare,
     /// no `Animation`, or a layer the entity's `AnimationLayers` lacks. Nothing was written.
     pub const ANIM_GRAPH_STATE_INVALID: DiagnosticCode = DiagnosticCode::new("L4290");
@@ -1954,6 +1975,9 @@ pub mod code {
     /// `L1527` — a `NavBlocker` has a non-finite or non-positive half-extent, a negative or non-finite
     /// `cost`, or an empty `classes` entry.
     pub const NAV_BLOCKER_INVALID: DiagnosticCode = DiagnosticCode::new("L1527");
+    /// `L1528` — a nav avoidance value is invalid: a `NavAgent.avoidance` with a non-finite or non-positive
+    /// `radius` or `horizon_s`, a `max_neighbors` outside 1..=16, or `avoidance` on a flying agent.
+    pub const NAV_AVOIDANCE_INVALID: DiagnosticCode = DiagnosticCode::new("L1528");
     /// `L1570` — a `Perceiver` field is invalid: no or too many sight zones, a bad range or angle, a
     /// duplicate zone name, a bad sweep or a bad visibility clamp.
     pub const PERCEIVER_INVALID: DiagnosticCode = DiagnosticCode::new("L1570");
@@ -2048,7 +2072,7 @@ pub mod code {
     pub const UI_RADIAL_INVALID: DiagnosticCode = DiagnosticCode::new("L1619");
     /// `L1620` — a `UiRect`, `UiText` or `UiGroup` `rotation` is not finite.
     pub const UI_ROTATION_INVALID: DiagnosticCode = DiagnosticCode::new("L1620");
-    /// `L1621` — a `UiShape` has a non-finite number, a bad radius, thickness, sweep, size or stroke width, or a fill or missing stroke on a stroke-only kind.
+    /// `L1621` — a `UiShape` has a non-finite number, a bad radius, thickness, sweep, size or stroke width, a fill or missing stroke on a stroke-only kind, or a bad polygon (non-finite or over 256 points, or a stroke).
     pub const UI_SHAPE_INVALID: DiagnosticCode = DiagnosticCode::new("L1621");
     /// `L2302` — a UI element's `group` could not be resolved; drawn ungrouped.
     pub const UI_GROUP_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2302");
@@ -2056,6 +2080,8 @@ pub mod code {
     pub const UI_CLIP_NESTING: DiagnosticCode = DiagnosticCode::new("L2303");
     /// `L2304` — a UI text outline wider than the face can draw; clamped.
     pub const UI_TEXT_OUTLINE_CLAMPED: DiagnosticCode = DiagnosticCode::new("L2304");
+    /// `L2305` — a `UiShape` polygon is degenerate or self-intersecting; it draws nothing.
+    pub const UI_POLYGON_DEGENERATE: DiagnosticCode = DiagnosticCode::new("L2305");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
     pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
@@ -3190,9 +3216,59 @@ matching a member glob of the outer workspace — Cargo rejects a package that b
 workspaces, so neither the engine nor the new project would build.
 
 Fix: create the project somewhere outside the engine checkout — its parent directory, a sibling of
-the engine repo, or any path that is not under the engine's `crates/` or `games/`. During the
-local-first phase the generated `Cargo.toml` points its `ludion` dependency at this engine checkout
-by absolute path, so the project still builds against the engine from anywhere on disk.",
+the engine repo, or any path that is not under the engine's `crates/` or `games/`. From a checkout
+the generated project links `.ludion/engine` to this engine and its `Cargo.toml` depends on the
+engine through that link, so it builds against the engine from anywhere on disk.",
+    },
+    CodeEntry {
+        code: code::ENGINE_LINK_MISSING,
+        severity: Severity::Error,
+        title: "the project's engine link is missing",
+        explanation: "\
+A project scaffolded from an engine checkout reached for `.ludion/engine` and found nothing usable
+there: the link is missing, dangling (the checkout moved or was deleted), or points at a directory
+that is not an engine checkout.
+
+The project's `Cargo.toml` depends on the engine through `.ludion/engine`, a gitignored per-machine
+link to this machine's engine checkout, so the committed project names no absolute path. `ludion
+new` creates the link; a fresh clone on another machine does not have one.
+
+Fix: run `node scripts/ludion.mjs link-engine <engine checkout>` from the project root, once per
+machine.",
+    },
+    CodeEntry {
+        code: code::ENGINE_LINK_TARGET_INVALID,
+        severity: Severity::Error,
+        title: "not an engine checkout",
+        explanation: "\
+`node scripts/ludion.mjs link-engine <path>` was given a path that is not an engine checkout: it has
+no `Cargo.toml` at its root, or no `crates/ludion/Cargo.toml`.
+
+The link must point at the root of an engine checkout (the directory holding the workspace
+`Cargo.toml` and `crates/`), and the existing link is left unchanged.
+
+Fix: pass the engine checkout's root directory.",
+    },
+    CodeEntry {
+        code: code::ENGINE_LINK_OCCUPIED,
+        severity: Severity::Error,
+        title: "`.ludion/engine` is not a link",
+        explanation: "\
+`node scripts/ludion.mjs link-engine` found `.ludion/engine` already present and not a link — a real
+directory or file. The wrapper only ever replaces a link and never deletes real content.
+
+Fix: move or delete `.ludion/engine` yourself, then rerun `link-engine`.",
+    },
+    CodeEntry {
+        code: code::NEW_ENGINE_LINK_FAILED,
+        severity: Severity::Error,
+        title: "could not link the engine",
+        explanation: "\
+`ludion new` wrote the project's files but could not create its `.ludion/engine` link: Node is not
+installed or not on the PATH, or `scripts/ludion.mjs link-engine` failed. The files stay in place.
+
+Fix: install Node, then run `node scripts/ludion.mjs link-engine <engine checkout>` from the project
+root.",
     },
     CodeEntry {
         code: code::DEV_NOT_A_GAME,
@@ -9796,6 +9872,17 @@ Fix: write finite endpoints, a `cost` of 0 or more metres and a `snap_radius` ab
 Fix: write finite half-extents above 0, a `cost` of 0 or more metres and a named class in every `classes` entry.",
     },
     CodeEntry {
+        code: code::NAV_AVOIDANCE_INVALID,
+        severity: Severity::Error,
+        title: "nav avoidance values are invalid",
+        explanation: "A `NavAgent.avoidance` has a non-finite or non-positive `radius` or `horizon_s`, a
+`max_neighbors` of 0 or above 16, or sits on a flying agent (pointers
+`/entities/{i}/components/NavAgent/avoidance/{field}`, `/avoidance`). A scene with one is refused.
+
+Fix: write a `radius` and `horizon_s` above 0, a `max_neighbors` from 1 to 16, and drop `avoidance` from flying agents
+(avoidance steers walkers only).",
+    },
+    CodeEntry {
         code: code::PERCEIVER_INVALID,
         severity: Severity::Error,
         title: "a perceiver is invalid",
@@ -10325,7 +10412,8 @@ Fix: give `rotation` a finite value in degrees (positive is clockwise on screen;
 A `UiShape` has one of: a non-finite number; a `radius` that is not above 0; a `ring` `thickness` that is
 not in `(0, radius]`; a `wedge` `inner_radius` outside `[0, radius)`; a `sweep_deg` outside `[0, 360]`; a
 negative `size` component or `corner_radius`; a stroke `width` that is not above 0; a `fill` on a `line` or
-`arc` (they draw only their stroke); or a `line` or `arc` with no `stroke`. The pointer
+`arc` (they draw only their stroke); a `line` or `arc` with no `stroke`; a `polygon` point that is not
+finite, more than 256 `polygon` points, or a `stroke` on a `polygon`. The pointer
 (`/entities/{i}/components/UiShape/{field}`) names the field. A scene with one is refused.
 
 Fix: correct the field; give a `line` or `arc` a `stroke` and drop its `fill`.",
@@ -10364,6 +10452,17 @@ draws 1 to 4 whole source pixels. Reported once per element as a degraded warnin
 message names the face and the maximum width in canvas units.
 
 Fix: lower `outline.width` to the stated maximum, or bake the face with a larger SDF spread.",
+    },
+    CodeEntry {
+        code: code::UI_POLYGON_DEGENERATE,
+        severity: Severity::Warning,
+        title: "a UiShape polygon is degenerate",
+        explanation: "\
+A `UiShape` `polygon` has fewer than 3 distinct points, zero area, or edges that cross or touch, so it
+cannot be filled and draws nothing that frame. Reported once per entity as a degraded warning at render
+time; the message names the fault and, for a self-intersection, the two edge indices.
+
+Fix: write a simple polygon of 3+ distinct points whose edges do not cross.",
     },
     CodeEntry {
         code: code::STATIC_INELIGIBLE,
@@ -13954,6 +14053,27 @@ with `ludion check-scene`, but `paired_fit` refuses it.
 Fix: split the action into pairs of roles; see `ludion docs paired-actions`.",
     },
     CodeEntry {
+        code: code::PAIRED_LOCKSTEP_BROKEN,
+        severity: Severity::Warning,
+        title: "a game write broke a paired action's lockstep",
+        explanation: "A playing paired action keeps its clip roles in lockstep: each role's `Animation` has the clip, `started`
+and speed `1` that `start_paired` wrote. `paired_update` found one changed (a `crossfade`, a clip cut or a
+speed write by a game system), so it ended the whole action on that tick and warned once per entity. The
+guard does not name the writer.
+
+Fix: end the action with `abort_paired` before writing the participant's `Animation`, or stop the system
+that writes it while the action plays; see `ludion docs paired-actions`.",
+    },
+    CodeEntry {
+        code: code::PAIRED_NOT_PLAYING,
+        severity: Severity::Error,
+        title: "the entity is not in a paired action",
+        explanation: "`abort_paired` was given an entity that carries no `PairedAction`: the action already ended, or the entity
+never took part in one.
+
+Fix: check for `PairedAction` before aborting; see `ludion docs paired-actions`.",
+    },
+    CodeEntry {
         code: code::ANIM_GRAPH_STATE_INVALID,
         severity: Severity::Error,
         title: "an animation graph cannot step this entity",
@@ -14157,6 +14277,10 @@ mod tests {
         code::DOCS_UNKNOWN_TOPIC,
         code::DOCS_MALFORMED,
         code::NEW_TARGET_IN_WORKSPACE,
+        code::ENGINE_LINK_MISSING,
+        code::ENGINE_LINK_TARGET_INVALID,
+        code::ENGINE_LINK_OCCUPIED,
+        code::NEW_ENGINE_LINK_FAILED,
         code::DEV_NOT_A_GAME,
         code::DEV_CHILD_FAILED,
         code::THREADS_ENV_INVALID,
@@ -14515,6 +14639,7 @@ mod tests {
         code::PATROL_STATE_INVALID,
         code::NAV_LINK_INVALID,
         code::NAV_BLOCKER_INVALID,
+        code::NAV_AVOIDANCE_INVALID,
         code::PERCEIVER_INVALID,
         code::SIGHT_TARGET_INVALID,
         code::PERCEPTION_NAME_UNKNOWN,
@@ -14558,6 +14683,7 @@ mod tests {
         code::UI_GROUP_UNRESOLVED,
         code::UI_CLIP_NESTING,
         code::UI_TEXT_OUTLINE_CLAMPED,
+        code::UI_POLYGON_DEGENERATE,
         code::STATIC_INELIGIBLE,
         code::STATIC_PARENT_NOT_STATIC,
         code::STATIC_REWRITTEN,
@@ -14779,6 +14905,8 @@ mod tests {
         code::PAIRED_CAST_INVALID,
         code::PAIRED_SCALE_MISMATCH,
         code::PAIRED_UNSUPPORTED,
+        code::PAIRED_LOCKSTEP_BROKEN,
+        code::PAIRED_NOT_PLAYING,
         code::ANIM_GRAPH_STATE_INVALID,
         code::ANIM_GRAPH_INVALID,
     ];
@@ -14984,6 +15112,7 @@ mod tests {
             code::UI_GROUP_UNRESOLVED,
             code::UI_CLIP_NESTING,
             code::UI_TEXT_OUTLINE_CLAMPED,
+            code::UI_POLYGON_DEGENERATE,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
             code::STATIC_REWRITTEN,
@@ -15034,6 +15163,7 @@ mod tests {
             code::STRING_ARG_MISSING,
             code::SEQUENCE_ROLE_MISSING,
             code::SEQUENCE_KEY_DEGRADED,
+            code::PAIRED_LOCKSTEP_BROKEN,
             code::SERVER_EVENTS_DROPPED,
         ];
         let registered: Vec<DiagnosticCode> = CODES

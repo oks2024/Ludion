@@ -214,13 +214,15 @@ fn new_scaffolds_the_expected_files() {
 
     // The wrapper builds this checkout's CLI into the project's own target dir.
     let wrapper = read("scripts/ludion.mjs");
-    let root_literal = format!(
-        "const engineRoot = {};",
-        serde_json::to_string(&engine_root().to_string_lossy().replace('\\', "/")).unwrap()
-    );
+    let root_string = engine_root().to_string_lossy().replace('\\', "/");
     assert!(
-        wrapper.contains(&root_literal),
-        "wrapper lacks the engine root literal:\n{wrapper}"
+        !wrapper.contains(&root_string),
+        "wrapper embeds the engine root:\n{wrapper}"
+    );
+    assert_eq!(
+        fs::canonicalize(proj.join(".ludion/engine")).unwrap(),
+        fs::canonicalize(engine_root()).unwrap(),
+        "`.ludion/engine` must link to the engine checkout"
     );
     assert!(
         wrapper.contains("ludion-cli"),
@@ -246,8 +248,13 @@ fn new_scaffolds_the_expected_files() {
         "lib ident not substituted"
     );
     assert!(
-        cargo.contains("/crates/ludion\""),
-        "ludion path dep not pointed at the engine checkout"
+        cargo.contains("path = \".ludion/engine/crates/ludion\"")
+            && cargo.contains("exclude = [\".ludion\"]"),
+        "ludion path dep not routed through the engine link:\n{cargo}"
+    );
+    assert!(
+        !cargo.contains(&root_string),
+        "Cargo.toml embeds the engine root:\n{cargo}"
     );
     // The engine path must resolve to a real directory.
     assert!(
@@ -320,6 +327,10 @@ fn new_installed_mode_emits_version_deps_without_absolute_paths() {
         !base.join("installed-check/scripts/ludion.mjs").exists(),
         "an installed CLI is on the PATH; no wrapper is scaffolded"
     );
+    assert!(
+        !base.join("installed-check/.ludion").exists(),
+        "installed mode creates no engine link"
+    );
 
     // Every engine dependency is a version dep at this binary's own workspace version.
     let version = env!("CARGO_PKG_VERSION");
@@ -344,6 +355,87 @@ fn new_installed_mode_emits_version_deps_without_absolute_paths() {
         !cargo.contains(&engine_root().to_string_lossy().replace('\\', "/")),
         "installed-mode Cargo.toml leaked the build machine's engine root:\n{cargo}"
     );
+}
+
+/// Runs `node scripts/ludion.mjs <args>` in `proj`.
+fn wrapper_in(proj: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("node")
+        .arg("scripts/ludion.mjs")
+        .args(args)
+        .current_dir(proj)
+        .output()
+        .expect("run node")
+}
+
+/// `link-engine` relinks to a valid checkout, refuses a non-checkout (`L4391`) and a real directory
+/// (`L4392`) without touching them, and a dangling link fails fast with `L4390`.
+#[test]
+fn wrapper_link_engine_relinks_and_refuses() {
+    let (base, _lock) = common::stable_scratch("link_engine");
+    let made = Command::new(ludion())
+        .arg("new")
+        .arg("link-check")
+        .current_dir(&base)
+        .output()
+        .expect("run `ludion new`");
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let proj = base.join("link-check");
+    let link = proj.join(".ludion/engine");
+    let real_engine = fs::canonicalize(engine_root()).unwrap();
+
+    let not_engine = base.join("not-an-engine");
+    fs::create_dir_all(&not_engine).unwrap();
+    let out = wrapper_in(&proj, &["link-engine", not_engine.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("L4391"));
+    assert_eq!(
+        fs::canonicalize(&link).unwrap(),
+        real_engine,
+        "link unchanged"
+    );
+
+    let fake = base.join("fake-engine");
+    fs::create_dir_all(fake.join("crates/ludion")).unwrap();
+    fs::write(fake.join("Cargo.toml"), "").unwrap();
+    fs::write(fake.join("crates/ludion/Cargo.toml"), "").unwrap();
+    let out = wrapper_in(&proj, &["link-engine", fake.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::canonicalize(&link).unwrap(),
+        fs::canonicalize(&fake).unwrap()
+    );
+
+    // Removing the fake leaves a dangling link, which the wrapper names before any cargo call.
+    fs::remove_dir_all(&fake).unwrap();
+    let out = wrapper_in(&proj, &["docs"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("L4390"));
+
+    // A real directory at the link path is never replaced.
+    let out = Command::new("node")
+        .args(["-e", "require('fs').unlinkSync('.ludion/engine')"])
+        .current_dir(&proj)
+        .output()
+        .expect("run node");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    fs::create_dir_all(&link).unwrap();
+    fs::write(link.join("keep.txt"), "keep").unwrap();
+    let out = wrapper_in(&proj, &["link-engine", engine_root().to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("L4392"));
+    assert!(link.join("keep.txt").is_file());
 }
 
 /// Runs `ludion <args>` in `dir`.

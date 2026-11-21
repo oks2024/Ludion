@@ -1338,8 +1338,21 @@ fn extract_inner(
         {
             let hud_start = ui_entries.len();
             let shape = ui::hud::pre_shape(&hud, id, shape, degraded);
-            if let Some(row) = ui::shape::shape_instance(&shape, viewport) {
-                ui_entries.push((shape.order, id, row));
+            match ui::shape::shape_instance(&shape, viewport) {
+                Ok(Some(row)) => ui_entries.push((shape.order, id, row)),
+                Ok(None) => {}
+                Err(fault) => degraded.push((
+                    format!("{}/ui-polygon", crate::diagnostics::offender_key(world, id)),
+                    Diagnostic::new(
+                        code::UI_POLYGON_DEGENERATE,
+                        format!(
+                            "{id} has a `polygon` that cannot be filled: {fault}; it draws nothing"
+                        ),
+                    )
+                    .with_help(
+                        "write a simple polygon of 3+ distinct points; `ludion explain L2305`",
+                    ),
+                )),
             }
             ui::hud::post(
                 &hud,

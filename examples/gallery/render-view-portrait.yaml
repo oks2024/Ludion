@@ -1,0 +1,277 @@
+# Feature: render layers and light layers - a voxel figure lit only by its own key light, shown in a bottom-left panel.
+# The room is `render-view-radar`. The figure and its cool key light sit far to one side on the `portrait` layer; the
+# main camera draws and lights `[default]` only, so the figure is absent from the main frame and the key light does not
+# reach the room. `portrait-cam` draws `[portrait]` with `sun: false`: the room's sun and warm lamp do not reach it, so
+# the figure reads in the key light's colour alone. `ludion docs render-views`.
+format: 1
+name: render-view-portrait - a figure lit only by its own key light in a UiRect panel
+render_layers:
+  - name: portrait
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 9.0
+          - 16.0
+        rotation:
+          - -32.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+        layers:
+          - default
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - -0.4
+          - -0.8
+          - -0.4
+        color:
+          - 1.0
+          - 0.95
+          - 0.9
+        intensity: 1.4
+  - name: lamp
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 0.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.8
+          - 0.55
+        intensity: 3.0
+        range: 12.0
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.1
+          - 0.0
+        scale:
+          - 12.4
+          - 0.2
+          - 12.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.22
+          - 0.26
+          - 1.0
+        roughness: 0.9
+  - name: wall-back
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.7
+          - -6.0
+        scale:
+          - 12.4
+          - 1.4
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: wall-front
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.7
+          - 6.0
+        scale:
+          - 12.4
+          - 1.4
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: wall-left
+    components:
+      Transform:
+        translation:
+          - -6.0
+          - 0.7
+          - 0.0
+        scale:
+          - 0.4
+          - 1.4
+          - 12.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: wall-right
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 0.7
+          - 0.0
+        scale:
+          - 0.4
+          - 1.4
+          - 12.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: cover-a
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 0.6
+          - -1.5
+        scale:
+          - 2.0
+          - 1.2
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.25
+          - 0.45
+          - 0.6
+          - 1.0
+        roughness: 0.9
+  - name: cover-b
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.6
+          - 1.5
+        scale:
+          - 1.2
+          - 1.2
+          - 2.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.4
+          - 0.25
+          - 1.0
+        roughness: 0.9
+  - name: portrait-figure
+    components:
+      Transform:
+        translation:
+          - 30.0
+          - 0.0
+          - 0.0
+        scale:
+          - 0.1
+          - 0.1
+          - 0.1
+      Mesh:
+        shape:
+          voxel: voxels/rim-figure.voxel.yaml
+        color:
+          - 0.8
+          - 0.8
+          - 0.8
+          - 1.0
+      RenderLayers:
+        layers:
+          - portrait
+  - name: portrait-key
+    components:
+      Transform:
+        translation:
+          - 29.0
+          - 2.2
+          - 2.5
+      PointLight:
+        color:
+          - 0.3
+          - 0.5
+          - 1.0
+        intensity: 6.0
+        range: 10.0
+      RenderLayers:
+        layers:
+          - portrait
+  - name: portrait-cam
+    components:
+      Transform:
+        translation:
+          - 30.0
+          - 1.0
+          - 4.3
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 35.0
+      RenderView:
+        name: portrait
+        size:
+          - 256
+          - 256
+        layers:
+          - portrait
+        sun: false
+  - name: portrait-frame
+    components:
+      UiRect:
+        anchor: bottom_left
+        offset:
+          - 24.0
+          - -24.0
+        size:
+          - 212.0
+          - 212.0
+        color:
+          - 0.04
+          - 0.05
+          - 0.07
+          - 1.0
+        order: 0
+  - name: portrait-window
+    components:
+      UiRect:
+        anchor: bottom_left
+        offset:
+          - 30.0
+          - -30.0
+        size:
+          - 200.0
+          - 200.0
+        order: 1
+        view: portrait

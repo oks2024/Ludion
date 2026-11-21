@@ -35,9 +35,9 @@ use ludion_core::par;
 use ludion_core::rng::DeterministicRng;
 use ludion_ecs::{SystemCtx, World};
 use ludion_nav::{
-    ColumnSource, FloorSample, FlowCache, GridParams, NavGrid, NavLinks, NodeId, NodeMark,
-    OffMeshLink, PathOptions, PathStatus, find_path_linked, line_exit, nearest_node,
-    reachable_within, string_pull_marked, walkable_line,
+    AvoidAgent, AvoidNeighbor, ColumnSource, FloorSample, FlowCache, GridParams, NavGrid, NavLinks,
+    NodeId, NodeMark, OffMeshLink, OrcaLine, PathOptions, PathStatus, avoid_velocity,
+    find_path_linked, line_exit, nearest_node, reachable_within, string_pull_marked, walkable_line,
 };
 use ludion_physics::{LayerSet, PhysicsError, PhysicsWorld, QueryFilter, StaticBody};
 use ludion_renderer::DebugSegment;
@@ -1388,6 +1388,32 @@ struct Steer {
     goal: Option<NavGoal>,
     route: Option<NavRoute>,
     route_write: RouteWrite,
+    /// The agent's previous `NavSteering.velocity` (zero when absent): its own motion for avoidance.
+    velocity: [f32; 3],
+    /// The avoidance radius: `avoidance.radius`, else the class radius (0 for an unknown class).
+    radius: f32,
+}
+
+/// One walking agent as its neighbours' avoidance sees it: start-of-tick state only.
+struct AvoidBody {
+    radius: f32,
+    velocity: [f32; 2],
+    has_avoidance: bool,
+    priority: u32,
+}
+
+/// The walking agents by ascending entity, built only when some agent has `avoidance`.
+struct AvoidTable {
+    bodies: Vec<(EntityId, AvoidBody)>,
+    max_body_radius: f32,
+    dt: f32,
+}
+
+/// Per-chunk scratch for [`steer_one`]'s avoidance, so the parallel phase does not allocate per agent.
+#[derive(Default)]
+struct AvoidScratch {
+    lines: Vec<OrcaLine>,
+    neighbors: Vec<AvoidNeighbor>,
 }
 
 /// What the serial write-back does to an agent's [`NavRoute`] before applying the steering result.
@@ -1525,6 +1551,11 @@ fn plan_route(
 /// the flyer's in 3D). Inside `arrive_radius` the seek is zero. The velocity is the whole result:
 /// the game's mover applies it.
 ///
+/// A walker with `NavAgent.avoidance` gets an ORCA velocity (`ludion_nav::avoid_velocity`) in place of that
+/// push: its neighbours are the walking agents in the index, each at its previous `NavSteering.velocity`. The
+/// result is kept only if a cell-length walk along it stays on the class grid (blocker overlay included);
+/// otherwise the seek stands. An agent at a link or blocker does not avoid.
+///
 /// An agent that also carries a [`NavGoal`] takes precedence over `target`: a walker plans a route to
 /// `goal.at` (serially, ascending entity, at most `max_path_requests_per_tick` per tick; the rest wait in
 /// `planning`) and walks it waypoint by waypoint, writing the [`NavRoute`] component; a flyer seeks
@@ -1549,7 +1580,7 @@ fn plan_route(
 ///     .unwrap();
 /// # let _ = engine;
 /// ```
-pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
+pub fn nav_steer(world: &mut World, ctx: &SystemCtx) {
     let mut agents: Vec<(EntityId, NavAgent)> = world
         .query_ids::<(&NavAgent,)>()
         .map(|(id, (agent,))| (id, agent.clone()))
@@ -1565,6 +1596,13 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
             let class = world
                 .resource::<Nav>()
                 .map_or(Some(0), |nav| nav.config.class_index(&agent.class));
+            let radius = agent.avoidance.and_then(|a| a.radius).unwrap_or_else(|| {
+                world
+                    .resource::<Nav>()
+                    .zip(class)
+                    .and_then(|(nav, c)| nav.classes.get(c))
+                    .map_or(0.0, |c| c.radius)
+            });
             Some(Steer {
                 entity,
                 agent,
@@ -1574,6 +1612,12 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
                 goal: world.get::<NavGoal>(entity).ok().flatten().copied(),
                 route: world.get::<NavRoute>(entity).ok().flatten().cloned(),
                 route_write: RouteWrite::Keep,
+                velocity: world
+                    .get::<NavSteering>(entity)
+                    .ok()
+                    .flatten()
+                    .map_or([0.0; 3], |s| s.velocity),
+                radius,
             })
         })
         .collect();
@@ -1625,16 +1669,51 @@ pub fn nav_steer(world: &mut World, _ctx: &SystemCtx) {
                 cache: &n.caches[i],
                 table: &n.tables[i],
                 blockers: &n.blocker_tables[i],
+                height: n.classes[i].height,
             })
             .collect()
     });
+    let avoid_table = steers
+        .iter()
+        .any(|s| s.agent.avoidance.is_some() && !s.agent.flying)
+        .then(|| {
+            let bodies: Vec<(EntityId, AvoidBody)> = steers
+                .iter()
+                .filter(|s| !s.agent.flying && s.class.is_some())
+                .map(|s| {
+                    (
+                        s.entity,
+                        AvoidBody {
+                            radius: s.radius,
+                            velocity: [s.velocity[0], s.velocity[2]],
+                            has_avoidance: s.agent.avoidance.is_some(),
+                            priority: s.agent.avoidance.map_or(0, |a| a.priority),
+                        },
+                    )
+                })
+                .collect();
+            let max_body_radius = bodies.iter().fold(0.0f32, |m, (_, b)| m.max(b.radius));
+            AvoidTable {
+                bodies,
+                max_body_radius,
+                dt: ctx.dt.max(1e-4),
+            }
+        });
     let chunks = par::par_map_chunks(&steers, STEER_CHUNK, |_, chunk| {
         let mut scratch: Vec<Neighbor> = Vec::new();
+        let mut avoid_scratch = AvoidScratch::default();
         chunk
             .iter()
             .map(|steer| {
                 let view = steer.class.and_then(|c| views.get(c));
-                steer_one(steer, view, index, &mut scratch)
+                steer_one(
+                    steer,
+                    view,
+                    index,
+                    avoid_table.as_ref(),
+                    &mut scratch,
+                    &mut avoid_scratch,
+                )
             })
             .collect::<Vec<([f32; 3], Option<Advance>)>>()
     });
@@ -1685,6 +1764,7 @@ struct ClassView<'a> {
     cache: &'a FlowCache,
     table: &'a LinkTable,
     blockers: &'a BlockerTable,
+    height: f32,
 }
 
 /// Tells a routed agent its game-played link traversal is finished: the route continues from the link's
@@ -1790,7 +1870,9 @@ fn steer_one(
     steer: &Steer,
     view: Option<&ClassView>,
     index: &Index3d,
+    avoid: Option<&AvoidTable>,
     scratch: &mut Vec<Neighbor>,
+    avoid_scratch: &mut AvoidScratch,
 ) -> ([f32; 3], Option<Advance>) {
     let Steer {
         entity, agent, pos, ..
@@ -1819,7 +1901,73 @@ fn steer_one(
         Some(a) => waiting(a.status),
         None => steer.route.as_ref().is_some_and(|r| waiting(r.status)),
     };
-    if agent.neighbor_layers != 0 && agent.separation_neighbors > 0 && !at_link {
+    if let (Some(avoidance), Some(table), false, false) =
+        (agent.avoidance, avoid, agent.flying, at_link)
+    {
+        let height = view.map_or(0.0, |v| v.height);
+        let filter = Filter::new(agent.neighbor_layers).excluding(Handle::entity(*entity));
+        index.k_nearest(
+            *pos,
+            avoidance.max_neighbors as usize,
+            steer.radius + table.max_body_radius + agent.speed * avoidance.horizon_s,
+            &filter,
+            scratch,
+        );
+        avoid_scratch.neighbors.clear();
+        for n in scratch.iter() {
+            let Some(other) = n.handle.as_entity() else {
+                continue;
+            };
+            let Ok(slot) = table.bodies.binary_search_by_key(&other, |(e, _)| *e) else {
+                continue;
+            };
+            let body = &table.bodies[slot].1;
+            if (n.center[1] - pos[1]).abs() > height {
+                continue;
+            }
+            let responsibility = if !body.has_avoidance || body.priority > avoidance.priority {
+                1.0
+            } else if body.priority == avoidance.priority {
+                0.5
+            } else {
+                0.0
+            };
+            avoid_scratch.neighbors.push(AvoidNeighbor {
+                position: [n.center[0], n.center[2]],
+                velocity: body.velocity,
+                radius: body.radius,
+                responsibility,
+            });
+        }
+        let me = AvoidAgent {
+            position: [pos[0], pos[2]],
+            velocity: [steer.velocity[0], steer.velocity[2]],
+            preferred: [velocity[0], velocity[2]],
+            radius: steer.radius,
+            max_speed: agent.speed,
+            horizon_s: avoidance.horizon_s,
+            dt: table.dt,
+        };
+        let avoided = avoid_velocity(&me, &avoid_scratch.neighbors, &mut avoid_scratch.lines);
+        let speed = sqrt(avoided[0] * avoided[0] + avoided[1] * avoided[1]);
+        let on_grid = grid.is_some_and(|g| {
+            speed <= 1e-6 || {
+                let step = g.params().cell_size / speed;
+                walkable_line(
+                    g,
+                    *pos,
+                    [
+                        pos[0] + avoided[0] * step,
+                        pos[1],
+                        pos[2] + avoided[1] * step,
+                    ],
+                )
+            }
+        });
+        if on_grid {
+            velocity = [avoided[0], 0.0, avoided[1]];
+        }
+    } else if agent.neighbor_layers != 0 && agent.separation_neighbors > 0 && !at_link {
         let filter = Filter::new(agent.neighbor_layers).excluding(Handle::entity(*entity));
         index.k_nearest(
             *pos,

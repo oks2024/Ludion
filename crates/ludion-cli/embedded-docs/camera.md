@@ -212,6 +212,9 @@ Runnable: `crates/ludion/examples/first_person_kick.rs`.
 
 The target is projected onto the rail (the nearest point within `search_window` of last tick's); the path's no-roll frame there gives the axes. The desired eye is `point + offset.x * right + offset.y * up + offset.z * back`, **zero roll**: the camera never rolls with the rail (a game-written `roll_deg` still applies post-aim). The eye and the yaw/pitch toward the focus then chase it on critically damped springs. Look-ahead shifts the **focus only**, never the projection. While `grounded` the vertical anchor follows the target's height; airborne it holds until the target leaves `up_slack`/`down_slack`.
 
+## Lights per camera
+`Camera.lights: [default, portrait]` chooses which `PointLight`/`SpotLight` layers light the main camera's image (`RenderView.lights` does the same for a view). Absent, it is the camera's own `layers`; an unauthored camera takes every light. See `ludion docs render-views`.
+
 ## Zones
 
 A `CameraZone` on a sensor volume swaps the rig's config while the rig's target stands in it. Put it beside a `Collider` with `sensor: true` (`L1554` in `check-scene` otherwise).

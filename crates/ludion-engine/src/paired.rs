@@ -23,17 +23,24 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ludion_assets::AssetRoot;
+use ludion_components::crossfade;
+use ludion_components::paired_action::PairedAction;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, pointer_token};
 use ludion_core::ids::EntityId;
 use ludion_core::math::euler_xyz_degrees_to_quat;
 use ludion_core::math::f64 as f64s;
 use ludion_core::suggest;
-use ludion_ecs::{Parent, World};
-use ludion_physics::{CharacterMotor, MotorError, character_fit_ignoring};
+use ludion_core::time::{FrameIndex, GameTime};
+use ludion_ecs::{Parent, SystemCtx, World};
+use ludion_physics::{
+    CharacterMotor, CharacterMotorState, IgnoreCollisions, MotorError, character_fit_ignoring,
+};
 use ludion_scene::{PairedDocument, PairedMoves};
 
-use crate::components::{Mesh, MeshSource, Transform};
+use crate::animation_events::{AnimationEvents, ClipEvent};
+use crate::components::{Animation, Mesh, MeshSource, Transform};
+use crate::motor::set_character_posture;
 use crate::paired_doc::{PairedReport, check_paired_files};
 
 type Loaded = Result<Arc<PairedReport>, Vec<Diagnostic>>;
@@ -247,37 +254,21 @@ fn invalid(role: &str, message: String, help: impl Into<String>) -> Diagnostic {
         .with_help(help)
 }
 
-/// Whether a two-role paired action can start from where `cast` stands.
-///
-/// `paired` is the document's content-root path (`voxels/choke.paired.yaml`); `cast` names an entity
-/// for every role. Each role is moved to its aligned pose (decision 24), and a role with a
-/// `CharacterMotor` is fit-tested there at its role `posture`, looking through its partner. Nothing
-/// is mutated.
-///
-/// # Errors
-/// `L4370` when the document does not load (the loader's diagnostics follow); `L4373` for more than
-/// two roles; `L4371` for a cast that is not exactly the document's roles or whose entity cannot play
-/// its role; `L4372` for a scale that is not the role's. All cast problems are collected.
-///
-/// # Example
-/// ```no_run
-/// use ludion_ecs::World;
-/// use ludion_engine::{Warp, paired_fit};
-/// # fn demo(world: &World, a: ludion_core::ids::EntityId, b: ludion_core::ids::EntityId) {
-/// let warp = Warp { distance: 0.6, yaw_deg: 45.0 };
-/// let fit = paired_fit(world, "voxels/choke.paired.yaml", &[("instigator", a), ("target", b)], warp)
-///     .expect("a valid cast");
-/// if let Some((role, blocker)) = fit.blocked_by {
-///     println!("{role} is blocked by {blocker:?}");
-/// }
-/// # }
-/// ```
-pub fn paired_fit(
+/// A cast resolved against its document: every check of decisions 25 and 28 passed.
+pub(crate) struct Resolved {
+    pub report: Arc<PairedReport>,
+    /// Each role's name, entity and current `Transform`, sorted by role name.
+    pub entities: Vec<(String, EntityId, Transform)>,
+    /// The aligned targets, in the same order.
+    pub targets: Vec<Target>,
+}
+
+/// Loads the document and checks the cast: the `L4370`–`L4373` rules, all cast problems collected.
+pub(crate) fn resolve(
     world: &World,
     paired: &str,
     cast: &[(&str, EntityId)],
-    max_warp: Warp,
-) -> Result<PairedFit, Vec<Diagnostic>> {
+) -> Result<Resolved, Vec<Diagnostic>> {
     let report = match world.resource::<PairedLibrary>() {
         Some(library) => library.report(paired)?,
         None => {
@@ -378,7 +369,61 @@ pub fn paired_fit(
         })
         .collect();
     let targets = aligned_targets(doc, &poses);
+    let entities = entities
+        .into_iter()
+        .map(|(role, entity, transform)| (role.name.clone(), entity, transform))
+        .collect();
+    Ok(Resolved {
+        report: Arc::clone(&report),
+        entities,
+        targets,
+    })
+}
 
+/// Whether a two-role paired action can start from where `cast` stands.
+///
+/// `paired` is the document's content-root path (`voxels/choke.paired.yaml`); `cast` names an entity
+/// for every role. Each role is moved to its aligned pose (decision 24), and a role with a
+/// `CharacterMotor` is fit-tested there at its role `posture`, looking through its partner. Nothing
+/// is mutated.
+///
+/// # Errors
+/// `L4370` when the document does not load (the loader's diagnostics follow); `L4373` for more than
+/// two roles; `L4371` for a cast that is not exactly the document's roles or whose entity cannot play
+/// its role; `L4372` for a scale that is not the role's. All cast problems are collected.
+///
+/// # Example
+/// ```no_run
+/// use ludion_ecs::World;
+/// use ludion_engine::{Warp, paired_fit};
+/// # fn demo(world: &World, a: ludion_core::ids::EntityId, b: ludion_core::ids::EntityId) {
+/// let warp = Warp { distance: 0.6, yaw_deg: 45.0 };
+/// let fit = paired_fit(world, "voxels/choke.paired.yaml", &[("instigator", a), ("target", b)], warp)
+///     .expect("a valid cast");
+/// if let Some((role, blocker)) = fit.blocked_by {
+///     println!("{role} is blocked by {blocker:?}");
+/// }
+/// # }
+/// ```
+pub fn paired_fit(
+    world: &World,
+    paired: &str,
+    cast: &[(&str, EntityId)],
+    max_warp: Warp,
+) -> Result<PairedFit, Vec<Diagnostic>> {
+    let Resolved {
+        report,
+        entities,
+        targets,
+    } = resolve(world, paired, cast)?;
+    let doc = &report.doc;
+    let role_of = |name: &str| {
+        doc.roles
+            .iter()
+            .find(|role| role.name == name)
+            .expect("a resolved role is in the document")
+    };
+    let mut errors = Vec::new();
     let mut fit = PairedFit {
         fits: false,
         blocked_by: None,
@@ -387,7 +432,7 @@ pub fn paired_fit(
     };
     for ((role, entity, _), target) in entities.iter().zip(&targets) {
         fit.roles.push(PairedRoleFit {
-            role: role.name.clone(),
+            role: role.clone(),
             entity: *entity,
             feet: target.feet.map(|c| c as f32),
             yaw: target.yaw as f32,
@@ -395,7 +440,8 @@ pub fn paired_fit(
             yaw_deg: target.yaw_deg as f32,
         });
     }
-    for (index, ((role, entity, _), target)) in entities.iter().zip(&targets).enumerate() {
+    for (index, ((name, entity, _), target)) in entities.iter().zip(&targets).enumerate() {
+        let role = role_of(name);
         if !target.moves || !world.has::<CharacterMotor>(*entity) {
             continue;
         }
@@ -429,7 +475,7 @@ pub fn paired_fit(
                 && (target.distance > f64::from(max_warp.distance)
                     || target.yaw_deg > f64::from(max_warp.yaw_deg))
         })
-        .map(|((role, _, _), _)| role.name.clone());
+        .map(|((role, _, _), _)| role.clone());
     fit.fits = fit.blocked_by.is_none() && fit.over_warp.is_none();
     Ok(fit)
 }
@@ -529,6 +575,587 @@ fn check_entity(
         }
     }
     ok.then_some(transform).flatten()
+}
+
+// ---- playing a paired action (decisions 27-31) ----
+
+/// One tick of a paired mover's warp: feed it to `move_character` and `turn_character`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PairedMotion {
+    /// The planar displacement to apply this tick, in metres (`y` is 0).
+    pub displacement: [f32; 3],
+    /// The absolute heading to turn to, in radians about `+Y` (the `-Z` axis convention).
+    pub yaw: f32,
+    /// Whether the warp is still closing (`false` once the aligned pose is held, and for a role that
+    /// does not move).
+    pub warping: bool,
+}
+
+/// The entities whose [`PairedAction`] shares `entity`'s `(document, reference, started)`, ascending,
+/// `entity` included.
+fn group_of(world: &World, action: &PairedAction) -> Vec<EntityId> {
+    world
+        .entities()
+        .filter(|id| {
+            world
+                .get_unrecorded::<PairedAction>(*id)
+                .ok()
+                .flatten()
+                .is_some_and(|other| same_group(other, action))
+        })
+        .collect()
+}
+
+fn same_group(a: &PairedAction, b: &PairedAction) -> bool {
+    a.document == b.document && a.reference == b.reference && a.started == b.started
+}
+
+/// Ends `entity`'s role now: its `PairedAction` and `IgnoreCollisions` go, and so does any partner's
+/// `IgnoreCollisions` that looks through it. The partners keep playing.
+pub(crate) fn end_role(world: &mut World, entity: EntityId) {
+    let Some(action) = world
+        .get_unrecorded::<PairedAction>(entity)
+        .ok()
+        .flatten()
+        .cloned()
+    else {
+        return;
+    };
+    for partner in group_of(world, &action) {
+        if partner == entity {
+            continue;
+        }
+        let looks_through = world
+            .get_unrecorded::<IgnoreCollisions>(partner)
+            .ok()
+            .flatten()
+            .is_some_and(|ignore| ignore.with == entity);
+        if looks_through {
+            let _ = world.remove::<IgnoreCollisions>(partner);
+        }
+    }
+    let _ = world.remove::<PairedAction>(entity);
+    let _ = world.remove::<IgnoreCollisions>(entity);
+}
+
+/// Starts a two-role paired action: both roles are stamped, the movers' postures set, the partners
+/// made transparent to each other's motors, and each clip role crossfades to its clip at speed 1.
+///
+/// **Register [`paired_update`] after [`animation_events`](crate::animation_events) and before any
+/// reader of [`AnimationEvents`], or the `paired:` events vanish.** `fade` is the crossfade in
+/// seconds (`0` cuts). `game_time` is the gameplay time of this tick (as in `switch_to_ragdoll`): both
+/// `Animation.started` and `PairedAction.started` are its floor. It does not re-test the fit: call
+/// [`paired_fit`] first. A cast entity already in an action leaves it (its old partner plays on).
+///
+/// # Errors
+/// What [`paired_fit`] refuses (`L4370`–`L4373`), and `L4371` for an entity that already ignores
+/// another entity's collider, or a role `posture` that is blocked or refused. Nothing is mutated
+/// then.
+///
+/// # Example
+/// ```no_run
+/// use ludion_ecs::SystemCtx;
+/// use ludion_engine::{start_paired, paired_fit, Warp};
+/// # fn demo(world: &mut ludion_ecs::World, ctx: &SystemCtx, a: ludion_core::ids::EntityId, b: ludion_core::ids::EntityId) {
+/// let cast = [("instigator", a), ("target", b)];
+/// let warp = Warp { distance: 0.6, yaw_deg: 45.0 };
+/// if paired_fit(world, "voxels/choke.paired.yaml", &cast, warp).is_ok_and(|fit| fit.fits) {
+///     start_paired(world, "voxels/choke.paired.yaml", &cast, 0.1, ctx.game_instant).expect("fits");
+/// }
+/// # }
+/// ```
+pub fn start_paired(
+    world: &mut World,
+    paired: &str,
+    cast: &[(&str, EntityId)],
+    fade: f32,
+    game_time: impl Into<GameTime>,
+) -> Result<(), Vec<Diagnostic>> {
+    let resolved = resolve(world, paired, cast)?;
+    let doc = &resolved.report.doc;
+    let role_of = |name: &str| {
+        doc.roles
+            .iter()
+            .find(|role| role.name == name)
+            .expect("a resolved role is in the document")
+    };
+
+    let mut errors = Vec::new();
+    for (name, entity, _) in &resolved.entities {
+        let partner = resolved
+            .entities
+            .iter()
+            .map(|(_, other, _)| *other)
+            .find(|other| other != entity);
+        let Some(ignore) = world
+            .get_unrecorded::<IgnoreCollisions>(*entity)
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        if Some(ignore.with) == partner || in_action_with(world, *entity, ignore.with) {
+            continue;
+        }
+        errors.push(invalid(
+            name,
+            format!(
+                "role `{name}`: {entity:?} already ignores {:?}; remove it first",
+                ignore.with
+            ),
+            "remove the entity's `IgnoreCollisions` before pairing it",
+        ));
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+
+    let mut saved: Vec<(EntityId, Option<String>)> = Vec::new();
+    for (name, entity, _) in &resolved.entities {
+        let role = role_of(name);
+        let Some(posture) = role.posture.as_deref() else {
+            continue;
+        };
+        if !world.has::<CharacterMotor>(*entity) {
+            continue;
+        }
+        let before = world
+            .get_unrecorded::<CharacterMotorState>(*entity)
+            .ok()
+            .flatten()
+            .and_then(|state| state.posture.clone());
+        let refused = match set_character_posture(world, *entity, Some(posture)) {
+            Ok(report) => report.blocked_by.map(|blocker| {
+                invalid(
+                    name,
+                    format!("role `{name}`: posture `{posture}` is blocked by {blocker:?}"),
+                    "clear the space the role's posture needs, or start the action elsewhere",
+                )
+            }),
+            Err(error) => Some(motor_refusal(role, &error)),
+        };
+        if let Some(diagnostic) = refused {
+            for (earlier, posture) in saved.into_iter().rev() {
+                let _ = set_character_posture(world, earlier, posture.as_deref());
+            }
+            return Err(vec![diagnostic]);
+        }
+        saved.push((*entity, before));
+    }
+
+    for (_, entity, _) in &resolved.entities {
+        end_role(world, *entity);
+    }
+
+    let reference = resolved
+        .entities
+        .iter()
+        .find(|(name, _, _)| *name == doc.align.reference)
+        .map(|(_, entity, _)| *entity)
+        .expect("the reference role is cast");
+    let started = FrameIndex::new(game_time.into().ticks_floor());
+    let document = ludion_core::paths::normalize(paired);
+    for (name, entity, _) in &resolved.entities {
+        let partner = resolved
+            .entities
+            .iter()
+            .map(|(_, other, _)| *other)
+            .find(|other| other != entity)
+            .expect("two roles");
+        let _ = world.insert(
+            *entity,
+            PairedAction {
+                document: document.clone(),
+                action: doc.name.clone(),
+                role: name.clone(),
+                reference,
+                started,
+                fired: 0,
+            },
+        );
+        let _ = world.insert(*entity, IgnoreCollisions { with: partner });
+        if let Some(clip) = &role_of(name).clip {
+            if !world.has::<Animation>(*entity) {
+                let _ = world.insert(*entity, Animation::default());
+            }
+            if let Ok(Some(animation)) = world.get_mut::<Animation>(*entity) {
+                crossfade(animation, clip, fade, started);
+                animation.speed = 1.0;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `entity` is in a paired action whose participants include `other`.
+fn in_action_with(world: &World, entity: EntityId, other: EntityId) -> bool {
+    let Some(action) = world.get_unrecorded::<PairedAction>(entity).ok().flatten() else {
+        return false;
+    };
+    group_of(world, action).contains(&other)
+}
+
+/// Ends the paired action `entity` is in, on every participant now, and returns the cast as
+/// `(role, entity)` sorted by role, so the game can crossfade each to the clip it wants.
+///
+/// # Errors
+/// `L4375` when `entity` is not in an action.
+///
+/// # Example
+/// ```no_run
+/// # fn demo(world: &mut ludion_ecs::World, guard: ludion_core::ids::EntityId) {
+/// if let Ok(cast) = ludion_engine::abort_paired(world, guard) {
+///     for (role, entity) in cast {
+///         println!("{role} ({entity:?}) is free");
+///     }
+/// }
+/// # }
+/// ```
+pub fn abort_paired(
+    world: &mut World,
+    entity: EntityId,
+) -> Result<Vec<(String, EntityId)>, Diagnostic> {
+    let Some(action) = world
+        .get_unrecorded::<PairedAction>(entity)
+        .ok()
+        .flatten()
+        .cloned()
+    else {
+        return Err(Diagnostic::new(
+            code::PAIRED_NOT_PLAYING,
+            format!("{entity:?} is not in a paired action"),
+        )
+        .with_help("check for a `PairedAction` before aborting"));
+    };
+    let members = group_of(world, &action);
+    let mut cast: Vec<(String, EntityId)> = members
+        .iter()
+        .filter_map(|id| {
+            let role = world.get_unrecorded::<PairedAction>(*id).ok().flatten()?;
+            Some((role.role.clone(), *id))
+        })
+        .collect();
+    cast.sort();
+    for id in members {
+        end_role(world, id);
+    }
+    Ok(cast)
+}
+
+/// Seconds of slack for comparing a tick-derived clip time with an authored one.
+const EPSILON: f64 = 1e-9;
+
+fn smooth(u: f64) -> f64 {
+    u * u * (3.0 - 2.0 * u)
+}
+
+/// This tick's step of `entity`'s warp onto its aligned pose, or `None` off an action.
+///
+/// The warp is closed-loop: each tick closes the share of the remaining error that a smoothstep over
+/// `align.ticks` closes between the previous and this gameplay instant, toward the aligned pose
+/// recomputed from both current `Transform`s, so a partner that moves is followed. After the warp the
+/// mover holds the relative pose. A role that does not move, a partner that is gone and a held
+/// frame give a zero step. Feed the result to `move_character` and `turn_character` each tick, before
+/// [`paired_update`].
+///
+/// # Example
+/// ```no_run
+/// use ludion_ecs::{SystemCtx, World};
+/// use ludion_engine::{move_character, paired_motion, turn_character};
+/// fn drive(world: &mut World, ctx: &SystemCtx, entity: ludion_core::ids::EntityId) {
+///     if let Some(step) = paired_motion(world, entity, ctx) {
+///         let _ = move_character(world, entity, step.displacement);
+///         let _ = turn_character(world, entity, step.yaw);
+///     }
+/// }
+/// ```
+pub fn paired_motion(world: &World, entity: EntityId, ctx: &SystemCtx) -> Option<PairedMotion> {
+    let action = world
+        .get_unrecorded::<PairedAction>(entity)
+        .ok()
+        .flatten()?;
+    let here = world.get_unrecorded::<Transform>(entity).ok().flatten()?;
+    let yaw_now = heading(here.rotation);
+    let hold = PairedMotion {
+        displacement: [0.0; 3],
+        yaw: yaw_now as f32,
+        warping: false,
+    };
+    let Some(partner) = group_of(world, action).into_iter().find(|id| *id != entity) else {
+        return Some(hold);
+    };
+    let Some(other) = world.get_unrecorded::<PairedAction>(partner).ok().flatten() else {
+        return Some(hold);
+    };
+    let Some(there) = world.get_unrecorded::<Transform>(partner).ok().flatten() else {
+        return Some(hold);
+    };
+    let Some(report) = world
+        .resource::<PairedLibrary>()
+        .and_then(|library| library.report(&action.document).ok())
+    else {
+        return Some(hold);
+    };
+    let doc = &report.doc;
+    if doc.roles.len() != 2 {
+        return Some(hold);
+    }
+    let pose = |transform: &Transform| {
+        (
+            transform.translation.map(f64::from),
+            heading(transform.rotation),
+        )
+    };
+    let (feet_a, yaw_a) = pose(here);
+    let (feet_b, yaw_b) = pose(there);
+    let poses = [
+        (action.role.as_str(), feet_a, yaw_a),
+        (other.role.as_str(), feet_b, yaw_b),
+    ];
+    if !doc
+        .roles
+        .iter()
+        .all(|role| poses.iter().any(|(name, _, _)| *name == role.name))
+    {
+        return Some(hold);
+    }
+    let targets = aligned_targets(doc, &poses);
+    let Some(target) = targets.iter().find(|target| target.role == action.role) else {
+        return Some(hold);
+    };
+    if !target.moves {
+        return Some(hold);
+    }
+
+    let ticks = doc.align.ticks as f64;
+    let elapsed = ctx.game_instant.ticks_since(action.started);
+    let x = (elapsed / ticks).clamp(0.0, 1.0);
+    let xp = ((elapsed - f64::from(ctx.game_scale())) / ticks).clamp(0.0, 1.0);
+    let f = if ctx.game_scale() <= 0.0 {
+        0.0
+    } else if smooth(xp) >= 1.0 {
+        1.0
+    } else {
+        (smooth(x) - smooth(xp)) / (1.0 - smooth(xp))
+    };
+    let displacement = [
+        ((target.feet[0] - feet_a[0]) * f) as f32,
+        0.0,
+        ((target.feet[2] - feet_a[2]) * f) as f32,
+    ];
+    let yaw = yaw_a + wrap(target.yaw - yaw_a) * f;
+    Some(PairedMotion {
+        displacement,
+        yaw: yaw as f32,
+        warping: xp < 1.0,
+    })
+}
+
+/// Fires the document events of every playing paired action, ends the ones whose clips are done, and
+/// aborts the ones a game write took out of lockstep.
+///
+/// **Register it after [`animation_events`](crate::animation_events) and before any reader of
+/// [`AnimationEvents`], or the `paired:` events vanish**: `animation_events` rewrites the resource
+/// each tick and this system appends to it. The engine schedules neither; adding a default system
+/// would change every game's schedule and traces.
+///
+/// Events fire once per participant as a [`ClipEvent`] named for the document event under the clip
+/// `paired:<action>`, in ascending entity order after the clip events. When the longest clip role
+/// ends (or `align.ticks` for a document of `align_only` roles), the remaining events and an implicit
+/// `end` fire and every participant's `PairedAction` and `IgnoreCollisions` go on that tick. A
+/// participant whose `Animation` or assembly `Mesh` is gone (a ragdoll switch, a despawn) ends its
+/// own role only. A changed `clip`, `started` or `speed` aborts the whole action and warns `L4374`.
+/// With no `PairedAction` in the world, or on a held frame, nothing is touched.
+///
+/// # Example
+/// ```no_run
+/// use ludion_engine::{Engine, animation_events, paired_update};
+/// // The order matters: paired_update appends to what animation_events just wrote.
+/// let engine = Engine::builder()
+///     .system("animation_events", animation_events)
+///     .system("paired_update", paired_update)
+///     .build()
+///     .unwrap();
+/// ```
+pub fn paired_update(world: &mut World, ctx: &SystemCtx) {
+    if !ctx.game_advanced() {
+        return;
+    }
+    let mut groups: BTreeMap<(String, EntityId, u64), Vec<EntityId>> = BTreeMap::new();
+    for id in world.entities() {
+        if let Ok(Some(action)) = world.get_unrecorded::<PairedAction>(id) {
+            groups
+                .entry((
+                    action.document.clone(),
+                    action.reference,
+                    action.started.as_u64(),
+                ))
+                .or_default()
+                .push(id);
+        }
+    }
+    if groups.is_empty() {
+        return;
+    }
+    let mut fired: Vec<ClipEvent> = Vec::new();
+    for ((document, _, started), members) in groups {
+        let started = FrameIndex::new(started);
+        let report = match world
+            .resource::<PairedLibrary>()
+            .map(|library| library.report(&document))
+        {
+            Some(Ok(report)) => report,
+            _ => {
+                for id in members {
+                    end_role(world, id);
+                }
+                continue;
+            }
+        };
+        play_group(world, ctx, &report, started, members, &mut fired);
+    }
+    if fired.is_empty() {
+        return;
+    }
+    if world.resource::<AnimationEvents>().is_none() {
+        world.insert_resource(AnimationEvents::default());
+    }
+    let events = world
+        .resource_mut::<AnimationEvents>()
+        .expect("inserted above");
+    for event in fired {
+        events.push(event);
+    }
+}
+
+fn play_group(
+    world: &mut World,
+    ctx: &SystemCtx,
+    report: &PairedReport,
+    started: FrameIndex,
+    members: Vec<EntityId>,
+    fired: &mut Vec<ClipEvent>,
+) {
+    let doc = &report.doc;
+    let role_name = |world: &World, id: EntityId| {
+        world
+            .get_unrecorded::<PairedAction>(id)
+            .ok()
+            .flatten()
+            .map(|action| action.role.clone())
+    };
+    let clip_of = |name: &str| {
+        doc.roles
+            .iter()
+            .find(|role| role.name == name)
+            .and_then(|role| role.clip.as_deref())
+    };
+
+    // 1. A participant whose body or clip is gone ends its own role.
+    let mut live = Vec::new();
+    for id in members {
+        let Some(role) = role_name(world, id) else {
+            continue;
+        };
+        let assembly = matches!(
+            world
+                .get_unrecorded::<Mesh>(id)
+                .ok()
+                .flatten()
+                .map(|mesh| &mesh.shape),
+            Some(MeshSource::Assembly(_))
+        );
+        let animated = clip_of(&role).is_none() || world.has::<Animation>(id);
+        if assembly && animated {
+            live.push((id, role));
+        } else {
+            end_role(world, id);
+        }
+    }
+
+    // 2. A game write to a role's clip, start or speed breaks lockstep: the whole action ends.
+    let mut broken = false;
+    for (id, role) in &live {
+        let Some(clip) = clip_of(role) else { continue };
+        let Some(animation) = world.get_unrecorded::<Animation>(*id).ok().flatten() else {
+            continue;
+        };
+        if animation.clip != clip || animation.started != started || animation.speed != 1.0 {
+            broken = true;
+            let key = format!(
+                "{}/PairedAction",
+                crate::diagnostics::offender_key(world, *id)
+            );
+            crate::diagnostics::report(
+                world,
+                code::PAIRED_LOCKSTEP_BROKEN,
+                key,
+                format!(
+                    "{id:?} playing `{}` as `{role}` had its `Animation` changed by a game write, so \
+                     the action was aborted",
+                    doc.name
+                ),
+            );
+        }
+    }
+    if broken {
+        for (id, _) in live {
+            end_role(world, id);
+        }
+        return;
+    }
+
+    // 3. Events, once each per participant, in ascending entity order.
+    let clip = format!("paired:{}", doc.name);
+    let seconds = crate::extract::clock_elapsed(ctx.game_instant, started, 1.0, None);
+    let longest = report
+        .roles
+        .iter()
+        .filter_map(|role| role.duration)
+        .fold(None, |best: Option<f64>, d| {
+            Some(best.map_or(d, |b| b.max(d)))
+        });
+    let end = longest
+        .unwrap_or_else(|| doc.align.ticks as f64 * ctx.game_instant.rate().seconds_per_tick());
+    let ended = seconds + EPSILON >= end;
+    let due = if ended {
+        doc.events.len()
+    } else {
+        doc.events
+            .iter()
+            .take_while(|event| event.t <= seconds + EPSILON)
+            .count()
+    };
+    for (id, _) in &live {
+        let Ok(Some(action)) = world.get_mut::<PairedAction>(*id) else {
+            continue;
+        };
+        let from = action.fired as usize;
+        for event in doc.events.iter().take(due).skip(from) {
+            fired.push(ClipEvent {
+                entity: *id,
+                clip: clip.clone(),
+                name: event.name.clone(),
+                layer: String::new(),
+            });
+        }
+        action.fired = action.fired.max(due as u32);
+    }
+
+    // 4. The clip end ends every participant on the same tick.
+    if ended {
+        for (id, _) in &live {
+            fired.push(ClipEvent {
+                entity: *id,
+                clip: clip.clone(),
+                name: "end".to_owned(),
+                layer: String::new(),
+            });
+        }
+        for (id, _) in live {
+            end_role(world, id);
+        }
+    }
 }
 
 #[cfg(test)]

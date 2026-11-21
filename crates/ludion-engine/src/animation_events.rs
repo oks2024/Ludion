@@ -314,6 +314,11 @@ pub struct AnimationEvents {
 }
 
 impl AnimationEvents {
+    /// Appends one event after the run's own: how `paired_update` adds its `paired:<action>` events.
+    pub(crate) fn push(&mut self, event: ClipEvent) {
+        self.fired.push(event);
+    }
+
     /// The events fired this tick, in firing order.
     pub fn iter(&self) -> impl Iterator<Item = &ClipEvent> {
         self.fired.iter()

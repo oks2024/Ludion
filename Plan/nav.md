@@ -113,6 +113,29 @@
     remaining leg is checked: a leg that is no longer walkable replans. Legs that start at a link or blocker index
     are skipped. A walkable check fails on entering a blocked node or entering an interact node from outside. A
     `cost` toggle never replans; it prices the next plan. With no blockers the current-leg rule is unchanged.
+24. **Opt-in ORCA for walkers** (Neon Shroud request 0004 §6; owner ruling 2026-11-19, brings "Avoidance beyond
+    separation" into scope and subsumes Serious Isaac draft 0029). `NavAgent.avoidance` swaps the separation push
+    for an ORCA velocity in the xz plane (a 2D linear program, no sampling, no iteration count to tune), capped at
+    `speed`. An agent without it steers exactly as before. Walkers only; a flyer with `avoidance` is rejected
+    (`L1528`). A route `at_link`/`at_blocker` stands still with no avoidance, as it does with separation.
+25. **Inputs are start-of-tick hashed state.** Neighbour agents: the `k_nearest` neighbours on `neighbor_layers` (at
+    most `max_neighbors`, in `(distance², handle)` order) that are walking `NavAgent`s, each with its previous
+    `NavSteering.velocity` and its radius (`avoidance.radius`, else its class radius). Obstacles: every enabled
+    `NavObstacle` within range, in ascending entity order after the agents, each with its `NavObstacleState.velocity`.
+    Other index items are ignored; a neighbour whose `|dy|` exceeds the agent's class height is ignored. The query
+    radius is `radius + max_body_radius + speed · horizon_s`. Each agent is a pure function of this state, computed
+    in the existing parallel phase, so results do not depend on the thread count.
+26. **Responsibility and priority.** A neighbour with avoidance and equal `priority` shares the avoidance (½ each).
+    A higher-priority neighbour, an agent without avoidance, or an obstacle leaves the agent the whole avoidance (1).
+    The agent takes none toward a lower-priority neighbour with avoidance. Equal priority is symmetric, so no entity
+    tie-break is needed; neighbour order already ties by handle.
+27. **Obstacle motion.** `NavObstacleState { position, velocity }` is engine-written and hashed, like `NavSteering`.
+    In `nav_steer`'s serial pre-pass each `NavObstacle` (ascending entity) gets
+    `velocity = (pos − state.position) / ctx.dt` (zero on the first tick or when `dt` is 0), then `position = pos`.
+    Its body can be kinematic, motor-driven or game-moved: only its pose is read.
+28. **Composition with the grid.** An avoided velocity is kept only when the straight walk one `cell_size` along it
+    stays on the agent's class grid (`walkable_line`, which sees blocker overlays). Otherwise the agent takes its
+    seek velocity. The default radius is the class radius.
 
 **Known second way (temporary):** vigil keeps its game-side 2D nav (`games/vigil/src/nav.rs`).
 Moving it to the layered grid moves its `WorldHash`; the exit is the owed migration, gated by
@@ -191,10 +214,11 @@ independently shippable; later ones add fields and components, never reshape ear
   its own subtask after 2a.
 - **3 — off-mesh links (shipped):** `NavLink`, `NavRouteStatus::AtLink`, `nav_link_done`; `L1526`, `L4145`, `L4146`
   (decisions 14–16).
-- **4 — dynamic blockers (this):** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics; `L1527`
+- **4 — dynamic blockers (shipped):** a `NavBlocker` overlay and `AtBlocker`, without re-sampling statics; `L1527`
   (decisions 20–23). Amends decision 1 (statics only) — **accepted 2026-11-19**.
-- **5 — avoidance:** `NavAgent.avoidance` and `NavObstacle`; brings "Avoidance beyond separation" into
-  scope and subsumes Serious Isaac draft 0029 — **accepted 2026-11-19, scheduled (after wave 4)**.
+- **5a — agent avoidance (this):** `NavAgent.avoidance`, ORCA in `ludion-nav`; `L1528` (decisions 24–26, 28).
+  Brings "Avoidance beyond separation" into scope and subsumes Serious Isaac draft 0029 — **accepted 2026-11-19**.
+- **5b — `NavObstacle`:** non-agent moving bodies as avoidance obstacles (decisions 25, 27).
 
 **Open questions, answered.** Planning is synchronous with a per-tick cap, not async (the cap bounds the
 cost and keeps the result a function of the tick). Waypoint entity references wait for wave 3: `NavRoute`
@@ -203,7 +227,8 @@ keeps plain points. `nav_random_point` and `nav_raycast` shipped with wave 2a; t
 ## Explicitly out of scope (triggers recorded)
 
 - **A 3D flying field** — trigger: flyers stuck behind geometry in play.
-- **Avoidance beyond separation** — wave 5.
+- **3D avoidance for flyers** — trigger: flyers colliding in play.
+- **Static-edge ORCA lines (walls as constraints)** — trigger: avoiding agents clip corners in corridors.
 - **Links in flow fields** — trigger: a chasing crowd that must climb.
 - **Voxel-derived walkability** — trigger: a voxel room the collider sampler misreads.
 - **A door that one class may open and others not** (per-class `mode` on one blocker) — trigger: a game asks.

@@ -5,7 +5,9 @@ edition = "2024"
 
 # An empty `[workspace]` table makes this project standalone: it does NOT join the engine
 # checkout's Cargo workspace (which would fail — a package cannot belong to two workspaces).
+# `exclude` keeps the linked engine crates under `.ludion/` out of this workspace.
 [workspace]
+exclude = [".ludion"]
 
 [[bin]]
 name = "{{name}}"
@@ -33,9 +35,11 @@ window = ["wire", "ludion/window"]
 # are the game's own (above): the shipped build takes none, so the lib carries no listener and no
 # window.
 #
-# `ludion new` fills this in one of two ways. Run from an engine checkout, it points at the engine
-# by absolute path (dev flow — move the project anywhere, it still builds against the engine here).
-# Run from an installed `ludion` binary, it pins the matching published version instead.
+# `ludion new` fills this in one of two ways. Run from an engine checkout, the deps are relative
+# paths through `.ludion/engine`, a gitignored per-machine link `ludion new` creates to that checkout;
+# on another machine run `node scripts/ludion.mjs link-engine <engine checkout>` (a cargo error
+# naming `.ludion/engine/…/Cargo.toml` means the link is missing). Run from an installed `ludion`
+# binary, it pins the matching published version instead.
 ludion = {{ludion_dep}}
 # The component derives are the game's own dependencies — the facade does not re-export them.
 serde = { version = "1", features = ["derive"] }

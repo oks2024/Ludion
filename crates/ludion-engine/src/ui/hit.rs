@@ -14,6 +14,7 @@ use ludion_renderer::{SpriteInstance, UiClip, UiInstance, UiRotation};
 
 use super::group::{UiGroups, clip_contains, cos_sin};
 use super::hud::{self, Grouping, HudElement, HudFrame, UiEntry};
+use super::polygon::polygon_contains;
 use super::shape::{shape_contains, shape_instance};
 use super::{FontFace, radial_hit, radial_layout, ui_list_draw, ui_text_draw};
 use crate::components::{Anchor, UiList, UiRadial, UiRect, UiShape, UiText};
@@ -174,7 +175,7 @@ pub fn ui_hit(
         && shape.visible
     {
         let shape = hud::pre_shape(&probe.frame, entity, shape, &mut probe.degraded);
-        if let Some(row) = shape_instance(&shape, viewport)
+        if let Ok(Some(row)) = shape_instance(&shape, viewport)
             && probe.hit(
                 HudElement::Shape,
                 shape.anchor,
@@ -300,9 +301,22 @@ impl Probe<'_> {
                 [x - origin_px[0], y - origin_px[1]],
             ) && clip_contains(clip, self.cursor);
         }
+        if let UiInstance::Polygon {
+            origin_px,
+            points,
+            clip,
+            rotation,
+            ..
+        } = &entries[0].2
+        {
+            let [x, y] = unrotate(self.cursor, rotation);
+            return polygon_contains(points, [x - origin_px[0], y - origin_px[1]])
+                && clip_contains(clip, self.cursor);
+        }
         let (UiInstance::Rect { clip, rotation, .. }
         | UiInstance::Text { clip, rotation, .. }
-        | UiInstance::Shape { clip, rotation, .. }) = &entries[0].2;
+        | UiInstance::Shape { clip, rotation, .. }
+        | UiInstance::Polygon { clip, rotation, .. }) = &entries[0].2;
         // The geometry is axis-aligned and the draw turns it about the pivot, so the cursor turns
         // back the other way before the bounds test (decision 52).
         let [x, y] = unrotate(self.cursor, rotation);

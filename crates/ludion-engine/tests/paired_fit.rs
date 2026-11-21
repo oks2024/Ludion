@@ -15,13 +15,13 @@ use ludion_engine::{Engine, PairedFit, Warp, paired_fit};
 use ludion_protocol::command::EngineRestoreParams;
 use ludion_protocol::{Command, ResponseBody};
 
-const DOC: &str = "voxels/choke.paired.yaml";
+pub(crate) const DOC: &str = "voxels/choke.paired.yaml";
 const WARP: Warp = Warp {
     distance: 0.6,
     yaw_deg: 45.0,
 };
 
-fn gallery() -> PathBuf {
+pub(crate) fn gallery() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery")
 }
 
@@ -40,7 +40,13 @@ fn vec3(indent: usize, key: &str, v: [f32; 3]) -> String {
     )
 }
 
-fn motor_entity(name: &str, at: [f32; 3], yaw_deg: f32, scale: f32, shape: &str) -> String {
+pub(crate) fn motor_entity(
+    name: &str,
+    at: [f32; 3],
+    yaw_deg: f32,
+    scale: f32,
+    shape: &str,
+) -> String {
     format!(
         "  - name: {name}
     components:
@@ -71,7 +77,7 @@ fn plain_entity(name: &str, at: [f32; 3], scale: [f32; 3], rest: &str) -> String
 
 const ASSEMBLY: &str = "assembly: voxels/humanoid.assembly.yaml";
 
-fn scene(extra: &str) -> String {
+pub(crate) fn scene(extra: &str) -> String {
     format!(
         "format: 1
 seed: 5
@@ -112,7 +118,7 @@ fn boot(root: &Path, text: &str) -> Engine {
     engine
 }
 
-fn named(engine: &mut Engine, name: &str) -> EntityId {
+pub(crate) fn named(engine: &mut Engine, name: &str) -> EntityId {
     engine
         .world_mut()
         .query_ids::<(&Name,)>()
@@ -326,7 +332,7 @@ fn a_scale_that_is_not_the_roles_is_l4372() {
     }
 }
 
-fn copy_dir(from: &Path, to: &Path) {
+pub(crate) fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
         let entry = entry.unwrap();

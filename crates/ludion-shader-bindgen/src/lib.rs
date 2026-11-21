@@ -109,6 +109,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "ssr_trace.wgsl",
     "text.wgsl",
     "threshold.wgsl",
+    "ui_polygon.wgsl",
     "ui_rect.wgsl",
     "ui_shape.wgsl",
     "ui_text.wgsl",

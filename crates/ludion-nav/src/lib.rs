@@ -46,6 +46,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod avoid;
 mod cache;
 mod field;
 mod grid;
@@ -53,6 +54,7 @@ mod links;
 mod overlay;
 mod path;
 
+pub use avoid::{AvoidAgent, AvoidNeighbor, OrcaLine, avoid_velocity};
 pub use cache::FlowCache;
 pub use field::FlowField;
 pub use grid::{ColumnSource, FloorSample, GridParams, NEIGHBORS, NO_LINK, NavGrid, NodeId};

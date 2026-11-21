@@ -31,7 +31,7 @@ impl UiLineCap {
 
 /// The geometry of a [`UiShape`]. Every length is in canvas units; angles are clock degrees (0 is
 /// 12 o'clock, positive is clockwise). Everything is positioned on the shape's origin.
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiShapeType {
     /// A segment from `from` to `to`, drawn as its stroke only.
@@ -95,6 +95,12 @@ pub enum UiShapeType {
         #[serde(default, skip_serializing_if = "is_zero")]
         corner_radius: f32,
     },
+    /// A simple polygon (concave allowed, either winding), filled with `fill`; takes no `stroke`.
+    /// A self-intersecting or degenerate polygon draws nothing and warns once (`L2305`).
+    Polygon {
+        /// 3 to 256 points relative to the origin, +Y down. Fewer than 3 draws nothing (`L2305`).
+        points: Vec<[f32; 2]>,
+    },
 }
 
 impl Default for UiShapeType {
@@ -103,6 +109,9 @@ impl Default for UiShapeType {
         UiShapeType::Circle { radius: 16.0 }
     }
 }
+
+/// The most points a [`UiShapeType::Polygon`] may carry.
+pub const MAX_POLYGON_POINTS: usize = 256;
 
 fn full_sweep() -> f32 {
     360.0
@@ -230,7 +239,8 @@ impl SemanticValidate for UiShape {
     /// Rejects (`L1621`) a non-finite number; a `radius` not above 0; a ring `thickness` outside
     /// `(0, radius]`; a wedge `inner_radius` outside `[0, radius)`; a `sweep_deg` outside `[0, 360]`; a
     /// negative `size` or `corner_radius`; a stroke `width` not above 0; and a `fill` on, or no `stroke`
-    /// for, a `line` or `arc`. A non-finite `rotation` is `L1620`.
+    /// for, a `line` or `arc`. A `polygon` with a non-finite point, over 256 points or a `stroke` is
+    /// rejected too (fewer than 3 points is not an error). A non-finite `rotation` is `L1620`.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         crate::ui::validate_rotation(value, &mut out);
@@ -271,6 +281,34 @@ impl SemanticValidate for UiShape {
             }
         }
         let shape = value.get("shape");
+        let mut points_finite = true;
+        if let Some(points) = shape
+            .and_then(|s| s.get("points"))
+            .and_then(Value::as_array)
+        {
+            if points.len() > MAX_POLYGON_POINTS {
+                reject(
+                    "/shape/points".into(),
+                    format!(
+                        "a `polygon` takes at most {MAX_POLYGON_POINTS} points, got {}",
+                        points.len()
+                    ),
+                );
+            }
+            for (i, point) in points.iter().enumerate() {
+                if let Some(point) = point.as_array() {
+                    for (j, n) in point.iter().enumerate() {
+                        if n.as_f64().is_some_and(|n| !engine_number(n).is_finite()) {
+                            points_finite = false;
+                            reject(
+                                format!("/shape/points/{i}/{j}"),
+                                "the `UiShape` polygon point must be finite".into(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
         if let Some(shape) = shape {
             for key in [
                 "from",
@@ -295,7 +333,7 @@ impl SemanticValidate for UiShape {
                 reject(pointer, what);
             }
         }
-        if !finite {
+        if !finite || !points_finite {
             return out;
         }
 
@@ -366,6 +404,12 @@ impl SemanticValidate for UiShape {
             }
         }
         let stroke = value.get("stroke").filter(|s| !s.is_null());
+        if kind == "polygon" && stroke.is_some() {
+            reject(
+                "/stroke".into(),
+                "a `polygon` takes a fill only; remove `stroke`".into(),
+            );
+        }
         if matches!(kind, "line" | "arc") {
             if value.get("fill").is_some_and(|f| !f.is_null()) {
                 reject(
@@ -405,6 +449,7 @@ mod tests {
             json!({ "type": "arc", "radius": 20.0, "start_deg": 10.0 }),
             json!({ "type": "wedge", "radius": 20.0, "inner_radius": 5.0, "sweep_deg": 45.0 }),
             json!({ "type": "rounded_rect", "size": [40.0, 20.0], "corner_radius": 6.0 }),
+            json!({ "type": "polygon", "points": [[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]] }),
         ] {
             let kind: UiShapeType = serde_json::from_value(shape.clone()).unwrap();
             assert_eq!(serde_json::to_value(kind).unwrap(), shape);
@@ -488,6 +533,29 @@ mod tests {
         assert_eq!(got, vec![("L1621".to_string(), "/fill".to_string())]);
         let got = codes_at(json!({ "shape": { "type": "line", "from": [0, 0], "to": [4, 0] } }));
         assert_eq!(got, vec![("L1621".to_string(), "/stroke".to_string())]);
+    }
+
+    #[test]
+    fn polygon_points_are_validated() {
+        let l1621 = |at: &str| ("L1621".to_string(), at.to_string());
+        let got = codes_at(json!({
+            "shape": { "type": "polygon", "points": [[0, 0], [1e300, 0], [0, 4]] },
+            "fill": [1, 1, 1, 1]
+        }));
+        assert_eq!(got, vec![l1621("/shape/points/1/0")]);
+        let many: Vec<Value> = (0..257).map(|i| json!([i, 0])).collect();
+        let got = codes_at(json!({ "shape": { "type": "polygon", "points": many } }));
+        assert_eq!(got, vec![l1621("/shape/points")]);
+        let got = codes_at(json!({
+            "shape": { "type": "polygon", "points": [[0, 0], [4, 0], [0, 4]] },
+            "stroke": { "width": 2, "color": [1, 1, 1, 1] }
+        }));
+        assert_eq!(got, vec![l1621("/stroke")]);
+        let got = codes_at(json!({
+            "shape": { "type": "polygon", "points": [[0, 0], [4, 0]] },
+            "fill": [1, 1, 1, 1]
+        }));
+        assert!(got.is_empty(), "{got:?}");
     }
 
     #[test]

@@ -59,9 +59,41 @@ image casts from the meshes it draws.
 ```
 Names are interned per frame: `default` is a bit of its own and a scene may use 31 other names (more is `L2375`). A
 list must name at least one layer, none empty and none twice (`L2375`). Debug lines are never filtered; projectiles
-and volley bullets are in `default`; the viewmodel ignores layers; lights are not filtered. The editor's `render.view`
-flight draws every layer, so a designer sees radar overlays. A scene that authors none of these is unchanged, byte for
-byte. Probe captures and the GI bake ignore layers.
+and volley bullets are in `default`; the viewmodel ignores layers. The editor's `render.view` flight draws every layer,
+so a designer sees radar overlays. A scene that authors none of these is unchanged, byte for byte. Probe captures and
+the GI voxelization ignore layers.
+
+### Declaring layers
+A scene lists the layer names it uses once, at the top, as `physics.layers` does:
+
+```yaml
+format: 1
+render_layers:
+  - name: radar
+  - name: portrait
+entities: []
+```
+`default` is implicit and reserved; a name may not be empty or repeated, and the block holds at most 31 entries (`L2375`
+at `/render_layers/<i>/name`). The block is validation only: `ludion check-scene` and `scene.check` report `L2376`, with
+the nearest declared name, for an undeclared name in `RenderLayers`, `Camera.layers`/`lights` or
+`RenderView.layers`/`lights`. Load and extract do not, so a name inserted at runtime still renders. A scene file only: a
+prefab, an override and `generate-map` carry none.
+
+## Light layers
+A light joins layers through `RenderLayers` like any entity (a child light inherits its parent's). A point or spot light
+lights an image when its layers meet that image's **light mask**:
+- `Camera.lights` (main camera) and `RenderView.lights` list the light layers; absent, they default to the camera's or
+  view's own `layers`. An unauthored camera is lit by every light.
+- A light an image drops casts no shadow in it.
+- `RenderView.sun: false` drops the `DirectionalLight` from that view. It needs no layer. There is no main-camera switch.
+
+```yaml
+  - name: portrait-key
+    components:
+      PointLight: { color: [0.3, 0.5, 1.0], intensity: 6.0, range: 10.0 }
+      RenderLayers: { layers: [portrait] }   # lights only images whose light mask has portrait
+```
+The main camera filters by `Camera.lights` too, so a `portrait` light stays out of a main camera on `[default]`.
 
 ## Budget and cost
 At most **4** enabled views render per frame, in `(order, entity)` order. Each further one is warning `L2374` and is
@@ -75,7 +107,8 @@ release) prints the summed pass GPU time at 512² and 256².
 - `L2372` (error): `UiRect.view` names no `RenderView`.
 - `L2373` (error): `UiRect.view` beside `texture`, `atlas`, `frame`, `slice` or `uv_rect`.
 - `L2374` (warning): more than 4 enabled views.
-- `L2375` (error): an empty `layers` list, an empty or repeated layer name, or more than 31 names besides `default`.
+- `L2375` (error): an empty `layers`/`lights` list, an empty or repeated layer name, more than 31 names besides `default`, or a bad `render_layers:` entry.
+- `L2376` (error): a layer name the scene's `render_layers:` does not declare (check-scene only).
 
 `ludion check-scene` reports `L2370`–`L2373` and the list shape of `L2375` statically, with pointers. `ludion explain L2370` gives the fix.
 
@@ -85,6 +118,10 @@ release) prints the summed pass GPU time at 512² and 256².
 - The windowed presenter does not interpolate a view's camera between ticks, so a fast-moving view camera may judder
   live; headless renders are exact.
 - A rect whose view is disabled shows nothing, not the clear colour.
+- A view whose `lights` or `sun` differ from the main frame's draws without global illumination, so it never rebakes
+  the main frame's volume and does not pick up its bounce light. Probes keep the main frame's capture: a lit view near
+  a probe reflects the main frame's lights.
 
 The gallery scenes are `examples/gallery/render-view-radar.yaml` (the room in perspective, and from above in the
-corner) and `render-view-layers.yaml` (a blue marker only on the radar, a green one only in the main frame).
+corner) `render-view-layers.yaml` (a blue marker only on the radar, a green one only in the main frame) and
+`render-view-portrait.yaml` (a figure lit only by its own key light in a bottom-left panel, absent from the main frame).

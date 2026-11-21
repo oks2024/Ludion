@@ -144,7 +144,8 @@ the clip.
 7. **One clip kind.** `kind: animation` is extended: a track names a *target*, resolved against
    whatever plays the clip (an assembly part or a skin joint). A `scale` channel and `events:` are
    added for both. **Why:** a part and a joint are both a named rigid node under a parent, and
-   crossfade and events then land once for voxels and skins.
+   crossfade and events then land once for voxels and skins. *Amended:* the target `$root` is reserved for root
+   motion (`Plan/animation-layers.md` decision 55).
 8. **Rotation stays Euler degrees.** Import converts each glTF quaternion key to the Euler solution
    nearest the previous key (no wrap flips), then samples the result against the source and refuses
    the clip above the error bound (decision 13). Runtime blending (crossfade, and interpolation

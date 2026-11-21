@@ -349,6 +349,27 @@ impl GiBake {
         }
     }
 
+    /// The fallback volumes with the flag off: what a frame with no GI samples.
+    fn unlit(&self) -> ResolvedGi {
+        ResolvedGi {
+            probes: self.fallback.clone(),
+            bounce: self.bounce_fallback.clone(),
+            origin: [0.0; 4],
+            scale: [0.0; 4],
+            hits: None,
+            rays: 0,
+        }
+    }
+
+    /// [`resolve`](GiBake::resolve) for a derived frame (a secondary view) that may draw without GI: with
+    /// no input it returns the fallbacks and leaves the main frame's cached bake alone.
+    pub(crate) fn resolve_keeping(&self, gpu: &Gpu, input: Option<BakeInput<'_>>) -> ResolvedGi {
+        match input {
+            Some(_) => self.resolve(gpu, input),
+            None => self.unlit(),
+        }
+    }
+
     /// Resolves the probe volumes for this frame. `None` (no `GiVolume`, or a scene with no geometry
     /// to place probes around) drops the cached volumes and returns the fallbacks with a zero flag.
     /// `Some` bakes on a cache miss and returns the volumes with the flag on.
@@ -358,14 +379,7 @@ impl GiBake {
             // Nothing baked is nothing held back: a frame with no `GiVolume` reports no staleness
             // whatever the lever says, so the flag never survives GI being switched off.
             self.stale.set(false);
-            return ResolvedGi {
-                probes: self.fallback.clone(),
-                bounce: self.bounce_fallback.clone(),
-                origin: [0.0; 4],
-                scale: [0.0; 4],
-                hits: None,
-                rays: 0,
-            };
+            return self.unlit();
         };
 
         let (baked, _) = self.bake_or_cached(gpu, &input);

@@ -45,10 +45,12 @@ pub mod ik_targets;
 pub mod lane;
 pub mod light_exposure;
 pub mod mesh_blend;
+pub mod nav_avoid;
 pub mod nav_blocker;
 pub mod nav_link;
 pub mod nav_route;
 pub mod occluded_silhouette;
+pub mod paired_action;
 pub mod path_follow;
 pub mod patrol;
 pub mod patterns;
@@ -78,12 +80,14 @@ pub use ik_targets::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_t
 pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
 pub use mesh_blend::MeshBlend;
+pub use nav_avoid::{NAV_AVOIDANCE_MAX_NEIGHBORS, NavAvoidance};
 pub use nav_blocker::{NavBlocker, NavBlockerMode, NavBlockerShape};
 pub use nav_link::NavLink;
 pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
 pub use occluded_silhouette::{
     MAX_OUTLINE_PX, OccludedSilhouette, SilhouetteOutline, SilhouetteWhen,
 };
+pub use paired_action::PairedAction;
 pub use path_follow::{PathFollower, PathMode, PathOrient};
 pub use patrol::{PatrolFollower, PatrolPhase, PatrolResume, PatrolState};
 pub use patterns::{PatternPlayer, VOLLEY_MAX_BULLETS, Volley, VolleyShape};
@@ -4268,7 +4272,8 @@ impl SemanticValidate for ViewmodelLens {
 /// `speed`, `arrive_radius`, `separation_radius` and `separation_strength` are finite and not
 /// negative; `separation_neighbors` is at most 16. A field out of range is `L1340`. `neighbor_layers`
 /// is the `Index3d` layer mask the neighbours are read from; `0` turns separation off. `class` names
-/// the `NavConfig.classes` entry whose grid the agent walks (empty is the first class).
+/// the `NavConfig.classes` entry whose grid the agent walks (empty is the first class). `avoidance`
+/// (walkers only, `L1528`) swaps the separation push for ORCA avoidance; see [`NavAvoidance`].
 ///
 /// ```yaml
 /// components:
@@ -4276,6 +4281,7 @@ impl SemanticValidate for ViewmodelLens {
 ///     speed: 3.5
 ///     neighbor_layers: 2
 ///     class: forklift
+///     avoidance: { priority: 1 }
 /// ```
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct NavAgent {
@@ -4325,6 +4331,9 @@ pub struct NavAgent {
     /// The `NavConfig.classes` entry this agent walks; empty is the first class (default empty).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub class: String,
+    /// Opt-in ORCA avoidance for walkers, replacing the separation push (default absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoidance: Option<NavAvoidance>,
 }
 
 /// Most separation neighbours a [`NavAgent`] may ask for.
@@ -4342,6 +4351,7 @@ impl Default for NavAgent {
             separation_neighbors: nav_sep_neighbors_default(),
             neighbor_layers: nav_neighbor_layers_default(),
             class: String::new(),
+            avoidance: None,
         }
     }
 }
@@ -4436,6 +4446,7 @@ impl SemanticValidate for NavAgent {
                 ),
             );
         }
+        out.extend(nav_avoid::validate_avoidance(value));
         out
     }
 }
@@ -6888,6 +6899,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<AudioZone>("AudioZone")
         .expect("unique");
+    // A paired-action participant's state, appended after `AudioZone`: written by `start_paired`, read by witnesses.
+    registry
+        .register_validated::<PairedAction>("PairedAction")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7431,12 +7446,13 @@ mod tests {
                 "IgnoreCollisions",
                 "NavBlocker",
                 "AudioZone",
+                "PairedAction",
             ]
         );
         assert_eq!(
             registry.len(),
-            90,
-            "appending `AudioZone` grows the registry to 90"
+            91,
+            "appending `PairedAction` grows the registry to 91"
         );
     }
 

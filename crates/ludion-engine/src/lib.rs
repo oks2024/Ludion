@@ -184,6 +184,7 @@ pub use character::{
 };
 pub use checkpoints::{CheckpointConfig, CheckpointInfo, Checkpoints, RestoreOutcome};
 pub use commands::sim::step_in_batches;
+pub use components::PairedAction;
 pub use components::{AimKind, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
 pub use components::{
     Anchor, Animation, AudioEmitter, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend, DecalMap,
@@ -284,7 +285,10 @@ pub use nav::{
     Nav, NavClass, NavConfig, NavPath, PathRequest, nav_distance, nav_link_done, nav_path,
     nav_project, nav_random_point, nav_raycast, nav_reachable, nav_steer, nav_update,
 };
-pub use paired::{PairedFit, PairedRoleFit, Warp, paired_fit};
+pub use paired::{
+    PairedFit, PairedMotion, PairedRoleFit, Warp, abort_paired, paired_fit, paired_motion,
+    paired_update, start_paired,
+};
 pub use paired_doc::{PairedContactReport, PairedReport, PairedRoleReport, check_paired_files};
 pub use parent_joint::{posed_joint_world, scene_parent_joint_diagnostics};
 pub use path_follow::{

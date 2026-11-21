@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); A3 deferred; W6 not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); W6a (root motion) mechanized (2026-11-21); A3 deferred; W6b not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -194,6 +194,18 @@ No `WorldHash`, trace, replay, protocol schema or golden moved (no committed sce
 
 No measurement was taken and no budget file written. Only tests and docs changed.
 
+### W6a — root motion on assemblies
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/animation.rs`, `assembly.rs`, `lib.rs` | `ROOT_TRACK`, the `$root` `L1142` rules, the reserved part name `L1138` |
+| `crates/ludion-engine/src/animation_events.rs` | `RootClip`, the `roots` cache, `root_clips`, the pre-fill in `timings` |
+| `crates/ludion-engine/src/root_motion.rs`, `lib.rs` | `RootMotion`, `root_motion_delta`, the window accumulation |
+| `crates/ludion-engine/tests/root_motion.rs`, `it.rs`, `examples/root_motion.rs` | sums, fades, refusals, clock, threads, inertness |
+| `docs/voxel-animation.md` §Root motion, `docs/animation-layers.md`, embedded mirrors | the user-facing contract |
+
+No hash, schema or golden moved.
+
 ## Trigger
 
 The game's characters do locomotion plus something else on one skin: carry a body, aim, peek around a
@@ -251,8 +263,11 @@ share one driver shape.
     `ProfileReport` counters (a schema move, re-blessed there). *Amended (2026-11-21):* the bench gates
     `ProfileReport`'s existing extract sequential timing (`Budget.extract_ms`); the four counters move the
     protocol schema, so they ride R14 (decision 54).
-12. **Root motion** (W6): a `ludion_root_motion` extras flag at import and `root_motion_delta`, a deterministic
-    sim read of clip data through the libm sampler.
+12. **Root motion** (W6): *amended by W6a:* root motion is the reserved `$root` track of `kind: animation` (request
+    section 5), read by `root_motion_delta` on assemblies, a deterministic sim read of clip data through the libm
+    sampler. The glTF `ludion_root_motion` extras flag becomes a later import-side writer of `$root`. **Trigger:** a
+    skinned `kind: character` game needs root motion. Why: the owner's 2026-11-17 ruling makes the game's
+    characters assemblies, and one runtime serves both once the importer writes the track.
 13. **Blend points** are `clip` plus `at`: a number is 1D (`params[0]`), a block list `[x, z]` is 2D
     (`params[0..2]`). The dimension is inferred and every point must agree; there are no param names.
 14. **Weights.** 1D is linear between the sorted neighbours and clamps at the ends. 2D is barycentric over
@@ -435,6 +450,27 @@ share one driver shape.
     where the request's figure is 11 parts with four chains; no assembly was authored for the bench.
     **Owed:** the quiet release measurement and the budget files on the 3090 and the M4.
 
+55. **`$root` rules.** `ROOT_TRACK = "$root"` (`ludion-scene`). `animation::validate` refuses a `scale` channel, a
+    translation key with `v[1] != 0` and a rotation key with `v[0]` or `v[2] != 0` (`L1142`, pointer at the key);
+    a part named `$root` is `L1138`. No new code. The canonical writer quotes the key; no committed file had one.
+56. **Window and clock.** `root_motion_delta(&World, entity, &SystemCtx)` integrates the track over
+    `(prev instant, now]` of the exact gameplay clock (`clock_elapsed`, anchor and speed included, not the held pose
+    clock). A one-shot clamps, a loop wraps (latest 64 cycles), a held frame or a clip started this tick opens at
+    0, a reversed clock reads nothing; windows tile under a scaled clock. Travel accumulates per key segment in the
+    frame faced at the segment start; yaw is the unwrapped degrees lerp (validation keeps a turn under 180 per
+    segment), no `atan2`.
+57. **Crossfade.** The incoming side counts at `fade_weight`, the outgoing `from` at its complement. A blend name,
+    unknown name, clip without `$root` or `PoseSnapshot` side contributes nothing; `RootMotion.weight` is the summed
+    weight so a game scales its own move by `1 - weight`. `None` when no side contributes.
+58. **Frames and reads.** Keys are in the entity's frame at the clip start in assembly units, forward `-Z`; the result
+    is scaled by `Transform.scale` x/z and rotated by `Transform.rotation`, the frame `move_character` moves a root
+    motor in; yaw is applied as `turn_character(current + yaw)`. The read takes `&World`: `AnimationLibrary` keeps a
+    Mutex'd `roots` map (`PairedLibrary` pattern), pre-filled by `timings`' assembly branch, never locked across a
+    second model's load, never hashed.
+59. **Base only.** Layers and blends contribute no root motion (the game's preferred answer).
+60. **Never drawn, never applied.** Extract samples by part name so `$root` is invisible to the pose; no system
+    applies the delta. An unconsumed `$root` clip leaves matrices and `WorldHash` bit-identical (test).
+
 ## Waves
 
 - **W1 (shipped).** Masks, `AnimationLayers`, composition in extract's `Skin` phase, `L1670`–`L1672`, docs.
@@ -465,7 +501,10 @@ share one driver shape.
   `assembly-ground` golden is owed to the M4).
 - **W5b (bench shipped 2026-11-21).** The 32-character bench (decision 54); the measurement and the budget
   files are owed. The `ProfileReport` counters (decision 11) ride R14.
-- **W6.** Root motion import and `root_motion_delta` (decision 12).
+- **W6a (shipped 2026-11-21).** The `$root` track and `root_motion_delta` on assemblies (decisions 12 and 55-60).
+- **W6b.** Blend-space root motion (points weighted on the `BlendClock` phase; trigger: a locomotion blend whose
+  clips carry `$root`), a `check-scene` root row and a `render --model --clip --root-motion` travel strip, characters
+  and prefabs (trigger: a skinned or prefab game asks) and the glTF flag (decision 12).
 
 ## Owner rulings (2026-11-19)
 

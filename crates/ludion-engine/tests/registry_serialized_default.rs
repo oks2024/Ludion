@@ -65,6 +65,10 @@ fn fixtures(name: &str) -> Vec<Value> {
             json!({ "shape": { "sphere": { "radius": 1.0 } } }),
             json!({ "shape": { "box": { "half_extents": [1.0, 1.0, 1.0] } } }),
         ],
+        "PairedAction" => vec![
+            json!({ "document": "d", "action": "a", "role": "r", "reference": entity_ref(), "started": 0 }),
+            json!({ "document": "d", "action": "a", "role": "r", "reference": entity_ref(), "started": 7, "fired": 2 }),
+        ],
         "AudioZone" => vec![
             json!({ "shape": { "sphere": { "radius": 1.0 } } }),
             json!({

@@ -9,6 +9,7 @@ use ludion_core::math::{hypot, sin_cos};
 use ludion_renderer::{UiClip, UiInstance, UiRotation, UiShapeGeometry, UiShapeStroke};
 
 use super::group::cos_sin;
+use super::polygon::{PolygonFault, dedup_points, polygon_contains, triangulate};
 use super::{canvas_anchor_px, pixel_scale};
 use crate::components::{UiLineCap, UiShape, UiShapeType};
 
@@ -20,7 +21,48 @@ const TAU: f32 = std::f32::consts::TAU;
 ///
 /// `line` and `arc` carry no stroke in the instance: their geometry is the stroke band, drawn as a
 /// fill of the stroke colour (decision 56).
-pub(crate) fn shape_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<UiInstance> {
+pub(crate) fn shape_instance(
+    shape: &UiShape,
+    viewport: (u32, u32),
+) -> Result<Option<UiInstance>, PolygonFault> {
+    if let UiShapeType::Polygon { points } = &shape.shape {
+        return polygon_instance(shape, points, viewport);
+    }
+    Ok(analytic_instance(shape, viewport))
+}
+
+/// A `polygon` as `extract` draws it before tweens and groups act: the deduplicated points in pixels
+/// about the origin and their ear-clipped triangles. `Ok(None)` when it has no fill or is invisible;
+/// `Err` when it cannot be filled (decision 70).
+fn polygon_instance(
+    shape: &UiShape,
+    points: &[[f32; 2]],
+    viewport: (u32, u32),
+) -> Result<Option<UiInstance>, PolygonFault> {
+    let Some(fill) = shape.fill.filter(|_| shape.visible) else {
+        return Ok(None);
+    };
+    let ps = pixel_scale(viewport);
+    let anchor = canvas_anchor_px(shape.anchor, viewport);
+    let points: Vec<[f32; 2]> = dedup_points(points)
+        .iter()
+        .map(|p| [p[0] * ps, p[1] * ps])
+        .collect();
+    let triangles = triangulate(&points)?;
+    Ok(Some(UiInstance::Polygon {
+        origin_px: [
+            anchor[0] + shape.offset[0] * ps,
+            anchor[1] + shape.offset[1] * ps,
+        ],
+        points,
+        triangles,
+        fill,
+        clip: UiClip::NONE,
+        rotation: UiRotation::NONE,
+    }))
+}
+
+fn analytic_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<UiInstance> {
     if !shape.visible {
         return None;
     }
@@ -42,8 +84,8 @@ pub(crate) fn shape_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<Ui
         width_px: s.width * ps,
         color: s.color,
     });
-    let (geometry, fill, stroke) = match shape.shape {
-        UiShapeType::Line { from, to, cap } => {
+    let (geometry, fill, stroke) = match &shape.shape {
+        &UiShapeType::Line { from, to, cap } => {
             let stroke = stroke?;
             let (a, b) = ([from[0] * ps, from[1] * ps], [to[0] * ps, to[1] * ps]);
             let round = cap == UiLineCap::Round;
@@ -58,7 +100,7 @@ pub(crate) fn shape_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<Ui
             };
             (geometry, Some(stroke.color), None)
         }
-        UiShapeType::Circle { radius } => (
+        &UiShapeType::Circle { radius } => (
             UiShapeGeometry::Sector {
                 radius_outer: radius * ps,
                 radius_inner: 0.0,
@@ -68,7 +110,7 @@ pub(crate) fn shape_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<Ui
             shape.fill,
             stroke,
         ),
-        UiShapeType::Ring {
+        &UiShapeType::Ring {
             radius,
             thickness,
             start_deg,
@@ -89,7 +131,7 @@ pub(crate) fn shape_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<Ui
                 stroke,
             )
         }
-        UiShapeType::Arc {
+        &UiShapeType::Arc {
             radius,
             start_deg,
             sweep_deg,
@@ -112,7 +154,7 @@ pub(crate) fn shape_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<Ui
                 None,
             )
         }
-        UiShapeType::Wedge {
+        &UiShapeType::Wedge {
             radius,
             inner_radius,
             start_deg,
@@ -133,7 +175,7 @@ pub(crate) fn shape_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<Ui
                 stroke,
             )
         }
-        UiShapeType::RoundedRect {
+        &UiShapeType::RoundedRect {
             size,
             corner_radius,
         } => {
@@ -145,6 +187,7 @@ pub(crate) fn shape_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<Ui
                 stroke,
             )
         }
+        UiShapeType::Polygon { .. } => return None,
     };
     if fill.is_none() && stroke.is_none() {
         return None;
@@ -326,15 +369,12 @@ pub fn ui_shape_hit(shape: &UiShape, viewport: (u32, u32), cursor: [f32; 2]) -> 
     if !cursor.iter().all(|c| c.is_finite()) {
         return false;
     }
-    let Some(UiInstance::Shape {
-        origin_px,
-        geometry,
-        fill,
-        stroke,
-        ..
-    }) = shape_instance(shape, viewport)
-    else {
+    let Ok(Some(instance)) = shape_instance(shape, viewport) else {
         return false;
+    };
+    let origin_px = match &instance {
+        UiInstance::Shape { origin_px, .. } | UiInstance::Polygon { origin_px, .. } => *origin_px,
+        _ => return false,
     };
     let (dx, dy) = (cursor[0] - origin_px[0], cursor[1] - origin_px[1]);
     let local = if shape.rotation == 0.0 {
@@ -343,7 +383,16 @@ pub fn ui_shape_hit(shape: &UiShape, viewport: (u32, u32), cursor: [f32; 2]) -> 
         let (c, s) = cos_sin(shape.rotation.to_radians());
         [c * dx + s * dy, -s * dx + c * dy]
     };
-    shape_contains(&geometry, fill.is_some(), stroke.map(|s| s.width_px), local)
+    match &instance {
+        UiInstance::Shape {
+            geometry,
+            fill,
+            stroke,
+            ..
+        } => shape_contains(geometry, fill.is_some(), stroke.map(|s| s.width_px), local),
+        UiInstance::Polygon { points, .. } => polygon_contains(points, local),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -478,8 +527,12 @@ mod tests {
             fill: Some([1.0; 4]),
             ..UiShape::default()
         };
-        assert!(shape_instance(&ring, viewport).is_none());
-        assert!(shape_instance(&UiShape::default(), viewport).is_none());
+        assert!(shape_instance(&ring, viewport).unwrap().is_none());
+        assert!(
+            shape_instance(&UiShape::default(), viewport)
+                .unwrap()
+                .is_none()
+        );
         let zero_line = UiShape {
             shape: UiShapeType::Line {
                 from: [3.0, 3.0],
@@ -492,7 +545,7 @@ mod tests {
             }),
             ..UiShape::default()
         };
-        assert!(shape_instance(&zero_line, viewport).is_none());
+        assert!(shape_instance(&zero_line, viewport).unwrap().is_none());
     }
 
     #[test]
@@ -509,12 +562,12 @@ mod tests {
             }),
             ..UiShape::default()
         };
-        let Some(UiInstance::Shape {
+        let Ok(Some(UiInstance::Shape {
             geometry,
             fill,
             stroke,
             ..
-        }) = shape_instance(&arc, (1080, 1080))
+        })) = shape_instance(&arc, (1080, 1080))
         else {
             panic!("an arc draws");
         };

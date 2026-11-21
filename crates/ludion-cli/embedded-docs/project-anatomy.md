@@ -18,14 +18,14 @@ description: What ludion new scaffolds: each file's job, the content root, and w
 | `scenes/model-stage.yaml`, `scenes/model-stage-night.yaml`, `scenes/effects-stage.yaml` | The Ludion editor's stage scenes (its Voxel Artist / Models and Effects views) — display surfaces a second `ludion serve` hosts, never your own scene. Built-in components only; the `subject`/`adventurer`/`target` entity names are load-bearing. Safe to delete if you don't use the editor — it re-adds them with **Add stage scenes**. |
 | `CLAUDE.md` | Yours to edit; the engine never compares or rewrites it. |
 | `LUDION-GUIDE.md` | A copy of `ludion docs engine-guide` made at scaffold time. `ludion docs` warns `L0036` when it differs from the CLI's; `ludion new --refresh-guide` rewrites it. |
-| `scripts/ludion.mjs` | A Node wrapper that builds and runs this engine's CLI (written when the engine is a checkout; see below). |
+| `scripts/ludion.mjs` | A Node wrapper that builds and runs this engine's CLI, and the `link-engine` verb that (re)creates the engine link (written when the engine is a checkout; see below). |
 | `tests/gameplay.rs` | Headless sim assertions + a WorldHash-determinism test (no GPU). |
 | `tests/golden.rs` | A golden-image test (bless-or-skip until you commit `goldens/<os>/main.png`). |
 | `tests/drift.rs` | Asserts every component in the registry survives snapshot migration (`ludion docs components`). |
 | `clippy.toml` | The sim-side determinism denylist your game code inherits. |
 | `ludion.toml` | The project manifest: `name`, `default_scene` (equal to `game()`'s, `L0038`), the optional `[[import]]`, `[cook]` and `[audio]` tables, and the `[ios] bundle_id` `ludion export` reads (`ludion docs export`). |
-| `.gitignore` | `target/`, `.ludion/`, `generation/runs/` and `scenes/save/` (the player's profile). Add every `[[import]] to` root: `ludion sync` derives those trees and nothing else ignores them. |
-| `Cargo.toml` | A **standalone** crate (empty `[workspace]`); `ludion` is a path dep on the engine. The `wire` (the listener) and `window` (the `--window` in-process window) features are declared here and default on — the dev shape; `ludion export` builds with `--no-default-features` and starts through the lib's `ludion_game_start`. |
+| `.gitignore` | `target/`, `.ludion/` (also the engine link, below), `generation/runs/` and `scenes/save/` (the player's profile). Add every `[[import]] to` root: `ludion sync` derives those trees and nothing else ignores them. |
+| `Cargo.toml` | A **standalone** crate (`[workspace]` with `exclude = [".ludion"]`); `ludion` is a path dep on the engine, relative through `.ludion/engine` (the engine link, below). The `wire` (the listener) and `window` (the `--window` in-process window) features are declared here and default on — the dev shape; `ludion export` builds with `--no-default-features` and starts through the lib's `ludion_game_start`. |
 
 ## Getting the ludion CLI
 
@@ -46,6 +46,18 @@ edited copy into its own directory rather than touching anything scaffolded here
 committed `*.gen.yaml` recipes, `generation/workflows/` the committed API-format graphs they name,
 and `generation/runs/` the scratch a run writes — ignored by both version-control systems and never
 an engine input (`ludion docs generation`).
+
+## The engine link
+
+A project scaffolded from an engine checkout commits no absolute path. Its `Cargo.toml` path deps and `scripts/ludion.mjs` name `.ludion/engine`, a gitignored directory link (a junction on Windows, a symlink elsewhere) to this machine's engine checkout. `ludion new` creates it, so the scaffolding machine needs no extra step. On a fresh clone, or after the engine moves, run once per machine:
+
+```
+node scripts/ludion.mjs link-engine <engine checkout>
+```
+
+It refuses a path that is not an engine checkout (`L4391`) and a real directory at `.ludion/engine` (`L4392`, never deleted). A missing or dangling link makes the wrapper fail with `L4390`; cargo itself reports an error naming `.ludion/engine/…/Cargo.toml`. `ludion new` reports `L4393` if it could not run the link step (Node missing); the files stay.
+
+**Projects scaffolded before the link** carry absolute engine paths. To migrate: replace the three engine deps in `Cargo.toml` with `{ path = ".ludion/engine/crates/<crate>" }` (keep each dep's other keys), add `exclude = [".ludion"]` under `[workspace]`, replace `scripts/ludion.mjs` with a fresh `ludion new` copy, run `node scripts/ludion.mjs link-engine <engine checkout>`, and make sure `.ludion/` is in every ignore file the project's version control reads.
 
 A game is a binary depending on the `ludion` facade crate. It brings two things — components and
 systems — and gets everything else (scene load/validation, the deterministic sim, `WorldHash`,

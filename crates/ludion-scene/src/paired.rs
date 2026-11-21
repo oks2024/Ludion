@@ -979,6 +979,13 @@ fn validate_events(doc: &PairedDocument, d: &mut Vec<Diagnostic>) {
                 "give each event a unique name",
             ));
         }
+        if event.name == "end" {
+            d.push(data(
+                &format!("{base}/name"),
+                "`end` is the implicit event fired when the action ends; rename it".to_owned(),
+                "rename the event, for example `release`",
+            ));
+        }
         if !number_ok(event.t, &format!("{base}/t"), "`t`", d) {
             continue;
         }
@@ -1215,6 +1222,15 @@ contacts:
         assert!(
             all.contains(&(code.to_string(), pointer.to_string())),
             "{code} {pointer}: {all:?}\n{source}"
+        );
+    }
+
+    #[test]
+    fn an_event_named_end_is_reserved() {
+        assert_finds(
+            &base("", GOOD_ALIGN, "events:\n  - name: end\n    t: 0.5\n"),
+            "L1753",
+            "/events/0/name",
         );
     }
 
