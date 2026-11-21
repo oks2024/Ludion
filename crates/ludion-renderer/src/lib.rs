@@ -51,6 +51,7 @@ mod compute_shader;
 mod cull;
 mod cull_stats;
 mod debug_view;
+mod exposure_meter;
 mod frame_observer;
 mod gi_bake;
 mod gi_bin;
@@ -136,11 +137,12 @@ pub use scene::{
     FontDraw, GROUND_MARKER_LIFT, GiData, GlyphOutline, GroundMarkerInstance, GroundMarkerShape,
     GroundMarkerStyle, LocalShadowData, LodSettings, LutData, MAX_GI_TEXTURE_AXIS,
     MAX_RENDER_VIEWS, MAX_SILHOUETTE_STYLES, MapImage, MeshData, MeshInstance, MeshLod, MeshShape,
-    MeshTexture, MeshTextures, ParticleInstance, PointLightData, PostData, ProbeWorld,
-    RenderCamera, RenderScene, RenderViewData, SilhouetteMesh, SilhouetteStyle, Silhouettes,
-    SkinJoint, SpotLightData, SpriteInstance, StaticRange, SunCascadeConfig, SunData, TextRun,
-    TextureImage, TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance, UiRotation,
-    UiShapeGeometry, UiShapeStroke, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
+    MeshTexture, MeshTextures, MeterData, MeterWeighting, ParticleInstance, PointLightData,
+    PostData, ProbeWorld, RenderCamera, RenderScene, RenderViewData, SilhouetteMesh,
+    SilhouetteStyle, Silhouettes, SkinJoint, SpotLightData, SpriteInstance, StaticRange,
+    SunCascadeConfig, SunData, TextRun, TextureImage, TextureWrap, TonemapOperator, UiClip,
+    UiClipBox, UiInstance, UiRotation, UiShapeGeometry, UiShapeStroke, WorldVoxelGrid,
+    aspect_ratio, drop_shadow_fade,
 };
 pub use shader_reload::{check_shader_reload, is_renderer_shader};
 pub use sun_cascade::{

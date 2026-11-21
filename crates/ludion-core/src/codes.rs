@@ -2340,6 +2340,9 @@ pub mod code {
     /// `L2391` — a `.cube` LUT is valid but unsupported: a 1D table or a 3D size other than 17, 33 or 65.
     pub const CUBE_LUT_UNSUPPORTED: DiagnosticCode = DiagnosticCode::new("L2391");
 
+    /// `L1760` — a `PostProcess` metering field is out of range: `metering_clip`, `exposure_range`.
+    pub const POST_PROCESS_INVALID_METERING: DiagnosticCode = DiagnosticCode::new("L1760");
+
     /// `L2201` — a golden-test comparison was requested but no golden image exists yet at the
     /// expected path (or it could not be read). Raised by `ludion-testkit`.
     pub const RENDER_GOLDEN_MISSING: DiagnosticCode = DiagnosticCode::new("L2201");
@@ -11436,6 +11439,18 @@ Fix: re-export the LUT as a 3D `.cube`, or write one with `ludion lut identity`.
 Fix: re-export the LUT as a 3D table of size 17, 33 or 65.",
     },
     CodeEntry {
+        code: code::POST_PROCESS_INVALID_METERING,
+        severity: Severity::Error,
+        title: "invalid metered-exposure setting",
+        explanation: "A `PostProcess` metering field is out of range. `metering_clip` is `[low, high]`, the share of
+the metered pixels (by weight) trimmed off the dark and bright ends before the mean: each element must be in `[0, 1)`
+and the two must sum to less than 1. `exposure_range` is `[min, max]` in EV, each within `[-8, 8]`, with min not
+above max.
+
+Fix: keep each clip share below 1 and the pair's sum below 1 (the default is `[0.02, 0.02]`), and give
+`exposure_range` as `[min, max]` inside `[-8, 8]`.",
+    },
+    CodeEntry {
         code: code::RENDER_GOLDEN_MISSING,
         severity: Severity::Error,
         title: "golden image is missing",
@@ -14741,6 +14756,7 @@ mod tests {
         code::RAIN_STREAK_BUDGET,
         code::CUBE_LUT_MALFORMED,
         code::CUBE_LUT_UNSUPPORTED,
+        code::POST_PROCESS_INVALID_METERING,
         code::RENDER_GOLDEN_MISSING,
         code::RENDER_IMAGE_DIMENSION_MISMATCH,
         code::RENDER_SSIM_BELOW_THRESHOLD,

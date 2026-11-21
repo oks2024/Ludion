@@ -56,6 +56,7 @@ use crate::components::{
     UiList, UiRadial, UiRect, UiShape, UiText,
 };
 use crate::components::{AnimationLayer, AnimationLayers, BlendClock, LayerMode, layer_weight_at};
+use crate::components::{ExposureMode, Metering};
 use crate::docs::DocStore;
 use crate::extract_observer::{ExtractPhase, SkinCounts};
 use crate::fonts::FontLibrary;
@@ -2263,6 +2264,17 @@ fn extract_post(world: &World, ids: &[EntityId]) -> Option<PostData> {
             TonemapOperator::Neutral => ludion_renderer::TonemapOperator::Neutral,
             TonemapOperator::None => ludion_renderer::TonemapOperator::None,
         },
+        exposure_compensation: post.exposure_compensation,
+        meter: (post.exposure_mode == ExposureMode::Metered).then_some(
+            ludion_renderer::MeterData {
+                weighting: match post.metering {
+                    Metering::Average => ludion_renderer::MeterWeighting::Average,
+                    Metering::Center => ludion_renderer::MeterWeighting::Center,
+                },
+                clip: post.metering_clip,
+                range: post.exposure_range,
+            },
+        ),
         dither: post.dither,
         contrast: post.contrast,
         saturation: post.saturation,
@@ -8971,6 +8983,11 @@ mod tests {
                     bloom_strength: 0.2,
                     exposure: 1.75,
                     tonemap: TonemapOperator::Agx,
+                    exposure_mode: ExposureMode::Metered,
+                    exposure_compensation: -0.5,
+                    metering: Metering::Average,
+                    metering_clip: [0.05, 0.1],
+                    exposure_range: [-3.0, 1.0],
                     dither: true,
                     contrast: 1.2,
                     saturation: 0.8,
@@ -9022,6 +9039,12 @@ mod tests {
                 bloom_strength: 0.2,
                 exposure: 1.75,
                 tonemap: ludion_renderer::TonemapOperator::Agx,
+                exposure_compensation: -0.5,
+                meter: Some(ludion_renderer::MeterData {
+                    weighting: ludion_renderer::MeterWeighting::Average,
+                    clip: [0.05, 0.1],
+                    range: [-3.0, 1.0],
+                }),
                 dither: true,
                 contrast: 1.2,
                 saturation: 0.8,

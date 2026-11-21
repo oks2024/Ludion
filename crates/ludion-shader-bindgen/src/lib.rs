@@ -72,6 +72,7 @@ pub const RENDERER_SHADERS: &[&str] = &[
     "decal_receiver.wgsl",
     "dof.wgsl",
     "dof_coc.wgsl",
+    "exposure_meter.wgsl",
     "gi_bake.wgsl",
     "gi_inject.wgsl",
     "ground_marker.wgsl",
@@ -123,6 +124,7 @@ pub const UNFILTERABLE_TEXTURES: &[&str] = &[
     "hiz_src",
     "trace_hiz",
     "probe_live",
+    "exposure_tex",
     "proj_receivers",
     "lit_receivers",
 ];
@@ -184,6 +186,7 @@ pub const RENDER_GRAPH_SHADERS: &[&str] = &["gradient.wgsl", "vignette.wgsl", "w
 /// the same order, which a renderer test pins.
 pub const COMPUTE_SHADERS: &[&str] = &[
     "cull.wgsl",
+    "exposure_meter.wgsl",
     "gi_bake.wgsl",
     "gi_inject.wgsl",
     "ibl.wgsl",

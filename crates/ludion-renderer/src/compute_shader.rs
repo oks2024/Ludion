@@ -12,6 +12,7 @@ use crate::render::{Snippet, compose_builtin};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ComputeShader {
     Cull,
+    ExposureMeter,
     GiBake,
     GiInject,
     Ibl,
@@ -20,8 +21,9 @@ pub(crate) enum ComputeShader {
 
 impl ComputeShader {
     /// Every compute shader, in the order of `ludion_shader_bindgen::COMPUTE_SHADERS` (sorted).
-    pub(crate) const ALL: [ComputeShader; 5] = [
+    pub(crate) const ALL: [ComputeShader; 6] = [
         ComputeShader::Cull,
+        ComputeShader::ExposureMeter,
         ComputeShader::GiBake,
         ComputeShader::GiInject,
         ComputeShader::Ibl,
@@ -32,6 +34,7 @@ impl ComputeShader {
     pub(crate) fn file_name(self) -> &'static str {
         match self {
             ComputeShader::Cull => "cull.wgsl",
+            ComputeShader::ExposureMeter => "exposure_meter.wgsl",
             ComputeShader::GiBake => "gi_bake.wgsl",
             ComputeShader::GiInject => "gi_inject.wgsl",
             ComputeShader::Ibl => "ibl.wgsl",
@@ -44,7 +47,7 @@ impl ComputeShader {
         match self {
             ComputeShader::Ibl => &[Snippet::Math, Snippet::Dfg, Snippet::SkyGradient],
             ComputeShader::GiBake | ComputeShader::GiInject => &[Snippet::Math, Snippet::GiRays],
-            ComputeShader::Cull | ComputeShader::ProbeRelight => &[],
+            ComputeShader::Cull | ComputeShader::ExposureMeter | ComputeShader::ProbeRelight => &[],
         }
     }
 
@@ -52,6 +55,7 @@ impl ComputeShader {
     pub(crate) fn body_source(self) -> &'static str {
         match self {
             ComputeShader::Cull => include_str!("shaders/cull.wgsl"),
+            ComputeShader::ExposureMeter => include_str!("shaders/exposure_meter.wgsl"),
             ComputeShader::GiBake => include_str!("shaders/gi_bake.wgsl"),
             ComputeShader::GiInject => include_str!("shaders/gi_inject.wgsl"),
             ComputeShader::Ibl => include_str!("shaders/ibl.wgsl"),

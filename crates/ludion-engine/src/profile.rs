@@ -1464,7 +1464,7 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 60] = [
+const KNOWN_PASS_NAMES: [&str; 61] = [
     ludion_renderer::graph::pass::CULL,
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
@@ -1498,6 +1498,7 @@ const KNOWN_PASS_NAMES: [&str; 60] = [
     ludion_renderer::graph::pass::DOF_COC,
     ludion_renderer::graph::pass::DOF,
     ludion_renderer::graph::pass::BLOOM_THRESHOLD,
+    ludion_renderer::graph::pass::EXPOSURE_METER,
     ludion_renderer::graph::pass::BLOOM_DOWN[0],
     ludion_renderer::graph::pass::BLOOM_DOWN[1],
     ludion_renderer::graph::pass::BLOOM_DOWN[2],
@@ -1549,9 +1550,11 @@ const KNOWN_PASS_NAMES: [&str; 60] = [
 /// `lens` is the anamorphic streak chain's ten passes, present only when `PostProcess.anamorphic` is
 /// above zero.
 ///
+/// `exposure` is the one `exposure_meter` compute pass, present only for `exposure_mode: metered`.
+///
 /// `ssr` is the pyramids and the trace, not `reflections` (which runs every frame for the sky) and not
 /// the `ssr_debug` view.
-const POST_GROUPS: [(&str, &[&str]); 7] = [
+const POST_GROUPS: [(&str, &[&str]); 8] = [
     (
         "bloom",
         &[
@@ -1623,6 +1626,7 @@ const POST_GROUPS: [(&str, &[&str]); 7] = [
             ludion_renderer::graph::pass::LENS_UP[4],
         ],
     ),
+    ("exposure", &[ludion_renderer::graph::pass::EXPOSURE_METER]),
 ];
 
 /// Pass kinds whose graph names carry a mip suffix (`hiz_reduce_3`): one pass per pyramid level, and
@@ -4210,6 +4214,7 @@ gpu_frame_max_ms = 9.5
             transparent_medium: true,
             dof: true,
             anamorphic: true,
+            exposure_meter: true,
             gi_inject: Some([4, 4, 4]),
             cull: Some(ludion_renderer::CullShape::for_counts(1000, 8, 4, 1)),
             debug_lines: true,

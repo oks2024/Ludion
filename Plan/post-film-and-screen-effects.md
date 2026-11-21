@@ -99,14 +99,17 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
     both modes; 0 leaves `exposure` untouched on the CPU), `metering: average | center` (default `center`),
     `metering_clip: [low, high]` (default `[0.02, 0.02]`), `exposure_range: [min, max]` EV (default `[-2, 2]`).
     `L1760` when `min > max` or `low + high >= 1`.
-16. **Same frame, deterministic.** Two compute passes before `composite`: `exposure_histogram` reads the HDR `scene`
-    (what bloom reads) and `scene_depth` at a fixed stride and adds **integer** weights into 64 log2-luminance bins
-    (`atomicAdd` on `u32`: order-independent, so identical across runs); `exposure_reduce` runs one invocation that
-    walks the bins in fixed order, trims `metering_clip`, takes the mean log2 luminance, sets the correction that puts it
-    on 0.18 mid-grey, clamps it to `exposure_range` and writes a 1×1 texture. `composite` reads it as an optional input
-    and multiplies `exposure`. No readback, no previous frame.
-17. **Weights.** Centre weighting is an integer radial falloff; sky pixels (far depth) weigh 1 against 4 (the request's
-    0.25); viewmodel pixels (depth inside the viewmodel slice) weigh 0. UI is drawn after the meter, so it never counts.
+16. **Same frame, deterministic.** One compute pass before `composite`: `exposure_meter` (one workgroup of 256, a fixed
+    128x72 sample grid, so its cost is resolution-independent) reads the HDR `scene` (what bloom reads) and `scene_depth`
+    and adds **integer** weights into 64 log2-luminance bins over `[-16, 8)` (workgroup `atomicAdd` on integers:
+    order-independent, so identical across runs), with a fixed-point per-bin sum of log2 luminance so the trimmed mean is
+    exact to 1/512 EV. One thread then walks the bins in fixed order, trims `metering_clip`, takes the mean log2
+    luminance, sets the correction that puts it on 0.18 mid-grey, clamps it to `exposure_range` and writes a 65x1
+    `Rgba32Float` table (texels 0-63 the bins as `(weight, summed log2, 0, 0)`; texel 64 = `(correction EV, mean log2,
+    total weight, gain)`). `composite` reads texel 64 as an optional input and multiplies `exposure`. No readback, no
+    previous frame.
+17. **Weights.** Integers: a base of 4 (sky, depth 1, weighs 1: the request's 0.25); viewmodel pixels (depth inside the
+    viewmodel slice) weigh 0; `center` multiplies by a factor falling 4 to 1 across four radial rings. UI is drawn after the meter, so it never counts.
 18. **No temporal adaptation.** Smoothing over time would make the image a function of camera history (pipeline
     decision 5). A game eases between targets by writing `exposure_compensation` from a presentation system each tick,
     the `focus_distance` idiom; that value is world state and hashed like any field.
@@ -115,7 +118,8 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
     light model on both sides. The `irradiance` debug view replaces `composite`, so it stays unmetered.
 20. **Instruments.** `ludion render --debug-view exposure_meter` (CLI and engine only, not on the wire: a
     `RenderDebugView` variant moves `replay_schema_hash`, `Plan/light-exposure.md` decision 18) draws the histogram and
-    the chosen EV. `ludion profile` records the metered EV per frame by reading the 1×1 back off the frame path.
+    the chosen EV, reading the 65x1 table. `ludion profile` records the metered EV per frame by reading texel 64 back off
+    the frame path.
 
 ### D — animated grain
 
@@ -169,8 +173,9 @@ The rest of both ranges is reserved for this plan.
   `L2390`/`L2391`; **W2b** the tools. Together: the parser, `lut` field, the 3D input, `L2390`/`L2391`, `ludion lut
   identity|bake|apply|stats` with the grade's CPU twin, a committed `.cube` in the gallery, `docs/post-processing.md`
   and `anti-aliasing.md` (where the LUT sits with SMAA on).
-- **W3 — metered exposure** (C): the fields, `L1760`, the two compute passes, `[post_groups] exposure`, the
-  `exposure_meter` view, the profile field, an `image-stats` bright-to-dark pan check.
+- **W3 — metered exposure** (C), split: **W3a** the fields, `L1760`, `exposure_compensation`, the `exposure_meter`
+  pass, the composite's optional input, `[post_groups] exposure`; **W3b** the `exposure_meter` view, the profile field,
+  an `image-stats` bright-to-dark pan check.
 - **W4 — animated grain and region/fill effects** (D, F): the tick in `PostData`, `grain_motion`, `ScreenEffect`,
   `L1761`/`L2392`, the overlay split, `[post_groups] screen_fx`, gallery `screen-effects.yaml` with a `--frames 0,1,2`
   strip, `docs/screen-effects.md`. May split into W4a (D) and W4b (F) at planning. Needs no 0018 field (decision 3).
@@ -213,3 +218,4 @@ before the silhouette (decision 13); codes renumbered.
   default `anamorphic_length` measures about 0.30 of the frame width. Goldens and `lens` budgets owed on the pinned machines.
 - W2a (`.cube` parser, `lut` field, the composite step 7a) mechanized on the M5 2026-11-21; goldens owed on the pinned machines.
 - W2b (`ludion lut identity|bake|apply|stats`, the `grade_model` CPU twin of `grade()`) mechanized on the M5 2026-11-21: a LUT baked from a warm/teal analytic grade renders within 5 output steps (mean 0.05) of the analytic render of the same scene. Scratch scene `post-film-1982-lut` + its `.cube` owed a move into `examples/gallery/` and goldens on the pinned machines.
+- W3a (`exposure_mode`, `exposure_compensation`, `metering*`, `exposure_range`, `L1760`, the `exposure_meter` pass) mechanized on the M5 2026-11-21; goldens, the scratch scene `post-metered-exposure` and the `exposure` budget are owed on the pinned machines.

@@ -7571,6 +7571,53 @@
         "$ref": "#/$defs/TonemapOperator",
         "default": "agx"
       },
+      "exposure_mode": {
+        "description": "How the frame's exposure is chosen (default [`ExposureMode::Manual`]).\n\n`metered` runs one compute pass over a fixed 128x72 sample grid of the HDR scene before the\ncomposite: it bins log2 luminance, trims `metering_clip`, takes the mean, and multiplies\n`exposure` by the gain that puts that mean on 0.18, clamped to `exposure_range`. Sky pixels\n(depth at the far plane) weigh a quarter of surface pixels and viewmodel pixels weigh\nnothing; UI is drawn later and never counts. The result is a function of this frame alone\n(no adaptation, no history): to ease between exposures, write `exposure_compensation` from a\npresentation system each tick. The `irradiance` debug view stays unmetered.",
+        "$ref": "#/$defs/ExposureMode"
+      },
+      "exposure_compensation": {
+        "description": "A photographic offset in EV stops, validated `[-8, 8]` (default `0.0`), applied in both\nmodes: `exposure` is multiplied by `2^exposure_compensation`. `0.0` leaves `exposure`\nuntouched.",
+        "type": "number",
+        "format": "float",
+        "minimum": -8.0,
+        "maximum": 8.0,
+        "x-ui-range": [
+          -4.0,
+          4.0
+        ]
+      },
+      "metering": {
+        "description": "Metered exposure: how the metered pixels are weighted (default [`Metering::Center`]).",
+        "$ref": "#/$defs/Metering"
+      },
+      "metering_clip": {
+        "description": "Metered exposure: the share `[low, high]` of the metered weight trimmed off the dark and\nbright ends before the mean, so a lamp or a black bar does not steer the exposure. Each in\n`[0, 1)` and summing below 1 (default `[0.02, 0.02]`). Out of range is `L1760`.",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "x-ui-range": [
+          0.0,
+          0.5
+        ]
+      },
+      "exposure_range": {
+        "description": "Metered exposure: the correction's limits `[min, max]` in EV, each within `[-8, 8]` with\n`min <= max` (default `[-2, 2]`). `[0, 0]` makes metered identical to manual. Out of range is\n`L1760`.",
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "x-ui-range": [
+          -8.0,
+          8.0
+        ]
+      },
       "dither": {
         "description": "Whether to add ordered dither to the output (default `true`).\n\nThe output is 8-bit, so a smooth low-luminance gradient — an authored night sky is the case\nthis exists for — quantizes into visible bands. The dither is a sub-LSB ordered offset\napplied in the *encoded* domain, which trades those bands for fine stipple; it is\ndeterministic and carries no frame index, so a single-frame render reproduces exactly. It is\non by default because banding is a defect rather than a look: it costs one add and it is the\ndifference between a `banding_score` of 0.90 and 0.29 on an authored gradient.",
         "type": "boolean",
@@ -8026,6 +8073,36 @@
             "description": "No operator at all: the linear value passes straight through and the 8-bit output clamps it.\nA diagnostic setting — it shows what the scene pass actually produced, so an over-bright\nscene reads as flat white rather than as a curve's shoulder.",
             "type": "string",
             "const": "none"
+          }
+        ]
+      },
+      "ExposureMode": {
+        "description": "How [`PostProcess::exposure`] is chosen (default [`ExposureMode::Manual`]).",
+        "oneOf": [
+          {
+            "description": "The authored `exposure` is the camera's gain, untouched.",
+            "type": "string",
+            "const": "manual"
+          },
+          {
+            "description": "The frame's own luminance is metered the same frame and a correction that puts its trimmed\nmean on mid-grey multiplies `exposure`. No history is read, so a cut shows the new frame's\nexposure at once.",
+            "type": "string",
+            "const": "metered"
+          }
+        ]
+      },
+      "Metering": {
+        "description": "Which pixels count most when [`ExposureMode::Metered`] meters the frame (default\n[`Metering::Center`]).",
+        "oneOf": [
+          {
+            "description": "Every metered pixel weighs the same.",
+            "type": "string",
+            "const": "average"
+          },
+          {
+            "description": "The middle of the frame weighs up to four times the corners (an integer falloff in four\nrings).",
+            "type": "string",
+            "const": "center"
           }
         ]
       },

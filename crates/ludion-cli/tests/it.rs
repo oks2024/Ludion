@@ -25,6 +25,7 @@ mod diagnostic_severity;
 mod docs;
 mod explain;
 mod export;
+mod exposure;
 mod r#gen;
 mod generate_atlas;
 mod generate_atlas_font;

@@ -34,7 +34,7 @@ Most of the stack is branches in one `composite` pass, run in one pinned order:
 
 ```text
 chromatic aberration → depth of field → + bloom + halation + anamorphic → the medium (haze, then beams)
-  → exposure → tonemap → grade → LUT → vignette → grain → dither
+  → exposure × metered correction → tonemap → grade → LUT → vignette → grain → dither
 ```
 
 With SMAA on, the tail is `… vignette → SMAA → grain → dither`: grain and dither move into the AA's
@@ -79,12 +79,45 @@ the reference and records why each default is its number.
   before the tonemap, `>= 0` (default `1.3`). It is the one scalar here that is not neutral at its
   natural value: `1.3` is what puts mid-grey where AgX expects it. Because it lands after the
   bright-pass, `bloom_threshold` keeps meaning *scene* luminance whatever the exposure is.
+- **`exposure_compensation`** — a photographic offset in **EV stops**, `[-8, 8]` (default `0.0`), in
+  both modes: `exposure` is multiplied by `2^exposure_compensation`, and at `0` it is left untouched.
 - **`tonemap`** — `agx` (default) | `aces` | `neutral` | `none`. AgX is deliberately muted and
   expects a grade on top; `none` is the diagnostic setting, showing what the scene pass actually
   produced.
 - **`dither`** — ordered sub-LSB dither on the 8-bit output (default `true`). On by default because
   banding is a defect rather than a look; it is deterministic and carries no frame index, so a
   single-frame render reproduces exactly.
+
+**Metered exposure** — the frame sets its own exposure, the same frame, with no history.
+
+- **`exposure_mode`** — `manual` (default) | `metered`. Metered adds one compute pass,
+  `exposure_meter`, before the composite: it bins the log2 luminance of the HDR scene on a fixed
+  128x72 sample grid, trims `metering_clip`, takes the mean, and multiplies `exposure` by the gain
+  that puts that mean on 0.18 mid-grey, clamped to `exposure_range`. It costs the `exposure` budget
+  group (`[post_groups] exposure`); `manual` schedules nothing.
+- **`metering`** — `center` (default) | `average`. Pixels weigh 4 (integer weights); sky (depth at the
+  far plane) weighs 1 and viewmodel pixels 0. `center` multiplies by 4 down to 1 across four rings
+  from the middle to the corners. UI is drawn after the meter and never counts.
+- **`metering_clip`** — `[low, high]` (default `[0.02, 0.02]`): the shares of the weight trimmed off
+  the dark and bright ends before the mean, so one lamp or a black bar does not steer the frame.
+  Each in `[0, 1)`, the pair summing below 1.
+- **`exposure_range`** — `[min, max]` EV (default `[-2, 2]`): the correction's limits, each within
+  `[-8, 8]`, `min <= max`. `[0, 0]` makes metered identical to manual.
+- There is **no adaptation**: the value is a function of this frame alone, so a cut shows the new
+  exposure at once. To ease between exposures, write `exposure_compensation` from a presentation
+  system each tick. The `irradiance` debug view replaces the composite and stays unmetered. The
+  histogram is integer atomics and one thread reduces in a fixed order, so a machine renders the same
+  bytes every run. Out-of-range clip or range is `L1760`.
+
+```yaml
+PostProcess:
+  exposure_mode: metered
+  metering: center
+  exposure_range:
+    - -3.0
+    - 2.0
+  exposure_compensation: -0.5
+```
 
 **The grade** — display-referred, applied after the tonemap. Grading has no canonical order, so this one is part of the contract: white balance, then lift/gamma/gain, then contrast,
 then saturation. Each step is skipped by its own comparison, so an all-identity grade is
@@ -198,7 +231,9 @@ neither does JSON on the wire. The three **triples** are what a schema range can
 apply to array elements), so `gain >= 0`, `gamma > 0` and `fog_color >= 0` are checked semantically
 and report `L1130` at the offending element. `lift` is deliberately unbounded there: it is an offset,
 and a negative one legitimately crushes blacks. The SSR look is `L1273` when an `ssr_fade` end is
-outside `[0, 1]`, its start is not below its end, or `ssr_max_distance`/`ssr_thickness` is `0`.
+outside `[0, 1]`, its start is not below its end, or `ssr_max_distance`/`ssr_thickness` is `0`. The
+metering setup is `L1760` when a `metering_clip` end is outside `[0, 1)` or the two sum to 1 or more,
+or an `exposure_range` end is outside `[-8, 8]` or its min is above its max.
 
 Tune any of these off a contact sheet rather than by reasoning about them — `render --sweep` creates a
 field the scene left unauthored, so nothing has to be added to the file first. The worked commands are

@@ -661,6 +661,9 @@ pub struct Renderer {
     /// The probe relight kernel: the irradiance E at a capture point (baked with a probe) and at the
     /// ranked probes' centres (live, every frame) (`probe_relight.rs`).
     probe_relight: crate::probe_relight::ProbeRelight,
+    /// The metered-exposure kernel and the 1x1 table an unmetered frame binds to `composite`
+    /// (`exposure_meter.rs`).
+    exposure_meter: crate::exposure_meter::ExposureMeter,
     cull_pipelines: CullPipelines,
     /// Whether the frame culls on the GPU ([`set_frustum_culling`](Renderer::set_frustum_culling)).
     frustum_culling: bool,
@@ -832,6 +835,7 @@ impl Renderer {
         let voxel_bake = VoxelBake::new();
         let gi_bake = GiBake::new(&gpu);
         let probe_relight = crate::probe_relight::ProbeRelight::new(&gpu);
+        let exposure_meter = crate::exposure_meter::ExposureMeter::new(&gpu);
         let cull_pipelines = CullPipelines::new(gpu.device());
         let gi_inject = GiInject::new(&gpu);
 
@@ -873,6 +877,7 @@ impl Renderer {
             voxel_bake,
             gi_bake,
             probe_relight,
+            exposure_meter,
             cull_pipelines,
             frustum_culling: true,
             force_level_zero: false,
@@ -2230,6 +2235,16 @@ impl Renderer {
                 &centres,
             )
         });
+        // The metered-exposure upload: present exactly when the graph schedules the meter, which
+        // `composite` then reads as its last optional input.
+        let exposure_meter = chain
+            .exposure_meter_scheduled()
+            .then(|| scene.post.and_then(|post| post.meter))
+            .flatten()
+            .map(|meter| {
+                let slice = scene.viewmodel.as_ref().map_or(0.0, |v| v.depth_slice);
+                self.exposure_meter.prepare(device, meter, slice)
+            });
         let probe_list_buf = init_buffer(
             device,
             wgpu::BufferUsages::UNIFORM,
@@ -2454,6 +2469,7 @@ impl Renderer {
             probe_list_buf,
             probe_mask_buf,
             probe_relight,
+            exposure_meter,
             probe_cube_view,
             probe_emissive_view,
             sun_buf,
@@ -4081,6 +4097,9 @@ struct FrameRecorder<'a> {
     /// The `probe_relight` pass's upload (`probe_relight.rs`); `Some` exactly when the graph
     /// declares the pass.
     probe_relight: Option<crate::probe_relight::RelightFrame>,
+    /// The `exposure_meter` pass's upload (`exposure_meter.rs`); `Some` exactly when the graph
+    /// declares the pass, which also picks the composite's optional `exposure_tex`.
+    exposure_meter: Option<crate::exposure_meter::MeterFrame>,
     probe_cube_view: Option<wgpu::TextureView>,
     /// The probes' emissive cube array; absent when no probe sees emissive.
     probe_emissive_view: Option<wgpu::TextureView>,
@@ -4273,6 +4292,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::SSAO_BLUR | pass::SHAFTS_BLUR => self.record_box_blur(pass),
             pass::GI_INJECT => self.record_gi_inject(pass),
             pass::PROBE_RELIGHT => self.record_probe_relight(pass),
+            pass::EXPOSURE_METER => self.record_exposure_meter(pass),
             pass::CULL => self.record_cull(pass),
             pass::SCENE => self.record_scene(pass),
             pass::REFLECTIONS => self.record_reflections(pass),
@@ -4309,7 +4329,7 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::COMPOSITE => {
                 let composite = Composite {
                     strength: self.post.bloom_strength,
-                    exposure: self.post.exposure,
+                    exposure: compensated(self.post.exposure, self.post.exposure_compensation),
                     tonemap: tonemap_selector(self.post.tonemap),
                     // The last output pass applies the grain and the dither: the blend under SMAA, the
                     // resample under a scale; otherwise these are exactly the post settings.
@@ -4390,6 +4410,10 @@ impl PassRecorder for FrameRecorder<'_> {
                     lut: u32::from(self.lut_view.is_some()),
                     lut_scale: self.lut_params.map_or([0.0; 3], |p| p.scale),
                     lut_strength: self.lut_params.map_or(0.0, |p| p.strength),
+                    metered: u32::from(self.exposure_meter.is_some()),
+                    metered_pad0: 0,
+                    metered_pad1: 0,
+                    metered_pad2: 0,
                 };
                 // The composite's three optional inputs, each at the binding the WGSL itself declares,
                 // so neither can move the other and turning one off cannot shift the one behind it.
@@ -4438,6 +4462,11 @@ impl PassRecorder for FrameRecorder<'_> {
                         shader_gen::LUT_TEX_BINDING,
                         self.lut_view.as_ref().unwrap_or(&self.r.fallback_lut.view),
                     ),
+                    OptionalInput {
+                        binding: shader_gen::EXPOSURE_TEX_BINDING,
+                        present: self.exposure_meter.is_some(),
+                        fallback: self.r.exposure_meter.fallback(),
+                    },
                 ];
                 self.fullscreen_effect(
                     pass,
@@ -4878,6 +4907,28 @@ impl FrameRecorder<'_> {
         );
         let mut compute = pass.begin_compute();
         self.r.probe_relight.dispatch(&mut compute, frame, &bind);
+    }
+
+    /// The exposure meter: one workgroup reading the HDR `scene` and `scene_depth` into the table
+    /// `composite` reads. The graph declares the pass exactly when [`FrameRecorder::exposure_meter`]
+    /// is `Some`.
+    fn record_exposure_meter(&self, pass: &mut RecordedPass<'_>) {
+        let frame = self
+            .exposure_meter
+            .as_ref()
+            .expect("the graph schedules exposure_meter exactly when this frame uploaded for it");
+        let out = pass
+            .storage
+            .expect("the exposure_meter pass declares a storage texture");
+        let bind = self.r.exposure_meter.bind_group(
+            pass.device,
+            frame,
+            pass.inputs[0],
+            pass.inputs[1],
+            out,
+        );
+        let mut compute = pass.begin_compute();
+        self.r.exposure_meter.dispatch(&mut compute, &bind);
     }
 
     /// The mesh lighting's bind groups 2 and 3 — the sun with its shadows, and the environment with the
@@ -6794,6 +6845,16 @@ impl<'a> OptionalInput<'a> {
             present: false,
             fallback: view,
         }
+    }
+}
+
+/// The composite's exposure multiplier with the EV `compensation` applied. At zero it returns
+/// `exposure` untouched, so an uncompensated frame never computes `exposure * 2^0`.
+fn compensated(exposure: f32, compensation: f32) -> f32 {
+    if compensation == 0.0 {
+        exposure
+    } else {
+        exposure * compensation.exp2()
     }
 }
 
@@ -8805,7 +8866,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     LayoutDesc {
         id: LayoutId::Composite,
         create:
-            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_lut_tex_samp_composite_bgl,
+            shader_gen::create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent_depth_tex_medium_scatter_tex_scene_medium_tex_silhouette_mask_tex_silhouette_depth_tex_lens_tex_lut_tex_exposure_tex_samp_composite_bgl,
     },
     LayoutDesc {
         id: LayoutId::Resolve,

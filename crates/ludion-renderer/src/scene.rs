@@ -656,6 +656,10 @@ pub struct PostData {
     pub exposure: f32,
     /// Which tonemap operator the composite pass runs.
     pub tonemap: TonemapOperator,
+    /// Photographic offset in EV stops, in both exposure modes (`0.0` leaves `exposure` untouched).
+    pub exposure_compensation: f32,
+    /// The metered-exposure settings, or `None` for manual exposure (no `exposure_meter` pass).
+    pub meter: Option<MeterData>,
     /// Whether the composite pass adds ordered output dither.
     pub dither: bool,
     /// Grade: contrast about a `0.5` pivot (`1.0` = no change).
@@ -781,6 +785,8 @@ impl Default for PostData {
             bloom_strength: 0.1,
             exposure: 1.3,
             tonemap: TonemapOperator::Agx,
+            exposure_compensation: 0.0,
+            meter: None,
             dither: true,
             contrast: 1.0,
             saturation: 1.0,
@@ -845,6 +851,28 @@ pub enum TonemapOperator {
     /// No operator at all: the linear value passes through and the 8-bit output target's own store
     /// clamps it. Useful for judging what the scene pass actually produced.
     None,
+}
+
+/// How the `exposure_meter` pass weights the frame.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MeterWeighting {
+    /// Every metered pixel weighs the same.
+    Average,
+    /// The middle of the frame weighs up to four times the corners.
+    #[default]
+    Center,
+}
+
+/// The metered-exposure settings of a scene's `PostProcess`: present only for `exposure_mode:
+/// metered`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct MeterData {
+    /// Which pixels count most.
+    pub weighting: MeterWeighting,
+    /// The share `[low, high]` of the weight trimmed off the dark and bright ends.
+    pub clip: [f32; 2],
+    /// The correction's limits `[min, max]` in EV.
+    pub range: [f32; 2],
 }
 
 /// A spot light: a [`PointLightData`]'s range falloff times a cone factor about `direction`.

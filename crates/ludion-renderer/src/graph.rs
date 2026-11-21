@@ -45,6 +45,10 @@
 //!   `PostProcess.anamorphic` is above zero: five x-only downsamples off `bloom_down_1` (extent
 //!   `width >> (2 + k)` by `height >> 2`) and five horizontal tent upsamples. `lens_up_0` is
 //!   `composite`'s last optional read.
+//! - **exposure_meter** — present only with `exposure_mode: metered` ([`PostChain::exposure_meter`]) and no
+//!   debug view: one compute workgroup bins the HDR `scene`'s log2 luminance on a fixed sample grid into
+//!   the 65x1 `exposure` table, whose last texel `composite` reads (after `lens_up_0`) to scale its
+//!   exposure the same frame.
 //! - **composite** — blends in the defocused scene, mixes scene + blurred bloom, then applies fog, the
 //!   light shafts, exposure, the selected tonemap operator, the colour grade, the vignette and the
 //!   optional output dither, HDR→sRGB into the read-back output. It also reads `scene_depth` —
@@ -337,6 +341,10 @@ pub mod pass {
     /// texel per probe, which `reflections` reads last. Present only when
     /// [`PostChain::probe_relight`](super::PostChain::probe_relight) is set — a scene with probes.
     pub const PROBE_RELIGHT: &str = "probe_relight";
+    /// The metered-exposure compute pass: a fixed sample grid of the HDR `scene` and `scene_depth`
+    /// binned into the 65x1 `exposure` table that `composite` reads last. Present only when
+    /// [`PostChain::exposure_meter_scheduled`](super::PostChain::exposure_meter_scheduled).
+    pub const EXPOSURE_METER: &str = "exposure_meter";
     /// Screen-space ambient occlusion from the prepass's depth and normals, into a half-resolution
     /// factor. [`PostChain::ssao`](super::PostChain::ssao) only.
     pub const SSAO: &str = "ssao";
@@ -844,6 +852,10 @@ pub struct PostChain {
     /// the graph with neither, so a frame that authors no streak is graph-identical to one from before
     /// the chain existed.
     pub anamorphic: bool,
+    /// The scene meters its exposure (`exposure_mode: metered`): the [`pass::EXPOSURE_METER`] compute
+    /// pass is added behind bloom's bright pass and `composite` gains its ninth optional input.
+    /// Content like `ui`: no quality switch masks it. False leaves the graph with neither.
+    pub exposure_meter: bool,
     /// The probe lattice the [`pass::GI_INJECT`] compute pass writes, or `None` when this frame
     /// schedules no injection at all — the whole scheduling predicate, in one value
     /// (`Plan/gi-wave3-dynamic-injection.md` §5).
@@ -1060,6 +1072,7 @@ impl PostChain {
             // zero everywhere — two passes to reproduce their own input.
             dof: scene.post.is_some_and(|post| post.dof > 0.0),
             anamorphic: scene.post.is_some_and(|post| post.anamorphic > 0.0),
+            exposure_meter: scene.post.is_some_and(|post| post.meter.is_some()),
             // The injection's three-part predicate lives in `gi_inject.rs`, beside the pass that
             // implements it, so the graph and the recorder read one function rather than two copies
             // of a conjunction.
@@ -1136,6 +1149,13 @@ impl PostChain {
     /// recorder share.
     pub fn transparent_depth_scheduled(self) -> bool {
         self.transparent_cover && (self.fog || self.dof) && self.view().is_none()
+    }
+
+    /// Whether this frame runs the `exposure_meter` pass: the scene meters and no debug view stands in
+    /// for the composite that would read the table (the `irradiance` view stays unmetered). The one
+    /// predicate the graph and the recorder share.
+    pub fn exposure_meter_scheduled(self) -> bool {
+        self.exposure_meter && self.view().is_none()
     }
 
     /// Whether the resample is the last output pass: the frame is resampled and no debug view stands in
@@ -1637,6 +1657,11 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             }),
         }
     });
+    // The metered-exposure table: one texel per histogram bin plus the verdict in the last. Declared
+    // after the streak chain so no existing resource handle moves.
+    let exposure = chain
+        .exposure_meter_scheduled()
+        .then(|| graph.transient("exposure", TextureDesc::rgba32_storage(65, 1)));
     // Declared before any post-composite resource so the output's handle (and hence the minimal
     // graph's resource list) is identical to the pre-UI graph.
     let output = graph.output("final", TextureDesc::present_target(width, height));
@@ -1919,6 +1944,15 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         vec![scene],
         vec![bloom_bright],
     );
+    // Reads what bloom reads: the finished HDR scene, plus the depth that tells sky from surface.
+    if let Some(exposure) = exposure {
+        graph.add_external_compute_pass(
+            pass::EXPOSURE_METER,
+            pass::EXPOSURE_METER,
+            vec![scene, scene_depth],
+            exposure,
+        );
+    }
     // The chain ends in one half-res resource the composite pass mixes in: level 0's accumulation.
     let first_level = bloom_targets.down[0];
     let bloom = {
@@ -2085,6 +2119,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             .flat_map(|(mask, depth)| [mask, depth]),
     );
     composite_reads.extend(lens_term);
+    composite_reads.extend(exposure);
     // A debug view stands in for the whole composite: the tail after it is unchanged. Bloom, shafts
     // and dof still schedule with unread outputs — acceptable for a debug frame.
     match (chain.ssr_view, &ssr) {
@@ -2837,6 +2872,8 @@ mod tests {
                 dof: bits & 16 != 0,
                 // Content like `ui`: no quality switch masks it, so it varies and survives.
                 anamorphic: bits & 8 != 0,
+                // Content like `ui`: no quality switch masks it.
+                exposure_meter: bits & 1 != 0,
                 gi_inject: (bits & 32 != 0).then_some([4, 4, 4]),
                 cull: None,
                 // Content like `ui`, so masking leaves it alone (`ui` already varies over the walk).
@@ -3672,6 +3709,96 @@ mod tests {
         let on = with(0.01);
         assert!(on.anamorphic);
         assert!(on.masked(&Quality::LOW, &QualityParams::LOW).anamorphic);
+    }
+
+    /// A metered scene adds exactly the `exposure_meter` pass and the `exposure` resource, which
+    /// `composite` reads last; a manual scene's graph is the pre-meter shape.
+    #[test]
+    fn the_exposure_meter_is_absent_manual_and_composite_reads_its_table_last() {
+        let size = FrameSize::native(1920, 1080);
+        let (plain, _) = build_frame_graph(size, PostChain::default());
+        assert!(plain.passes().iter().all(|p| p.name != "exposure_meter"));
+        assert!(plain.resources().iter().all(|r| r.name != "exposure"));
+
+        let metered_chain = PostChain {
+            exposure_meter: true,
+            ..PostChain::default()
+        };
+        let (metered, _) = build_frame_graph(size, metered_chain);
+        let plain_passes = pass_names(&plain);
+        let mut expected = pass_names(&metered);
+        expected.retain(|n| *n != "exposure_meter");
+        assert_eq!(expected, plain_passes, "the meter is the only added pass");
+        let mut resources = resource_names(&metered);
+        resources.retain(|n| *n != "exposure");
+        assert_eq!(resources, resource_names(&plain));
+
+        let names = pass_names(&metered);
+        let at = |name: &str| names.iter().position(|n| *n == name).unwrap();
+        assert!(at("bloom_threshold") < at("exposure_meter"));
+        assert!(at("exposure_meter") < at("composite"));
+        assert_eq!(
+            reads_of(&metered, "exposure_meter"),
+            ["scene", "scene_depth"]
+        );
+        assert_eq!(
+            reads_of(&metered, "composite").last().copied(),
+            Some("exposure")
+        );
+        let table = metered
+            .resources()
+            .iter()
+            .find(|r| r.name == "exposure")
+            .unwrap();
+        assert_eq!((table.desc.extent.width, table.desc.extent.height), (65, 1));
+
+        // With the streaks on, the table is still the last read (after `lens_up_0`).
+        let (both, _) = build_frame_graph(
+            size,
+            PostChain {
+                anamorphic: true,
+                ..metered_chain
+            },
+        );
+        let composite = reads_of(&both, "composite");
+        assert_eq!(composite[composite.len() - 2..], ["lens_up_0", "exposure"]);
+    }
+
+    /// A debug view replaces `composite`, so the meter is not scheduled: no unread pass, and the
+    /// `irradiance` view stays unmetered.
+    #[test]
+    fn a_debug_view_drops_the_exposure_meter() {
+        let chain = PostChain {
+            exposure_meter: true,
+            irradiance_view: true,
+            ..PostChain::default()
+        };
+        assert!(!chain.exposure_meter_scheduled());
+        let (graph, _) = build_frame_graph(FrameSize::native(1920, 1080), chain);
+        assert!(graph.passes().iter().all(|p| p.name != "exposure_meter"));
+        assert!(graph.resources().iter().all(|r| r.name != "exposure"));
+    }
+
+    /// The meter derives from the scene's own mode, and no quality switch masks it.
+    #[test]
+    fn for_scene_gates_the_exposure_meter_on_the_mode() {
+        let with = |meter: Option<crate::scene::MeterData>| {
+            let mut scene = sun_scene();
+            scene.post = Some(crate::scene::PostData {
+                meter,
+                ..crate::scene::PostData::default()
+            });
+            PostChain::for_scene(&scene)
+        };
+        assert!(!PostChain::for_scene(&sun_scene()).exposure_meter);
+        assert!(!with(None).exposure_meter);
+        let on = with(Some(crate::scene::MeterData {
+            weighting: crate::scene::MeterWeighting::Center,
+            clip: [0.02, 0.02],
+            range: [-2.0, 2.0],
+        }));
+        assert!(on.exposure_meter);
+        assert!(on.masked(&Quality::LOW, &QualityParams::LOW).exposure_meter);
     }
 
     fn ssr_chain() -> PostChain {

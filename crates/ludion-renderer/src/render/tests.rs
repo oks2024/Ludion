@@ -6,6 +6,7 @@ use super::*;
 use crate::scene::{MeshInstance, RenderScene};
 
 mod blended;
+mod exposure;
 mod film;
 mod gpu_cull;
 mod lit_additive;
@@ -111,10 +112,10 @@ fn fullscreen_layouts_follow_the_binding_convention() {
         ],
         [0, 1, 2],
     );
-    // Twelve input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
+    // Thirteen input textures: composite mixes scene + bloom, loads the scene depth for fog, samples
     // the blurred shaft term, blends the depth-of-field gather, loads the transparent layer, adds the
     // local-light term, loads the mesh medium mask and the silhouette mask with its depth —
-    // the anamorphic streak field, the 3D `.cube` LUT — the first three in the graph pass's declared read order, and the last nine the arc's
+    // the anamorphic streak field, the 3D `.cube` LUT, the exposure meter's table — the first three in the graph pass's declared read order, and the last ten the arc's
     // *optional* slots, whose bindings are fixed whether or not the scene enables them (see
     // `optional_inputs_hold_their_binding`).
     assert_eq!(
@@ -131,10 +132,11 @@ fn fullscreen_layouts_follow_the_binding_convention() {
             shader_gen::SILHOUETTE_DEPTH_TEX_BINDING,
             shader_gen::LENS_TEX_BINDING,
             shader_gen::LUT_TEX_BINDING,
+            shader_gen::EXPOSURE_TEX_BINDING,
             shader_gen::SAMP_BINDING,
             shader_gen::COMPOSITE_BINDING,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
     );
     // Three input textures: the depth-of-field prefilter samples the scene, loads its depth, in
     // the graph pass's declared read order, and loads the transparent layer in the *optional* slot
@@ -4089,6 +4091,8 @@ fn needs_gpu_a_fully_neutral_post_process_is_byte_identical_to_none() {
         bloom_strength: 0.1,
         exposure: 1.3,
         tonemap: TonemapOperator::Agx,
+        exposure_compensation: 0.0,
+        meter: None,
         dither: true,
         contrast: 1.0,
         saturation: 1.0,

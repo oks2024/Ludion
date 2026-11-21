@@ -15,7 +15,7 @@
 //   2. + bloom * strength + halation + anamorphic streaks — the mix
 //   3. the medium's ambient in-scatter — scene-referred: extinction + sky-coloured haze, linear HDR
 //   4. the medium's sun in-scatter  — scene-referred: the marched beams, added to what survived
-//   5. exposure                     — the camera's own gain
+//   5. exposure                     — the camera's own gain, times the metered correction (decision 16)
 //   6. tonemap                      — HDR to display
 //   7. grade                        — display-referred (see the grading section below)
 //   7a. LUT                         — display-referred, indexed by the sRGB-encoded colour (decision 13)
@@ -164,7 +164,11 @@
 // `lens_tex`. It exists when a LUT is authored; otherwise the recorder binds a 1x1x1 stand-in and
 // `composite.lut` is zero, so step 7a never reads it.
 @group(0) @binding(11) var lut_tex: texture_3d<f32>;
-@group(0) @binding(12) var samp: sampler;
+// The exposure meter's 65x1 table (`exposure_meter`) — the tenth **optional** input, behind `lut_tex`.
+// It exists for `exposure_mode: metered`; otherwise the recorder binds a 1x1 stand-in and
+// `composite.metered` is zero, so step 5 never reads it. Texel 64's `.w` is the gain.
+@group(0) @binding(12) var exposure_tex: texture_2d<f32>;
+@group(0) @binding(13) var samp: sampler;
 
 // The selector values `Composite.tonemap` carries, one per `PostProcess.tonemap` variant. The
 // shader-bindgen hoists integer consts into `shader_gen`, so the recorder maps its `TonemapOperator`
@@ -315,8 +319,13 @@ struct Composite {
     lut: u32,
     lut_scale: vec3<f32>,
     lut_strength: f32,
+    // Nonzero when `exposure_tex` is real; the three pads keep the block whole.
+    metered: u32,
+    metered_pad0: u32,
+    metered_pad1: u32,
+    metered_pad2: u32,
 };
-@group(0) @binding(13) var<uniform> composite: Composite;
+@group(0) @binding(14) var<uniform> composite: Composite;
 
 // The extinguished fraction of the same ray with its optical depth scaled by `m`: T^m = exp(-m·τ).
 fn medium_scaled(extinguished: f32, m: f32) -> f32 {
@@ -986,6 +995,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     if (composite.exposure != 1.0) {
         hdr = hdr * composite.exposure;
+    }
+    if (composite.metered != 0u) {
+        hdr = hdr * textureLoad(exposure_tex, vec2<i32>(64, 0), 0).w;
     }
     var color = grade(apply_tonemap(composite.tonemap, hdr));
     if (composite.lut != 0u) { color = apply_lut(color); }

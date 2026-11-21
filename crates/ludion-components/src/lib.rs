@@ -1683,6 +1683,32 @@ pub enum TonemapOperator {
     None,
 }
 
+/// How [`PostProcess::exposure`] is chosen (default [`ExposureMode::Manual`]).
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExposureMode {
+    /// The authored `exposure` is the camera's gain, untouched.
+    #[default]
+    Manual,
+    /// The frame's own luminance is metered the same frame and a correction that puts its trimmed
+    /// mean on mid-grey multiplies `exposure`. No history is read, so a cut shows the new frame's
+    /// exposure at once.
+    Metered,
+}
+
+/// Which pixels count most when [`ExposureMode::Metered`] meters the frame (default
+/// [`Metering::Center`]).
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Metering {
+    /// Every metered pixel weighs the same.
+    Average,
+    /// The middle of the frame weighs up to four times the corners (an integer falloff in four
+    /// rings).
+    #[default]
+    Center,
+}
+
 /// A `.cube` 3D LUT applied by [`PostProcess::lut`].
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct PostLut {
@@ -1946,6 +1972,45 @@ pub struct PostProcess {
     /// Which tonemap operator maps HDR onto the output (default [`TonemapOperator::Agx`]).
     #[serde(default)]
     pub tonemap: TonemapOperator,
+    /// How the frame's exposure is chosen (default [`ExposureMode::Manual`]).
+    ///
+    /// `metered` runs one compute pass over a fixed 128x72 sample grid of the HDR scene before the
+    /// composite: it bins log2 luminance, trims `metering_clip`, takes the mean, and multiplies
+    /// `exposure` by the gain that puts that mean on 0.18, clamped to `exposure_range`. Sky pixels
+    /// (depth at the far plane) weigh a quarter of surface pixels and viewmodel pixels weigh
+    /// nothing; UI is drawn later and never counts. The result is a function of this frame alone
+    /// (no adaptation, no history): to ease between exposures, write `exposure_compensation` from a
+    /// presentation system each tick. The `irradiance` debug view stays unmetered.
+    #[serde(default, skip_serializing_if = "is_default_exposure_mode")]
+    pub exposure_mode: ExposureMode,
+    /// A photographic offset in EV stops, validated `[-8, 8]` (default `0.0`), applied in both
+    /// modes: `exposure` is multiplied by `2^exposure_compensation`. `0.0` leaves `exposure`
+    /// untouched.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    #[schemars(range(min = -8.0, max = 8.0))]
+    #[schemars(extend("x-ui-range" = [-4.0, 4.0]))]
+    pub exposure_compensation: f32,
+    /// Metered exposure: how the metered pixels are weighted (default [`Metering::Center`]).
+    #[serde(default, skip_serializing_if = "is_default_metering")]
+    pub metering: Metering,
+    /// Metered exposure: the share `[low, high]` of the metered weight trimmed off the dark and
+    /// bright ends before the mean, so a lamp or a black bar does not steer the exposure. Each in
+    /// `[0, 1)` and summing below 1 (default `[0.02, 0.02]`). Out of range is `L1760`.
+    #[serde(
+        default = "metering_clip_default",
+        skip_serializing_if = "is_metering_clip_default"
+    )]
+    #[schemars(extend("x-ui-range" = [0.0, 0.5]))]
+    pub metering_clip: [f32; 2],
+    /// Metered exposure: the correction's limits `[min, max]` in EV, each within `[-8, 8]` with
+    /// `min <= max` (default `[-2, 2]`). `[0, 0]` makes metered identical to manual. Out of range is
+    /// `L1760`.
+    #[serde(
+        default = "exposure_range_default",
+        skip_serializing_if = "is_exposure_range_default"
+    )]
+    #[schemars(extend("x-ui-range" = [-8.0, 8.0]))]
+    pub exposure_range: [f32; 2],
     /// Whether to add ordered dither to the output (default `true`).
     ///
     /// The output is 8-bit, so a smooth low-luminance gradient — an authored night sky is the case
@@ -2477,6 +2542,7 @@ impl SemanticValidate for PostProcess {
             post_process_tint_diagnostics(value, field, &mut out);
         }
         post_process_ssr_diagnostics(value, &mut out);
+        post_process_metering_diagnostics(value, &mut out);
         out
     }
 }
@@ -2553,6 +2619,68 @@ fn post_process_ssr_diagnostics(value: &Value, out: &mut Vec<Diagnostic>) {
     }
 }
 
+/// `L1760` — the `PostProcess` metering rules a schema `range` cannot spell: each clip share in
+/// `[0, 1)` and the pair below 1, each range end within `[-8, 8]` and `min <= max`.
+fn post_process_metering_diagnostics(value: &Value, out: &mut Vec<Diagnostic>) {
+    if let Some(clip) = value.get("metering_clip").and_then(Value::as_array) {
+        let ends: Vec<Option<f64>> = clip.iter().map(as_stored_f32).collect();
+        for (index, end) in ends.iter().enumerate() {
+            if let Some(end) = end
+                && !(0.0..1.0).contains(end)
+            {
+                out.push(post_process_invalid_metering(
+                    &format!("/metering_clip/{index}"),
+                    "a trim is the share of the metered weight dropped from one end, so it is at least 0 and below 1",
+                    "give both ends of `metering_clip` a value from 0 up to (not including) 1, e.g. `[0.02, 0.02]`",
+                ));
+            }
+        }
+        if let [Some(low), Some(high)] = ends[..]
+            && (0.0..1.0).contains(&low)
+            && (0.0..1.0).contains(&high)
+            && low + high >= 1.0
+        {
+            out.push(post_process_invalid_metering(
+                "/metering_clip",
+                "the two trims together would drop every pixel, leaving nothing to average",
+                "make the two ends of `metering_clip` sum to less than 1, e.g. `[0.02, 0.02]`",
+            ));
+        }
+    }
+    if let Some(range) = value.get("exposure_range").and_then(Value::as_array) {
+        let ends: Vec<Option<f64>> = range.iter().map(as_stored_f32).collect();
+        for (index, end) in ends.iter().enumerate() {
+            if let Some(end) = end
+                && !(-8.0..=8.0).contains(end)
+            {
+                out.push(post_process_invalid_metering(
+                    &format!("/exposure_range/{index}"),
+                    "the correction is in EV stops, kept within -8 to 8 like `exposure_compensation`",
+                    "give both ends of `exposure_range` a value from -8 to 8, e.g. `[-2, 2]`",
+                ));
+            }
+        }
+        if let [Some(min), Some(max)] = ends[..]
+            && min > max
+        {
+            out.push(post_process_invalid_metering(
+                "/exposure_range",
+                "the range is `[min, max]`, so `min` cannot be above `max`",
+                "order `exposure_range` as `[min, max]` with min <= max, e.g. `[-2, 2]`",
+            ));
+        }
+    }
+}
+
+fn post_process_invalid_metering(pointer: &str, role: &str, help: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::POST_PROCESS_INVALID_METERING,
+        format!("this `PostProcess` metered-exposure field is out of range; {role}"),
+    )
+    .with_path(pointer.to_string())
+    .with_help(help.to_string())
+}
+
 fn post_process_invalid_ssr(pointer: &str, role: &str, help: &str) -> Diagnostic {
     Diagnostic::new(
         code::POST_PROCESS_INVALID_SSR,
@@ -2603,6 +2731,11 @@ impl Default for PostProcess {
             bloom_strength: 0.1,
             exposure: 1.3,
             tonemap: TonemapOperator::Agx,
+            exposure_mode: ExposureMode::Manual,
+            exposure_compensation: 0.0,
+            metering: Metering::Center,
+            metering_clip: metering_clip_default(),
+            exposure_range: exposure_range_default(),
             dither: true,
             contrast: 1.0,
             saturation: 1.0,
@@ -6436,6 +6569,26 @@ fn anamorphic_tint_default() -> [f32; 3] {
 fn ssr_fade_default() -> [f32; 2] {
     [0.45, 0.65]
 }
+fn metering_clip_default() -> [f32; 2] {
+    [0.02, 0.02]
+}
+fn exposure_range_default() -> [f32; 2] {
+    [-2.0, 2.0]
+}
+fn is_default_exposure_mode(value: &ExposureMode) -> bool {
+    *value == ExposureMode::Manual
+}
+fn is_default_metering(value: &Metering) -> bool {
+    *value == Metering::Center
+}
+#[allow(clippy::float_cmp)]
+fn is_metering_clip_default(value: &[f32; 2]) -> bool {
+    *value == metering_clip_default()
+}
+#[allow(clippy::float_cmp)]
+fn is_exposure_range_default(value: &[f32; 2]) -> bool {
+    *value == exposure_range_default()
+}
 fn ssr_max_distance_default() -> f32 {
     30.0
 }
@@ -10006,6 +10159,96 @@ mod tests {
         assert!(PostProcess::validate_semantics(&serde_json::json!({})).is_empty());
     }
 
+    /// An unauthored metering setup serializes to none of its five keys, so every committed scene's
+    /// canonical text and the component's `WorldHash` value are what they were before the fields.
+    #[test]
+    fn an_unauthored_metering_setup_serializes_nothing() {
+        let json = serde_json::to_value(PostProcess::default()).unwrap();
+        let keys = [
+            "exposure_mode",
+            "exposure_compensation",
+            "metering",
+            "metering_clip",
+            "exposure_range",
+        ];
+        for key in keys {
+            assert!(json.get(key).is_none(), "`{key}` leaked into {json}");
+        }
+        let authored = serde_json::to_value(PostProcess {
+            exposure_mode: ExposureMode::Metered,
+            exposure_compensation: 1.0,
+            metering: Metering::Average,
+            metering_clip: [0.1, 0.2],
+            exposure_range: [-1.0, 3.0],
+            ..PostProcess::default()
+        })
+        .unwrap();
+        for key in keys {
+            assert!(
+                authored.get(key).is_some(),
+                "`{key}` missing from {authored}"
+            );
+        }
+    }
+
+    /// `L1760` names the offending pointer for each rule, and a valid authored setup passes.
+    #[test]
+    fn invalid_metering_fields_reach_l1760() {
+        for (bad, pointer) in [
+            (
+                serde_json::json!({ "metering_clip": [-0.1, 0.02] }),
+                "/metering_clip/0",
+            ),
+            (
+                serde_json::json!({ "metering_clip": [0.02, 1.0] }),
+                "/metering_clip/1",
+            ),
+            (
+                serde_json::json!({ "metering_clip": [0.5, 0.5] }),
+                "/metering_clip",
+            ),
+            (
+                serde_json::json!({ "exposure_range": [-9.0, 2.0] }),
+                "/exposure_range/0",
+            ),
+            (
+                serde_json::json!({ "exposure_range": [-2.0, 8.5] }),
+                "/exposure_range/1",
+            ),
+            (
+                serde_json::json!({ "exposure_range": [2.0, -2.0] }),
+                "/exposure_range",
+            ),
+        ] {
+            let out = PostProcess::validate_semantics(&bad);
+            assert!(
+                out.iter()
+                    .any(|d| d.code.as_str() == "L1760" && d.path.as_deref() == Some(pointer)),
+                "expected an L1760 at {pointer} for {bad}: {out:?}"
+            );
+        }
+        let good = serde_json::json!({
+            "exposure_mode": "metered",
+            "metering": "average",
+            "metering_clip": [0.0, 0.5],
+            "exposure_range": [0.0, 0.0],
+        });
+        assert!(PostProcess::validate_semantics(&good).is_empty());
+    }
+
+    /// `exposure_compensation` is bounded by the schema's `range` (`L1014`), not by `L1760`.
+    #[test]
+    fn exposure_compensation_out_of_range_is_l1014() {
+        let schema = serde_json::to_value(schemars::schema_for!(PostProcess)).unwrap();
+        let prop = &schema["properties"]["exposure_compensation"];
+        assert_eq!(prop["minimum"], -8.0, "{prop}");
+        assert_eq!(prop["maximum"], 8.0, "{prop}");
+        assert!(
+            PostProcess::validate_semantics(&serde_json::json!({ "exposure_compensation": 9.0 }))
+                .is_empty()
+        );
+    }
+
     /// `PostProcess` round-trips through serde with non-default fields, and its closed enum spells
     /// its variants in snake_case on the wire and in a scene file.
     #[test]
@@ -10015,6 +10258,11 @@ mod tests {
             bloom_strength: 0.4,
             exposure: 1.6,
             tonemap: TonemapOperator::Aces,
+            exposure_mode: ExposureMode::Metered,
+            exposure_compensation: -0.5,
+            metering: Metering::Average,
+            metering_clip: [0.05, 0.1],
+            exposure_range: [-3.0, 1.0],
             dither: true,
             contrast: 1.15,
             saturation: 0.85,
