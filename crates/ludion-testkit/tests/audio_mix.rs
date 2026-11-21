@@ -175,6 +175,7 @@ fn beds_and_voices_follow_their_syncs_and_stops() {
                 pan: -0.2,
                 category: AudioCategory::Voice,
                 spatial: VoiceSpatial::default(),
+                offset_ticks: 0,
             },
         ),
         (

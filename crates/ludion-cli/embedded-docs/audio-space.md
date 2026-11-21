@@ -66,6 +66,11 @@ queue.voice_stop(id, 6); // optional: fade it out over 6 ticks
 - **`push_voice(event)` is the global form:** a stoppable one-shot with no entity and no falloff. It starts at the
   event's own gain and pan, ends with its clip, counts for ducking, and is never resynced; `voice_stop` fades it.
   A radio or UI line is one (`ludion docs dialogue`).
+- **`push_voice_from(event, offset_ticks)` and `push_on_from(entity, event, range, offset_ticks)`** start the voice that many
+  ticks into the clip, for resuming a line already on air; the engine tracks only the remainder. An offset at or past the
+  clip sends nothing (the id is still returned, a stop is ignored).
+- **A held bus holds the voice.** While `bus_pause` holds a voice's bus (or the master) its tracked end moves out one tick
+  per held tick, so `voice_stop` after the resume still reaches it, and a held voice does not keep a `DuckRule` live.
 
 ## Filters
 

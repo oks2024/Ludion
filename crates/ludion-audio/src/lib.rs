@@ -1290,6 +1290,7 @@ impl Router {
                 pan,
                 category,
                 spatial,
+                offset_ticks,
             } => {
                 let samples = resolve(
                     &mut self.cache,
@@ -1300,11 +1301,13 @@ impl Router {
                     self.out_channels,
                     self.recheck,
                 )?;
+                let pos = (self.feed.device_frames(offset_ticks) * self.out_channels as usize)
+                    .min(samples.len());
                 VoiceCommand::VoiceStart {
                     id: LoopKey::Voice(id.0),
                     voice: Voice {
                         samples,
-                        pos: 0,
+                        pos,
                         envelope: Envelope::at(gain),
                         pan: Panner::at(sane_pan(pan)),
                         category,
@@ -3197,8 +3200,50 @@ mod tests {
             pan: 0.0,
             category: AudioCategory::Voice,
             spatial: VoiceSpatial::default(),
+            offset_ticks: 0,
         };
         assert!(rig.router.route(message).is_none());
+    }
+
+    /// A voice started `offset_ticks` in begins its cursor there, clamped to the clip, and one
+    /// started past the end retires without a sound.
+    #[test]
+    fn a_voice_offset_starts_the_cursor_that_many_ticks_in() {
+        let root = scratch_root("voice-offset");
+        let clip: Vec<i16> = (1..=3000).map(|k| k as i16).collect();
+        std::fs::write(root.join("line.wav"), wav_bytes(&clip)).unwrap();
+        let mut rig = rig(root);
+        let mut start = |offset_ticks: u32| {
+            let message = AudioMessage::VoiceStart {
+                id: ludion_core::audio::VoiceId(0),
+                sound: "line.wav".to_string(),
+                gain: 1.0,
+                pan: 0.0,
+                category: AudioCategory::Voice,
+                spatial: VoiceSpatial::default(),
+                offset_ticks,
+            };
+            let Some(VoiceCommand::VoiceStart { voice, .. }) = rig.router.route(message) else {
+                panic!("a voice start");
+            };
+            voice
+        };
+        let whole = start(0);
+        assert_eq!(whole.pos, 0);
+        let offset = start(2);
+        assert_eq!(offset.pos, 2 * 735 * 2, "735 device frames a tick, stereo");
+        assert!(Arc::ptr_eq(&whole.samples, &offset.samples));
+        let past = start(10_000);
+        assert_eq!(past.pos, past.samples.len());
+
+        let (mut mixer, _) = mixer(CategoryGains::default());
+        mixer.apply(VoiceCommand::VoiceStart {
+            id: LoopKey::Voice(0),
+            voice: past,
+        });
+        let out = render(&mut mixer, 4);
+        assert!(out.iter().all(|sample| *sample == 0.0), "{out:?}");
+        assert!(mixer.voices.is_empty(), "the voice retires");
     }
 
     #[test]

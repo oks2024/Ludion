@@ -124,7 +124,9 @@ without `.dialogue`, with `L1719`.
   on air; `suspend(world, false)` resumes them. A pause menu's own `Ui` sounds stay live.
 - **Ducking is yours:** `.audio_duck(DuckRule { when: Bus::Voice, .. })` dips music under every voiced line
   (`ludion docs audio-mix`); dialogue adds nothing.
-- **A restored mid-line plays on silently**: voice ids are not saved.
+- **A restored mid-line resumes its voice.** The line remembers the file it started with (so a locale change since does
+  not swap it), and the first update after a restore or checkpoint restarts that voice at the line's elapsed tick; a line
+  already inside its tail restarts nothing. If the game is suspended, the suspend buses are paused first.
 
 ## Events and subtitles
 

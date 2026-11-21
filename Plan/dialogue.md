@@ -55,9 +55,8 @@
     line's voice has already ended within its tail).
 21. **Suspend** sends `bus_pause(suspend_buses)` once on the transition, resume `bus_resume`; only while a voiced line is on
     air, so a text-only world's audio log is unchanged. The ui channel's `Ui` bus is not paused by default.
-22. **Voice ids live in an unhashed resource** reset on rebuild; a restored mid-line plays on silently until W2b.
+22. **Voice ids live in an unhashed resource** reset on rebuild; a restored mid-line resumes its voice (38).
 23. **Ducking is the game's `DuckRule { when: Voice, .. }`** (0023); dialogue adds nothing.
-
 24. **Opt-in `EngineBuilder::localization()`.** It registers `kind: strings` (moved from `.dialogue()`) and `kind: locales`,
     both `doc_kind_engine_owned`, plus the validators, the `LocaleState` component and the `localize_text` system. It is
     idempotent (a builder flag), and `.dialogue()` calls it. The system is pushed like `.system(...)` at the point of the
@@ -105,6 +104,44 @@
 34. **Unkeyed text** keeps its single `L1256` against the base face; a keyed component's authored `text` is not checked.
 35. **Bare render hosts** load string tables when a scene has keyed text or a locale is asked for;
     `render_scene_with_registry(.., locale)` (a break) and `ludion render --locale` (W3b-2).
+36. **`VoiceStart` carries `offset_ticks`** (0 = from the start). The sink starts the cursor that many ticks in, clamped to
+    the clip. `AudioQueue::push_voice_from(event, offset_ticks)` and `push_on_from(entity, event, range, offset_ticks)`;
+    `push_voice`/`push_on` are the 0 case. The tracked end is `frame + clip - offset`. An offset at or past a known clip
+    emits nothing (the id is still returned; a stop is ignored).
+37. **Pause-aware tracking.** The engine records the buses held by every `BusPause` it emits (a held master holds every
+    bus). A tracked voice on a held bus has its end pushed one tick per held tick, so a stop after the resume still reaches
+    it, and it does not keep a `DuckRule` live. The record resets with the rebuild's blanket stop. The end may run up to
+    one pause fade long, because the sink's cursor moves through the fade; a stop to a voice that already ended is ignored
+    by the sink.
+38. **Restore resumes voices.** `DialogueLine.voice_file` records the file resolved at start, so the voice keeps the locale
+    it started in. On the first `dialogue_update` after a build or restore, every playing line with a `voice_file` and no
+    tracked voice restarts its voice at `offset = elapsed` (after this tick's increment), if the offset is under the clip.
+    While suspended, the suspend buses are paused before that restart. Checkpoints take the same path.
+39. **Fallback syntax (W3c).** A `fonts:` value is a path or a mapping `{path, fallback}` whose `fallback` is a block list of
+    names (the strict-subset YAML has no non-empty flow sequences). `FontsDocument.fallbacks` keeps `(name, [names])` sorted
+    by name; `fonts` stays `(name, path)`, and `emit` writes the mapping only for entries with a fallback. `L1253` at
+    `/fonts/<name>/fallback[/<i>]` for an undefined name, the entry itself, a cycle, an empty list, or a flattened chain over
+    8 faces. `locales:` overrides stay plain paths.
+40. **Chain flattening per locale.** At load, every base name with a fallback gets a chain for the base table and for each
+    `locales:` tag. Each name resolves through `(locale, name)` then the base `name` (decision 31), a face that failed to load
+    is skipped, and the order is depth-first through each fallback's own fallbacks, deduped by path. A per-locale primary
+    keeps the same fallbacks; a locale with no `locales:` entry uses the base chain. `FontLibrary::face` returns the chained
+    face, and `chain_paths(name, locale)` lists the `(doc, image)` paths index-aligned with `face.chain()`.
+41. **The chain rides inside `FontFace`**, so no measurement API changes: `FontFace::with_fallbacks`, `fallbacks`, `chain`,
+    `face_for`. A fallback glyph's advance, and its kerning, convert into the primary's units with integer rounding
+    `(v * L_primary + L_k / 2).div_euclid(L_k)` (exact when the units agree). Not an lcm: Silkscreen's 1250 and Inter's 2478
+    have an lcm near 1.5 million, which overflows `LaidGlyph.advance_units`. Widths, extent and wrap stay in primary units.
+    Kerning applies only between two glyphs of one face. Each `LaidGlyph` and `GlyphQuad` carries a `face` index. A fallback
+    quad uses its face's unit (`size / L_k`) and atlas on the primary's baseline; a primary quad keeps its exact float
+    expressions, so a one-face text is bit-identical. A char no face has draws the primary's notdef.
+42. **One draw per face run.** Extract splits each text's quads by `face` into one `UiInstance::Text` (UiText, each UiList line,
+    UiRadial) or one `TextRun` (world `Text`) per face, primary first, with that face's atlas and its own `resolve_outline`.
+    A text on one face is exactly one run. The renderer is unchanged.
+43. **`L1256` over the chain.** `check-scene` counts a char missing only when no chain face has it. `validate_localization_docs`
+    (now given the content root) also checks every string of each locale, with placeholders removed, against
+    `table_face(None, locale)`'s chain, one warning per (locale, key) at `strings/<doc path>/strings/<key>`; it is skipped
+    without a font table `default`.
+
 
 Validation codes: `L1719` bad channel table or `dialogue_channels` without `dialogue` (build); `L1720` a line's voice does not
 read for the default locale (error); `L1721` it does not read for another locale with a `kind: strings` doc (warning).
@@ -119,10 +156,9 @@ locale without a strings table (warning).
 - **W2a voice (shipped):** `voice:` with default-locale fallback, duration from the WAV length plus `tail_ticks`, radio
   band-pass via `VoiceFilter`, world lines via `push_on`, `AudioQueue::push_voice`, ducking through the voice-bus
   `DuckRule`, suspend to `bus_pause`, `.dialogue_channels(...)`, `L1719`-`L1721`, `L5137`-`L5138`.
-- **W2b subtitles:** the built-in `SubtitleView` component and its golden in a new gallery scene (subtitles on by default,
-  per the owner ruling); `subtitle_range` against `AudioListener` (else the lowest-id camera); a mid-line restore either
-  re-starts the voice at a sample offset (needs a start offset on `push_voice`/`push_on` in `ludion-audio`) or ends it
-  `Interrupted`; pause-aware tracking, so a voice held by `bus_pause` is still stoppable after resume.
+- **W2b, cut in two.** Part 1 (audio): the voice start offset, pause-aware tracking and the restore resume (36-38).
+  Part 2 (subtitles): the built-in `SubtitleView` component and its golden in a new gallery scene (subtitles on by default,
+  per the owner ruling); `subtitle_range` against `AudioListener` (else the lowest-id camera).
 - **W3a localization, text side (shipped):** `kind: locales`, the `LocaleState` locale, keyed `UiText`/`Text` with `args`
   and `resolved`, `localization::*`, `L1722`, `L1723`, `L5139`, `L5140`, `ludion docs localization`. Engine-only, no golden.
 - **W3b-1 localization, font side (mechanized):** the `locales:` section (`ludion-scene` parser), `FontLibrary::face(name, locale)`,
@@ -130,14 +166,14 @@ locale without a strings table (warning).
   `L1256`.
 - **W3b-2 localization, render hosts:** strings loaded in bare hosts, `render_scene_with_registry(.., locale)`,
   `ludion render --locale`, and the `localization` gallery scene with `en` and `fr` goldens.
-- **W3c fallback chains:**
-  - A `fonts:` value may be `{ path, fallback: [name, ..] }`.
-  - `ludion-font` lays text out over a face chain with integer widths in a common unit (the lcm of the chain's `line_units`),
+- **W3c fallback chains (39-43):**
+  - A `fonts:` value may be `{ path, fallback: [name, ..] }` (a block list).
+  - `ludion-font` lays text out over a face chain in the primary's units, with each fallback advance rounded in (not an lcm),
     so a one-face chain is bit-identical. Kerning applies only within one face, and each glyph carries its face index.
-  - Quads are grouped per face, and extract emits one `UiInstance::Text` per face run, with an outline per face.
-  - Hit tests and measurement walk the chain.
+  - Quads are grouped per face, and extract emits one `UiInstance::Text` or `TextRun` per face run, with an outline per face.
+  - Hit tests and measurement walk the chain, since the chain rides inside `FontFace`.
   - `L1256` walks the chain, plus whole-table coverage: every string of a locale against that locale's `default` chain.
-  - A fallback gallery golden.
+  - The `font-fallback` gallery scene and golden (`pixel-latin`: Silkscreen over Inter).
 
 ## Out of scope (with triggers)
 
@@ -180,3 +216,7 @@ locale without a strings table (warning).
   RTX 3090: `localization` (en, discovered) and `localization-fr` (hand-written test). External break:
   `render_scene_with_registry` gains a trailing `locale: Option<&str>` (serious-isaac's `examples/probe_look.rs` passes `None`).
   Owed: the macOS twins of both goldens. No protocol schema, component schema, replay or existing golden moved.
+- W2b part 1 mechanized: `VoiceStart.offset_ticks` (sink cursor), `AudioQueue::push_voice_from`/`push_on_from`, pause-aware
+  attached-voice tracking (`held_buses`), `DialogueLine.voice_file` and the first-update voice resume in `dialogue/queue.rs`,
+  `tests/audio.rs`, `tests/dialogue_voice.rs`, the `ludion-audio` offset test, `docs/dialogue.md`, `docs/audio-space.md`. No
+  protocol schema, component schema, golden or replay moved; only a world with a voiced line on air hashes differently.

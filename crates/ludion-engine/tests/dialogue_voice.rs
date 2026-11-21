@@ -17,8 +17,9 @@ use ludion_engine::localization;
 use ludion_engine::{
     Diagnostics, DialogueConfig, DialogueEvents, DuckRule, Engine, EngineBuilder, dialogue_update,
 };
-use ludion_protocol::Command;
-use ludion_protocol::command::SimStepParams;
+use ludion_protocol::command::{EngineRestoreParams, SimStepParams};
+use ludion_protocol::{Command, ResponseBody};
+use serde_json::Value;
 
 /// Camera 0 (the listener), guard 1 (a world speaker).
 const SCENE: &str = "\
@@ -699,4 +700,187 @@ fn a_text_only_world_is_unchanged_by_dialogue_channels() {
         )),
         "a world that never voices a line sends nothing"
     );
+}
+
+// --- Restore resumes the voice ---------------------------------------------------------------
+
+fn snapshot_of(engine: &mut Engine) -> Value {
+    match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    }
+}
+
+fn restore(engine: &mut Engine, snapshot: Value) {
+    match engine
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+}
+
+fn elapsed_of(engine: &Engine, handle: LineHandle) -> u32 {
+    engine
+        .world()
+        .get::<DialogueLine>(handle.0)
+        .unwrap()
+        .expect("the line is on air")
+        .elapsed
+}
+
+/// The `(sound, offset_ticks)` of the last start in the log.
+fn last_start(engine: &Engine) -> (String, u32) {
+    match starts(engine).pop().expect("a start") {
+        AudioMessage::VoiceStart {
+            sound,
+            offset_ticks,
+            ..
+        } => (sound, offset_ticks),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_restored_radio_line_restarts_its_voice_at_the_elapsed_tick() {
+    let mut engine = boot("restore-radio");
+    let handle = say(&mut engine, "radio");
+    run(&mut engine, 10);
+    let snapshot = snapshot_of(&mut engine);
+    run(&mut engine, 5);
+    restore(&mut engine, snapshot);
+    let before = starts(&engine).len();
+    tick(&mut engine);
+    assert_eq!(starts(&engine).len(), before + 1, "one restart");
+    let (sound, offset) = last_start(&engine);
+    assert_eq!(sound, "voice/en/a.wav");
+    assert_eq!(offset, elapsed_of(&engine, handle));
+    assert!(offset > 0);
+    run(&mut engine, 3);
+    assert_eq!(
+        starts(&engine).len(),
+        before + 1,
+        "only the first update resumes"
+    );
+
+    let stops_before = count(&engine, |m| matches!(m, AudioMessage::VoiceStop { .. }));
+    dialogue::interrupt(engine.world_mut(), handle);
+    run(&mut engine, 2);
+    let stops: Vec<_> = voice_log(&engine)
+        .into_iter()
+        .filter(|(_, m)| matches!(m, AudioMessage::VoiceStop { .. }))
+        .collect();
+    assert_eq!(
+        stops.len(),
+        stops_before + 1,
+        "the cut stops the restarted voice"
+    );
+    let AudioMessage::VoiceStart { id, .. } = starts(&engine).pop().unwrap() else {
+        unreachable!()
+    };
+    assert!(
+        matches!(&stops.last().unwrap().1, AudioMessage::VoiceStop { id: stopped, .. } if *stopped == id)
+    );
+}
+
+#[test]
+fn a_restored_world_line_resumes_on_its_speaker() {
+    let mut engine = boot("restore-world");
+    say(&mut engine, "world");
+    run(&mut engine, 10);
+    let snapshot = snapshot_of(&mut engine);
+    restore(&mut engine, snapshot);
+    let before = starts(&engine).len();
+    tick(&mut engine);
+    assert_eq!(starts(&engine).len(), before + 1);
+    let (_, offset) = last_start(&engine);
+    assert!(offset > 0);
+    let AudioMessage::VoiceStart { id, .. } = starts(&engine).pop().unwrap() else {
+        unreachable!()
+    };
+    engine
+        .world_mut()
+        .get_mut::<ludion_engine::Transform>(GUARD)
+        .unwrap()
+        .unwrap()
+        .translation = [15.0, 0.0, 0.0];
+    run(&mut engine, 3);
+    assert!(
+        count(
+            &engine,
+            |m| matches!(m, AudioMessage::VoiceSync { id: i, .. } if *i == id)
+        ) >= 1,
+        "the resumed voice follows its speaker"
+    );
+}
+
+#[test]
+fn a_line_suspended_at_the_snapshot_pauses_the_bus_before_its_voice_restarts() {
+    let mut engine = boot("restore-suspended");
+    say(&mut engine, "radio");
+    run(&mut engine, 10);
+    dialogue::suspend(engine.world_mut(), true);
+    tick(&mut engine);
+    let snapshot = snapshot_of(&mut engine);
+    restore(&mut engine, snapshot);
+    let mark = voice_log(&engine).len();
+    tick(&mut engine);
+    let after: Vec<_> = voice_log(&engine).split_off(mark);
+    let pause = after
+        .iter()
+        .position(|(_, m)| matches!(m, AudioMessage::BusPause { paused: true, .. }))
+        .expect("the suspend bus is held again");
+    let start = after
+        .iter()
+        .position(|(_, m)| matches!(m, AudioMessage::VoiceStart { .. }))
+        .expect("the voice restarts");
+    assert!(pause < start, "{after:?}");
+}
+
+#[test]
+fn a_line_restored_inside_its_tail_restarts_nothing() {
+    let mut engine = boot("restore-tail");
+    say(&mut engine, "radio");
+    run(&mut engine, 35);
+    let snapshot = snapshot_of(&mut engine);
+    restore(&mut engine, snapshot);
+    let before = starts(&engine).len();
+    run(&mut engine, 3);
+    assert_eq!(starts(&engine).len(), before);
+}
+
+#[test]
+fn a_restored_line_keeps_the_locale_it_started_in() {
+    let mut engine = boot("restore-locale");
+    say(&mut engine, "radio");
+    run(&mut engine, 10);
+    localization::set_locale(engine.world_mut(), "fr");
+    let snapshot = snapshot_of(&mut engine);
+    restore(&mut engine, snapshot);
+    tick(&mut engine);
+    assert_eq!(last_start(&engine).0, "voice/en/a.wav");
+}
+
+#[test]
+fn a_run_with_a_restore_is_reproducible() {
+    let trace = |name: &str| {
+        let mut engine = boot(name);
+        say(&mut engine, "radio");
+        run(&mut engine, 10);
+        let snapshot = snapshot_of(&mut engine);
+        run(&mut engine, 5);
+        restore(&mut engine, snapshot);
+        run(&mut engine, 40);
+        (
+            engine.world_hash().unwrap().as_u64(),
+            engine
+                .audio_log()
+                .iter()
+                .map(|entry| (entry.frame.as_u64(), entry.message.clone()))
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(trace("restore-repro-a"), trace("restore-repro-b"));
 }

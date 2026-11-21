@@ -13,9 +13,10 @@
 //!    on a blocked channel ends `Blocked`; a line with a dead speaker is `Dropped`; sequences cascade;
 //! 6. cues fire for lines that started or advanced this tick;
 //! 7. ended lines are despawned in ascending `seq`;
-//! 8. voices: a playing line cut any way but `Completed` stops its voice, a line that started
-//!    pushes its voice (`push_voice`, or `push_on` its speaker on `world`), and a change of the
-//!    suspend flag pauses or resumes the suspend buses;
+//! 8. voices: a playing line cut any way but `Completed` stops its voice, a change of the suspend
+//!    flag pauses or resumes the suspend buses, and a line that started pushes its voice
+//!    (`push_voice`, or `push_on` its speaker on `world`); the first pass after a build or restore
+//!    also restarts the voice of each playing line that has a `voice_file`, at its `elapsed`;
 //! 9. `GameClock::hold` is called if a playing line holds gameplay;
 //! 10. [`DialogueEvents`] and [`Subtitles`] are rewritten.
 //!
@@ -32,7 +33,7 @@ use ludion_ecs::{SystemCtx, World};
 use crate::audio::{AudioEvent, AudioQueue, VoiceSpatial};
 use crate::localization::{self, render};
 
-use super::voice::{DialogueChannels, DialogueVoices, resolve};
+use super::voice::{DialogueChannels, DialogueVoices, VoiceLibrary, resolve};
 use super::{
     Channel, DialogueConfig, DialogueControl, DialogueLine, EndReason, Interrupt, LineHandle,
     LineState, Priority, WhenBlocked, control, find_speaker,
@@ -253,33 +254,61 @@ fn resolve_sequences(rows: &mut [Row], events: &mut Vec<DialogueEvent>) {
 }
 
 /// Stops the voice of every playing line that ended other than `Completed`, starts the voice of
-/// every line that started this tick, then pauses or resumes the suspend buses on a change of the
-/// suspend flag. All in ascending `seq`; a world with no voiced line pushes nothing.
-fn sync_voices(world: &mut World, rows: &[Row], suspended: bool) {
+/// every line that started this tick (and, on the first update after a build or restore, restarts
+/// the voice of every playing line that has none, at its `elapsed`), then pauses or resumes the
+/// suspend buses on a change of the suspend flag. All in ascending `seq`; a world with no voiced
+/// line pushes nothing.
+fn sync_voices(world: &mut World, rows: &[Row], suspended: bool, hz: u32) {
     let Some(channels) = world.resource::<DialogueChannels>().cloned() else {
         return;
     };
     let Some(mut voices) = world.resource_mut::<DialogueVoices>().map(std::mem::take) else {
         return;
     };
-    if let Some(queue) = world.resource_mut::<AudioQueue>() {
-        for row in rows {
-            if row.before.state != LineState::Playing {
-                continue;
-            }
-            let Some(reason) = row.ended else {
-                continue;
-            };
-            if let Some(id) = voices.by_line.remove(&row.id)
-                && reason != EndReason::Completed
-            {
-                queue.voice_stop(id, channels.of(row.line.channel).cut_fade_ticks);
-            }
+    let mut stops = Vec::new();
+    for row in rows {
+        if row.before.state != LineState::Playing {
+            continue;
         }
-        for row in rows {
-            let Some(file) = &row.voice_file else {
-                continue;
-            };
+        let Some(reason) = row.ended else {
+            continue;
+        };
+        if let Some(id) = voices.by_line.remove(&row.id)
+            && reason != EndReason::Completed
+        {
+            stops.push((id, channels.of(row.line.channel).cut_fade_ticks));
+        }
+    }
+    // Starts this tick, and on the first update after a build the resumes of lines already on
+    // air, each with the file it started with, in ascending `seq`.
+    let mut pushes: Vec<(&Row, &str, u32)> = Vec::new();
+    for row in rows {
+        if let Some(file) = &row.voice_file {
+            pushes.push((row, file, 0));
+        } else if !voices.resumed
+            && row.playing()
+            && let Some(file) = &row.line.voice_file
+            && !voices.by_line.contains_key(&row.id)
+            && world
+                .resource_mut::<VoiceLibrary>()
+                .and_then(|library| library.clip_ticks(hz, file))
+                .is_some_and(|clip| u64::from(row.line.elapsed) < clip)
+        {
+            pushes.push((row, file, row.line.elapsed));
+        }
+    }
+    if let Some(queue) = world.resource_mut::<AudioQueue>() {
+        for (id, fade) in stops {
+            queue.voice_stop(id, fade);
+        }
+        if suspended && !voices.paused && !(voices.by_line.is_empty() && pushes.is_empty()) {
+            queue.bus_pause(&channels.suspend_buses, channels.suspend_fade_ticks);
+            voices.paused = true;
+        } else if !suspended && voices.paused {
+            queue.bus_resume(&channels.suspend_buses, channels.suspend_fade_ticks);
+            voices.paused = false;
+        }
+        for (row, file, offset) in pushes {
             let audio = channels.of(row.line.channel);
             let event = AudioEvent {
                 category: audio.category,
@@ -287,22 +316,18 @@ fn sync_voices(world: &mut World, rows: &[Row], suspended: bool) {
                     filter: audio.filter,
                     send: 0.0,
                 },
-                ..AudioEvent::new(file.clone(), audio.gain)
+                ..AudioEvent::new(file, audio.gain)
             };
             let id = match (row.line.channel, row.line.speaker) {
-                (Channel::World, Some(speaker)) => queue.push_on(speaker, event, audio.range),
-                _ => queue.push_voice(event),
+                (Channel::World, Some(speaker)) => {
+                    queue.push_on_from(speaker, event, audio.range, offset)
+                }
+                _ => queue.push_voice_from(event, offset),
             };
             voices.by_line.insert(row.id, id);
         }
-        if suspended && !voices.paused && !voices.by_line.is_empty() {
-            queue.bus_pause(&channels.suspend_buses, channels.suspend_fade_ticks);
-            voices.paused = true;
-        } else if !suspended && voices.paused {
-            queue.bus_resume(&channels.suspend_buses, channels.suspend_fade_ticks);
-            voices.paused = false;
-        }
     }
+    voices.resumed = true;
     world.insert_resource(voices);
 }
 
@@ -464,6 +489,7 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
             };
             let row = &mut rows[head];
             row.voice_file = voice.map(|(file, _)| file);
+            row.line.voice_file = row.voice_file.clone();
             row.line.state = LineState::Playing;
             row.line.elapsed = 0;
             row.line.duration = duration;
@@ -538,7 +564,7 @@ pub fn dialogue_update(world: &mut World, ctx: &SystemCtx) {
     let _ = world.despawn_many(&doomed);
 
     // 8. Voices.
-    sync_voices(world, &rows, suspended);
+    sync_voices(world, &rows, suspended, hz);
 
     // 9. Holds.
     if rows

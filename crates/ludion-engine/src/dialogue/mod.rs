@@ -218,6 +218,9 @@ pub struct DialogueLine {
     /// The sim frame it started on.
     #[serde(default)]
     pub started_frame: u64,
+    /// The voice file resolved at start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_file: Option<String>,
     /// A cancel waiting for the next [`dialogue_update`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel: Option<EndReason>,
@@ -418,6 +421,7 @@ fn spawn_line(
         elapsed: 0,
         duration: 0,
         started_frame: 0,
+        voice_file: None,
         cancel: None,
     };
     let entity = world.spawn();

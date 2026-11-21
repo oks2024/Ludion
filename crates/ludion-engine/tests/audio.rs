@@ -1920,3 +1920,123 @@ fn unfiltered_messages_carry_the_default_spatial() {
     assert!(spatials.len() >= 4, "{spatials:?}");
     assert!(spatials.iter().all(|s| *s == VoiceSpatial::default()));
 }
+
+// --- Voice offsets and pause-aware tracking ---
+
+fn voice_event(sound: &str) -> AudioEvent {
+    AudioEvent {
+        category: AudioCategory::Voice,
+        ..AudioEvent::new(sound, 1.0)
+    }
+}
+
+fn stops_in(engine: &Engine) -> usize {
+    voice_messages(engine)
+        .iter()
+        .filter(|(_, message)| matches!(message, AudioMessage::VoiceStop { .. }))
+        .count()
+}
+
+/// `push_voice_from` starts the voice `offset_ticks` in and tracks only the clip's remainder: a
+/// stop before it ends reaches the sink, one after it ends does not.
+#[test]
+fn push_voice_from_carries_the_offset_and_tracks_the_remainder() {
+    let mut engine = voice_engine("offset-early", AudioPan::Centred);
+    let id = queue(&mut engine).push_voice_from(voice_event("short.wav"), 10);
+    step_n(&mut engine, 5);
+    let starts: Vec<_> = voice_messages(&engine);
+    assert!(
+        matches!(
+            starts.as_slice(),
+            [(
+                0,
+                AudioMessage::VoiceStart {
+                    offset_ticks: 10,
+                    ..
+                }
+            )]
+        ),
+        "{starts:?}"
+    );
+    queue(&mut engine).voice_stop(id, 6);
+    step_n(&mut engine, 1);
+    assert_eq!(stops_in(&engine), 1, "a stop inside the remainder lands");
+
+    let mut engine = voice_engine("offset-late", AudioPan::Centred);
+    let id = queue(&mut engine).push_voice_from(voice_event("short.wav"), 10);
+    step_n(&mut engine, 25);
+    queue(&mut engine).voice_stop(id, 6);
+    step_n(&mut engine, 1);
+    assert_eq!(stops_in(&engine), 0, "the remainder ended at tick 20");
+}
+
+/// An offset at or past the clip emits no start, and a stop to its id is ignored.
+#[test]
+fn an_offset_past_the_clip_emits_nothing() {
+    for offset in [30, 400] {
+        let mut engine = voice_engine(&format!("offset-past-{offset}"), AudioPan::Centred);
+        let global = queue(&mut engine).push_voice_from(voice_event("short.wav"), offset);
+        let attached =
+            queue(&mut engine).push_on_from(GUARD, voice_event("short.wav"), 10.0, offset);
+        step_n(&mut engine, 2);
+        queue(&mut engine).voice_stop(global, 6);
+        queue(&mut engine).voice_stop(attached, 6);
+        step_n(&mut engine, 2);
+        assert!(voice_messages(&engine).is_empty(), "offset {offset}");
+    }
+}
+
+/// An attached voice resumed with `push_on_from` carries its offset too.
+#[test]
+fn push_on_from_carries_the_offset() {
+    let mut engine = voice_engine("offset-attached", AudioPan::Centred);
+    queue(&mut engine).push_on_from(GUARD, voice_event("long.wav"), 10.0, 40);
+    step_n(&mut engine, 1);
+    assert!(matches!(
+        voice_messages(&engine).as_slice(),
+        [(
+            0,
+            AudioMessage::VoiceStart {
+                offset_ticks: 40,
+                ..
+            }
+        )]
+    ));
+}
+
+/// A voice held by `bus_pause` past its clip length stays stoppable after the resume; without the
+/// pause the same stop is ignored.
+#[test]
+fn a_voice_on_a_paused_bus_stays_stoppable_after_the_resume() {
+    let mut engine = voice_engine("pause-stoppable", AudioPan::Centred);
+    let id = queue(&mut engine).push_voice(voice_event("short.wav"));
+    step_n(&mut engine, 1);
+    queue(&mut engine).bus_pause(&[Bus::Voice], 0);
+    step_n(&mut engine, 40);
+    queue(&mut engine).bus_resume(&[Bus::Voice], 0);
+    step_n(&mut engine, 1);
+    queue(&mut engine).voice_stop(id, 6);
+    step_n(&mut engine, 1);
+    assert_eq!(stops_in(&engine), 1);
+
+    let mut engine = voice_engine("pause-absent", AudioPan::Centred);
+    let id = queue(&mut engine).push_voice(voice_event("short.wav"));
+    step_n(&mut engine, 42);
+    queue(&mut engine).voice_stop(id, 6);
+    step_n(&mut engine, 1);
+    assert_eq!(stops_in(&engine), 0);
+}
+
+/// A held voice bus does not keep a duck rule live: the duck releases while the pause holds.
+#[test]
+fn a_held_voice_bus_releases_its_duck() {
+    let mut engine = duck_engine("duck-held");
+    queue(&mut engine).push_voice(voice_event("long.wav"));
+    step_n(&mut engine, 3);
+    queue(&mut engine).bus_pause(&[Bus::Voice], 0);
+    step_n(&mut engine, 5);
+    let ducks = duck_messages(&engine);
+    let frames: Vec<u64> = ducks.iter().map(|duck| duck.0).collect();
+    assert_eq!(frames, [0, 0, 3, 3], "{ducks:?}");
+    assert!(ducks[2..].iter().all(|duck| duck.2 == 1.0));
+}

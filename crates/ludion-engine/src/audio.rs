@@ -64,6 +64,7 @@ pub(crate) enum Queued {
         entity: Option<EntityId>,
         event: AudioEvent,
         range: f32,
+        offset_ticks: u32,
     },
     StopVoice {
         id: VoiceId,
@@ -191,7 +192,31 @@ impl AudioQueue {
     /// ```
     ///
     /// [`voice_stop`]: Self::voice_stop
-    pub fn push_on(&mut self, entity: EntityId, mut event: AudioEvent, range: f32) -> VoiceId {
+    pub fn push_on(&mut self, entity: EntityId, event: AudioEvent, range: f32) -> VoiceId {
+        self.push_on_from(entity, event, range, 0)
+    }
+
+    /// [`push_on`](Self::push_on) starting `offset_ticks` sim ticks into the clip: the way to resume
+    /// a line that was already on air. An offset at or past the clip's length emits nothing (the id
+    /// is still returned, and a stop to it is ignored); the voice's tracked end is the clip's
+    /// remainder.
+    ///
+    /// ```
+    /// # use ludion_ecs::World;
+    /// # use ludion_engine::audio::{AudioEvent, AudioQueue};
+    /// # let guard = World::new().spawn();
+    /// let mut queue = AudioQueue::default();
+    /// // The guard's line, resumed 90 ticks in.
+    /// let id = queue.push_on_from(guard, AudioEvent::new("voice/chatter.wav", 1.0), 18.0, 90);
+    /// queue.voice_stop(id, 6);
+    /// ```
+    pub fn push_on_from(
+        &mut self,
+        entity: EntityId,
+        mut event: AudioEvent,
+        range: f32,
+        offset_ticks: u32,
+    ) -> VoiceId {
         let id = VoiceId(self.next_voice);
         self.next_voice += 1;
         event.gain = self.finite_gain(&event.sound, event.gain);
@@ -200,6 +225,7 @@ impl AudioQueue {
             entity: Some(entity),
             event,
             range,
+            offset_ticks,
         });
         id
     }
@@ -225,7 +251,23 @@ impl AudioQueue {
     /// ```
     ///
     /// [`voice_stop`]: Self::voice_stop
-    pub fn push_voice(&mut self, mut event: AudioEvent) -> VoiceId {
+    pub fn push_voice(&mut self, event: AudioEvent) -> VoiceId {
+        self.push_voice_from(event, 0)
+    }
+
+    /// [`push_voice`](Self::push_voice) starting `offset_ticks` sim ticks into the clip: the way to
+    /// resume a line that was already on air. An offset at or past the clip's length emits nothing
+    /// (the id is still returned, and a stop to it is ignored); the voice's tracked end is the
+    /// clip's remainder.
+    ///
+    /// ```
+    /// # use ludion_engine::audio::{AudioEvent, AudioQueue};
+    /// let mut queue = AudioQueue::default();
+    /// // A radio line, resumed 90 ticks in.
+    /// let id = queue.push_voice_from(AudioEvent::new("voice/radio.wav", 1.0), 90);
+    /// queue.voice_stop(id, 6);
+    /// ```
+    pub fn push_voice_from(&mut self, mut event: AudioEvent, offset_ticks: u32) -> VoiceId {
         let id = VoiceId(self.next_voice);
         self.next_voice += 1;
         event.gain = self.finite_gain(&event.sound, event.gain);
@@ -234,6 +276,7 @@ impl AudioQueue {
             entity: None,
             event,
             range: 0.0,
+            offset_ticks,
         });
         id
     }

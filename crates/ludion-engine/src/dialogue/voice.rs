@@ -241,12 +241,15 @@ pub(crate) fn resolve(
     None
 }
 
-/// The voice ids of the lines on air, and whether the suspend pause is in force. Never hashed or
-/// snapshotted; reset with every world build, so a restored mid-line plays on silently.
+/// The voice ids of the lines on air, whether the suspend pause is in force, and whether the first
+/// `dialogue_update` since the build has run. Never hashed or snapshotted; reset with every world
+/// build, so that first update restarts the voice of every playing line that has a `voice_file`
+/// and no tracked voice (a restore resumes it at the line's `elapsed`).
 #[derive(Debug, Default)]
 pub(crate) struct DialogueVoices {
     pub(crate) by_line: BTreeMap<EntityId, VoiceId>,
     pub(crate) paused: bool,
+    pub(crate) resumed: bool,
 }
 
 #[cfg(test)]

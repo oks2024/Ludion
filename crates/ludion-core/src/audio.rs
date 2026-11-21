@@ -579,6 +579,7 @@ pub enum AudioMessage {
     ///     pan: -0.2,
     ///     category: AudioCategory::Voice,
     ///     spatial: VoiceSpatial::default(),
+    ///     offset_ticks: 0,
     /// };
     /// assert_ne!(message, AudioMessage::StopAllLoops);
     /// ```
@@ -595,6 +596,8 @@ pub enum AudioMessage {
         category: AudioCategory,
         /// The voice's filter and reverb send.
         spatial: VoiceSpatial,
+        /// Sim ticks into the clip the voice starts at; 0 plays it from the start.
+        offset_ticks: u32,
     },
     /// Slew the voice `id` to a new `gain`, `pan` and filter, keeping its cursor. A voice that has
     /// ended is ignored.

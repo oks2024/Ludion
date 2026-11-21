@@ -570,6 +570,8 @@ pub struct Engine {
     /// despawns. Host-side bookkeeping like `audible_emitters`: never hashed, snapshotted or
     /// recorded, and cleared by [`install_audio_queue`](Engine::install_audio_queue).
     attached_voices: StableMap<VoiceId, AttachedVoice>,
+    /// The buses held by an emitted `BusPause`, one bit per `Bus as usize`; reset by the rebuild's blanket stop.
+    held_buses: u8,
     /// Each sound a voice started on: its length in sim ticks (`None` when the file would not
     /// decode), read once per path. Content-derived, so it is no sim state.
     voice_ticks: StableMap<String, Option<u64>>,
@@ -1046,6 +1048,7 @@ impl Engine {
             audible_emitters: StableMap::new(),
             audio_zones: ZoneState::default(),
             attached_voices: StableMap::new(),
+            held_buses: 0,
             voice_ticks: StableMap::new(),
             duck_rules: Vec::new(),
             audio_occlusion: None,
@@ -2444,6 +2447,16 @@ impl Engine {
                     if let AudioMessage::OneShot(event) = &message {
                         self.track_duck_shot(frame, event.category, &event.sound);
                     }
+                    if let AudioMessage::BusPause { buses, paused, .. } = &message {
+                        for &bus in buses {
+                            let bit = 1u8 << (bus as usize);
+                            if *paused {
+                                self.held_buses |= bit;
+                            } else {
+                                self.held_buses &= !bit;
+                            }
+                        }
+                    }
                     self.emit_audio(frame, message);
                 }
                 Queued::At {
@@ -2479,9 +2492,13 @@ impl Engine {
                     entity,
                     event,
                     range,
+                    offset_ticks,
                 } => {
                     let Some(entity) = entity else {
                         let ticks = self.clip_ticks(&event.sound).filter(|&ticks| ticks > 0);
+                        if ticks.is_some_and(|ticks| u64::from(offset_ticks) >= ticks) {
+                            continue;
+                        }
                         if let Some(ticks) = ticks {
                             self.attached_voices.insert(
                                 id,
@@ -2493,7 +2510,7 @@ impl Engine {
                                     sent_gain: event.gain,
                                     sent_pan: event.pan,
                                     sent_low_pass_hz: event.spatial.filter.low_pass_hz,
-                                    ends: FrameIndex(frame.0 + ticks),
+                                    ends: FrameIndex(frame.0 + ticks - u64::from(offset_ticks)),
                                     spatial: event.spatial,
                                 },
                             );
@@ -2507,6 +2524,7 @@ impl Engine {
                                 pan: event.pan,
                                 category: event.category,
                                 spatial: event.spatial,
+                                offset_ticks,
                             },
                         );
                         continue;
@@ -2519,6 +2537,9 @@ impl Engine {
                         .and_then(|l| self.voice_gain_pan(l, entity, event.gain, range))
                         .unwrap_or((0.0, 0.0));
                     let ticks = self.clip_ticks(&event.sound);
+                    if ticks.is_some_and(|ticks| ticks > 0 && u64::from(offset_ticks) >= ticks) {
+                        continue;
+                    }
                     let tracked = ticks.is_some_and(|ticks| ticks > 0);
                     // The first result is applied unsmoothed, so a voice starting behind a wall
                     // starts muffled.
@@ -2550,7 +2571,7 @@ impl Engine {
                                 sent_gain: gain,
                                 sent_pan: pan,
                                 sent_low_pass_hz: spatial.filter.low_pass_hz,
-                                ends: FrameIndex(frame.0 + ticks),
+                                ends: FrameIndex(frame.0 + ticks - u64::from(offset_ticks)),
                                 spatial: event.spatial,
                             },
                         );
@@ -2564,6 +2585,7 @@ impl Engine {
                             pan,
                             category: event.category,
                             spatial,
+                            offset_ticks,
                         },
                     );
                 }
@@ -2737,10 +2759,9 @@ impl Engine {
         let mut live = Vec::with_capacity(self.duck_rules.len());
         for (index, rule) in self.duck_rules.iter().enumerate() {
             let on = self.duck_shots.iter().any(|&(bus, _)| bus == rule.when)
-                || self
-                    .attached_voices
-                    .values()
-                    .any(|voice| voice.bus == rule.when && voice.sent_gain > 0.0);
+                || self.attached_voices.values().any(|voice| {
+                    voice.bus == rule.when && voice.sent_gain > 0.0 && !self.bus_held(voice.bus)
+                });
             if on != self.rules_live[index] {
                 let (slots, ticks) = if on {
                     (&mut attack, rule.attack_ticks)
@@ -2819,6 +2840,11 @@ impl Engine {
         )
     }
 
+    /// Whether an emitted `BusPause` holds `bus`, directly or through the master.
+    fn bus_held(&self, bus: Bus) -> bool {
+        self.held_buses & ((1u8 << (bus as usize)) | (1u8 << (Bus::Master as usize))) != 0
+    }
+
     /// The length of the WAV `sound` in sim ticks, `ceil(frames x tick_hz / sample_rate)` in integer
     /// math, or `None` when it will not read or decode. Cached per path until the next rebuild.
     fn clip_ticks(&mut self, sound: &str) -> Option<u64> {
@@ -2852,8 +2878,15 @@ impl Engine {
             let Some(voice) = self.attached_voices.get(&id) else {
                 continue;
             };
-            let (entity, authored, range, ends) =
+            let held = self.bus_held(voice.bus);
+            let (entity, authored, range, mut ends) =
                 (voice.entity, voice.gain, voice.range, voice.ends);
+            if held {
+                ends.0 += 1;
+                if let Some(voice) = self.attached_voices.get_mut(&id) {
+                    voice.ends = ends;
+                }
+            }
             if frame >= ends {
                 self.attached_voices.remove(&id);
                 continue;
@@ -4532,6 +4565,7 @@ impl Engine {
         self.audible_emitters.clear();
         self.audio_zones = ZoneState::default();
         self.attached_voices.clear();
+        self.held_buses = 0;
         self.occlusion_state = OcclusionState::default();
         self.voice_ticks.clear();
         // The blanket stop below resets the sink's duck layer, so no `Duck` message goes out.

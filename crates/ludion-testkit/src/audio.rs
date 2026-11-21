@@ -201,6 +201,7 @@ pub fn mix_state(messages: &[(u64, AudioMessage)], frame: u64) -> MixState {
                 pan,
                 category,
                 spatial,
+                ..
             } => {
                 mix.voices.insert(
                     *id,
