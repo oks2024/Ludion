@@ -1,0 +1,380 @@
+# post-film-1982 - the film-lens look for a 1982 neon-noir street: sodium-amber lamps and an emissive
+# neon strip under a red-orange halation (`halation_color`) with a faint cool anamorphic streak,
+# vignette and static grain. It exercises `halation_color` and the `anamorphic*` fields together.
+format: 1
+name: post-film-1982 - halation colour and anamorphic streaks on a night street
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.015
+          - 0.04
+        sky_horizon:
+          - 0.04
+          - 0.05
+          - 0.09
+        sky_ground:
+          - 0.006
+          - 0.007
+          - 0.012
+        ibl_intensity: 0.8
+      PostProcess:
+        bloom_threshold: 0.8
+        bloom_strength: 0.08
+        exposure: 0.9
+        tonemap: aces
+        dither: true
+        halation: 0.12
+        halation_color:
+          - 1.0
+          - 0.25
+          - 0.08
+        anamorphic: 0.08
+        vignette: 0.5
+        vignette_radius: 0.8
+        grain: 0.012
+        grain_size: 0.0016
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.2
+          - 12.0
+        rotation:
+          - -4.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - -10.0
+        scale:
+          - 40.0
+          - 1.0
+          - 60.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.05
+          - 0.055
+          - 0.07
+          - 1.0
+        roughness: 0.7
+  - name: building-1
+    components:
+      Transform:
+        translation:
+          - -9.0
+          - 6.0
+          - -4.0
+        scale:
+          - 6.0
+          - 12.0
+          - 6.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.14
+          - 0.15
+          - 0.19
+          - 1.0
+        roughness: 0.85
+  - name: building-2
+    components:
+      Transform:
+        translation:
+          - -9.0
+          - 7.5
+          - -16.0
+        scale:
+          - 6.0
+          - 15.0
+          - 6.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.14
+          - 0.15
+          - 0.19
+          - 1.0
+        roughness: 0.85
+  - name: building-3
+    components:
+      Transform:
+        translation:
+          - 9.0
+          - 6.5
+          - -8.0
+        scale:
+          - 6.0
+          - 13.0
+          - 6.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.14
+          - 0.15
+          - 0.19
+          - 1.0
+        roughness: 0.85
+  - name: building-4
+    components:
+      Transform:
+        translation:
+          - 9.0
+          - 5.5
+          - -20.0
+        scale:
+          - 6.0
+          - 11.0
+          - 6.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.14
+          - 0.15
+          - 0.19
+          - 1.0
+        roughness: 0.85
+  - name: lamp-post-1
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 2.0
+          - 0.0
+        scale:
+          - 0.15
+          - 4.0
+          - 0.15
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 0.1
+          - 0.12
+          - 1.0
+        roughness: 0.85
+  - name: lamp-1
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 4.2
+          - 0.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.22
+        intensity: 14.0
+        range: 16.0
+  - name: lamp-head-1
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 4.2
+          - 0.0
+        scale:
+          - 0.5
+          - 0.25
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.62
+          - 0.22
+          - 1.0
+        roughness: 0.5
+        emissive: 6.0
+  - name: lamp-post-2
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 2.0
+          - -6.0
+        scale:
+          - 0.15
+          - 4.0
+          - 0.15
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 0.1
+          - 0.12
+          - 1.0
+        roughness: 0.85
+  - name: lamp-2
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 4.2
+          - -6.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.22
+        intensity: 14.0
+        range: 16.0
+  - name: lamp-head-2
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 4.2
+          - -6.0
+        scale:
+          - 0.5
+          - 0.25
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.62
+          - 0.22
+          - 1.0
+        roughness: 0.5
+        emissive: 6.0
+  - name: lamp-post-3
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 2.0
+          - -12.0
+        scale:
+          - 0.15
+          - 4.0
+          - 0.15
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 0.1
+          - 0.12
+          - 1.0
+        roughness: 0.85
+  - name: lamp-3
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 4.2
+          - -12.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.22
+        intensity: 14.0
+        range: 16.0
+  - name: lamp-head-3
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 4.2
+          - -12.0
+        scale:
+          - 0.5
+          - 0.25
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.62
+          - 0.22
+          - 1.0
+        roughness: 0.5
+        emissive: 6.0
+  - name: lamp-post-4
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 2.0
+          - -18.0
+        scale:
+          - 0.15
+          - 4.0
+          - 0.15
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 0.1
+          - 0.12
+          - 1.0
+        roughness: 0.85
+  - name: lamp-4
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 4.2
+          - -18.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.22
+        intensity: 14.0
+        range: 16.0
+  - name: lamp-head-4
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 4.2
+          - -18.0
+        scale:
+          - 0.5
+          - 0.25
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.62
+          - 0.22
+          - 1.0
+        roughness: 0.5
+        emissive: 6.0
+  - name: neon-strip
+    components:
+      Transform:
+        translation:
+          - -8.9
+          - 3.0
+          - -8.0
+        scale:
+          - 0.1
+          - 0.25
+          - 4.0
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.1
+          - 0.4
+          - 1.0
+        roughness: 0.5
+        emissive: 8.0

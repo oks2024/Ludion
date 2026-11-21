@@ -1,0 +1,592 @@
+# post-metered-exposure - night-street with `exposure_mode: metered`: the same frame metered to mid-grey
+# (centre weighting, +-2 EV) instead of the authored manual exposure. Goldens owed on the pinned machines.
+# night-street - a built-in-registry stand-in for a vigil night district, so `render --sweep` and
+# `image-stats` (which only reach the built-in registry, never a district's own components) can tune
+# the volumetric medium against vigil-shaped geometry: a street canyon of tall buildings, a colonnade
+# the moon casts through, and a character that throws a long shadow.
+#
+# It is authored at the look the medium's exit sitting was chasing - visible raking shafts, not a
+# flat veil - and the four ingredients that get there are the durable finding (see the shipped
+# artifact and `Plan/volumetric-medium.md`):
+#   1. CAMERA that sees the air. The shafts live in the air above the street; a steep follow-cam
+#      staring at the ground crops them out. This scene pitches only -12 deg. (Swept -12..-58: the
+#      beams vanish as the pitch approaches vigil's follow angle - the real reason a district reads
+#      as veil, and a camera/game-side call, not a medium knob.)
+#   2. BACKLIT azimuth. The eye looks toward the moon (direction mostly +z, down-street) so each ray
+#      travels along a beam. vigil's own moon (0.32,-0.45,0.83) already has this; fog_anisotropy
+#      stays 0 because the forward lobe still points away from a downward view.
+#   3. OCCLUDERS in the air column - the colonnade and building gaps give the moon something to cast
+#      through, so there is shadowed air to rake the beams against.
+#   4. A DARK backdrop - fog_sky 0.4 with a dark fog_color, so the shadowed air is near-black and the
+#      beams stand out instead of drowning in sky-lit haze.
+#
+# Grade/exposure/vignette/film fields are vigil's env-night values verbatim, so the night look
+# matches; the moon DIRECTION, intensity, and shadow ANCHOR are this scene's own geometry (a
+# DirectionalLight's Transform.translation is the frustum centre, not a sky position).
+format: 1
+name: night-street - a vigil-geometry testbed for the volumetric medium
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.02
+          - 0.055
+        sky_horizon:
+          - 0.05
+          - 0.08
+          - 0.14
+        sky_ground:
+          - 0.006
+          - 0.008
+          - 0.015
+        sun_disc_size: 3.0
+        sun_disc_intensity: 6.0
+        ibl_intensity: 1.2
+      PostProcess:
+        exposure_mode: metered
+        bloom_threshold: 0.5
+        bloom_strength: 0.125
+        exposure: 0.6
+        tonemap: aces
+        dither: true
+        contrast: 0.98
+        saturation: 1.22
+        temperature: 0.12
+        tint: 0.12
+        lift:
+          - 0.0
+          - 0.0
+          - 0.0
+        gamma:
+          - 1.0
+          - 1.0
+          - 1.0
+        gain:
+          - 1.0
+          - 1.0
+          - 1.0
+        fog_density: 0.035
+        fog_color:
+          - 0.02
+          - 0.03
+          - 0.06
+        fog_start: 9.0
+        fog_height: 0.0
+        fog_height_falloff: 0.115
+        fog_sky: 0.4
+        fog_anisotropy: 0.0
+        vignette: 0.82
+        vignette_radius: 0.83
+        ssao: 1.0
+        ssao_radius: 1.66
+        ssao_bias: 0.0
+        ssao_direct: 1.0
+        shafts: 3.0
+        dof: 0.005
+        focus_distance: 22.0
+        chromatic_aberration: 0.002
+        halation: 0.095
+        grain: 0.01
+        grain_size: 0.0016
+  - name: moon
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - -20.0
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.4
+          - 0.87
+        color:
+          - 0.55
+          - 0.65
+          - 0.9
+        intensity: 1.4
+        shadow_extent: 42.0
+        shadow_near: 1.0
+        shadow_far: 200.0
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - -2.0
+          - 4.5
+          - 20.0
+        rotation:
+          - -12.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 120.0
+          - 1.0
+          - 120.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.05
+          - 0.055
+          - 0.07
+          - 1.0
+        roughness: 0.92
+  - name: building-left-1
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 6.0
+          - 4.0
+        scale:
+          - 5.0
+          - 12.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.16
+          - 0.17
+          - 0.21
+          - 1.0
+        roughness: 0.85
+  - name: building-left-2
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 7.5
+          - -8.0
+        scale:
+          - 5.0
+          - 15.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.14
+          - 0.15
+          - 0.19
+          - 1.0
+        roughness: 0.85
+  - name: building-left-3
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 5.0
+          - -20.0
+        scale:
+          - 5.0
+          - 10.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.16
+          - 0.2
+          - 1.0
+        roughness: 0.85
+  - name: building-left-4
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 7.0
+          - -32.0
+        scale:
+          - 5.0
+          - 14.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.13
+          - 0.14
+          - 0.18
+          - 1.0
+        roughness: 0.85
+  - name: building-left-5
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 5.5
+          - -44.0
+        scale:
+          - 5.0
+          - 11.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.14
+          - 0.15
+          - 0.19
+          - 1.0
+        roughness: 0.85
+  - name: building-right-1
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 6.5
+          - -2.0
+        scale:
+          - 5.0
+          - 13.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.16
+          - 0.2
+          - 1.0
+        roughness: 0.85
+  - name: building-right-2
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 5.5
+          - -14.0
+        scale:
+          - 5.0
+          - 11.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.16
+          - 0.17
+          - 0.21
+          - 1.0
+        roughness: 0.85
+  - name: building-right-3
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 7.5
+          - -26.0
+        scale:
+          - 5.0
+          - 15.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.13
+          - 0.14
+          - 0.18
+          - 1.0
+        roughness: 0.85
+  - name: building-right-4
+    components:
+      Transform:
+        translation:
+          - 8.0
+          - 6.0
+          - -38.0
+        scale:
+          - 5.0
+          - 12.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.15
+          - 0.16
+          - 0.2
+          - 1.0
+        roughness: 0.85
+  # A close-spaced colonnade along the moon-side (-x) street edge: the low side-moon shines BETWEEN
+  # these thin pillars, so the near street air is broken into lit blades against mostly-shadowed air.
+  # This is the occluder the open street lacked - a wide gap lets light in everywhere and gives a
+  # flat veil; a narrow picket is what draws beams.
+  - name: colonnade-n3
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 5.5
+          - 19.0
+        scale:
+          - 0.5
+          - 11.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: colonnade-n2
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 5.5
+          - 15.0
+        scale:
+          - 0.5
+          - 11.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: colonnade-n1
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 5.5
+          - 11.0
+        scale:
+          - 0.5
+          - 11.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: colonnade-1
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 5.5
+          - 7.0
+        scale:
+          - 0.5
+          - 11.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: colonnade-2
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 4.5
+          - 3.0
+        scale:
+          - 0.5
+          - 9.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: colonnade-3
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 4.5
+          - -1.0
+        scale:
+          - 0.5
+          - 9.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: colonnade-4
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 4.5
+          - -5.0
+        scale:
+          - 0.5
+          - 9.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: colonnade-5
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 4.5
+          - -9.0
+        scale:
+          - 0.5
+          - 9.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: colonnade-6
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 4.5
+          - -13.0
+        scale:
+          - 0.5
+          - 9.0
+          - 0.5
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: colonnade-lintel
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 9.0
+          - -3.0
+        scale:
+          - 0.5
+          - 0.6
+          - 24.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.21
+          - 0.25
+          - 1.0
+        roughness: 0.8
+  - name: character
+    components:
+      Transform:
+        translation:
+          - -1.0
+          - 1.5
+          - 5.0
+        scale:
+          - 1.2
+          - 3.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.28
+          - 0.26
+          - 1.0
+        roughness: 0.6
+  - name: lamp-post
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 8.2
+          - -8.0
+        scale:
+          - 0.6
+          - 0.6
+          - 0.6
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.66
+          - 0.28
+          - 1.0
+        emissive: 7.0
+  - name: lamp-glow
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 7.6
+          - -8.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.66
+          - 0.3
+        intensity: 3.0
+        range: 14.0
+  - name: street-glow
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.4
+          - 4.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.7
+          - 0.34
+        intensity: 2.2
+        range: 11.0
+  - name: window-strip
+    components:
+      Transform:
+        translation:
+          - 5.5
+          - 4.0
+          - -26.0
+        scale:
+          - 0.3
+          - 2.0
+          - 1.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.72
+          - 1.0
+          - 1.0
+        emissive: 5.0
