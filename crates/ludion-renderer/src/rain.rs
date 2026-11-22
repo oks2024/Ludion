@@ -76,6 +76,12 @@ pub fn rain_per_tile(density: f32, intensity: f32, cell: f32) -> u32 {
     (density * intensity * cell * cell * cell).round().max(0.0) as u32
 }
 
+/// The per-tile count a quality's `rain_density` draws: the authored count scaled and rounded, so a lower
+/// density draws a prefix of the same drops. `1.0` is the identity.
+pub fn rain_draw_per_tile(per_tile: u32, density: f32) -> u32 {
+    (per_tile as f32 * density).round().max(0.0) as u32
+}
+
 /// `per_tile` clamped so `tiles · per_tile` fits [`MAX_RAIN_STREAKS`]; the flag is true when it clamped.
 pub fn rain_budget(per_tile: u32, tiles: u32) -> (u32, bool) {
     if tiles == 0 || u64::from(per_tile) * u64::from(tiles) <= u64::from(MAX_RAIN_STREAKS) {
@@ -338,6 +344,9 @@ mod tests {
         assert!(clamped && per_tile * tiles <= MAX_RAIN_STREAKS && per_tile == 65_536 / tiles);
         assert_eq!(rain_per_tile(1.5, 1.0, 4.0), 96);
         assert_eq!(rain_per_tile(1.5, 0.5, 4.0), 48);
+        assert_eq!(rain_draw_per_tile(96, 1.0), 96);
+        assert_eq!(rain_draw_per_tile(96, 0.4), 38);
+        assert_eq!(rain_draw_per_tile(96, 0.0), 0);
         let layout = rain_layout(&RainData { per_tile: 96, ..r }, Vec3::ZERO);
         assert_eq!(layout.instances, 486 * 96);
     }

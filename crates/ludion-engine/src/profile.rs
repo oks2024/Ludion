@@ -4456,6 +4456,7 @@ gpu_frame_max_ms = 9.5
             fog: true,
             silhouette: false,
             rain: false,
+            rain_view: false,
             blended: false,
             blend_nearest: false,
             aa: ludion_renderer::AntiAliasing::Off,

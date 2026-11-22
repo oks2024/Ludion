@@ -620,10 +620,12 @@ enum Command {
         /// `local_shadow_atlas` (the local-light shadow atlas, letterboxed) or `sun_cascades` (the
         /// lit frame, each mesh fragment tinted by the sun cascade that shades it) or
         /// `exposure_meter` (the metered frame dimmed, with the meter's histogram, trimmed bins,
-        /// mean and mid-grey target over its bottom quarter). A view never turns
+        /// mean and mid-grey target over its bottom quarter) or `rain_occlusion` (every opaque mesh
+        /// fragment inside the rain map tinted blue where rain reaches it and orange where it is
+        /// covered). A view never turns
         /// its effect on: where the scene's `PostProcess.ssr` is 0, this quality masks the trace,
         /// the scene has no probes, no local light is granted a shadow, the sun fits no cascades,
-        /// or `PostProcess.exposure_mode` is `manual`, the normal frame is drawn and the summary
+        /// `PostProcess.exposure_mode` is `manual` or the scene has no `Rain`, the normal frame is drawn and the summary
         /// line says so.
         #[arg(
             long,
@@ -2012,6 +2014,8 @@ enum CliDebugView {
     Irradiance,
     #[value(name = "exposure_meter")]
     ExposureMeter,
+    #[value(name = "rain_occlusion")]
+    RainOcclusion,
 }
 
 impl From<CliDebugView> for ludion_engine::DebugView {
@@ -2024,6 +2028,7 @@ impl From<CliDebugView> for ludion_engine::DebugView {
             CliDebugView::SunCascades => ludion_engine::DebugView::SunCascades,
             CliDebugView::Irradiance => ludion_engine::DebugView::Irradiance,
             CliDebugView::ExposureMeter => ludion_engine::DebugView::ExposureMeter,
+            CliDebugView::RainOcclusion => ludion_engine::DebugView::RainOcclusion,
         }
     }
 }

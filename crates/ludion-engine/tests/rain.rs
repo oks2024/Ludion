@@ -222,3 +222,80 @@ fn a_presentation_rain_does_not_move_the_world_hash() {
     );
     let _ = Rain::default();
 }
+
+/// A cube entity with extra component blocks (each already indented to six spaces).
+fn cube(name: &str, extra: &str) -> String {
+    format!(
+        "  - name: {name}\n    components:\n      Transform: {{}}\n      Mesh:\n        shape: cube\n{extra}"
+    )
+}
+
+/// `Parent` of the entity at list position `index` (`cam` is 0).
+fn parent_block(index: u32) -> String {
+    format!("      Parent:\n        index: {index}\n        generation: 0\n")
+}
+
+const SHADOWLESS: &str = "      Visibility:\n        cast_shadows: false\n";
+
+fn occluders(engine: &mut Engine) -> Vec<bool> {
+    extract(engine)
+        .meshes
+        .iter()
+        .map(|mesh| mesh.rain_occluder)
+        .collect()
+}
+
+/// Without a `RainOccluder` a mesh occludes exactly when it casts a shadow.
+#[test]
+fn an_absent_rain_occluder_follows_cast_shadows() {
+    let mut engine = engine_for(&document(&format!(
+        "{}{}",
+        cube("caster", ""),
+        cube("ghost", SHADOWLESS)
+    )));
+    assert_eq!(occluders(&mut engine), [true, false]);
+}
+
+/// An own `RainOccluder` overrides `cast_shadows` both ways.
+#[test]
+fn an_own_rain_occluder_overrides_cast_shadows_both_ways() {
+    let mut engine = engine_for(&document(&format!(
+        "{}{}",
+        cube("forced", &format!("{SHADOWLESS}      RainOccluder: {{}}\n")),
+        cube("exempt", "      RainOccluder:\n        occludes: false\n"),
+    )));
+    assert_eq!(occluders(&mut engine), [true, false]);
+}
+
+/// A parent's tag reaches an untagged child, and the nearest tag wins down the chain.
+#[test]
+fn a_parents_rain_occluder_reaches_its_children_and_the_nearest_wins() {
+    let mut engine = engine_for(&document(&format!(
+        "{}{}{}{}",
+        cube("root", "      RainOccluder:\n        occludes: false\n"),
+        cube("child", &parent_block(1)),
+        cube(
+            "retagged",
+            &format!("{}      RainOccluder: {{}}\n", parent_block(1))
+        ),
+        cube("grandchild", &parent_block(3)),
+    )));
+    assert_eq!(occluders(&mut engine), [false, false, true, true]);
+}
+
+/// `occludes: true` on a blended mesh is inert and reported once as `L2383`; `occludes: false` is not.
+#[test]
+fn a_rain_occluder_on_a_blended_mesh_reports_l2383() {
+    let blended = "        blend: alpha\n";
+    let mut engine = engine_for(&document(&format!(
+        "{}{}",
+        cube("glass", &format!("{blended}      RainOccluder: {{}}\n")),
+        cube(
+            "net",
+            &format!("{blended}      RainOccluder:\n        occludes: false\n")
+        ),
+    )));
+    let scene = extract(&mut engine);
+    assert!(scene.meshes.is_empty(), "both are blended");
+    assert_eq!(reported(&engine, code::RAIN_OCCLUDER_BLENDED), 1);
+}

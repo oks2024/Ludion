@@ -33,11 +33,15 @@ pub enum DebugView {
     /// mid-grey target and the unclamped window drawn over the bottom quarter. Drawn only when the
     /// scene meters (`exposure_mode: metered`); a manual scene draws the normal frame.
     ExposureMeter,
+    /// Every opaque mesh fragment inside the rain occlusion map, tinted by its column's exposure:
+    /// blue where rain reaches it, orange where it is covered ([`RAIN_VIEW_EXPOSED`],
+    /// [`RAIN_VIEW_COVERED`]); untinted outside the map. Drawn only when the scene has a `Rain`.
+    RainOcclusion,
 }
 
 impl DebugView {
     /// Every view, in the order the CLI lists them.
-    pub const ALL: [DebugView; 7] = [
+    pub const ALL: [DebugView; 8] = [
         DebugView::SsrConfidence,
         DebugView::SsrFootprint,
         DebugView::ProbeIndex,
@@ -45,6 +49,7 @@ impl DebugView {
         DebugView::SunCascades,
         DebugView::Irradiance,
         DebugView::ExposureMeter,
+        DebugView::RainOcclusion,
     ];
 
     /// The spelling used by the CLI and in summaries.
@@ -57,6 +62,7 @@ impl DebugView {
             DebugView::SunCascades => "sun_cascades",
             DebugView::Irradiance => "irradiance",
             DebugView::ExposureMeter => "exposure_meter",
+            DebugView::RainOcclusion => "rain_occlusion",
         }
     }
 
@@ -91,3 +97,9 @@ pub const SUN_CASCADE_VIEW_PALETTE: [[f32; 3]; 4] = [
     [0.5, 0.6, 1.0],
     [1.0, 1.0, 0.4],
 ];
+
+/// The `rain_occlusion` view's tint for a surface rain reaches; `mesh.wgsl`'s `RAIN_VIEW_EXPOSED` mirrors it.
+pub const RAIN_VIEW_EXPOSED: [f32; 3] = [0.15, 0.55, 1.0];
+
+/// The `rain_occlusion` view's tint for a covered surface; `mesh.wgsl`'s `RAIN_VIEW_COVERED` mirrors it.
+pub const RAIN_VIEW_COVERED: [f32; 3] = [1.0, 0.45, 0.1];

@@ -100,7 +100,8 @@ pub use compressed::{CompressedUploadError, check_compressed};
 pub use cull::{LodRadii, cull_marks, lod_level, lod_radii, lod_size};
 pub use cull_stats::CullViewCount;
 pub use debug_view::{
-    DebugView, IRRADIANCE_VIEW_SCALE, PROBE_VIEW_PALETTE, SUN_CASCADE_VIEW_PALETTE,
+    DebugView, IRRADIANCE_VIEW_SCALE, PROBE_VIEW_PALETTE, RAIN_VIEW_COVERED, RAIN_VIEW_EXPOSED,
+    SUN_CASCADE_VIEW_PALETTE,
 };
 pub use exposure_readback::MeterReading;
 pub use frame_observer::{FrameObserver, FramePhase};
@@ -132,7 +133,7 @@ pub use projector::{
 pub use quality::{MAX_SUN_CASCADES, Quality, QualityParams};
 pub use rain::{
     MAX_RAIN_STREAKS, RAIN_TIME_WRAP_S, RainData, RainLayout, drop_position, rain_budget,
-    rain_layout, rain_per_tile, rain_tiles,
+    rain_draw_per_tile, rain_layout, rain_per_tile, rain_tiles,
 };
 pub use render::{
     GpuUploads, Renderer, SHADER_SOURCE_DIR, dump_scene_frame_graph_json, view_scene,

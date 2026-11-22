@@ -102,7 +102,7 @@ pub use perception::{
 pub use pose_snapshot::{PoseSnapshot, SnapshotPart};
 pub use prefab::PrefabInstance;
 pub use radial::{AimKind, MAX_RADIAL_ITEMS, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
-pub use rain::{MAX_RAIN_HEIGHT_SPAN, Rain, rain_problems};
+pub use rain::{MAX_RAIN_HEIGHT_SPAN, Rain, RainOccluder, rain_problems};
 pub use render_layers::{DEFAULT_RENDER_LAYER, RenderLayers, layer_names_diagnostics};
 pub use render_view::{
     PostProfile, RENDER_VIEW_SIZE_RANGE, RenderView, ViewBackground, ViewShading,
@@ -7197,6 +7197,10 @@ pub fn builtin_registry() -> Registry {
     registry
         .register_validated::<PostProfile>("PostProfile")
         .expect("unique");
+    // Which meshes write the rain occlusion map, appended after `PostProfile`: read by `extract` into `MeshInstance.rain_occluder`.
+    registry
+        .register::<RainOccluder>("RainOccluder")
+        .expect("unique");
     // Read only by a sim system: physics, path_follow, camera_rig, pose_blend.
     for name in SIM_ONLY_COMPONENTS {
         registry.mark_sim_only(name).expect("registered above");
@@ -7762,12 +7766,13 @@ mod tests {
                 "NavObstacleState",
                 "SubtitleView",
                 "PostProfile",
+                "RainOccluder",
             ]
         );
         assert_eq!(
             registry.len(),
-            96,
-            "appending `PostProfile` grows the registry to 96"
+            97,
+            "appending `RainOccluder` grows the registry to 97"
         );
     }
 

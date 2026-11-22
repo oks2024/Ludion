@@ -8582,6 +8582,19 @@
       }
     }
   },
+  "RainOccluder": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "RainOccluder",
+    "description": "Whether an entity's opaque meshes write the `rain_occlusion` map. Absent, a mesh occludes when it casts a\nshadow. `{}` makes a non-caster occlude; `occludes: false` exempts a caster (a chain-link fence, a net\ncanopy). The nearest `RainOccluder` on the entity or a `Parent` ancestor wins. Blended and viewmodel\nmeshes never occlude.\n\n```\nuse ludion_components::RainOccluder;\n\nlet net: RainOccluder = serde_json::from_value(serde_json::json!({ \"occludes\": false })).unwrap();\nassert!(!net.occludes);\nassert!(serde_json::from_value::<RainOccluder>(serde_json::json!({})).unwrap().occludes);\n```",
+    "type": "object",
+    "properties": {
+      "occludes": {
+        "description": "Whether this entity's opaque meshes write the rain occlusion map (default true).",
+        "type": "boolean",
+        "default": true
+      }
+    }
+  },
   "ReflectionProbe": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "ReflectionProbe",

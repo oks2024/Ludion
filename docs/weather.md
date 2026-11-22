@@ -58,12 +58,23 @@ A `rain_occlusion` pass draws every shadow caster over the rain volume straight 
 the camera (`radius` either side, texel-snapped so a camera move under a texel leaves the map still, and reaching 64 m
 above the band). Each streak fragment compares its height with the nearest caster over its column and fades out over
 5 cm below it: no rain under an awning, a roof or a doorway lintel, with a crisp edge. What occludes is what casts a
-shadow: a `Mesh` with `cast_shadows: false` lets rain through (`RainOccluder`, a component that occludes without
-drawing, is in `Plan/rain-and-wet.md`). The map is straight down, so wind-slanted rain still reaches the first metre
+shadow: a `Mesh` with `cast_shadows: false` lets rain through unless a `RainOccluder` says otherwise. The map is straight down, so wind-slanted rain still reaches the first metre
 inside a wall's edge, and a roof more than 64 m over the band does not occlude. The pass runs only with a `Rain`
 present: a rain-free scene keeps the identical frame graph and pixels. `occlusion: false` keeps the pass and draws no
 casters, so nothing occludes. The pass costs 0.003 ms on `rain-awning` at 1080p on the RTX 3090 (a handful of
 casters); it grows with the casters in the volume, like the sun's shadow pass.
+
+## RainOccluder
+`RainOccluder { occludes: bool }` (default `true`) decides whether an entity's opaque meshes write the map, whatever
+they do for shadows. `RainOccluder: {}` makes a non-caster (`cast_shadows: false`) occlude; `occludes: false` exempts a
+caster, such as a chain-link fence or a net canopy. The nearest `RainOccluder` on the entity or a `Parent` ancestor
+wins, so a prefab is tagged once at its root; with none, a mesh occludes when it casts a shadow. Blended and viewmodel
+meshes never occlude (`occludes: true` on a blended mesh is `L2383`), and a hidden entity draws nothing, so it occludes
+nothing.
+
+`ludion render --scene <scene> --debug-view rain_occlusion` tints every opaque mesh fragment inside the map: blue where
+rain reaches it, orange where it is covered, untinted outside the map. It needs a `Rain` (the normal frame is drawn
+without one) and is CLI-only.
 
 ## Wetness
 `wetness` (default 1) darkens and glosses every opaque mesh surface the rain reaches. Per fragment the scene pass
@@ -92,7 +103,7 @@ over time, the way a game writes `focus_distance`; `wetness: 0` renders the fram
 ## Gotchas
 | Situation | What happens |
 |---|---|
-| A roof over the camera | No streaks under it, per pixel; `occlusion: false` draws through. A mesh with `cast_shadows: false` does not occlude |
+| A roof over the camera | No streaks under it, per pixel; `occlusion: false` draws through. A mesh with `cast_shadows: false` does not occlude unless it carries `RainOccluder: {}`; a net that should let rain through carries `occludes: false` |
 | Light | A lit streak takes the lit-sprite rule at its centre, so the sun and local lights are unshadowed |
 | Fog | Streaks fog through the transparent layer; `medium: 0` keeps them out of the fog |
 | Streaks overlapping | Blended premultiplied, unsorted within the draw |
@@ -107,6 +118,11 @@ over time, the way a game writes `focus_distance`; `wetness: 0` renders the fram
 - `L2380` (error): a field is non-finite or out of range, at its JSON Pointer.
 - `L2381` (warning): more than one `Rain`; the lowest id is used.
 - `L2382` (warning): the streak budget clamped the per-tile count.
+- `L2383` (warning): a `RainOccluder` with `occludes: true` sits on a blended mesh, which never writes the map.
 
-`ludion explain L2380` gives the fix. The gallery scenes are `examples/gallery/rain-open.yaml`, `rain-awning.yaml` and
-`rain-wet.yaml` (wet voxel ground and figures, a dry awning).
+`ludion explain L2380` gives the fix. The gallery scenes are `examples/gallery/rain-open.yaml`, `rain-awning.yaml`,
+`rain-wet.yaml` (wet voxel ground and figures, a dry awning) and `rain-occluder.yaml` (a net that lets rain through beside a
+shadowless canopy that stops it).
+
+`--quality low` draws 0.4 of the streaks (`rain_density`, a prefix of the same drops); wetness and the map are unchanged.
+

@@ -232,6 +232,8 @@ fn instance_hash(instance: &MeshInstance, assets: &[Arc<MeshData>], palette: &[M
         scatter_color,
         bone_offset,
         cast_shadows,
+        // Probe captures carry no rain, so the rain map's occluder flag cannot change a capture.
+        rain_occluder: _,
         viewmodel,
         rim,
         medium,

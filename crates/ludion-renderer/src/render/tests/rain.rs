@@ -144,6 +144,7 @@ fn roof(center: Vec3, size: Vec3, casts: bool) -> MeshInstance {
     let mut mesh = slab(Vec3::ZERO, 1.0, [0.4; 3]);
     mesh.model = Mat4::from_translation(center) * Mat4::from_scale(size);
     mesh.cast_shadows = casts;
+    mesh.rain_occluder = casts;
     mesh
 }
 
@@ -281,6 +282,160 @@ fn needs_gpu_a_non_caster_roof_does_not_occlude() {
         .expect("off");
     assert_ne!(kept.rgba, bare.rgba, "the rain shows under a non-caster");
     assert_eq!(kept.rgba, off.rgba, "nothing occludes it");
+}
+
+/// The rain flag list is empty when every instance occludes, and one entry per mesh otherwise.
+#[test]
+fn rain_casts_are_empty_when_every_instance_occludes() {
+    let mut meshes = vec![slab(Vec3::ZERO, 1.0, [0.3; 3]); 3];
+    assert!(caster_flags(&meshes, |m| m.rain_occluder).is_empty());
+    meshes[1].rain_occluder = false;
+    assert_eq!(
+        caster_flags(&meshes, |m| m.rain_occluder),
+        [true, false, true]
+    );
+    assert!(caster_flags(&meshes, |m| m.cast_shadows).is_empty());
+}
+
+/// `RainOccluder: {}` on a roof that casts no shadow makes it occlude: with 60 m of roof overhead
+/// the rained frame equals the rain-free one. Skips with no GPU.
+#[test]
+fn needs_gpu_a_non_caster_occluder_roof_stops_the_rain() {
+    let Some(renderer) = skip_or_renderer("a_non_caster_occluder_roof_stops_the_rain") else {
+        return;
+    };
+    let tagged = || {
+        let mut mesh = roof(Vec3::new(0.0, 3.0, 0.0), Vec3::new(60.0, 0.2, 60.0), false);
+        mesh.rain_occluder = true;
+        Some(mesh)
+    };
+    let bare = renderer
+        .render(&under_roof(None, tagged()), size())
+        .expect("bare");
+    let covered = renderer
+        .render(&under_roof(Some(rain(1.0)), tagged()), size())
+        .expect("covered");
+    assert_eq!(
+        covered.rgba, bare.rgba,
+        "the tagged non-caster stops every streak"
+    );
+}
+
+/// `RainOccluder: { occludes: false }` exempts a caster: the rain draws under it, equal to the frame
+/// with occlusion off. Skips with no GPU.
+#[test]
+fn needs_gpu_an_exempt_caster_roof_lets_the_rain_through() {
+    let Some(renderer) = skip_or_renderer("an_exempt_caster_roof_lets_the_rain_through") else {
+        return;
+    };
+    let net = || {
+        let mut mesh = roof(Vec3::new(0.0, 3.0, 0.0), Vec3::new(60.0, 0.2, 60.0), true);
+        mesh.rain_occluder = false;
+        Some(mesh)
+    };
+    let bare = renderer
+        .render(&under_roof(None, net()), size())
+        .expect("bare");
+    let through = renderer
+        .render(&under_roof(Some(rain(1.0)), net()), size())
+        .expect("through");
+    let off = renderer
+        .render(
+            &under_roof(
+                Some(RainData {
+                    occlusion: false,
+                    ..rain(1.0)
+                }),
+                net(),
+            ),
+            size(),
+        )
+        .expect("off");
+    assert_ne!(
+        through.rgba, bare.rgba,
+        "streaks show under the exempt caster"
+    );
+    assert_eq!(through.rgba, off.rgba, "nothing occludes it");
+}
+
+/// `rain_density` thins the streaks drawn: half the density renders what a scene authoring half the
+/// per-tile count renders at full, and differs from the full rain. Skips with no GPU.
+#[test]
+fn needs_gpu_rain_density_draws_a_prefix_of_the_same_drops() {
+    let Some(mut renderer) = skip_or_renderer("rain_density_draws_a_prefix_of_the_same_drops")
+    else {
+        return;
+    };
+    let full = renderer
+        .render(&floor(Some(rain(1.0))), size())
+        .expect("full");
+    let half_count = crate::rain::rain_draw_per_tile(96, 0.5);
+    let authored = renderer
+        .render(
+            &floor(Some(RainData {
+                per_tile: half_count,
+                ..rain(1.0)
+            })),
+            size(),
+        )
+        .expect("authored");
+    renderer.set_quality(
+        Quality::FULL,
+        QualityParams {
+            rain_density: 0.5,
+            ..QualityParams::FULL
+        },
+    );
+    let thinned = renderer
+        .render(&floor(Some(rain(1.0))), size())
+        .expect("thinned");
+    assert_ne!(
+        thinned.rgba, full.rgba,
+        "half the streaks differ from all of them"
+    );
+    assert_eq!(
+        thinned.rgba, authored.rgba,
+        "the thinned rain is the prefix of the same drops"
+    );
+}
+
+/// The `rain_occlusion` view tints a floor under a roof orange and an open floor blue; a rain-free
+/// scene draws the normal frame. Skips with no GPU.
+#[test]
+fn needs_gpu_the_rain_occlusion_view_tints_covered_and_exposed_surfaces() {
+    let Some(renderer) =
+        skip_or_renderer("the_rain_occlusion_view_tints_covered_and_exposed_surfaces")
+    else {
+        return;
+    };
+    let half = || {
+        Some(roof(
+            Vec3::new(-30.0, 3.0, 0.0),
+            Vec3::new(60.0, 0.2, 60.0),
+            true,
+        ))
+    };
+    let mut viewed = matte_under_roof(1.0, half());
+    viewed.debug_view = Some(crate::DebugView::RainOcclusion);
+    let frame = renderer.render(&viewed, size()).expect("viewed");
+    let (covered, exposed) = (px(&frame, PX / 4, PX - 6), px(&frame, PX * 3 / 4, PX - 6));
+    assert!(
+        covered[0] > covered[2],
+        "under the roof is orange-dominant: {covered:?}"
+    );
+    assert!(
+        exposed[2] > exposed[0],
+        "the open floor is blue-dominant: {exposed:?}"
+    );
+
+    let mut dry = floor(None);
+    let normal = renderer.render(&dry, size()).expect("normal");
+    dry.debug_view = Some(crate::DebugView::RainOcclusion);
+    let unviewed = renderer.render(&dry, size()).expect("rain-free view");
+    assert_eq!(
+        unviewed.rgba, normal.rgba,
+        "a view never conjures its subject"
+    );
 }
 
 /// The `rain_occlusion` pass time under a roof at 1080p: a measurement, not a gate. Run with

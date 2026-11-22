@@ -107,6 +107,9 @@ pub struct MeshInstance {
     /// occlusion; `true` for every instance a Visibility-free scene extracts. CPU-only: it never
     /// reaches the GPU instance data.
     pub cast_shadows: bool,
+    /// Whether this instance writes the `rain_occlusion` map: its resolved `cast_shadows` unless a
+    /// `RainOccluder` overrides it. CPU-only like `cast_shadows`: it never reaches the GPU instance data.
+    pub rain_occluder: bool,
     /// Whether this instance is a first-person viewmodel: its `model` is composed onto the frame's
     /// drawn camera (see [`RenderScene::viewmodel`]). CPU-only like `cast_shadows`: it never reaches
     /// the GPU instance data.
@@ -1730,6 +1733,7 @@ impl StaticRange {
                 scatter_color,
                 bone_offset,
                 cast_shadows,
+                rain_occluder,
                 viewmodel,
                 rim,
                 medium,
@@ -1761,6 +1765,7 @@ impl StaticRange {
             bytes.extend_from_slice(&[
                 u8::from(*use_vertex_material),
                 u8::from(*cast_shadows),
+                u8::from(*rain_occluder),
                 u8::from(*viewmodel),
             ]);
         }
@@ -2179,6 +2184,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            rain_occluder: true,
             viewmodel: false,
             rim: [0.0; 4],
             porosity: crate::DEFAULT_POROSITY,
@@ -2242,6 +2248,7 @@ mod tests {
             },
             MeshInstance {
                 cast_shadows: false,
+                rain_occluder: false,
                 ..base
             },
             MeshInstance {

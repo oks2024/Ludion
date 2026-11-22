@@ -1854,6 +1854,7 @@ fn a_visibility_free_world_extracts_unchanged() {
     let mut recast = c.clone();
     for mesh in &mut recast.meshes {
         mesh.cast_shadows = true;
+        mesh.rain_occluder = true;
     }
     assert_eq!(a, recast, "cast_shadows alone does not hide anything");
 }

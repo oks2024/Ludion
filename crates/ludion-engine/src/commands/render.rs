@@ -275,6 +275,7 @@ fn wire_view(view: DebugView) -> Option<RenderDebugView> {
         // Not on the wire: a wire variant moves the replay schema hash.
         DebugView::Irradiance => return None,
         DebugView::ExposureMeter => return None,
+        DebugView::RainOcclusion => return None,
     })
 }
 

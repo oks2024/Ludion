@@ -798,6 +798,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset,
             cast_shadows: true,
+            rain_occluder: true,
             viewmodel: false,
             rim: [0.0; 4],
         }

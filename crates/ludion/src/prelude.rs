@@ -326,6 +326,7 @@ pub use ludion_engine::{RootMotion, root_motion_delta};
 
 pub use ludion_engine::AudioOcclusion;
 pub use ludion_engine::Rain;
+pub use ludion_engine::RainOccluder;
 pub use ludion_engine::RenderLayers;
 pub use ludion_engine::RenderView;
 pub use ludion_engine::SubtitleView;

@@ -44,6 +44,7 @@
 //! gi_probe_scale = 1.5
 //! render_scale = 0.75
 //! particle_density = 0.25
+//! rain_density = 0.4
 //! ssr_scale = 0.25
 //! ```
 //!
@@ -58,7 +59,8 @@
 //! which beats native. `particle_density` is the third multiplier and reads the same way round: it
 //! is the fraction of every emitter's authored `rate` and `burst` that is actually emitted, so
 //! `full`'s `1.0` is its ceiling too — a fuller plume is the emitter's own to author, never a
-//! machine's to ask for.
+//! machine's to ask for. `rain_density` reads the same way: it is the fraction of a `Rain`'s streaks the
+//! renderer draws (wetness and the occlusion map are untouched), with `full`'s `1.0` as its ceiling.
 //! `ssr_scale` is the fourth and reads the same way: the reflection trace's extent as a fraction of
 //! the output extent, so cheaper is smaller and `full`'s `0.5` is its ceiling.
 //!
@@ -429,6 +431,8 @@ struct Params {
     #[serde(default)]
     particle_density: Option<f32>,
     #[serde(default)]
+    rain_density: Option<f32>,
+    #[serde(default)]
     ssr_scale: Option<f32>,
 }
 
@@ -665,6 +669,19 @@ fn parse_override_file(text: &str, path: &Path) -> Result<(Quality, QualityParam
             }
             params.particle_density = density;
         }
+        // Spent in the renderer (`build_rain_draw`), bounded like `particle_density`.
+        if let Some(density) = overrides.rain_density {
+            if !density.is_finite() || !(0.0..=QualityParams::FULL.rain_density).contains(&density)
+            {
+                return Err(invalid(format!(
+                    "`{}` sets `rain_density` to {density}, which is outside 0.0..=1.0: it is the \
+                     fraction of a `Rain`'s streaks that is drawn, so 1.0 is the rain the scene asked \
+                     for and the most a machine may ask for",
+                    path.display(),
+                )));
+            }
+            params.rain_density = density;
+        }
         // The fourth multiplier, read like `render_scale` and bounded the same way: the trace is
         // drawn at a fraction of the output extent, so `full`'s value is the ceiling and the
         // floor is the smallest fraction `RenderScale` itself accepts.
@@ -692,7 +709,7 @@ fn invalid(message: String) -> Diagnostic {
          \"...\"` base, an optional `[effects]` table of \
          `ssao`/`shafts`/`dof`/`gi_dynamic`/`shadows`/`ssr` booleans, and an optional `[params]` table of \
          `ssao_samples`/`shaft_steps`/`dof_taps`/`shadow_map_size`/`sun_cascades`/`local_shadow_atlas_size`/`ibl_specular_size`/`pcf`/`gi_rays` \
-         counts plus the `gi_probe_scale`, `render_scale`, `particle_density` and `ssr_scale` multipliers); a host's `--quality` \
+         counts plus the `gi_probe_scale`, `render_scale`, `particle_density`, `rain_density` and `ssr_scale` multipliers); a host's `--quality` \
          flag beats {QUALITY_ENV} either way",
         preset_list(),
     ))
@@ -1053,7 +1070,7 @@ mod tests {
             params_of(
                 "[params]\nssao_samples = 2\nshaft_steps = 3\ndof_taps = 5\nshadow_map_size = 512\n\
                  sun_cascades = 3\nlocal_shadow_atlas_size = 256\nibl_specular_size = 64\npcf = 1\ngi_rays = 16\ngi_probe_scale = 2.5\n\
-                 render_scale = 0.5\nparticle_density = 0.5\n",
+                 render_scale = 0.5\nparticle_density = 0.5\nrain_density = 0.4\n",
             ),
             QualityParams {
                 ssao_samples: 2,
@@ -1070,6 +1087,7 @@ mod tests {
                 gi_probe_scale: 2.5,
                 render_scale: 0.5,
                 particle_density: 0.5,
+                rain_density: 0.4,
                 ssr_scale: QualityParams::FULL.ssr_scale,
                 lod_bias: QualityParams::FULL.lod_bias,
             },
@@ -1262,6 +1280,35 @@ mod tests {
             params_of("preset = \"low\"\n[params]\nparticle_density = 1.0\n").particle_density,
             QualityParams::FULL.particle_density,
             "a file can buy the full plumes back on a machine whose bottleneck is elsewhere",
+        );
+    }
+
+    /// `rain_density` is bounded 0.0..=1.0 like `particle_density`: the share of a Rain's streaks drawn.
+    #[test]
+    fn rain_density_is_bounded_from_zero_up_to_the_authored_rain() {
+        let path = Path::new("quality.toml");
+        for bad in ["-0.1", "1.5", "nan"] {
+            let diagnostic =
+                parse_override_file(&format!("[params]\nrain_density = {bad}\n"), path)
+                    .expect_err("an out-of-range rain density must be refused");
+            assert_eq!(diagnostic.code, code::QUALITY_SETTING_INVALID);
+            assert!(
+                diagnostic.message.contains("rain_density"),
+                "{}",
+                diagnostic.message
+            );
+        }
+        assert_eq!(
+            params_of("[params]\nrain_density = 0.4\n").rain_density,
+            0.4
+        );
+        assert_eq!(
+            params_of("preset = \"low\"\n").rain_density,
+            QualityParams::LOW.rain_density
+        );
+        assert_eq!(
+            params_of("preset = \"low\"\n[params]\nrain_density = 1.0\n").rain_density,
+            QualityParams::FULL.rain_density,
         );
     }
 

@@ -1541,6 +1541,7 @@ fn extract_inner(
         }
         let (fade, rim, medium) = inherit.resolve(world, mesh);
         let cast_shadows = visibility.casts(mesh.id);
+        let rain_occluder = crate::rain::rain_occluder(world, mesh.id, cast_shadows);
         let mut character: Option<Arc<CharacterData>> = None;
         let shape = match mesh.source {
             PlacedMeshSource::Primitive(shape) => Some(shape),
@@ -1641,6 +1642,7 @@ fn extract_inner(
                         scatter_color: mesh.scatter_color,
                         bone_offset: 0,
                         cast_shadows,
+                        rain_occluder,
                         viewmodel: false,
                         rim: resolve_rim_lane(&mesh_assets, Some(index), rim),
                         medium,
@@ -1658,6 +1660,7 @@ fn extract_inner(
                     );
                     match mode {
                         Some(mode) => {
+                            crate::rain::report_blended_occluder(world, mesh.id, degraded);
                             blended.push(blended_mesh(
                                 instance,
                                 mode,
@@ -1714,6 +1717,7 @@ fn extract_inner(
                 rim,
                 medium,
                 cast_shadows,
+                rain_occluder,
                 bone_offset,
             );
             let document_blend = matches!(shape, MeshShape::Asset(idx) if mesh_assets[idx].blend);
@@ -1728,6 +1732,7 @@ fn extract_inner(
                 degraded,
             ) {
                 Some(mode) => {
+                    crate::rain::report_blended_occluder(world, mesh.id, degraded);
                     blended.push(blended_mesh(
                         instance,
                         mode,
@@ -5772,6 +5777,7 @@ pub(crate) fn mesh_instance(
     rim: [f32; 4],
     medium: f32,
     cast_shadows: bool,
+    rain_occluder: bool,
     bone_offset: u32,
 ) -> MeshInstance {
     let asset = match shape {
@@ -5793,6 +5799,7 @@ pub(crate) fn mesh_instance(
         scatter_color: mesh.scatter_color,
         bone_offset,
         cast_shadows,
+        rain_occluder,
         viewmodel: false,
         rim: resolve_rim_lane(mesh_assets, asset, rim),
         medium,
@@ -5813,6 +5820,7 @@ fn blended_mesh(
         nearest,
         instance: MeshInstance {
             cast_shadows: false,
+            rain_occluder: false,
             ..instance
         },
         mode: match mode {

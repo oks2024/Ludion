@@ -444,6 +444,65 @@ fn needs_gpu_sun_cascades_view_matches_committed_golden_at_exactly_one() {
     }
 }
 
+/// The gallery's `rain-occluder.yaml` scene under the `rain_occlusion` view: exposed surfaces blue, covered
+/// ones orange. The discovery pairing covers the scene's normal render.
+fn rain_occluder_view_test() -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery.join("rain-occluder.yaml"),
+        os_goldens().join("rain-occluder-view.png"),
+    )
+    .with_debug_view(Some(DebugView::RainOcclusion));
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// `rain-occluder` under the `rain_occlusion` debug view compares clean against its committed golden at exactly
+/// SSIM 1.0. Under `LUDION_BLESS`, (re)writes the committed golden instead. Skips gracefully with no GPU adapter.
+#[test]
+fn needs_gpu_rain_occluder_view_matches_committed_golden_at_exactly_one() {
+    let test = rain_occluder_view_test();
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!(
+                    "SKIPPED rain_occluder_view_matches_committed_golden_at_exactly_one (bless): {}",
+                    skip_note(&diagnostics)
+                );
+            }
+            Err(diagnostics) => {
+                panic!("blessing the rain-occluder view golden failed: {diagnostics:?}")
+            }
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir("rain_occluder_view_out");
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => {
+            assert_eq!(
+                report.ssim,
+                Some(1.0),
+                "the rain-occluder view render must be byte-identical to its freshly-blessed golden"
+            );
+        }
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!("the rain-occluder view golden failed: {}", report.summary)
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!(
+                "SKIPPED rain_occluder_view_matches_committed_golden_at_exactly_one: {}",
+                skip_note(&diagnostics)
+            );
+        }
+        Err(diagnostics) => panic!("the rain-occluder view render failed: {diagnostics:?}"),
+    }
+}
+
 /// The gallery's `light-exposure.yaml` scene under the `irradiance` view at 960×540: the diffuse
 /// irradiance `light_exposure` is checked against. The discovery pairing covers the normal render.
 fn light_exposure_irradiance_test() -> GoldenTest {

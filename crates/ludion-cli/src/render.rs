@@ -541,6 +541,10 @@ fn debug_view_note(
             " (debug view: {} not drawn: the scene is not metered (`PostProcess.exposure_mode` is `manual`))",
             ludion_engine::DebugView::ExposureMeter.name()
         ),
+        (Some(ludion_engine::DebugView::RainOcclusion), None) => format!(
+            " (debug view: {} not drawn: the scene has no `Rain` (or its intensity is 0))",
+            ludion_engine::DebugView::RainOcclusion.name()
+        ),
         (Some(view), None) => format!(
             " (debug view: {} not drawn: the scene has no reflection probes)",
             view.name()

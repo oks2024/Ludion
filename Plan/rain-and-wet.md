@@ -1,8 +1,8 @@
 # Plan: Rain and wet weather
 
-> Status: **W1a, W1b, W2a and W2b mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
-> roof occlusion, mesh wetness, authored porosity and the `rain-open`, `rain-awning`, `rain-wet` and `rain-porosity` goldens. Usage is `ludion docs weather`; the gallery scenes are
-> `examples/gallery/rain-open.yaml`, `rain-awning.yaml`, `rain-wet.yaml` and `rain-porosity.yaml`.
+> Status: **W1a, W1b, W2a, W2b and W2c mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
+> roof occlusion, mesh wetness, authored porosity, `RainOccluder`, the `rain_occlusion` debug view, the `rain_density` quality lever and the `rain-open`, `rain-awning`, `rain-wet`, `rain-porosity` and `rain-occluder` goldens. Usage is `ludion docs weather`; the gallery scenes are
+> `examples/gallery/rain-open.yaml`, `rain-awning.yaml`, `rain-wet.yaml`, `rain-porosity.yaml` and `rain-occluder.yaml`.
 
 ## Why
 
@@ -65,10 +65,24 @@ for the whole arc; W1a ships the streak field.
     `authored_material`, so a palette that authors only `porosity` takes the vertex material. A non-finite or
     out-of-range value is the format's existing material-scalar or material-list code at its JSON Pointer. No new code.
 16. **GPU lanes, no new attribute.** All 22 vertex attributes are in use. Per vertex, `MeshVertex.material` widens
-    `[f32; 3]` to `[f32; 4]`, w = porosity. Per instance, porosity rides `MeshInstanceRaw.medium[1]`, a lane already
-    padded to a `vec4`, so the cull pass's stride is unchanged. `VsOut.material` widens to `vec4` and interpolates like
+    `[f32; 3]` to `[f32; 4]`, w = porosity. Per instance, porosity rides `MeshInstanceRaw.medium[2]` (`.y` is the cull pass's
+    scatter slot), a lane already padded to a `vec4`, so the cull pass's stride is unchanged. `VsOut.material` widens to `vec4` and interpolates like
     roughness; `vs_main` mixes porosity through the same `mix` as the rest of the material.
 17. **Probe key.** Probe captures carry no rain, so porosity cannot change a capture: `probe_store` does not key it.
+18. **`RainOccluder { occludes: bool }`** (default true), beside `Rain`. It decides whether an entity's opaque meshes write
+    the `rain_occlusion` map: `{}` makes a non-caster occlude, `occludes: false` exempts a caster (a chain-link fence, a net
+    canopy). Absent, the rule stays D6: what casts a shadow occludes. It is resolved at extract per placed mesh, the nearest
+    `RainOccluder` on the entity or a `Parent` ancestor winning (the shape `Visibility.cast_shadows` has), into the CPU-only
+    `MeshInstance.rain_occluder`. Blended and viewmodel instances never occlude; a hidden entity never reaches the map.
+19. **`L2383` (warning).** `occludes: true` on an entity whose mesh is routed as blended is inert, because blended meshes are
+    drawn outside `scene.meshes`; extract reports it once per entity through `degraded`.
+20. **The `rain_occlusion` debug view** (CLI-only, no wire enum). `PostChain.rain_view` is set only with a `Rain` in the scene.
+    It adds no pass and no pipeline: `EnvParams.wet.w` (reserved until now) is 1, and `mesh.wgsl` tints each opaque fragment
+    inside the map by its column's exposure (the `surface_wetness` `under` term): blue exposed, orange covered, untinted outside.
+    `surface_wetness` is untouched, so no existing golden moves.
+21. **`rain_density`** is a `QualityParams` multiplier (full/high/medium 1.0, low 0.4) spent in the renderer: `build_rain_draw`
+    thins `per_tile` before the layout, so drops `0..thinned` are the same drops as at full. Wetness, occlusion and the `L2382`
+    budget are untouched. It is an override-file key, not in the wire-hashed `QualityProfile` (`particle_density`'s precedent).
 
 ## Waves
 
@@ -89,6 +103,7 @@ for the whole arc; W1a ships the streak field.
 - **Lens drops.** Trigger: a game asks for rain on the camera.
 - **Snow mode.** Trigger: a game asks for snow; the lattice already carries the shape of it.
 - **Gameplay rain zones.** Separate sim data, never read from the picture's rain.
+- **Invisible rain-occluder volumes.** Trigger: a game asks.
 
 ## Owner rulings (2026-11-19)
 
@@ -132,3 +147,4 @@ for the whole arc; W1a ships the streak field.
   gallery goldens passed unblessed. No replay content hash, `WorldHash` or protocol schema moved. Owed: the macOS twin of
   `rain-porosity`. W2c (`RainOccluder`, `rain_occlusion` debug view, `rain_density`) is next.
 - M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twin of `rain-porosity` is blessed (r2455).
+- **W2c mechanized (2026-11-22):** `RainOccluder { occludes }` (D18; resolved per placed mesh at extract, nearest on the entity or a `Parent` ancestor, into the CPU-only `MeshInstance.rain_occluder`), `L2383` (D19), `ludion render --debug-view rain_occlusion` (D20; `PostChain.rain_view`, `EnvParams.wet.w`, no pass, CLI-only) and `QualityParams.rain_density` (D21; `low` 0.4, a prefix of the same drops). `rain-occluder` and `rain-occluder-view` are new Windows goldens blessed on the RTX 3090; the other 124 gallery goldens passed unblessed. No replay content hash, `WorldHash` or protocol schema moved; the component schema snapshot gained `RainOccluder`. Owed: the macOS twins of both goldens.

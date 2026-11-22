@@ -2,12 +2,12 @@
 //! uniform. See `shaders/rain.wgsl` and [`crate::rain`].
 
 use super::{
-    CAMERA_GROUP, CasterPipeline, FrameRecorder, HDR_FORMAT, LIGHTS_GROUP, LayoutId, RecordedPass,
-    Renderer, SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, ShaderId, depth_state, init_buffer, module,
-    premultiplied_blend, shader_gen, skin_bind_group,
+    CAMERA_GROUP, CasterPipeline, Casters, FrameRecorder, HDR_FORMAT, LIGHTS_GROUP, LayoutId,
+    RecordedPass, Renderer, SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, ShaderId, depth_state,
+    init_buffer, module, premultiplied_blend, shader_gen, skin_bind_group,
 };
 use crate::graph::FrameSize;
-use crate::rain::{RainData, occlusion_view, rain_layout};
+use crate::rain::{RainData, occlusion_view, rain_draw_per_tile, rain_layout};
 use crate::scene::RenderScene;
 use ludion_core::math::glam::Vec3;
 
@@ -31,6 +31,8 @@ pub(super) struct WetFrame {
     pub(super) view: [[f32; 4]; 4],
     pub(super) wetness: f32,
     pub(super) half_extent: f32,
+    /// The `rain_occlusion` debug view: the scene pass tints by the map (`EnvParams.wet.w`).
+    pub(super) debug: bool,
 }
 
 /// The group-3 flavour a shading bind group is built for.
@@ -53,11 +55,12 @@ impl<'a> WetInput<'a> {
 }
 
 impl WetFrame {
-    pub(super) fn new(rain: &RainData, camera: Vec3) -> Self {
+    pub(super) fn new(rain: &RainData, camera: Vec3, debug: bool) -> Self {
         Self {
             view: occlusion_view(rain, camera).to_cols_array_2d(),
             wetness: rain.wetness,
             half_extent: rain.radius,
+            debug,
         }
     }
 }
@@ -72,7 +75,12 @@ impl Renderer {
         device: &wgpu::Device,
     ) -> Option<RainDraw> {
         let rain = scene.rain.as_ref()?;
-        let layout = rain_layout(rain, scene.camera.position);
+        // `rain_density` thins the drawn streaks only: wetness and the occlusion map keep the authored rain.
+        let thinned = RainData {
+            per_tile: rain_draw_per_tile(rain.per_tile, self.quality_params.rain_density),
+            ..*rain
+        };
+        let layout = rain_layout(&thinned, scene.camera.position);
         if layout.instances == 0 && rain.wetness <= 0.0 {
             return None;
         }
@@ -168,6 +176,7 @@ impl FrameRecorder<'_> {
             },
             None,
             &mut bound,
+            Casters::Rain,
         );
     }
 

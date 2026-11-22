@@ -143,6 +143,31 @@ fn default_medium() -> f32 {
     1.0
 }
 
+/// Whether an entity's opaque meshes write the `rain_occlusion` map. Absent, a mesh occludes when it casts a
+/// shadow. `{}` makes a non-caster occlude; `occludes: false` exempts a caster (a chain-link fence, a net
+/// canopy). The nearest `RainOccluder` on the entity or a `Parent` ancestor wins. Blended and viewmodel
+/// meshes never occlude.
+///
+/// ```
+/// use ludion_components::RainOccluder;
+///
+/// let net: RainOccluder = serde_json::from_value(serde_json::json!({ "occludes": false })).unwrap();
+/// assert!(!net.occludes);
+/// assert!(serde_json::from_value::<RainOccluder>(serde_json::json!({})).unwrap().occludes);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq)]
+pub struct RainOccluder {
+    /// Whether this entity's opaque meshes write the rain occlusion map (default true).
+    #[serde(default = "default_true")]
+    pub occludes: bool,
+}
+
+impl Default for RainOccluder {
+    fn default() -> Self {
+        Self { occludes: true }
+    }
+}
+
 /// Every out-of-range field of `rain` as `(JSON Pointer, what is wrong)`; empty when valid.
 /// Shared by the component validator and the engine's extract.
 pub fn rain_problems(rain: &Rain) -> Vec<(String, String)> {

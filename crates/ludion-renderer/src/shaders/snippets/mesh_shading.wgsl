@@ -137,8 +137,8 @@ struct EnvParams {
     // The rain-occlusion map's world-to-clip view (straight down, orthographic); read by `mesh.wgsl` only.
     wet_view: mat4x4<f32>,
     // x = `Rain.wetness` (0 = no rain: the map is never read), y = the map flag (1 = `wet_map` holds
-    // this frame's `rain_occlusion`), z = the map's half extent in metres (the edge fade), w reserved
-    // and written zero.
+    // this frame's `rain_occlusion`), z = the map's half extent in metres (the edge fade), w = 1 draws
+    // the `rain_occlusion` debug tint (0 otherwise).
     wet: vec4<f32>,
 };
 @group(3) @binding(0) var irradiance_tex: texture_cube<f32>;

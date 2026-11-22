@@ -261,6 +261,7 @@ pub use ludion_camera::{
     look_from_counts, orbit_eye, resolve_zone, set_look, snap_rig,
 };
 pub use ludion_components::Rain;
+pub use ludion_components::RainOccluder;
 pub use ludion_components::RenderLayers;
 pub use ludion_components::RenderView;
 pub use ludion_components::{BlendDepth, MeshBlend};

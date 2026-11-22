@@ -162,6 +162,23 @@ pub(crate) fn inherited_visibility(world: &World, entity: EntityId) -> Visibilit
         })
 }
 
+/// The nearest `T` on `entity` or a `Parent` ancestor, the entity's own first. An unparented entity
+/// costs one read and one presence check, and no chain walk.
+pub(crate) fn nearest_component<T: ludion_ecs::Component + Copy>(
+    world: &World,
+    entity: EntityId,
+) -> Option<T> {
+    let own = |id: EntityId| world.get::<T>(id).ok().flatten().copied();
+    if let Some(found) = own(entity) {
+        return Some(found);
+    }
+    if !world.has::<Parent>(entity) {
+        return None;
+    }
+    let (up, _) = chain(world, entity);
+    up.iter().rev().skip(1).find_map(|&ancestor| own(ancestor))
+}
+
 /// The entities hidden by [`Visibility`] this frame, computed once so each extract pass asks a set
 /// instead of walking `Parent` chains. Empty, with no walk, when the world has no `Visibility`.
 /// `shadowless` holds the visible entities that cast no shadow; a hidden entity is in `hidden` only.

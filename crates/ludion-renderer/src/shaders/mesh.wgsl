@@ -456,6 +456,25 @@ fn surface_wetness(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
     return env.wet.x * exposure * facing;
 }
 
+// The `rain_occlusion` debug view's tints (`env.wet.w` = 1): blue where rain reaches a surface, orange where it
+// is covered. Mirrors `debug_view.rs::RAIN_VIEW_EXPOSED` / `RAIN_VIEW_COVERED`.
+const RAIN_VIEW_EXPOSED = vec3<f32>(0.15, 0.55, 1.0);
+const RAIN_VIEW_COVERED = vec3<f32>(1.0, 0.45, 0.1);
+
+// The view's tint for a fragment: untinted outside the map; inside, its column's exposure (the `under` term of
+// `surface_wetness`, 1 where no occluder is above) picks between the two.
+fn rain_view_tint(world_pos: vec3<f32>) -> vec3<f32> {
+    let column = occluder_top(env.wet_view, wet_map, world_pos);
+    if (column.y < 0.5) {
+        return vec3<f32>(1.0);
+    }
+    var under = 1.0;
+    if (column.x > NO_OCCLUDER) {
+        under = smoothstep(column.x - 0.2, column.x, world_pos.y);
+    }
+    return mix(RAIN_VIEW_COVERED, RAIN_VIEW_EXPOSED, under);
+}
+
 // The wet look (`Plan/rain-and-wet.md` decision 14): the albedo multiplier at full wetness and porosity,
 // and the roughness of a water film. Porosity is authored per vertex or per instance (`in.material.w`).
 const WET_ALBEDO_DARKEN: f32 = 0.6;
@@ -569,6 +588,9 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
     }
     if (SUN_CASCADE_VIEW && sun.cascade_count > 0u) {
         lit = lit * sun_cascade_tint(in.world_pos);
+    }
+    if (!VIEWMODEL && !BLENDED && env.wet.w > 0.5) {
+        lit = lit * rain_view_tint(in.world_pos);
     }
     // Emissive rides the HDR/bloom pipeline: colour * intensity, no new pass, no new uniform — times
     // the emissive map where one is bound.

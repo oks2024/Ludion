@@ -164,6 +164,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: false,
+            rain_occluder: false,
             viewmodel: true,
             rim: [0.0; 4],
         });

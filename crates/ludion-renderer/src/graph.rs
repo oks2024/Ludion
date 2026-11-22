@@ -28,6 +28,7 @@
 //!   the shadow casters over the rain volume, scheduled ahead of `scene`, which reads it last to wet the
 //!   surfaces the rain reaches, and read by `transparents` and `transparent_depth` as their last input,
 //!   so the streaks stop under a roof.
+//!   [`PostChain::rain_view`] (the `rain_occlusion` debug view) adds no pass: the scene pass tints by the map.
 //! - **decal_receivers** — present only when a decal lists receiver meshes ([`PostChain::decal_receivers`]):
 //!   the listed meshes redrawn into an id target, depth-matched against `scene_depth`, read by both decal
 //!   passes. It sits right after `scene`.
@@ -959,6 +960,11 @@ pub struct PostChain {
     /// input. `false` leaves the graph with neither the pass nor the resource, which is what makes a
     /// rain-free frame byte-identical by construction. It is content, so `masked` keeps it.
     pub rain: bool,
+    /// The `rain_occlusion` view: the mesh pass tints each fragment inside the rain map by its column's
+    /// exposure ([`crate::DebugView::RainOcclusion`]). It adds no pass; `mesh.wgsl` reads `EnvParams.wet.w`.
+    /// Set only when the scene asked for it **and** has a `Rain` ([`rain`](PostChain::rain)): a view never
+    /// conjures its subject. Rain is content, so `masked` keeps it.
+    pub rain_view: bool,
     /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
     /// writing the `probe_live` transient (`MAX_PROBES`×6, `Rgba32Float`: one row per cube axis) that `reflections` reads
     /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
@@ -1172,6 +1178,8 @@ impl PostChain {
             aa: AntiAliasing::Off,
             silhouette: !scene.silhouettes.meshes.is_empty(),
             rain: scene.rain.is_some(),
+            rain_view: scene.debug_view == Some(crate::DebugView::RainOcclusion)
+                && scene.rain.is_some(),
         }
     }
 
@@ -1184,6 +1192,7 @@ impl PostChain {
             && !self.probe_view
             && !self.local_shadow_view
             && !self.sun_cascade_view
+            && !self.rain_view
             && !self.irradiance_view
             && !self.exposure_meter_view
     }
@@ -1223,6 +1232,7 @@ impl PostChain {
                 self.sun_cascade_view
                     .then_some(crate::DebugView::SunCascades)
             })
+            .or_else(|| self.rain_view.then_some(crate::DebugView::RainOcclusion))
             .or_else(|| self.irradiance_view.then_some(crate::DebugView::Irradiance))
             .or_else(|| {
                 self.exposure_meter_view
@@ -2660,6 +2670,7 @@ mod tests {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            rain_occluder: true,
             viewmodel,
         }
     }
@@ -2995,6 +3006,7 @@ mod tests {
                 silhouette: bits & 1 != 0,
                 // Content too: no quality switch removes the rain.
                 rain: bits & 1 != 0,
+                rain_view: false,
                 // Content too: no quality switch removes a blended mesh.
                 blended: bits & 1 != 0,
                 blend_nearest: bits & 1 != 0,
@@ -3739,6 +3751,60 @@ mod tests {
         cascadeless.debug_view = Some(crate::DebugView::SunCascades);
         let none = PostChain::for_scene(&cascadeless);
         assert!(!none.sun_cascade_view);
+        assert_eq!(none.view(), None);
+    }
+
+    /// The rain view needs a `Rain`, adds no pass, survives `masked`, is named by `view()` and schedules no SMAA.
+    #[test]
+    fn the_rain_occlusion_view_needs_rain_and_adds_no_pass() {
+        let size = FrameSize::native(1920, 1080);
+        let rain = crate::RainData {
+            radius: 16.0,
+            height: [-6.0, 14.0],
+            cell: 4.0,
+            fall_speed: [7.0, 9.0],
+            wind: [0.0; 3],
+            gust: 0.0,
+            drop_width: 0.01,
+            streak: 1.0,
+            color: [1.0; 4],
+            lit: false,
+            medium: 1.0,
+            occlusion: true,
+            wetness: 1.0,
+            seed: 0,
+            time_s: 0.0,
+            per_tile: 8,
+        };
+        let mut plain = RenderScene::empty((1920, 1080));
+        plain.rain = Some(rain);
+        let mut viewed = plain.clone();
+        viewed.debug_view = Some(crate::DebugView::RainOcclusion);
+
+        let plain_chain = PostChain::for_scene(&plain);
+        assert!(!plain_chain.rain_view);
+        let chain = PostChain::for_scene(&viewed);
+        assert!(chain.rain_view);
+        assert_eq!(chain.view(), Some(crate::DebugView::RainOcclusion));
+        let names = |chain: PostChain| {
+            let (graph, _) = build_frame_graph(size, chain);
+            pass_names(&graph)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(chain), names(plain_chain));
+        assert!(chain.masked(&Quality::LOW, &QualityParams::LOW).rain_view);
+        let smaa = PostChain {
+            aa: AntiAliasing::Smaa,
+            ..chain
+        };
+        assert!(!smaa.smaa_scheduled());
+
+        let mut rain_free = RenderScene::empty((1920, 1080));
+        rain_free.debug_view = Some(crate::DebugView::RainOcclusion);
+        let none = PostChain::for_scene(&rain_free);
+        assert!(!none.rain_view);
         assert_eq!(none.view(), None);
     }
 

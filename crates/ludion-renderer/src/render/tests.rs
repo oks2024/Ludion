@@ -602,6 +602,7 @@ fn bucketing_asset_instances_preserves_the_refiltered_draw_order() {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     };
@@ -687,6 +688,7 @@ fn instance_layout_carries_material_and_selection_flag() {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     };
@@ -746,6 +748,7 @@ fn wrap_probe(wrap: f32, scatter: [f32; 3]) -> MeshInstance {
         scatter_color: scatter,
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     }
@@ -1233,6 +1236,7 @@ fn needs_gpu_same_asset_mesh_referenced_twice_uploads_once() {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            rain_occluder: true,
             viewmodel: false,
             rim: [0.0; 4],
         });
@@ -1403,6 +1407,7 @@ fn needs_gpu_an_empty_asset_mesh_is_skipped_and_the_rest_still_draws() {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     };
@@ -1509,6 +1514,7 @@ fn ground(scale: f32) -> MeshInstance {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     }
@@ -1533,6 +1539,7 @@ fn cube(pos: Vec3, size: Vec3, color: [f32; 4]) -> MeshInstance {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     }
@@ -2218,6 +2225,7 @@ fn needs_gpu_environment_ibl_changes_pixels_and_prefilter_is_deterministic() {
             scatter_color: [1.0; 3],
             bone_offset: 0,
             cast_shadows: true,
+            rain_occluder: true,
             viewmodel: false,
             rim: [0.0; 4],
         },
@@ -2263,6 +2271,7 @@ fn reflective_sphere(material: [f32; 3], flash: f32) -> MeshInstance {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     }
@@ -2387,6 +2396,7 @@ fn wrap_mesh(
         scatter_color: scatter,
         bone_offset: 0,
         cast_shadows: cast,
+        rain_occluder: cast,
         viewmodel: false,
         rim: [0.0; 4],
     }
@@ -3028,6 +3038,7 @@ fn needs_gpu_fade_dithers_deterministically_and_gates_by_height() {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     };
@@ -3145,6 +3156,7 @@ fn skin_instance(model: Mat4, bone_offset: u32) -> MeshInstance {
         scatter_color: [1.0; 3],
         bone_offset,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     }
@@ -3416,6 +3428,7 @@ fn flat_diamond_scene(w: u32, h: u32) -> RenderScene {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     }];
@@ -3699,6 +3712,7 @@ fn known_hdr_scene(w: u32, h: u32, color: [f32; 3]) -> RenderScene {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     }];
@@ -4688,6 +4702,7 @@ fn slab(center: Vec3, size: f32, color: [f32; 3]) -> MeshInstance {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     }
@@ -5299,6 +5314,7 @@ fn cooked_map_scene(quad: MeshData) -> RenderScene {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     });
@@ -10654,6 +10670,7 @@ fn dark_box(center: Vec3, size: Vec3) -> MeshInstance {
         scatter_color: [1.0; 3],
         bone_offset: 0,
         cast_shadows: true,
+        rain_occluder: true,
         viewmodel: false,
         rim: [0.0; 4],
     }

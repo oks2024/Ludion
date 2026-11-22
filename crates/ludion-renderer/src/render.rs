@@ -2467,11 +2467,8 @@ impl Renderer {
         if let Some(copies) = StaticCopy::encode(device, &static_copies) {
             self.gpu.queue().submit(Some(copies));
         }
-        let casts: Vec<bool> = if scene.meshes.iter().all(|m| m.cast_shadows) {
-            Vec::new()
-        } else {
-            scene.meshes.iter().map(|m| m.cast_shadows).collect()
-        };
+        let casts = caster_flags(&scene.meshes, |m| m.cast_shadows);
+        let rain_casts = caster_flags(&scene.meshes, |m| m.rain_occluder);
         let (local_views, light_shadow) = local_shadow_tables(
             local_shadow.as_ref(),
             scene.lights.len() + scene.spot_lights.len(),
@@ -2495,7 +2492,7 @@ impl Renderer {
             .rain
             .then_some(scene.rain.as_ref())
             .flatten()
-            .map(|rain| rain::WetFrame::new(rain, scene.camera.position));
+            .map(|rain| rain::WetFrame::new(rain, scene.camera.position, chain.rain_view));
         let text_draws = self.build_text_draws(scene, device, &textures);
         let screen_effects: Vec<ScreenEffectData> = scene
             .screen_effects
@@ -2584,6 +2581,7 @@ impl Renderer {
             local_cull_base,
             sun_tile: chain.shadow_map.unwrap_or_default(),
             casts,
+            rain_casts,
             ground_marker_draw,
             debug_line_draw,
             sprite_draws,
@@ -3543,9 +3541,9 @@ impl Renderer {
                 0.0,
             ],
             wet_view: wet.frame().map_or([[0.0; 4]; 4], |(_, w)| w.view),
-            wet: wet
-                .frame()
-                .map_or([0.0; 4], |(_, w)| [w.wetness, 1.0, w.half_extent, 0.0]),
+            wet: wet.frame().map_or([0.0; 4], |(_, w)| {
+                [w.wetness, 1.0, w.half_extent, f32::from(w.debug)]
+            }),
         };
         let params_buf = init_buffer(
             device,
@@ -4157,6 +4155,27 @@ pub(crate) struct GiStrengths {
     pub(crate) bounce: f32,
 }
 
+/// Per scene mesh, whether `flag` holds; empty when it holds for every instance, so the common path
+/// draws its ranges untouched.
+fn caster_flags(
+    meshes: &[crate::MeshInstance],
+    flag: impl Fn(&crate::MeshInstance) -> bool,
+) -> Vec<bool> {
+    if meshes.iter().all(&flag) {
+        Vec::new()
+    } else {
+        meshes.iter().map(flag).collect()
+    }
+}
+
+/// Which per-instance flag filters a caster draw: the shadow passes read `cast_shadows`, the rain
+/// occlusion map reads `rain_occluder`.
+#[derive(Clone, Copy)]
+enum Casters {
+    Shadow,
+    Rain,
+}
+
 /// Records the frame graph's passes; constructed per frame with the uploaded resources.
 struct FrameRecorder<'a> {
     r: &'a Renderer,
@@ -4350,6 +4369,8 @@ struct FrameRecorder<'a> {
     cull_bounds_buf: wgpu::Buffer,
     /// Per scene mesh, whether it writes shadow maps; empty when every instance does.
     casts: Vec<bool>,
+    /// Per scene mesh, whether it writes the rain occlusion map; empty when every instance does.
+    rain_casts: Vec<bool>,
     /// The scene's ground markers, or `None` when it authors none — in which case the scene pass
     /// binds no marker pipeline and issues no marker draw.
     ground_marker_draw: Option<GroundMarkerDraw>,
@@ -4683,6 +4704,7 @@ impl FrameRecorder<'_> {
             all_ranges,
             culled.map(|c| (c, SUN_CULL_VIEW)),
             &mut bound,
+            Casters::Shadow,
         );
     }
 
@@ -5492,7 +5514,13 @@ impl FrameRecorder<'_> {
             rp.set_viewport(x as f32, y as f32, tile as f32, tile as f32, 0.0, 1.0);
             rp.set_scissor_rect(x, y, tile, tile);
             rp.set_bind_group(SHADOW_VIEW_GROUP, view_bg, &[]);
-            self.draw_casters(&mut rp, |s| kept_ranges(s, &ds.exclude), None, &mut bound);
+            self.draw_casters(
+                &mut rp,
+                |s| kept_ranges(s, &ds.exclude),
+                None,
+                &mut bound,
+                Casters::Shadow,
+            );
         }
     }
 
@@ -5552,6 +5580,7 @@ impl FrameRecorder<'_> {
                 all_ranges,
                 culled.map(|c| (c, self.local_cull_base + index as u32)),
                 &mut bound,
+                Casters::Shadow,
             );
         }
     }
@@ -5576,18 +5605,23 @@ impl FrameRecorder<'_> {
         )
     }
 
-    /// `ranges` for a draw's `sources`, minus the instances that cast no shadow. `casts` is empty
-    /// when every instance casts, so the common path is `ranges` untouched.
+    /// `ranges` for a draw's `sources`, minus the instances `which` excludes. The list is empty
+    /// when every instance is in, so the common path is `ranges` untouched.
     fn casting(
         &self,
         sources: &[u32],
         ranges: &impl Fn(&[u32]) -> Vec<std::ops::Range<u32>>,
+        which: Casters,
     ) -> Vec<std::ops::Range<u32>> {
         let kept = ranges(sources);
-        if self.casts.is_empty() {
+        let casts = match which {
+            Casters::Shadow => &self.casts,
+            Casters::Rain => &self.rain_casts,
+        };
+        if casts.is_empty() {
             kept
         } else {
-            crate::cull::casting_ranges(kept, sources, &self.casts)
+            crate::cull::casting_ranges(kept, sources, casts)
         }
     }
 
@@ -5603,6 +5637,7 @@ impl FrameRecorder<'_> {
         ranges: impl Fn(&[u32]) -> Vec<std::ops::Range<u32>>,
         cull: Option<(Culled<'_>, u32)>,
         bound: &mut CasterPipeline,
+        which: Casters,
     ) {
         let (culled, view) = cull.map_or((None, 0), |(culled, view)| (Some(culled), view));
         // The ranges a direct draw covers, `None` when it has none; an indirect draw needs no list.
@@ -5610,7 +5645,7 @@ impl FrameRecorder<'_> {
             let kept = if indirect {
                 Vec::new()
             } else {
-                self.casting(sources, &ranges)
+                self.casting(sources, &ranges, which)
             };
             (indirect || !kept.is_empty()).then_some(kept)
         };
@@ -5713,6 +5748,7 @@ impl FrameRecorder<'_> {
                 all_ranges,
                 culled.map(|c| (c, SUN_CULL_VIEW + index as u32)),
                 &mut bound,
+                Casters::Shadow,
             );
         }
     }

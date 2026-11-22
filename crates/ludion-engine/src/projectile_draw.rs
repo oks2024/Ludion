@@ -619,6 +619,7 @@ pub(crate) fn extract_projectiles(
                     scatter_color: [1.0; 3],
                     bone_offset: 0,
                     cast_shadows: visual.cast_shadows,
+                    rain_occluder: visual.cast_shadows,
                     viewmodel: false,
                     rim,
                     medium: visual.medium,

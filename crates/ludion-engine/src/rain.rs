@@ -1,7 +1,7 @@
 //! Rain at extract: the lowest-id `Rain` becomes the frame's [`RainData`]. The static half,
 //! [`scene_rain_diagnostics`], reports the duplicate and the streak budget from scene text.
 
-use ludion_components::{Rain, rain_problems};
+use ludion_components::{Rain, RainOccluder, rain_problems};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
@@ -16,6 +16,46 @@ fn streaks_per_tile(rain: &Rain) -> (u32, u32, bool) {
     let authored = rain_per_tile(rain.density, rain.intensity, rain.cell);
     let (drawn, clamped) = rain_budget(authored, n_xz * n_xz * n_y);
     (authored, drawn, clamped)
+}
+
+/// Whether a placed mesh writes the rain occlusion map: the nearest `RainOccluder` on its entity or a
+/// `Parent` ancestor decides, and with none the mesh occludes when it casts a shadow. A world with no
+/// `RainOccluder` answers `cast_shadows` after one O(1) count.
+pub(crate) fn rain_occluder(world: &World, id: EntityId, cast_shadows: bool) -> bool {
+    if world.component_count::<RainOccluder>() == 0 {
+        return cast_shadows;
+    }
+    crate::hierarchy::nearest_component::<RainOccluder>(world, id)
+        .map_or(cast_shadows, |occluder| occluder.occludes)
+}
+
+/// `L2383` when a mesh routed as blended carries a `RainOccluder` with `occludes: true` (its own or an
+/// ancestor's): blended meshes are drawn outside the opaque list and never write the map. Keyed per
+/// entity, so an assembly's parts and each frame report once.
+pub(crate) fn report_blended_occluder(
+    world: &World,
+    id: EntityId,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) {
+    if world.component_count::<RainOccluder>() == 0 {
+        return;
+    }
+    if !crate::hierarchy::nearest_component::<RainOccluder>(world, id).is_some_and(|o| o.occludes) {
+        return;
+    }
+    degraded.push((
+        format!(
+            "{}/rain-occluder-blended",
+            crate::diagnostics::offender_key(world, id)
+        ),
+        Diagnostic::new(
+            code::RAIN_OCCLUDER_BLENDED,
+            format!("{id} carries a `RainOccluder` but its mesh is blended, which never writes the rain map"),
+        )
+        .with_help(
+            "blended meshes never write the rain map; put the occluder on an opaque mesh (`ludion docs weather`)",
+        ),
+    ));
 }
 
 /// The frame's rain, `None` when no entity carries one, its intensity is 0, or a field is out of range

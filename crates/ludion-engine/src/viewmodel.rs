@@ -183,6 +183,7 @@ pub(crate) fn apply(
         }
         mesh.viewmodel = true;
         mesh.cast_shadows = false;
+        mesh.rain_occluder = false;
         locals.push(ViewmodelLocal {
             mesh: u32::try_from(index).ok()?,
             owner,

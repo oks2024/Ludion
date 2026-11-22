@@ -2377,6 +2377,9 @@ pub mod code {
     /// `L2382` — a `Rain` asks for more streaks than the budget; the per-tile count is clamped.
     pub const RAIN_STREAK_BUDGET: DiagnosticCode = DiagnosticCode::new("L2382");
 
+    /// `L2383` — a `RainOccluder` sits on an entity whose mesh is blended, which never writes the rain map.
+    pub const RAIN_OCCLUDER_BLENDED: DiagnosticCode = DiagnosticCode::new("L2383");
+
     /// `L2390` — a `.cube` LUT file is malformed: a bad header, a bad data row or a wrong row count.
     pub const CUBE_LUT_MALFORMED: DiagnosticCode = DiagnosticCode::new("L2390");
 
@@ -11591,6 +11594,16 @@ per load by extract and by check-scene.
 Fix: lower `density`, `radius` or the `height` span.",
     },
     CodeEntry {
+        code: code::RAIN_OCCLUDER_BLENDED,
+        severity: Severity::Warning,
+        title: "RainOccluder on a blended mesh",
+        explanation: "A `RainOccluder` with `occludes: true` sits on an entity whose mesh is drawn blended (glass,
+holograms). Blended meshes are drawn outside the opaque mesh list and never write the rain occlusion map, so the
+component has no effect. Raised once per entity by extract.
+
+Fix: put the `RainOccluder` on an opaque mesh, or remove it; `ludion docs weather` covers what occludes.",
+    },
+    CodeEntry {
         code: code::CUBE_LUT_MALFORMED,
         severity: Severity::Error,
         title: "malformed .cube LUT",
@@ -15057,6 +15070,7 @@ mod tests {
         code::RAIN_INVALID,
         code::RAIN_DUPLICATE,
         code::RAIN_STREAK_BUDGET,
+        code::RAIN_OCCLUDER_BLENDED,
         code::CUBE_LUT_MALFORMED,
         code::CUBE_LUT_UNSUPPORTED,
         code::POST_PROCESS_INVALID_METERING,
@@ -15461,6 +15475,7 @@ mod tests {
             code::POST_PROFILE_VIEW_IGNORED,
             code::RAIN_DUPLICATE,
             code::RAIN_STREAK_BUDGET,
+            code::RAIN_OCCLUDER_BLENDED,
             code::SCREEN_EFFECT_CAP,
             code::TRANSITION_CARRY_DEAD,
             code::TRANSITION_CARRY_ORPHANED,

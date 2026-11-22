@@ -179,6 +179,9 @@ impl Default for Quality {
 /// // It is also the only preset that thins the particle population, on the same reading.
 /// assert_eq!(QualityParams::LOW.particle_density, 0.25);
 /// assert_eq!(QualityParams::MEDIUM.particle_density, 1.0);
+/// // `low` also draws 0.4 of a `Rain`'s streaks; every other preset draws them all.
+/// assert_eq!(QualityParams::LOW.rain_density, 0.4);
+/// assert_eq!(QualityParams::HIGH.rain_density, 1.0);
 /// // Mesh LOD reads upward: cheaper is a larger bias, and `full`'s 0 is the floor.
 /// assert_eq!(QualityParams::FULL.lod_bias, 0.0);
 /// assert_eq!(QualityParams::LOW.lod_bias, 1.0);
@@ -288,6 +291,11 @@ pub struct QualityParams {
     /// the profile report's quality descriptor does not carry — the descriptor is wire-schema-hashed
     /// and the particle feature ships no schema revision — so a report names it through `preset`.
     pub particle_density: f32,
+    /// Fraction of a `Rain`'s streaks the renderer draws, spent in the renderer (`build_rain_draw` thins the
+    /// per-tile count before the lattice is laid out, so a lower value draws a prefix of the same drops).
+    /// Cheaper is smaller and `full`'s 1.0 is the **ceiling**. Wetness and the rain occlusion map are
+    /// untouched. Like `particle_density` it is not in the profile report's wire-hashed descriptor.
+    pub rain_density: f32,
     /// Fraction of the **output** extent the SSR trace and its pyramids are sized at (not of the
     /// render extent: `render_scale` does not move it). Structure like
     /// [`shadow_map_size`](QualityParams::shadow_map_size) — a resource's extent is graph
@@ -333,6 +341,7 @@ impl QualityParams {
         gi_probe_scale: 1.0,
         render_scale: 1.0,
         particle_density: 1.0,
+        rain_density: 1.0,
         ssr_scale: 0.5,
         lod_bias: 0.0,
     };
@@ -369,6 +378,7 @@ impl QualityParams {
         gi_probe_scale: 1.0,
         render_scale: QualityParams::FULL.render_scale,
         particle_density: QualityParams::FULL.particle_density,
+        rain_density: QualityParams::FULL.rain_density,
         ssr_scale: QualityParams::FULL.ssr_scale,
         lod_bias: QualityParams::FULL.lod_bias,
     };
@@ -398,6 +408,7 @@ impl QualityParams {
         gi_probe_scale: 1.5,
         render_scale: QualityParams::FULL.render_scale,
         particle_density: QualityParams::FULL.particle_density,
+        rain_density: QualityParams::FULL.rain_density,
         ssr_scale: QualityParams::FULL.ssr_scale,
         lod_bias: 0.5,
     };
@@ -428,6 +439,7 @@ impl QualityParams {
         gi_probe_scale: 2.0,
         render_scale: 0.75,
         particle_density: 0.25,
+        rain_density: 0.4,
         lod_bias: 1.0,
         ..QualityParams::MEDIUM
     };
@@ -759,6 +771,10 @@ mod tests {
                 low.particle_density <= high.particle_density,
                 "a cheaper preset must never emit more particles ({cheaper} vs {dearer})",
             );
+            assert!(
+                low.rain_density <= high.rain_density,
+                "a cheaper preset must never draw more rain streaks ({cheaper} vs {dearer})",
+            );
         }
         // The strict half: every modulated axis genuinely moves across the three presets that render
         // the effects, so nothing here is an alias wearing a second name.
@@ -909,6 +925,25 @@ mod tests {
             .collect();
         assert_eq!(thinned, ["low"], "exactly one preset thins the plumes");
         assert_eq!(QualityParams::LOW.particle_density, 0.25);
+    }
+
+    /// `rain_density` reads like `particle_density`: `full`'s 1.0 is the ceiling and only `low` is below it.
+    #[test]
+    fn only_the_cheapest_preset_thins_the_rain() {
+        for (label, params) in [
+            ("low", QualityParams::LOW),
+            ("medium", QualityParams::MEDIUM),
+            ("high", QualityParams::HIGH),
+            ("full", QualityParams::FULL),
+        ] {
+            let density = params.rain_density;
+            assert!(
+                (0.0..=QualityParams::FULL.rain_density).contains(&density),
+                "`{label}` draws {density}× the streaks, outside 0.0..=1.0",
+            );
+            assert_eq!(density < 1.0, label == "low", "only `low` thins the rain");
+        }
+        assert_eq!(QualityParams::LOW.rain_density, 0.4);
     }
 
     /// A PCF kernel is a *centred* square, so its edge length is odd at every preset — an even edge

@@ -542,7 +542,18 @@ fn classify(frame: &mut Frame<'_>, inherit: &mut MeshInherit, id: EntityId) -> C
             Some((_, _, data)) => std::slice::from_ref(data),
             None => &[],
         };
-        let instance = mesh_instance(&placed, shape, assets, fade, rim, medium, casts, 0);
+        let rain_occluder = crate::rain::rain_occluder(world, id, casts);
+        let instance = mesh_instance(
+            &placed,
+            shape,
+            assets,
+            fade,
+            rim,
+            medium,
+            casts,
+            rain_occluder,
+            0,
+        );
         parts.push(Part {
             placed: PlacedMesh {
                 source: PlacedMeshSource::Primitive(MeshShape::Cube),
