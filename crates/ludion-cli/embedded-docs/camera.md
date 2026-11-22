@@ -232,6 +232,7 @@ A `CameraZone` on a sensor volume swaps the rig's config while the rig's target 
 - **A game write to `CameraRig::rig` inside a zone becomes the base** and is never fought; it applies on exit.
 - **Snap and respawn:** `snap_rig` or a load with the target inside a zone cuts straight to the zone's `rig`, no blend.
 - A live edit to the active zone's `rig` applies at the next zone change. `RigState.zone`/`base` are engine-written and hashed. A world with no `CameraZone` does no query and no work. Without physics, zones are skipped (`L1553`).
+- **A sequence `rig` key overrides zones** until its `restore` (`ludion docs sequences`); `restore` inside a zone hands the camera back to that zone, and leaving it returns the pre-zone base.
 - For switch-and-stay (never revert), keep a game component and copy its `RigConfig` into `rig` on `Entered`, as `games/character-course` does (`CameraGate`).
 
 ## Occluders

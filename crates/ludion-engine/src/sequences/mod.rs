@@ -6,12 +6,14 @@
 //! [`SequenceEvents`], and drives a beat through the free functions here. **The API only marks
 //! state** — [`play`] spawns a pending [`SequencePlayer`], [`skip`] and [`cancel`] set a flag — and
 //! the system applies every key and emits every event. [`release`] clears a `wait: release` key,
-//! [`holding`] reports a `holds_gameplay` beat holding the gameplay clock.
+//! [`holding`] reports a `holds_gameplay` beat holding the gameplay clock. An audio `play` key is a voice
+//! (see `audio`, a per-build resource, never hashed): skip and cancel stop it, `duck` keys release at every end.
 //!
 //! State is entities, so it rides hashing, snapshots and checkpoints: one [`SequencePlayer`] per
 //! playing beat (its handle *is* the entity) and one [`SequenceBinding`] per bound role. A game that
 //! never plays one hashes as if it had not opted in.
 
+pub(crate) mod audio;
 pub(crate) mod bound;
 mod docs;
 mod events;
@@ -30,13 +32,25 @@ use serde::{Deserialize, Serialize};
 
 pub use bound::{EntityClock, SequenceBound, entity_clock};
 pub use docs::{
-    AnimationKey, AudioKey, CameraKey, DialogueKey, DialogueWait, EventKey, EventWait, OnSkip,
-    SequenceClock, SequenceDoc, SequenceTracks, TransformKey, TransformTo, UiKey,
+    AnimationKey, AudioKey, CameraKey, DialogueKey, DialogueWait, DuckKey, EventKey, EventWait,
+    MusicCrossfadeKey, OnSkip, SequenceClock, SequenceDoc, SequenceTracks, TransformKey,
+    TransformTo, UiKey,
 };
 pub use events::{SequenceEnd, SequenceEvent, SequenceEvents, SequenceTrack};
 pub use update::sequence_update;
 
 pub(crate) use docs::{SEQUENCE_KIND, validate_sequence_docs};
+
+/// Whether a playing sequence's camera key holds `camera`'s rig, so the zone system stands aside until
+/// the sequence's `restore`. `false` for a game that did not opt in.
+pub(crate) fn overrides_camera(world: &mut World, camera: EntityId) -> bool {
+    if world.resource::<SequenceEvents>().is_none() {
+        return false;
+    }
+    world
+        .query_ids::<(&SequenceBinding,)>()
+        .any(|(_, (binding,))| binding.entity == camera && binding.saved_rig.is_some())
+}
 
 /// Where a playing sequence stands.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]

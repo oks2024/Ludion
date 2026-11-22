@@ -80,6 +80,20 @@ tracks:
       gain: 0.8
       role: radar
       range: 20.0
+    - at: 35
+      music_crossfade:
+        id: radar
+        stems:
+          - - music/radar.ogg
+            - 1.0
+        ticks: 30
+    - at: 36
+      duck:
+        buses:
+          - music
+        depth_db: -9.0
+        attack: 6
+        release: 30
   dialogue:
     - at: 40
       line: radar_online
@@ -92,11 +106,11 @@ tracks:
 
 | Track | Key fields | Effect |
 | --- | --- | --- |
-| `camera` | `role`, exactly one of `rig` / `restore: true`, `snap` (false) | Writes `CameraRig.rig`; the first `rig` key saves the old one for `restore`. A write that differs blends over its `blend_in`. |
+| `camera` | `role`, exactly one of `rig` / `restore: true`, `snap` (false) | Writes `CameraRig.rig`; a `rig` key with no saved rig saves the old one for `restore`; until `restore` the rig holds against camera zones (`ludion docs camera`). A write that differs blends over its `blend_in`. |
 | `transform` | `role`, exactly one of `to` / `path`, `over` (0), `ease` (`linear`), `orient` (`none`, path only) | Moves the role's `Transform` over `over` ticks from the pose it had when the key applied. `to`: `anchor?` (a declared role), `offset` (the anchor's frame, else world), `yaw_deg?` (added to the anchor's yaw; absent leaves rotation alone). `path`: a `kind: path` in the role's parent frame. `at + over <= length_ticks`. |
 | `animation` | `role`, `clip`, `fade` (0 s) | `crossfade`; `fade: 0` is a hard cut. |
 | `ui` | `role`, `tracks` | Writes `UiTween`; each track's `start` is a frame offset after the key. |
-| `audio` | `play`, `gain` (1), `role?`, `range` (10) | A one-shot; with `role`, positional at that entity. |
+| `audio` | exactly one of `play` (+ `gain` 1, `role?`, `range` 10), `music_crossfade` (`id`, `stems` as `[path, gain]`, `ticks` 0), `duck` (`buses`, `depth_db` <= 0, `attack` 0, `release` 0) | `play` is a voice (attached to `role`'s entity, else global); `music_crossfade` is `AudioQueue::music_crossfade`; `duck` is `duck_start` under one key per beat, a later key replaces it. |
 | `dialogue` | `line`, `speaker?`, `wait?` (`line_end`) | `dialogue::say`; refused lines warn `L4353` (and set no wait). |
 | `event` | `name`, `on_skip` (`fire`), `wait?` (`release`) | `Fired` in `SequenceEvents`. `name` is not empty or `end`. |
 
@@ -145,9 +159,9 @@ but not `SequenceBound`.
 
 `skip` returns `false` when the handle is dead or the doc says `skippable: false`. Otherwise, per role, the last
 camera, transform, animation and ui key not yet applied takes its end form (camera: write plus a snap; transform:
-the span's end pose, after every live span writes its end; animation: hard cut; ui: `once` tracks jump to `to`), unplayed audio and dialogue keys are dropped, its lines are interrupted, `on_skip: fire`
+the span's end pose, after every live span writes its end; animation: hard cut; ui: `once` tracks jump to `to`), the last unplayed `music_crossfade` applies, other unplayed audio and dialogue keys are dropped, its voices fade out over 6 ticks and its duck releases, its lines are interrupted, `on_skip: fire`
 events fire in order, then `Ended { Skipped }`. A skipped and a watched beat leave the same rig, pose, clip and tween.
-`cancel` applies no end state, interrupts its lines and ends `Cancelled`; so does a document unloaded mid-play.
+`cancel` applies no end state, stops its voices (as a skip does), interrupts its lines and ends `Cancelled`; a completed beat lets its voices play out. Every end releases the beat's duck; so does a document unloaded mid-play.
 
 ## Events
 
@@ -158,7 +172,7 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
 
 | Code | Meaning |
 | --- | --- |
-| `L1730` | Structural: length 0, `at` past the length or out of order, camera key without exactly one of `rig`/`restore`, transform key without exactly one of `to`/`path` or ending past the length, non-finite number |
+| `L1730` | Structural: length 0, `at` past the length or out of order, camera key without exactly one of `rig`/`restore`, audio key without exactly one of `play`/`music_crossfade`/`duck` or a bad stem, bus list or `depth_db`, transform key without exactly one of `to`/`path` or ending past the length, non-finite number |
 | `L1731` | Unknown, duplicate or missing role (a transform `anchor` too) |
 | `L1732` | Empty or reserved event name |
 | `L1733` | Dialogue line unknown, or no `.dialogue()` |
@@ -178,6 +192,9 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
 - A transform target is fixed when its key applies: a moving anchor is not tracked. A second key on a role starts
   from its current pose. Only a `kinematic` body follows `Transform`; a dynamic body is the solver's. Scale is never
   written.
+- A `restore` inside a camera zone hands the rig back to the zone system, not to the saved rig; a `music_crossfade`
+  is never undone. A checkpoint restore or world rebuild mid-beat forgets the voice ids (they play out, a later skip
+  cannot stop them) and drops the duck.
 - A game system that writes a bound actor's `Animation` during the hold stamps from
   `sequences::entity_clock(world, id, ctx).frame`, not `ctx.game_frame`.
 

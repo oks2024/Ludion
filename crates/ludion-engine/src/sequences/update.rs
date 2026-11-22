@@ -8,7 +8,8 @@
 //! 1. a vanished document or a cancel ends it `Cancelled`;
 //! 2. a pending player stamps its start from its clock, and a `holds_gameplay` one binds its role
 //!    entities and their `Parent` descendants to their own clock;
-//! 3. a skip applies the end forms and ends it `Skipped` (waits do not stop it);
+//! 3. a skip applies the end forms (the last pending `music_crossfade` included) and ends it `Skipped` (waits
+//!    do not stop it); every end but `Completed` stops the beat's voices, every end releases its duck;
 //! 4. a pending wait either clears (the line ended, or `release` was called) and the playhead
 //!    resumes from the wait's `at`, or the player stores itself and applies nothing;
 //! 5. otherwise the playhead is `now - started - waited`, stopped at the earliest due wait key, and
@@ -31,9 +32,10 @@ use ludion_core::math::{
 use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 
+use super::audio;
 use super::bound::{bind, entity_clock, release_orphans};
 use super::docs::{
-    CameraKey, DialogueWait, EventWait, OnSkip, SequenceClock, SequenceDoc, TransformKey,
+    AudioKey, CameraKey, DialogueWait, EventWait, OnSkip, SequenceClock, SequenceDoc, TransformKey,
     TransformTo,
 };
 use super::events::{SequenceEnd, SequenceEvent, SequenceEvents, SequenceTrack};
@@ -76,6 +78,7 @@ pub fn sequence_update(world: &mut World, ctx: &SystemCtx) {
         return;
     }
     release_orphans(world, ctx);
+    audio::prune(world);
     let mut players: Vec<(EntityId, SequencePlayer)> = world
         .query_ids::<(&SequencePlayer,)>()
         .map(|(id, (player,))| (id, player.clone()))
@@ -218,7 +221,7 @@ impl Beat<'_> {
             self.applied(SequenceTrack::Ui, key.at);
         }
         for key in doc.tracks.audio.iter().filter(|k| due(k.at)) {
-            self.audio(&key.play, key.gain, key.role.as_deref(), key.range);
+            self.audio_key(key);
             self.applied(SequenceTrack::Audio, key.at);
         }
         for key in doc.tracks.dialogue.iter().filter(|k| due(k.at)) {
@@ -278,6 +281,7 @@ impl Beat<'_> {
         if end != SequenceEnd::Completed {
             interrupt_said(self.world, &self.player.said);
         }
+        audio::end(self.world, self.pid, end != SequenceEnd::Completed);
         self.events.push(SequenceEvent::Ended {
             handle: SequenceHandle(self.pid),
             end,
@@ -334,16 +338,33 @@ impl Beat<'_> {
             return;
         };
         let mut now_saved = None;
+        let mut cleared = false;
         if let Some(config) = &key.rig {
             if saved.is_none() {
                 now_saved = Some(rig.rig.clone());
             }
             rig.rig = config.clone();
         } else if let Some(saved) = saved {
-            rig.rig = saved;
+            cleared = true;
+            if rig.state.zone.is_some() {
+                // Inside a zone `saved` is the zone's rig; the zone pass owns the camera again.
+                rig.rig = rig.state.base.take().unwrap_or(saved);
+                rig.state.zone = None;
+            } else {
+                rig.rig = saved;
+            }
         }
         if key.snap {
             snap_rig(rig);
+        }
+        if cleared {
+            self.roles[index].saved_rig = None;
+            if let Ok(Some(binding)) = self
+                .world
+                .get_mut::<SequenceBinding>(self.roles[index].binding)
+            {
+                binding.saved_rig = None;
+            }
         }
         if let Some(rig) = now_saved {
             self.roles[index].saved_rig = Some(rig.clone());
@@ -518,23 +539,21 @@ impl Beat<'_> {
         }
     }
 
-    fn audio(&mut self, sound: &str, gain: f32, role: Option<&str>, range: f32) {
-        let position = match role {
-            None => None,
-            Some(role) => {
-                let Some(index) = self.resolve(role) else {
-                    return;
-                };
-                crate::hierarchy::world_transform(self.world, self.roles[index].entity)
-                    .map(|pose| pose.trs.translation)
-            }
-        };
-        let Some(queue) = self.world.resource_mut::<crate::AudioQueue>() else {
-            return;
-        };
-        match position {
-            Some(at) => queue.play_at(sound, gain, at, range),
-            None => queue.play(sound, gain),
+    /// Applies one audio key: a voice, a music crossfade or a duck.
+    fn audio_key(&mut self, key: &AudioKey) {
+        if let Some(sound) = &key.play {
+            let entity = match key.role.as_deref() {
+                None => None,
+                Some(role) => match self.resolve(role) {
+                    Some(index) => Some(self.roles[index].entity),
+                    None => return,
+                },
+            };
+            audio::play(self.world, self.pid, sound, key.gain, entity, key.range);
+        } else if let Some(fade) = &key.music_crossfade {
+            audio::crossfade(self.world, fade);
+        } else if let Some(duck) = &key.duck {
+            audio::duck(self.world, self.pid, duck);
         }
     }
 
@@ -629,6 +648,16 @@ impl Beat<'_> {
                 self.ui(&key.role, &key.tracks, true);
                 self.applied(SequenceTrack::Ui, key.at);
             }
+        }
+        let audio = &doc.tracks.audio;
+        if let Some(n) = (0..audio.len())
+            .filter(|&n| audio[n].music_crossfade.is_some() && pending(audio[n].at))
+            .max_by_key(|&n| (audio[n].at, n))
+        {
+            if let Some(fade) = &audio[n].music_crossfade {
+                audio::crossfade(self.world, fade);
+            }
+            self.applied(SequenceTrack::Audio, audio[n].at);
         }
         snapped.sort();
         snapped.dedup();

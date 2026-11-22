@@ -182,7 +182,17 @@ pub enum AudioCategory {
 /// assert_eq!(Bus::from(AudioCategory::Sfx), Bus::Sfx);
 /// assert_eq!(Bus::ALL.len(), 6);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Bus {
     /// Multiplies every other bus.

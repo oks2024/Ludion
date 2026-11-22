@@ -114,6 +114,12 @@ tracks:
   audio:
     - at: 10
       play: sounds/radar_on.wav
+    - at: 12
+      duck:
+        buses:
+          - music
+        depth_db: -9.0
+        release: 12
   dialogue:
     - at: 20
       line: online
@@ -202,7 +208,12 @@ fn run(
     let focus = world.get::<CameraRig>(camera).ok()??.rig.focus_offset;
     let clip = world.get::<Animation>(radar).ok()??.clip.clone();
     let pose = world.get::<Transform>(radar).ok()??.translation;
-    println!("{label}: the radar ends at {pose:?}");
+    let ducks = engine
+        .audio_log()
+        .iter()
+        .filter(|entry| format!("{:?}", entry.message).starts_with("Duck"))
+        .count();
+    println!("{label}: the radar ends at {pose:?}, {ducks} duck messages");
     Some((focus, clip, online, pose))
 }
 

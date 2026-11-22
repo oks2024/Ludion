@@ -208,7 +208,9 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         _ => None,
     };
     let mut rig = rig;
-    crate::camera_zone::apply(world, entity, &mut rig, target, target_position);
+    if !crate::sequences::overrides_camera(world, entity) {
+        crate::camera_zone::apply(world, entity, &mut rig, target, target_position);
+    }
     let cut = rig.state.snap || rig.state.last_applied.is_none();
     let own = crate::sequences::entity_clock(world, entity, ctx);
     let physics = world.resource::<PhysicsWorld>();

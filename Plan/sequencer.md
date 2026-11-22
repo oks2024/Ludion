@@ -1,6 +1,6 @@
 # Plan: Sequencer — `kind: sequence`, keyed tracks, skip
 
-> **Waves 1–3a mechanized — the document, `sequences::play`, seven tracks (the transform track included), skip, `holds_gameplay`, `wait: line_end`/`release` and the per-entity clock domain (`SequenceBound`) ship; voices, music and duck keys, and preview are laid out below.**
+> **Waves 1–3b mechanized — the document, `sequences::play`, seven tracks (transform and the audio voices, `music_crossfade` and `duck` keys included), skip, `holds_gameplay`, `wait: line_end`/`release`, the per-entity clock domain (`SequenceBound`) and the camera-zone override ship; preview and wire are laid out below.**
 > Driven by Neon Shroud request 0025 (sequencer / timeline). Game-facing doc: `ludion docs sequences`.
 
 ## Design decisions
@@ -28,13 +28,13 @@
    `at == L` apply that tick) `Ended { Completed }` is emitted and the player and its bindings are despawned; the handle
    is valid until it ends (the `LineHandle` rule).
 7. **Camera track.** A key has exactly one of `rig: <RigConfig map>` (inline; no rig doc kind exists) or
-   `restore: true`, plus `snap: bool` (default false). The first applied rig key saves the role's current
-   `CameraRig.rig` into its `SequenceBinding.saved_rig`; `restore` writes it back.
+   `restore: true`, plus `snap: bool` (default false). A rig key with no saved rig saves the role's current
+   `CameraRig.rig` into its `SequenceBinding.saved_rig`; `restore` writes it back and clears it (decision 35).
 8. **Skip.** `sequences::skip -> bool` is `false` when not live or the doc says `skippable: false` (default `true`:
    whether "seen once" is a game rule). At the next update, the **last** camera, animation and ui key of each role, if
    not yet applied, applies in end form (camera: write, then `snap_rig` for every camera role touched; animation: hard
    cut at the game frame; ui: the tween written with every `once` track's `duration` 0 and `start` = now). Unplayed
-   audio and dialogue keys are dropped, the lines it said are interrupted (found by `DialogueLine.seq`), unfired
+   `play`/`duck` and dialogue keys are dropped, the last pending `music_crossfade` applies (decision 33), the lines it said are interrupted (found by `DialogueLine.seq`), unfired
    `on_skip: fire` events (default) fire in order and `drop` ones do not. Then `Ended { Skipped }`. A beat's state
    outcome never depends on whether it was watched.
 9. **Cancel.** `sequences::cancel -> bool`: no end state, lines interrupted, `Ended { Cancelled }`. A document unloaded
@@ -42,7 +42,7 @@
 10. **Events.** `SequenceEvents`, rewritten every run: `KeyApplied { handle, track, at }` (the W1 trace; a skip emits
     it for each end form), `Fired { handle, name }`, `Ended { handle, end }`, with `fired(handle, name)` and
     `ended(handle)`.
-11. **Later waves own their fields.** Voices, music and duck keys, preview and wire are unknown
+11. **Later waves own their fields.** Preview and wire are unknown
     fields today (`L1120`), never silently ignored. Holds and waits shipped in W2a (decisions 13–18).
 12. **UI `start`.** A ui key's track `start` is a frame offset after the key applies, on the track's own clock
     (`real` → `ctx.frame`, `game` → `ctx.game_frame`).
@@ -119,6 +119,29 @@
     `path_follow` convention); a dynamic body is the solver's. A role under a `Parent` gets its local pose from the
     world target (`localize`), with its own world scale kept. A role without `Transform` degrades (`L4353`).
 
+31. **The audio key is a one-of.** `AudioKey` holds exactly one of `play`, `music_crossfade { id, stems: [[path, gain]],
+    ticks }` and `duck { buses, depth_db, attack, release }` (`L1730` otherwise; `role`, `gain`, `range` belong to
+    `play`). Shape validation mirrors the camera key's one-of. `Bus` gained `JsonSchema`; it sits in no committed schema.
+32. **Voices.** `play` is a voice: `push_voice`, or `push_on` the role's entity (the old fixed-position `play_at` becomes
+    a voice that follows the role). `SequenceAudio` (a per-build resource, unhashed, never snapshotted, reset with every
+    rebuild like the `AudioQueue` voice counter) holds each player's voice ids in push order; skip and cancel stop them
+    over 6 ticks (the dialogue `cut_fade_ticks` default); a Completed beat lets them play out. A player the game
+    despawned is pruned at the top of `sequence_update`.
+33. **`music_crossfade`** is `AudioQueue::music_crossfade`. A skip applies the last pending one (by `at`, then document
+    order) and emits its `KeyApplied`; the earlier ones are dropped. It is never undone: the music after the beat is
+    the game's.
+34. **`duck`** is `duck_start` under one key per player, `sequence:{pid}`: a later duck key replaces it. Every end
+    (Completed, Skipped, Cancelled) releases it over the last duck key's `release`; a skip drops unplayed duck keys.
+35. **The camera-zone override.** While a role's binding holds a `saved_rig` the zone pass skips that camera
+    (`overrides_camera`, derived, no new field), so `RigState.zone`/`base` stay as the override found them. `restore`
+    takes the saved rig and clears it on the player and the binding, ending the override; inside a zone it writes the
+    zone's `base` (or the saved rig when none), clears `zone`, and the next zone pass re-enters whichever zone the
+    target stands in. Writing the saved rig would make `resolve_zone` adopt the zone's rig as the base. Amends
+    decision 7: a rig key with no saved rig saves.
+36. **Known limits.** A checkpoint restore or world rebuild mid-beat forgets the voice ids (earlier voices play out,
+    a later skip cannot stop them) and drops the duck (the rebuild's blanket stop drops every manual duck). A beat
+    that ends without `restore` keeps its rig, and the zone system resumes from it.
+
 ## Waves
 
 - **W1 (shipped):** the document and validator (`L1730`–`L1733`), `play`/`skip`/`cancel`/`is_playing`, `SequenceEvents`,
@@ -133,8 +156,8 @@
   At release the gameplay stamps of the entity clock's readers (decision 22) shift back by the lead, so nothing jumps. `docs/game-clock.md`'s "no per-component opt-out" line is amended
   there (request amendment 2, **accepted 2026-11-19, shipped in W2b**).
 - **W3a (mechanized):** the transform track (decisions 25–30): anchor pose spans and `kind: path` spans.
-- **W3b:** audio voices stopped on skip and cancel, `music_crossfade`, duck keys, the camera-zone override flag (with
-  request 0010).
+- **W3b (mechanized):** audio voices stopped on skip and cancel, `music_crossfade`, duck keys, the camera-zone override
+  (decisions 31–36).
 - **W4:** built-in schedule placement, `ludion render --sequence --bind --at`, wire `sequence.play/seek/skip` (a
   protocol schema move), a gallery scene and goldens, testkit `sequence_trace`.
 
@@ -163,3 +186,6 @@
 - W3a mechanized: `sequences/{docs,mod,update,events}.rs` (`TransformKey`, `TransformTo`, `TransformSpan`,
   `SequencePlayer.spans`, `SequenceTrack::Transform`), `path_follow::orient` visible to the crate,
   `tests/sequence_transform.rs`, `docs/sequences.md`, the example.
+- W3b mechanized: `sequences/{audio,docs,mod,update}.rs` (`SequenceAudio`, `MusicCrossfadeKey`, `DuckKey`,
+  `overrides_camera`), `camera_rig.rs` guard, `Bus` `JsonSchema`, `tests/sequence_{audio,zone}.rs`,
+  `docs/{sequences,camera}.md`, the example.

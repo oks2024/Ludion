@@ -470,6 +470,7 @@ game crate, and the tooling knows `games/*`).
     `RigState` gains `zone` and `base` (hashed, skipped at default). Entering from no zone stores the
     config in force as the base, a zone change copies the zone's `rig` so the existing blend runs over its
     `blend_in`, leaving restores the base, and a game write inside a zone becomes the base (item 4).
+    A sequence camera key overrides zones while it holds a saved rig (`Plan/sequencer.md` d35).
     No `CameraZone` in the world means no query and no state touched. `L1553` no physics, `L1554`
     check-scene without a sensor. `CameraZone` registers at the registry's end (the append-only order).
 38. **The occluder query** (0010 W3c; mechanized; item 6). `camera_occluders(world, camera, &layers,

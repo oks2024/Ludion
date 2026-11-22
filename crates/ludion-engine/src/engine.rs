@@ -4862,6 +4862,9 @@ impl Engine {
             self.driver
                 .world_mut()
                 .insert_resource(crate::SequenceEvents::default());
+            self.driver
+                .world_mut()
+                .insert_resource(crate::sequences::audio::SequenceAudio::default());
         }
     }
 

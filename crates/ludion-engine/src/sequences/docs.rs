@@ -214,23 +214,80 @@ pub struct UiKey {
     pub tracks: Vec<UiTweenTrack>,
 }
 
-/// One audio key: a one-shot.
+/// One audio key: exactly one of `play`, `music_crossfade` and `duck`.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AudioKey {
     /// The tick the key applies on.
     pub at: u32,
-    /// The sound, a path relative to the content root.
-    pub play: String,
-    /// Linear gain (default `1.0`).
+    /// A voice: the sound, a path relative to the content root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub play: Option<String>,
+    /// Linear gain of a `play` key (default `1.0`).
     #[serde(default = "one")]
     pub gain: f32,
-    /// Plays positionally at this role's entity (default: not positional).
+    /// A `play` key's voice follows this role's entity (default: not positional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
-    /// The positional falloff range in metres (default `10.0`, the `AudioEmitter` default).
+    /// The positional falloff range of a `play` key in metres (default `10.0`, the `AudioEmitter` default).
     #[serde(default = "ten")]
     pub range: f32,
+    /// Crossfades the music to a stem set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub music_crossfade: Option<MusicCrossfadeKey>,
+    /// Ducks buses until the beat ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duck: Option<DuckKey>,
+}
+
+/// An audio key's music crossfade (`AudioQueue::music_crossfade`).
+///
+/// ```
+/// use ludion_engine::sequences::MusicCrossfadeKey;
+///
+/// let fade: MusicCrossfadeKey = serde_json::from_value(serde_json::json!({
+///     "id": "combat", "stems": [["music/combat.ogg", 1.0]],
+/// }))
+/// .unwrap();
+/// assert_eq!(fade.ticks, 0);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MusicCrossfadeKey {
+    /// The music id.
+    pub id: String,
+    /// The stems as `[path, gain]` pairs, paths relative to the content root.
+    pub stems: Vec<(String, f32)>,
+    /// The fade length in ticks (default `0`, a cut).
+    #[serde(default)]
+    pub ticks: u32,
+}
+
+/// An audio key's duck (`AudioQueue::duck_start`), one per beat: a later duck key replaces it, and the
+/// beat's end releases it.
+///
+/// ```
+/// use ludion_engine::sequences::DuckKey;
+///
+/// let duck: DuckKey = serde_json::from_value(serde_json::json!({
+///     "buses": ["music"], "depth_db": -9.0, "release": 30,
+/// }))
+/// .unwrap();
+/// assert_eq!((duck.attack, duck.release), (0, 30));
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DuckKey {
+    /// The buses to duck.
+    pub buses: Vec<ludion_core::audio::Bus>,
+    /// The depth in decibels, `0` or negative.
+    pub depth_db: f32,
+    /// The attack in ticks (default `0`).
+    #[serde(default)]
+    pub attack: u32,
+    /// The release in ticks when the beat ends (default `0`).
+    #[serde(default)]
+    pub release: u32,
 }
 
 fn one() -> f32 {
@@ -547,7 +604,26 @@ fn validate_doc(
         }
     }
     for (n, key) in tracks.audio.iter().enumerate() {
+        let pointer = format!("/tracks/audio/{n}");
+        let forms = usize::from(key.play.is_some())
+            + usize::from(key.music_crossfade.is_some())
+            + usize::from(key.duck.is_some());
+        if forms != 1 {
+            out.push(diagnostic(
+                code::SEQUENCE_INVALID,
+                "an audio key needs exactly one of `play:`, `music_crossfade:` and `duck:`"
+                    .to_owned(),
+                at(&pointer),
+            ));
+        }
         if let Some(role) = &key.role {
+            if key.play.is_none() {
+                out.push(diagnostic(
+                    code::SEQUENCE_INVALID,
+                    "`role` applies to a `play` key only".to_owned(),
+                    at(&format!("{pointer}/role")),
+                ));
+            }
             role_of("audio", n, role, false, out);
         }
         for (field, value) in [("gain", key.gain), ("range", key.range)] {
@@ -555,7 +631,55 @@ fn validate_doc(
                 out.push(diagnostic(
                     code::SEQUENCE_INVALID,
                     format!("`{field}` is {value}; it must be finite and not negative"),
-                    at(&format!("/tracks/audio/{n}/{field}")),
+                    at(&format!("{pointer}/{field}")),
+                ));
+            }
+        }
+        if let Some(fade) = &key.music_crossfade {
+            let base = format!("{pointer}/music_crossfade");
+            if fade.id.trim().is_empty() {
+                out.push(diagnostic(
+                    code::SEQUENCE_INVALID,
+                    "a `music_crossfade` key has a blank `id`".to_owned(),
+                    at(&format!("{base}/id")),
+                ));
+            }
+            if fade.stems.is_empty() {
+                out.push(diagnostic(
+                    code::SEQUENCE_INVALID,
+                    "a `music_crossfade` key needs at least one stem".to_owned(),
+                    at(&format!("{base}/stems")),
+                ));
+            }
+            for (i, (path, gain)) in fade.stems.iter().enumerate() {
+                if path.trim().is_empty() || !gain.is_finite() || *gain < 0.0 {
+                    out.push(diagnostic(
+                        code::SEQUENCE_INVALID,
+                        format!(
+                            "stem `{path}` needs a path and a finite, non-negative gain (got {gain})"
+                        ),
+                        at(&format!("{base}/stems/{i}")),
+                    ));
+                }
+            }
+        }
+        if let Some(duck) = &key.duck {
+            let base = format!("{pointer}/duck");
+            if duck.buses.is_empty() {
+                out.push(diagnostic(
+                    code::SEQUENCE_INVALID,
+                    "a `duck` key needs at least one bus".to_owned(),
+                    at(&format!("{base}/buses")),
+                ));
+            }
+            if !duck.depth_db.is_finite() || duck.depth_db > 0.0 {
+                out.push(diagnostic(
+                    code::SEQUENCE_INVALID,
+                    format!(
+                        "`depth_db` is {}; it must be finite and 0 or negative",
+                        duck.depth_db
+                    ),
+                    at(&format!("{base}/depth_db")),
                 ));
             }
         }
@@ -743,6 +867,75 @@ mod tests {
         assert!(run(doc("hello"), true).is_empty());
         assert_eq!(codes(&run(doc("nope"), true)), ["L1733"]);
         assert_eq!(codes(&run(doc("hello"), false)), ["L1733"]);
+    }
+
+    #[test]
+    fn an_audio_key_needs_exactly_one_form_and_valid_fields() {
+        let doc = |key: serde_json::Value| json!({ "roles": ["a"], "length_ticks": 9, "tracks": { "audio": [key] } });
+        assert!(run(doc(json!({ "at": 0, "play": "s.wav", "role": "a" })), true).is_empty());
+        assert!(
+            run(
+                doc(json!({ "at": 0, "music_crossfade": { "id": "m", "stems": [["m.ogg", 1.0]], "ticks": 6 } })),
+                true
+            )
+            .is_empty()
+        );
+        assert!(
+            run(
+                doc(json!({ "at": 0, "duck": { "buses": ["music"], "depth_db": -12.0, "release": 9 } })),
+                true
+            )
+            .is_empty()
+        );
+        let none = run(doc(json!({ "at": 0 })), true);
+        assert_eq!(codes(&none), ["L1730"]);
+        assert_eq!(
+            none[0].path.as_deref(),
+            Some("sequence/sequences/t.yaml/tracks/audio/0")
+        );
+        let two = run(
+            doc(
+                json!({ "at": 0, "play": "s.wav", "duck": { "buses": ["music"], "depth_db": -1.0 } }),
+            ),
+            true,
+        );
+        assert_eq!(codes(&two), ["L1730"]);
+        let role = run(
+            doc(json!({ "at": 0, "role": "a", "duck": { "buses": ["music"], "depth_db": -1.0 } })),
+            true,
+        );
+        assert_eq!(codes(&role), ["L1730"]);
+        assert!(role[0].path.as_deref().unwrap().ends_with("/role"));
+        let fade = run(
+            doc(json!({ "at": 0, "music_crossfade": { "id": " ", "stems": [] } })),
+            true,
+        );
+        assert_eq!(codes(&fade), ["L1730", "L1730"]);
+        let stem = run(
+            doc(
+                json!({ "at": 0, "music_crossfade": { "id": "m", "stems": [["", 1.0], ["a.ogg", -1.0]] } }),
+            ),
+            true,
+        );
+        assert_eq!(codes(&stem), ["L1730", "L1730"]);
+        assert!(
+            stem[1]
+                .path
+                .as_deref()
+                .unwrap()
+                .ends_with("/music_crossfade/stems/1")
+        );
+        let empty = run(
+            doc(json!({ "at": 0, "duck": { "buses": [], "depth_db": -3.0 } })),
+            true,
+        );
+        assert_eq!(codes(&empty), ["L1730"]);
+        let up = run(
+            doc(json!({ "at": 0, "duck": { "buses": ["sfx"], "depth_db": 3.0 } })),
+            true,
+        );
+        assert_eq!(codes(&up), ["L1730"]);
+        assert!(up[0].message.contains('3'));
     }
 
     #[test]
