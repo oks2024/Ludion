@@ -151,3 +151,4 @@
   snapshot/restore); `docs/ai.md`; the `ai_squad` example. Deviation from the request: a roster naming the
   member, opt-in, instead of a count on `Group` (decision 17). The ai-squad fixture and every pinned
   artifact are unmoved. A roster stamped at tick 0 is not refreshed until tick 1 (`seen` defaults to 0).
+- M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the ai-squad fixture matches its committed `WorldHash` trace on the M4.

@@ -204,3 +204,4 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   the extract fill of both (`ludion-engine`), docs `render-views` and `camera`. `NoInterpolate`/`PresentCuts` cut a view camera;
   `alpha >= 1` is still `next.clone()`. No `WorldHash`, replay, schema, `SnapshotDoc` or golden moved. API break: `BlendData` gains two
   pub fields (a struct literal needs `..Default::default()`; none found outside `crates/`). W4c is open.
+- M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twins of `render-view-unlit`, `render-view-portrait` and `render-view-radar` are blessed (r2451); the full macOS gallery re-renders byte-identically.

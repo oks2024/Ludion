@@ -239,3 +239,4 @@ instead of passing `MoveReport.ground.surface`; not built, the game passes the i
   `scene_perception_name_diagnostics`; `L1572` per occurrence with the nearest match); tests in
   `crates/ludion-engine/tests/perception_check.rs` and `debug_draw.rs` (incl. the world-hash and extract-unchanged
   proofs). No component, wire schema, replay, golden or hash moved.
+- M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the committed perception trace reproduces on the M4 (`perception_gallery`, `perception_trace`), and the macOS `perception` golden passes.

@@ -144,3 +144,4 @@ engine answers from sim state, with the renderer's own formulas.
   blessed on the RTX 3090, and `light_exposure_agreement.rs`. On this box: clean 696 of 1024, max relative
   error 0.0167, max absolute error 0.0099, binary agreement 100 % (864 of 864 steady samples). Owed: the
   M4 twins of both goldens and the agreement test green there; the wire variant (decision 18).
+- M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): `light_exposure_agreement` is green on Metal, and both macOS goldens pass.

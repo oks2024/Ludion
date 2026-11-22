@@ -17,8 +17,8 @@
 > (`ui/hud.rs`; the component and schema snapshots moved once, no golden, replay or protocol hash);
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
 > component schema snapshot moved); W3c-1: filled `polygon` (decisions 67–73, `L2305`, `ui_polygon.wgsl`; the `ui-polygons`
-> golden is blessed on the RTX 3090, the macOS golden is owed on the M4); W3c-2: polygon strokes and `polyline` (decisions 74–80, `UiLineJoin`,
-> `push_ui_stroke_verts` on the polygon pipeline; the `ui-strokes` golden is blessed on the RTX 3090, the macOS golden is owed on the M4). Waves 3c-3, 5b and 7 are recorded below and not started. Owed: the
+> golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455); W3c-2: polygon strokes and `polyline` (decisions 74–80, `UiLineJoin`,
+> `push_ui_stroke_verts` on the polygon pipeline; the `ui-strokes` golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455). Waves 3c-3, 5b and 7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 

@@ -102,6 +102,7 @@ No `WorldHash`, replay, protocol schema, `PHYSICS_BLOB_VERSION` or golden moved.
 | `ludion-testkit/src/drift.rs`, `registry_serialized_default.rs`, the prelude | seed, fixture, exports |
 
 `paired_update` is game-registered (decision 32). No `WorldHash` of a scene that never starts an action, replay, protocol schema, `PHYSICS_BLOB_VERSION` or golden moved. Only `component_schemas.json` re-blessed. The M4 cross-arch twin of the warp test is owed.
+- M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twins of the four `paired-takedown` goldens are blessed (r2453). The cross-arch takedown trace, the aligned-pose, warp and N-role tests, `ragdoll_rest` and the joint-zero tests pass on the M4.
 
 ## Trigger
 

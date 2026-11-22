@@ -131,3 +131,4 @@ for the whole arc; W1a ships the streak field.
   `rain-porosity` is new (stripes at 0, 0.5 and 1 darken in order, all gloss; a `Mesh.porosity: 0.1` cube); the other 110
   gallery goldens passed unblessed. No replay content hash, `WorldHash` or protocol schema moved. Owed: the macOS twin of
   `rain-porosity`. W2c (`RainOccluder`, `rain_occlusion` debug view, `rain_density`) is next.
+- M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twin of `rain-porosity` is blessed (r2455).

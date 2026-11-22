@@ -197,3 +197,4 @@ tried on Metal, in the orthographic shaft tests, or on the reference game, and w
   `blend_depth: nearest` with `L2362`, the pass break and scratch depth copy, the `ghost-figure` gallery scene (no
   depth bias needed on the RTX 3090). The macOS twins of the three gallery goldens and a Metal look at the pass
   break are owed.
+- M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twins of `ghost-figure` and `glass-reflections` are blessed (r2452). On Metal the device takes `max_sampled_textures_per_shader_stage = 20` and the lit blended pipelines create and render with no validation error; `ghost-figure` shows no pass-break artifact. Still owed: the iOS-simulator limit check.

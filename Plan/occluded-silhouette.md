@@ -93,3 +93,4 @@ decision and is not settled by this.
   (`film_carry`) and `smaa_blend`, `resolve` and `upscale` read it from the nearest source texel. The
   `occluded-silhouette-film` gallery golden is blessed on the RTX 3090 (macOS twin and M4 proof of the four edited
   passes owed). No existing golden, replay, `WorldHash` or protocol schema moved.
+- M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twins of `occluded-silhouette-styles` and `occluded-silhouette-film` are blessed (r2452). The M4 proof of the four edited passes is done: a full gallery re-render reproduced all 108 committed macOS goldens byte for byte.

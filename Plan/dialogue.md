@@ -238,3 +238,4 @@ locale without a strings table (warning).
   gallery `subtitles` scene (`dialogue/subtitles.yaml`, `strings/subtitles-en.yaml`), `docs/dialogue.md`, `docs/components-ui.md`.
   New Windows goldens blessed on the RTX 3090: `subtitles` (discovered) and `subtitles-driven`. The component schema snapshot is
   re-blessed. Owed: the macOS twins of both goldens. No protocol schema, replay or existing golden moved.
+- M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twins of `subtitles`, `subtitles-driven`, `localization`, `localization-fr` and `font-fallback` are blessed (r2454).
