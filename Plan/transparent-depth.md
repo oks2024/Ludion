@@ -193,4 +193,7 @@ tried on Metal, in the orthographic shaft tests, or on the reference game, and w
 - Mesh path (0016) W1 mechanized (r2386, 2026-11-18): `Mesh.blend` (`alpha` or `additive`) draws in the
   `transparents` pass and joins `transparent_depth`; the `glass-and-holograms` gallery golden is blessed on the
   RTX 3090. Opaque scenes keep the same pixels, and no replay content hash, `WorldHash`, existing golden or
-  protocol schema moved. W2a shipped (r2440): asset and glTF `blend`. W2b shipped (r2442): indirect specular on lit blends, `lit: false`. W3 in progress: `blend_depth: nearest` with `L2362`, the pass break and scratch depth copy, the `ghost-figure` gallery scene.
+  protocol schema moved. W2a shipped (r2440): asset and glTF `blend`. W2b shipped (r2442): indirect specular on lit blends, `lit: false`. W3 mechanized (r2443):
+  `blend_depth: nearest` with `L2362`, the pass break and scratch depth copy, the `ghost-figure` gallery scene (no
+  depth bias needed on the RTX 3090). The macOS twins of the three gallery goldens and a Metal look at the pass
+  break are owed.
