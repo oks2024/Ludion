@@ -109,17 +109,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var fill_cov: f32;
     var out_cov: f32;
     if in.sdf > 0.5 {
-        if in.ol_param.z > 0.0 {
-            // A soft shadow widens each edge by a fraction of the field band below it; the lower
-            // bound stays above 0, so coverage is 0 at the quad's padded edge.
-            let hf = in.ol_param.z * max(0.5 - 2.0 * w, 0.0);
-            let ho = in.ol_param.z * max(in.ol_param.y - 2.0 * w, 0.0);
-            fill_cov = smoothstep(0.5 - w - hf, 0.5 + w + hf, raw);
-            out_cov = smoothstep(in.ol_param.y - w - ho, in.ol_param.y + w + ho, raw);
-        } else {
-            fill_cov = smoothstep(0.5 - w, 0.5 + w, raw);
-            out_cov = smoothstep(in.ol_param.y - w, in.ol_param.y + w, raw);
-        }
+        fill_cov = smoothstep(0.5 - w, 0.5 + w, raw);
+        out_cov = smoothstep(in.ol_param.y - w, in.ol_param.y + w, raw);
     } else {
         let texel = 1.0 / vec2<f32>(textureDimensions(atlas_tex, 0));
         let k = i32(in.ol_param.y);
@@ -131,6 +122,25 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             }
         }
     }
+    let af = in.color.a * fill_cov;
+    let ao = in.ol_color.a * out_cov;
+    let a = af + ao * (1.0 - af);
+    let rgb = (in.color.rgb * af + in.ol_color.rgb * ao * (1.0 - af)) / max(a, 1e-6);
+    return vec4<f32>(rgb, a * clip);
+}
+
+// Soft-shadow quads only (SDF, `ol_param.z > 0`): drawn by the twin pipeline so `fs_main` stays branch-free of it.
+@fragment
+fn fs_soft_shadow(in: VsOut) -> @location(0) vec4<f32> {
+    let clip = clip_cov(in.clip.xy, in.cl_a, in.cl_b, in.cl_r, in.cl_t);
+    let raw = textureSample(atlas_tex, atlas_sampler, in.uv).a;
+    let w = max(fwidth(raw), 1e-4) * 0.7;
+    // A soft shadow widens each edge by a fraction of the field band below it; the lower
+    // bound stays above 0, so coverage is 0 at the quad's padded edge.
+    let hf = in.ol_param.z * max(0.5 - 2.0 * w, 0.0);
+    let ho = in.ol_param.z * max(in.ol_param.y - 2.0 * w, 0.0);
+    let fill_cov = smoothstep(0.5 - w - hf, 0.5 + w + hf, raw);
+    let out_cov = smoothstep(in.ol_param.y - w - ho, in.ol_param.y + w + ho, raw);
     let af = in.color.a * fill_cov;
     let ao = in.ol_color.a * out_cov;
     let a = af + ao * (1.0 - af);

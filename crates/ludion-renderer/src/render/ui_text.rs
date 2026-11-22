@@ -44,6 +44,9 @@ pub(super) const UI_TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 11] = wgpu::verte
 /// A `shadow` emits the run's quads first, moved by `offset_px` before the turn and packed in the
 /// shadow's colour (the outline's too when outlined, so the composite is one flat silhouette); then the
 /// fill follows exactly as without one.
+///
+/// Returns how many leading vertices (the shadow pass) need `fs_soft_shadow`: all of them when the
+/// shadow is soft (an SDF face with `softness > 0`), else 0.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn push_ui_text_verts(
     verts: &mut Vec<UiTextVertexRaw>,
@@ -54,7 +57,7 @@ pub(super) fn push_ui_text_verts(
     rotation: &UiRotation,
     outline: Option<(&GlyphOutline, u32, [u32; 2])>,
     shadow: Option<&GlyphShadow>,
-) {
+) -> usize {
     let [clip_a, clip_b, clip_r, clip_t] = ui_clip_raw(clip);
     let turn = (rotation.radians != 0.0).then(|| ui_cos_sin(rotation.radians));
     let place = |x: f32, y: f32| match turn {
@@ -90,6 +93,7 @@ pub(super) fn push_ui_text_verts(
             [clip_a, clip_b, clip_r, clip_t],
         );
     };
+    let mut soft_verts = 0;
     if let Some(s) = shadow {
         let softness = if sdf { s.softness } else { 0.0 };
         let (ol_color, ol_param) = match outline {
@@ -98,8 +102,12 @@ pub(super) fn push_ui_text_verts(
             None => ([0.0; 4], [0.0; 4]),
         };
         pass(s.offset_px, s.color, ol_color, ol_param);
+        if softness > 0.0 {
+            soft_verts = quads.len() * 6;
+        }
     }
     pass([0.0; 2], color, ol_color, ol_param);
+    soft_verts
 }
 
 /// One pass over `quads`: every glyph quad as 6 vertices, moved by `offset` (after the outline's
@@ -489,5 +497,27 @@ mod tests {
         assert_eq!(hard[0].ol_param, [0.0; 4]);
         let zero = pack(&quads, true, &UiRotation::NONE, None, Some(&shadow(0.0)));
         assert_eq!(zero[0].ol_param, [0.0; 4]);
+
+        let soft_count = |sdf: bool, outline, shadow: Option<&GlyphShadow>| {
+            push_ui_text_verts(
+                &mut Vec::new(),
+                &quads,
+                [1.0; 4],
+                sdf,
+                &UiClip::NONE,
+                &UiRotation::NONE,
+                outline,
+                shadow,
+            )
+        };
+        let span = quads.len() * 6;
+        assert_eq!(soft_count(true, None, Some(&s)), span);
+        assert_eq!(
+            soft_count(true, Some((&outline, 8, [128, 64])), Some(&s)),
+            span
+        );
+        assert_eq!(soft_count(false, None, Some(&s)), 0, "bitmap stays hard");
+        assert_eq!(soft_count(true, None, Some(&shadow(0.0))), 0);
+        assert_eq!(soft_count(true, None, None), 0);
     }
 }

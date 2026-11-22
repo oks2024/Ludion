@@ -14267,3 +14267,32 @@ fn the_embedded_atlas_png_matches_the_face_and_carries_coverage() {
         "covered texels are white; alpha carries the coverage",
     );
 }
+
+/// A text batch draws in vertex order: soft ranges (shadow quads) on the twin, the gaps on the main
+/// pipeline, adjacent spans never split, and no soft range leaves a single main draw.
+#[test]
+#[allow(clippy::single_range_in_vec_init)]
+fn text_draw_spans_alternate_in_vertex_order() {
+    assert_eq!(text_draw_spans(12, &[]), vec![(0..12, false)]);
+    assert_eq!(
+        text_draw_spans(12, &[0..6]),
+        vec![(0..6, true), (6..12, false)]
+    );
+    assert_eq!(
+        text_draw_spans(18, &[6..12]),
+        vec![(0..6, false), (6..12, true), (12..18, false)]
+    );
+    assert_eq!(
+        text_draw_spans(12, &[6..12]),
+        vec![(0..6, false), (6..12, true)]
+    );
+    assert_eq!(
+        text_draw_spans(24, &[0..6, 12..18]),
+        vec![
+            (0..6, true),
+            (6..12, false),
+            (12..18, true),
+            (18..24, false)
+        ]
+    );
+}

@@ -1208,6 +1208,14 @@ impl Renderer {
             .unwrap_or_else(|| panic!("{} has no split pipeline twin", id.label()))
     }
 
+    /// The UI text shader's twin for soft shadow quads.
+    fn soft_shadow_pipeline(&self, id: ShaderId) -> &wgpu::RenderPipeline {
+        self.pipelines[id as usize]
+            .soft_shadow
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has no soft shadow pipeline twin", id.label()))
+    }
+
     /// The transparent layer twin of a sprite, particle or text pipeline.
     /// The `Rgba16Float` twin when the layer `format` is that (it carries the weighted medium in blue).
     fn transparent_depth_pipeline(
@@ -3363,6 +3371,7 @@ impl Renderer {
                     let face = *font;
                     let sdf = face.is_some_and(|f| f.sdf);
                     let mut verts: Vec<UiTextVertexRaw> = Vec::new();
+                    let mut soft: Vec<std::ops::Range<u32>> = Vec::new();
                     let (atlas_dims, spread_px) = match face {
                         None => ([self.atlas.texture.width(), self.atlas.texture.height()], 0),
                         Some(f) => {
@@ -3384,7 +3393,8 @@ impl Renderer {
                         if *font != face {
                             break;
                         }
-                        push_ui_text_verts(
+                        let start = verts.len();
+                        let soft_verts = push_ui_text_verts(
                             &mut verts,
                             quads,
                             *color,
@@ -3394,6 +3404,13 @@ impl Renderer {
                             outline.as_ref().map(|o| (o, spread_px, atlas_dims)),
                             shadow.as_ref(),
                         );
+                        if soft_verts > 0 {
+                            let range = start as u32..(start + soft_verts) as u32;
+                            match soft.last_mut() {
+                                Some(last) if last.end == range.start => last.end = range.end,
+                                _ => soft.push(range),
+                            }
+                        }
                         i += 1;
                     }
                     // A run of only empty/blank strings produces no vertices — nothing to draw.
@@ -3409,6 +3426,7 @@ impl Renderer {
                         tex_bg: self.font_bind_group(device, face, textures),
                         verts: buffer,
                         count: verts.len() as u32,
+                        soft,
                     });
                 }
             }
@@ -4123,6 +4141,24 @@ fn particle_raws_split(
     (raws, start)
 }
 
+/// A text batch's draw order: `0..count` cut into consecutive spans, each flagged soft when it lies in
+/// one of the ascending, disjoint `soft` ranges (the soft-shadow twin draws those).
+fn text_draw_spans(count: u32, soft: &[std::ops::Range<u32>]) -> Vec<(std::ops::Range<u32>, bool)> {
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for range in soft {
+        if range.start > at {
+            spans.push((at..range.start, false));
+        }
+        spans.push((range.clone(), true));
+        at = range.end;
+    }
+    if at < count {
+        spans.push((at..count, false));
+    }
+    spans
+}
+
 /// One batch of the overlay pass's UI draws, in the scene's pinned draw order: either a run of rects
 /// sharing one texture (instanced) or a run of text (one glyph vertex buffer).
 enum UiBatch {
@@ -4135,6 +4171,9 @@ enum UiBatch {
         tex_bg: wgpu::BindGroup,
         verts: wgpu::Buffer,
         count: u32,
+        /// Vertex ranges (ascending, disjoint) drawn by the soft-shadow twin; the rest use the main
+        /// pipeline.
+        soft: Vec<std::ops::Range<u32>>,
     },
     Shapes {
         instances: wgpu::Buffer,
@@ -6567,12 +6606,19 @@ impl FrameRecorder<'_> {
                     tex_bg,
                     verts,
                     count,
+                    soft,
                 } => {
-                    rp.set_pipeline(self.r.pipeline(ShaderId::UiText));
                     rp.set_bind_group(UI_GROUP, ui_bg, &[]);
                     rp.set_bind_group(ATLAS_TEX_GROUP, tex_bg, &[]);
                     rp.set_vertex_buffer(0, verts.slice(..));
-                    rp.draw(0..*count, 0..1);
+                    for (span, is_soft) in text_draw_spans(*count, soft) {
+                        if is_soft {
+                            rp.set_pipeline(self.r.soft_shadow_pipeline(ShaderId::UiText));
+                        } else {
+                            rp.set_pipeline(self.r.pipeline(ShaderId::UiText));
+                        }
+                        rp.draw(span, 0..1);
+                    }
                 }
             }
         }
@@ -9335,6 +9381,8 @@ struct ShaderPipelines {
     cascade_view: Option<CascadeViewTwins>,
     /// The reflections shader's twin that also writes `refl_fill` (entry `fs_split`).
     split: Option<wgpu::RenderPipeline>,
+    /// The UI text shader's twin for soft shadow quads (entry `fs_soft_shadow`).
+    soft_shadow: Option<wgpu::RenderPipeline>,
     /// The mesh shader's medium-mask variants, by [`MeshVariant::index`], with the fourth, `scene_medium`
     /// target (entry `fs_medium`).
     medium: Option<[wgpu::RenderPipeline; 4]>,
@@ -9408,6 +9456,7 @@ fn build_pipeline(
             variants: Some(variants),
             viewmodel: None,
             cascade_view: None,
+            soft_shadow: None,
             split: None,
             capture: None,
             medium: None,
@@ -9498,7 +9547,29 @@ fn build_pipeline(
         ShaderId::UiRect => build_ui_rect_pipeline(device, label, src, &layout),
         ShaderId::UiShape => build_ui_shape_pipeline(device, label, src, &layout),
         ShaderId::UiPolygon => build_ui_polygon_pipeline(device, label, src, &layout),
-        ShaderId::UiText => build_ui_text_pipeline(device, label, src, &layout),
+        ShaderId::UiText => {
+            return ShaderPipelines {
+                main: build_ui_text_pipeline(device, label, src, &layout, "fs_main"),
+                variants: None,
+                viewmodel: None,
+                cascade_view: None,
+                split: None,
+                soft_shadow: Some(build_ui_text_pipeline(
+                    device,
+                    label,
+                    src,
+                    &layout,
+                    "fs_soft_shadow",
+                )),
+                capture: None,
+                medium: None,
+                decal: None,
+                lit: None,
+                hdr: None,
+                transparent_depth: None,
+                transparent_medium: None,
+            };
+        }
         ShaderId::DebugLine => build_debug_line_pipeline(device, label, src, &layout),
         ShaderId::Reflections => {
             return ShaderPipelines {
@@ -9506,6 +9577,7 @@ fn build_pipeline(
                 variants: None,
                 viewmodel: None,
                 cascade_view: None,
+                soft_shadow: None,
                 split: Some(build_reflections_split_pipeline(
                     device, label, src, &layout,
                 )),
@@ -9540,6 +9612,7 @@ fn build_pipeline(
                 variants: None,
                 viewmodel: None,
                 cascade_view: None,
+                soft_shadow: None,
                 split: None,
                 capture: None,
                 medium: None,
@@ -9556,6 +9629,7 @@ fn build_pipeline(
                 variants: None,
                 viewmodel: None,
                 cascade_view: None,
+                soft_shadow: None,
                 split: None,
                 capture: None,
                 medium: None,
@@ -9580,6 +9654,7 @@ fn build_pipeline(
         variants: None,
         viewmodel: None,
         cascade_view: None,
+        soft_shadow: None,
         split: None,
         capture: None,
         medium: None,
@@ -10412,6 +10487,7 @@ fn build_ui_text_pipeline(
     label: &str,
     src: &str,
     layout: &wgpu::PipelineLayout,
+    fragment_entry: &str,
 ) -> wgpu::RenderPipeline {
     let shader = module(device, label, src);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -10429,7 +10505,7 @@ fn build_ui_text_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             targets: &[Some(wgpu::ColorTargetState {
                 format: OUTPUT_FORMAT,
                 blend: Some(alpha_blend()),
