@@ -1,6 +1,6 @@
 # Plan: Sequencer — `kind: sequence`, keyed tracks, skip
 
-> **Waves 1–2b mechanized — the document, `sequences::play`, six tracks, skip, `holds_gameplay`, `wait: line_end`/`release` and the per-entity clock domain (`SequenceBound`) ship; transform spans and preview are laid out below.**
+> **Waves 1–3a mechanized — the document, `sequences::play`, seven tracks (the transform track included), skip, `holds_gameplay`, `wait: line_end`/`release` and the per-entity clock domain (`SequenceBound`) ship; voices, music and duck keys, and preview are laid out below.**
 > Driven by Neon Shroud request 0025 (sequencer / timeline). Game-facing doc: `ludion docs sequences`.
 
 ## Design decisions
@@ -42,7 +42,7 @@
 10. **Events.** `SequenceEvents`, rewritten every run: `KeyApplied { handle, track, at }` (the W1 trace; a skip emits
     it for each end form), `Fired { handle, name }`, `Ended { handle, end }`, with `fired(handle, name)` and
     `ended(handle)`.
-11. **Later waves own their fields.** The transform track, voices, music and duck keys, preview and wire are unknown
+11. **Later waves own their fields.** Voices, music and duck keys, preview and wire are unknown
     fields today (`L1120`), never silently ignored. Holds and waits shipped in W2a (decisions 13–18).
 12. **UI `start`.** A ui key's track `start` is a frame offset after the key applies, on the track's own clock
     (`real` → `ctx.frame`, `game` → `ctx.game_frame`).
@@ -96,6 +96,28 @@
     game system that writes a bound actor's `Animation` during the hold stamps it from `entity_clock(..).frame`.
 24. **Out of the domain:** particles, volleys, patterns, ai and anything else not in decision 22's list follow the
     global clock. A checkpoint restore mid-bind rebases the global clock but not `bound_*`; this is a known limit.
+25. **The transform key** (`tracks.transform`): `{ at, role, to | path, orient?, over?, ease? }`. Exactly one of `to`
+    (`{ anchor?, offset, yaw_deg? }`) and `path` (`L1730` otherwise); `orient` (default `none`) only with `path`; the
+    `anchor` is a declared role (`L1731`); `at + over <= length_ticks` so every span ends by `Completed`. `ease` is
+    the existing `UiEase` (no second enum, Pillar 6).
+26. **Target pose and frames.** `to` is a world pose: with an anchor, `A.t + rotate(A.r, offset)` and `A.r · Ry(yaw)`
+    from the anchor's world pose; without, `offset` and `Ry(yaw)`. `yaw_deg` absent never writes the rotation.
+    **The target is computed once, when the key applies**: a moving anchor is not tracked, so the span is closed form.
+    A `path` span follows `PathFollower`'s convention: points are in the role's parent frame, `orient` writes
+    `Transform.rotation`, `s = ease(u) · length`.
+27. **Span state** lives in `SequencePlayer.spans` (hashed, snapshotted, skipped when empty so no existing hash
+    moves): `{ role, at, over, ease, motion }`, self-contained so a document reload cannot re-point it. A key on a role
+    that has a live span first writes that span's value at the playhead, then replaces it, so the new span starts
+    from the exact current pose.
+28. **Evaluation** sits between camera and animation: due keys apply in document order, then every live span is
+    written at `u = clamp((playhead − at) / over)` (`over: 0` is `u = 1`), `e = ease(u)`, and the ended ones drop.
+    `u >= 1` writes the exact end values, never `from + (to − from)·1`. Rotation is a shortest-path `slerp` of the
+    world quaternions. A wait's early return writes nothing; the last write holds; cancel leaves the pose.
+29. **Skip** writes every live span's end, then each role's last pending transform key takes its end form (the same
+    code as a span at `u = 1`), so a skipped beat ends bit-identically to a watched one.
+30. **Kinematic only, scale never written.** A role with a `kinematic` body moves by its `Transform` (the
+    `path_follow` convention); a dynamic body is the solver's. A role under a `Parent` gets its local pose from the
+    world target (`localize`), with its own world scale kept. A role without `Transform` degrades (`L4353`).
 
 ## Waves
 
@@ -110,8 +132,9 @@
   `animation_events.rs`, `blend_clock.rs`, `camera_rig.rs`, `path_follow.rs` and the sequence's own animation stamp.
   At release the gameplay stamps of the entity clock's readers (decision 22) shift back by the lead, so nothing jumps. `docs/game-clock.md`'s "no per-component opt-out" line is amended
   there (request amendment 2, **accepted 2026-11-19, shipped in W2b**).
-- **W3:** the transform track (anchor pose and ease, `kind: path` spans), audio voices stopped on skip,
-  `music_crossfade`, duck keys, the camera-zone override flag (with request 0010).
+- **W3a (mechanized):** the transform track (decisions 25–30): anchor pose spans and `kind: path` spans.
+- **W3b:** audio voices stopped on skip and cancel, `music_crossfade`, duck keys, the camera-zone override flag (with
+  request 0010).
 - **W4:** built-in schedule placement, `ludion render --sequence --bind --at`, wire `sequence.play/seek/skip` (a
   protocol schema move), a gallery scene and goldens, testkit `sequence_trace`.
 
@@ -137,3 +160,6 @@
   `GameClock::excluded_q16`, `tests/sequence_clock.rs`, `docs/{sequences,game-clock,camera}.md`, the example. Known
   limits: a checkpoint restore mid-bind rebases the global clock but not `bound_*`; a stamp younger than the lead
   saturates at frame 0 on release.
+- W3a mechanized: `sequences/{docs,mod,update,events}.rs` (`TransformKey`, `TransformTo`, `TransformSpan`,
+  `SequencePlayer.spans`, `SequenceTrack::Transform`), `path_follow::orient` visible to the crate,
+  `tests/sequence_transform.rs`, `docs/sequences.md`, the example.

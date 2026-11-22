@@ -583,7 +583,12 @@ fn pose(sampler: &PathSampler, follower: &PathFollower, advance: Option<f64>) ->
 }
 
 /// The Euler XYZ degrees to write for a follower posed at `s` (`None`: leave the rotation alone).
-pub(crate) fn orient(sampler: &PathSampler, orient: PathOrient, s: f64, direction: f32) -> Option<[f32; 3]> {
+pub(crate) fn orient(
+    sampler: &PathSampler,
+    orient: PathOrient,
+    s: f64,
+    direction: f32,
+) -> Option<[f32; 3]> {
     let facing = f64::from(direction);
     let quat = match orient {
         PathOrient::None => return None,

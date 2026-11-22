@@ -1,11 +1,11 @@
 ---
-description: Sequences: kind sequence timelines of camera, animation, ui, audio, dialogue, event keys; skip
+description: Sequences: kind sequence timelines of camera, transform, animation, ui, audio, dialogue, events
 ---
 
 # Sequences (a keyed timeline, skip, cancel)
 
-**Scope:** `kind: sequence` documents, `sequences::play` with roles bound to entities, the six W1 tracks,
-`SequenceEvents`, skip and cancel, `holds_gameplay`, waits. Clocks are `ludion docs game-clock`; lines are `ludion docs dialogue`; the camera
+**Scope:** `kind: sequence` documents, `sequences::play` with roles bound to entities, the tracks,
+`SequenceEvents`, skip and cancel, `holds_gameplay`, waits, the transform track. Clocks are `ludion docs game-clock`; lines are `ludion docs dialogue`; the camera
 rig is `ludion docs camera`; UI tweens are `ludion docs ui-tweens`.
 
 ## The loop
@@ -42,6 +42,23 @@ tracks:
     - at: 120
       role: camera
       restore: true
+  transform:
+    - at: 5
+      role: radar
+      over: 20
+      ease: smooth
+      to:
+        anchor: camera
+        offset:
+          - 0.0
+          - 0.0
+          - -3.0
+        yaw_deg: 180.0
+    - at: 40
+      role: radar
+      over: 30
+      path: paths/orbit.path.yaml
+      orient: yaw
   animation:
     - at: 10
       role: radar
@@ -76,6 +93,7 @@ tracks:
 | Track | Key fields | Effect |
 | --- | --- | --- |
 | `camera` | `role`, exactly one of `rig` / `restore: true`, `snap` (false) | Writes `CameraRig.rig`; the first `rig` key saves the old one for `restore`. A write that differs blends over its `blend_in`. |
+| `transform` | `role`, exactly one of `to` / `path`, `over` (0), `ease` (`linear`), `orient` (`none`, path only) | Moves the role's `Transform` over `over` ticks from the pose it had when the key applied. `to`: `anchor?` (a declared role), `offset` (the anchor's frame, else world), `yaw_deg?` (added to the anchor's yaw; absent leaves rotation alone). `path`: a `kind: path` in the role's parent frame. `at + over <= length_ticks`. |
 | `animation` | `role`, `clip`, `fade` (0 s) | `crossfade`; `fade: 0` is a hard cut. |
 | `ui` | `role`, `tracks` | Writes `UiTween`; each track's `start` is a frame offset after the key. |
 | `audio` | `play`, `gain` (1), `role?`, `range` (10) | A one-shot; with `role`, positional at that entity. |
@@ -89,7 +107,7 @@ Every list is in ascending `at`, each `at` in `0..=length_ticks`; an unknown fie
 The playhead is `now − started`. `clock: game` reads `ctx.game_frame`: a `GameClock` hold applies nothing and later keys
 shift by the held length; `scale(0.5)` doubles the ticks. `clock: sim` runs through a hold. Animation keys always stamp
 the gameplay frame. A sequence started on frame F ends `Completed` on F+`length_ticks`, keys at `at == length_ticks`
-applying that tick. Order inside a tick: track (camera, animation, ui, audio, dialogue, event), `at`, document order;
+applying that tick. Order inside a tick: track (camera, transform, animation, ui, audio, dialogue, event), `at`, document order;
 players in ascending entity id.
 
 ## Holds and waits
@@ -126,9 +144,9 @@ but not `SequenceBound`.
 ## Skip and cancel
 
 `skip` returns `false` when the handle is dead or the doc says `skippable: false`. Otherwise, per role, the last
-camera, animation and ui key not yet applied takes its end form (camera: write plus a snap; animation: hard cut; ui:
-`once` tracks jump to `to`), unplayed audio and dialogue keys are dropped, its lines are interrupted, `on_skip: fire`
-events fire in order, then `Ended { Skipped }`. A skipped and a watched beat leave the same rig, clip and tween.
+camera, transform, animation and ui key not yet applied takes its end form (camera: write plus a snap; transform:
+the span's end pose, after every live span writes its end; animation: hard cut; ui: `once` tracks jump to `to`), unplayed audio and dialogue keys are dropped, its lines are interrupted, `on_skip: fire`
+events fire in order, then `Ended { Skipped }`. A skipped and a watched beat leave the same rig, pose, clip and tween.
 `cancel` applies no end state, interrupts its lines and ends `Cancelled`; so does a document unloaded mid-play.
 
 ## Events
@@ -140,15 +158,15 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
 
 | Code | Meaning |
 | --- | --- |
-| `L1730` | Structural: length 0, `at` past the length or out of order, camera key without exactly one of `rig`/`restore`, non-finite number |
-| `L1731` | Unknown, duplicate or missing role |
+| `L1730` | Structural: length 0, `at` past the length or out of order, camera key without exactly one of `rig`/`restore`, transform key without exactly one of `to`/`path` or ending past the length, non-finite number |
+| `L1731` | Unknown, duplicate or missing role (a transform `anchor` too) |
 | `L1732` | Empty or reserved event name |
 | `L1733` | Dialogue line unknown, or no `.dialogue()` |
 | `L1734` | `holds_gameplay: true` with an explicit `clock: game` |
 | `L1735` | Two `wait` keys at one `at` (dialogue and event tracks together) |
 | `L4350` / `L4351` | `play`: unknown document / role undeclared or bound twice |
 | `L4352` | Role unbound or its entity dead (warning, once) |
-| `L4353` | Key degraded: missing `CameraRig`/`Animation`, `say` refused, doc gone (warning, once) |
+| `L4353` | Key degraded: missing `CameraRig`/`Animation`/`Transform`, a `path` that does not load, `say` refused, doc gone (warning, once) |
 | `L4354` | Called without `.sequences()` |
 
 ## Gotchas
@@ -157,6 +175,9 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
   Entity refs in a list are refused (`L1392`), hence one binding entity per role.
 - Scheduled after `dialogue_update`, a dialogue key starts a tick late.
 - An opted-in game that never plays hashes as if it had not opted in.
+- A transform target is fixed when its key applies: a moving anchor is not tracked. A second key on a role starts
+  from its current pose. Only a `kinematic` body follows `Transform`; a dynamic body is the solver's. Scale is never
+  written.
 - A game system that writes a bound actor's `Animation` during the hold stamps from
   `sequences::entity_clock(world, id, ctx).frame`, not `ctx.game_frame`.
 

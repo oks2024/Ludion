@@ -656,7 +656,7 @@ tracks:
             format!(
                 "{head}length_ticks: 9
 tracks:
-  transform: []
+  particles: []
 "
             ),
         ),

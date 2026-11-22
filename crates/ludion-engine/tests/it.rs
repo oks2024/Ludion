@@ -174,6 +174,7 @@ mod save_dir_walk;
 mod scatter_bench;
 mod scene_paths;
 mod sequence_clock;
+mod sequence_transform;
 mod sequences;
 mod settings;
 mod settle_bench;

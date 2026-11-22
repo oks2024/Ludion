@@ -12,8 +12,9 @@
 //! 4. a pending wait either clears (the line ended, or `release` was called) and the playhead
 //!    resumes from the wait's `at`, or the player stores itself and applies nothing;
 //! 5. otherwise the playhead is `now - started - waited`, stopped at the earliest due wait key, and
-//!    every key with `applied_through < at <= playhead` applies, by track (camera, animation, ui,
-//!    audio, dialogue, event), then `at`, then document order; a wait key parks the playhead;
+//!    every key with `applied_through < at <= playhead` applies, by track (camera, transform,
+//!    animation, ui, audio, dialogue, event), then `at`, then document order; a wait key parks the
+//!    playhead; after the transform keys, every live transform span is written at the playhead;
 //! 6. the tick the playhead reaches `length_ticks` with no wait pending it ends `Completed`;
 //! 7. a player that stays live with `holds_gameplay` makes the system call `GameClock::hold` once.
 
@@ -21,17 +22,24 @@ use std::collections::BTreeMap;
 
 use ludion_camera::{CameraRig, snap_rig};
 use ludion_components::ui::{UiClock, UiTween, UiTweenRepeat};
-use ludion_components::{Animation, crossfade};
+use ludion_components::{Animation, Transform, crossfade};
 use ludion_core::codes::code;
 use ludion_core::ids::EntityId;
+use ludion_core::math::{
+    Trs, euler_xyz_degrees_to_quat, quat_mul, quat_rotate, quat_to_euler_xyz_degrees,
+};
 use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 
 use super::bound::{bind, entity_clock, release_orphans};
-use super::docs::{CameraKey, DialogueWait, EventWait, OnSkip, SequenceClock, SequenceDoc};
+use super::docs::{
+    CameraKey, DialogueWait, EventWait, OnSkip, SequenceClock, SequenceDoc, TransformKey,
+    TransformTo,
+};
 use super::events::{SequenceEnd, SequenceEvent, SequenceEvents, SequenceTrack};
 use super::{
-    PendingWait, PlayerState, SequenceBinding, SequenceHandle, SequencePlayer, WaitKind, find_doc,
+    PendingWait, PlayerState, SequenceBinding, SequenceHandle, SequencePlayer, SpanMotion,
+    TransformSpan, WaitKind, find_doc,
 };
 use crate::diagnostics::report;
 use crate::dialogue::{DialogueLine, LineHandle};
@@ -200,6 +208,7 @@ impl Beat<'_> {
             self.camera(key);
             self.applied(SequenceTrack::Camera, key.at);
         }
+        self.transforms(&doc, &due, playhead);
         for key in doc.tracks.animation.iter().filter(|k| due(k.at)) {
             self.animation(&key.role, &key.clip, key.fade);
             self.applied(SequenceTrack::Animation, key.at);
@@ -347,6 +356,122 @@ impl Beat<'_> {
         }
     }
 
+    /// Applies the due transform keys, then writes every live span at `playhead` and drops the ones
+    /// that have ended. A key replaces its role's live span, which first writes its value now, so
+    /// the new span starts from the exact current pose.
+    fn transforms(&mut self, doc: &SequenceDoc, due: &dyn Fn(u32) -> bool, playhead: u32) {
+        for key in doc.tracks.transform.iter().filter(|k| due(k.at)) {
+            if let Some(n) = self.player.spans.iter().position(|s| s.role == key.role) {
+                let old = self.player.spans.remove(n);
+                self.write_span_at(&old, playhead);
+            }
+            if let Some(span) = self.start_span(key) {
+                self.player.spans.push(span);
+            }
+            self.applied(SequenceTrack::Transform, key.at);
+        }
+        for span in std::mem::take(&mut self.player.spans) {
+            self.write_span_at(&span, playhead);
+            if playhead < span.at.saturating_add(span.over) {
+                self.player.spans.push(span);
+            }
+        }
+    }
+
+    /// Writes `span` at the playhead's progress through it.
+    fn write_span_at(&mut self, span: &TransformSpan, playhead: u32) {
+        #[allow(clippy::cast_precision_loss)]
+        let u = if span.over == 0 {
+            1.0
+        } else {
+            (playhead.saturating_sub(span.at) as f32 / span.over as f32).min(1.0)
+        };
+        self.write_span(span, u);
+    }
+
+    /// Writes `span` at progress `u` to its role's entity, degrading the key when it cannot.
+    fn write_span(&mut self, span: &TransformSpan, u: f32) {
+        let Some(index) = self.resolve(&span.role) else {
+            return;
+        };
+        let entity = self.roles[index].entity;
+        if let Err(message) = write_span(self.world, entity, span, u) {
+            self.degrade(&format!("transform:{}", span.role), message);
+        }
+    }
+
+    /// The span `key` starts: the role's current world pose and the target, fixed now. `None` (the
+    /// key is inert) when the role, its `Transform`, the anchor or the path is unusable.
+    fn start_span(&mut self, key: &TransformKey) -> Option<TransformSpan> {
+        let index = self.resolve(&key.role)?;
+        let entity = self.roles[index].entity;
+        let Some(pose) = crate::hierarchy::world_transform(self.world, entity) else {
+            self.degrade(
+                &format!("transform:{}", key.role),
+                format!(
+                    "role `{}` has no `Transform`; its transform keys are skipped",
+                    key.role
+                ),
+            );
+            return None;
+        };
+        let motion = match (&key.path, &key.to) {
+            (Some(path), _) => {
+                if let Err(message) = path_sampler(self.world, path) {
+                    self.degrade(&format!("transform:{}", key.role), message);
+                    return None;
+                }
+                SpanMotion::Path {
+                    path: path.clone(),
+                    orient: key.orient,
+                }
+            }
+            (None, Some(to)) => {
+                let (translation, rotation) = self.target(&key.role, to)?;
+                SpanMotion::To {
+                    from: pose.trs.translation,
+                    from_rotation: pose.trs.rotation,
+                    to: translation,
+                    to_rotation: rotation,
+                }
+            }
+            (None, None) => return None,
+        };
+        Some(TransformSpan {
+            role: key.role.clone(),
+            at: key.at,
+            over: key.over,
+            ease: key.ease,
+            motion,
+        })
+    }
+
+    /// The world pose `to` names, from the anchor's world pose now.
+    fn target(&mut self, role: &str, to: &TransformTo) -> Option<([f32; 3], Option<[f32; 4]>)> {
+        let yaw = to
+            .yaw_deg
+            .map(|yaw| euler_xyz_degrees_to_quat([0.0, yaw, 0.0]));
+        let Some(anchor) = &to.anchor else {
+            return Some((to.offset, yaw));
+        };
+        let index = self.resolve(anchor)?;
+        let Some(pose) = crate::hierarchy::world_transform(self.world, self.roles[index].entity)
+        else {
+            self.degrade(
+                &format!("transform:{role}"),
+                format!("anchor `{anchor}` has no `Transform`; the key of `{role}` is skipped"),
+            );
+            return None;
+        };
+        let rotated = quat_rotate(pose.trs.rotation, to.offset);
+        let translation = [
+            pose.trs.translation[0] + rotated[0],
+            pose.trs.translation[1] + rotated[1],
+            pose.trs.translation[2] + rotated[2],
+        ];
+        Some((translation, yaw.map(|yaw| quat_mul(pose.trs.rotation, yaw))))
+    }
+
     fn animation(&mut self, role: &str, clip: &str, fade: f32) {
         let Some(index) = self.resolve(role) else {
             return;
@@ -442,7 +567,7 @@ impl Beat<'_> {
         }
     }
 
-    /// The skip: each role's last camera, animation and ui key not yet applied takes its end form,
+    /// The skip: each role's last camera, transform, animation and ui key not yet applied takes its end form,
     /// every camera role touched snaps, and unfired `fire` events fire in order.
     fn skip_to_end(&mut self, doc: &SequenceDoc) {
         let applied = self.player.applied_through;
@@ -474,6 +599,19 @@ impl Beat<'_> {
                 self.camera(&key);
                 snapped.push(key.role);
                 self.applied(SequenceTrack::Camera, camera[n].at);
+            }
+        }
+        for span in std::mem::take(&mut self.player.spans) {
+            self.write_span(&span, 1.0);
+        }
+        let transform = &doc.tracks.transform;
+        for n in last(transform.iter().map(|k| k.role.as_str()).collect()) {
+            let key = &transform[n];
+            if pending(key.at) {
+                if let Some(span) = self.start_span(key) {
+                    self.write_span(&span, 1.0);
+                }
+                self.applied(SequenceTrack::Transform, key.at);
             }
         }
         let animation = &doc.tracks.animation;
@@ -508,6 +646,108 @@ impl Beat<'_> {
             }
         }
     }
+}
+
+/// The shared sampler of the path `path`, or the loader's first message.
+fn path_sampler(
+    world: &mut World,
+    path: &str,
+) -> Result<std::sync::Arc<ludion_scene::PathSampler>, String> {
+    let library = world
+        .resource_mut::<crate::path_follow::PathLibrary>()
+        .ok_or_else(|| "no path library is installed".to_owned())?;
+    library.sampler(path).map_err(|found| {
+        let reason = found.first().map_or("", |d| d.message.as_str());
+        format!("path `{path}` did not load ({reason}); the transform key is skipped")
+    })
+}
+
+/// Writes `span` at progress `u` (`1` is exactly its end) to `entity`; the error feeds `degrade`.
+fn write_span(
+    world: &mut World,
+    entity: EntityId,
+    span: &TransformSpan,
+    u: f32,
+) -> Result<(), String> {
+    let eased = span.ease.apply(u);
+    let no_transform = || {
+        format!(
+            "role `{}` has no `Transform`; its transform keys are skipped",
+            span.role
+        )
+    };
+    match &span.motion {
+        SpanMotion::To {
+            from,
+            from_rotation,
+            to,
+            to_rotation,
+        } => {
+            let translation = if u >= 1.0 {
+                *to
+            } else {
+                std::array::from_fn(|i| from[i] + (to[i] - from[i]) * eased)
+            };
+            let rotation = to_rotation.map(|end| {
+                if u >= 1.0 {
+                    return end;
+                }
+                let widen = |q: [f32; 4]| q.map(f64::from);
+                let mixed = ludion_scene::slerp(
+                    widen(*from_rotation),
+                    widen(end),
+                    f64::from(eased.clamp(0.0, 1.0)),
+                );
+                #[allow(clippy::cast_possible_truncation)]
+                mixed.map(|c| c as f32)
+            });
+            write_world_pose(world, entity, translation, rotation).ok_or_else(no_transform)
+        }
+        SpanMotion::Path { path, orient } => {
+            let sampler = path_sampler(world, path)?;
+            let s = if u >= 1.0 {
+                sampler.length()
+            } else {
+                f64::from(eased) * sampler.length()
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            let point = sampler.point_at(s).map(|c| c as f32);
+            let facing = crate::path_follow::orient(&sampler, *orient, s, 1.0);
+            let Ok(Some(transform)) = world.get_mut::<Transform>(entity) else {
+                return Err(no_transform());
+            };
+            transform.translation = point;
+            if let Some(rotation) = facing {
+                transform.rotation = rotation;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Places `entity` at a world `translation` (and `rotation`, when given) by writing its local
+/// `Transform` under its parent; scale is never written. `None` when it has no `Transform`.
+fn write_world_pose(
+    world: &mut World,
+    entity: EntityId,
+    translation: [f32; 3],
+    rotation: Option<[f32; 4]>,
+) -> Option<()> {
+    let own = crate::hierarchy::world_transform(world, entity)?.trs;
+    let parent = crate::hierarchy::parent_of(world, entity)
+        .and_then(|parent| crate::hierarchy::chain_pose(world, parent.0))
+        .map_or(Trs::IDENTITY, |pose| pose.trs);
+    let local = parent.localize(&Trs {
+        translation,
+        rotation: rotation.unwrap_or(own.rotation),
+        scale: own.scale,
+    });
+    let transform = world.get_mut::<Transform>(entity).ok().flatten()?;
+    transform.translation = local.translation;
+    if rotation.is_some() {
+        transform.rotation = quat_to_euler_xyz_degrees(local.rotation);
+    }
+    Some(())
 }
 
 /// Whether a dialogue line with `seq` still exists (lines despawn when they end).

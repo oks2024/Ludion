@@ -85,6 +85,17 @@ tracks:
     - at: 60
       role: camera
       restore: true
+  transform:
+    - at: 5
+      role: radar
+      over: 20
+      ease: smooth
+      to:
+        anchor: camera
+        offset:
+          - 0.0
+          - 0.0
+          - -3.0
   animation:
     - at: 10
       role: radar
@@ -135,12 +146,13 @@ fn write(root: &std::path::Path, name: &str, text: &str) -> std::io::Result<()> 
 }
 
 /// Plays the beat, optionally skipping it at `skip_at`, printing each event; returns the camera's
-/// final `focus_offset`, the radar's final clip and whether `radar_online` fired.
+/// final `focus_offset`, the radar's final clip, whether `radar_online` fired and the radar's final
+/// translation (a skip ends where a watched beat does).
 fn run(
     root: &std::path::Path,
     label: &str,
     skip_at: Option<usize>,
-) -> Option<([f32; 3], String, bool)> {
+) -> Option<([f32; 3], String, bool, [f32; 3])> {
     let mut engine = game(root.to_path_buf()).build().ok()?;
     engine
         .load_inline_scene("format: 1\nseed: 1\nentities: []\n")
@@ -149,8 +161,10 @@ fn run(
     let camera = world.spawn();
     world.insert(camera, Camera::default()).ok()?;
     world.insert(camera, CameraRig::default()).ok()?;
+    world.insert(camera, Transform::default()).ok()?;
     let radar = world.spawn();
     world.insert(radar, Animation::default()).ok()?;
+    world.insert(radar, Transform::default()).ok()?;
     let handle: SequenceHandle = sequences::play(
         world,
         "sequences/radar.yaml",
@@ -187,7 +201,9 @@ fn run(
     let world = engine.world();
     let focus = world.get::<CameraRig>(camera).ok()??.rig.focus_offset;
     let clip = world.get::<Animation>(radar).ok()??.clip.clone();
-    Some((focus, clip, online))
+    let pose = world.get::<Transform>(radar).ok()??.translation;
+    println!("{label}: the radar ends at {pose:?}");
+    Some((focus, clip, online, pose))
 }
 
 /// A beat that holds gameplay and parks on `wait: release` until the game calls `sequences::release`

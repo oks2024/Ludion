@@ -1,4 +1,4 @@
-//! Sequences: linear timelines of keys — camera, animation, ui, audio, dialogue and events — played
+//! Sequences: linear timelines of keys — camera, transform, animation, ui, audio, dialogue and events — played
 //! over roles bound to entities (`ludion docs sequences`).
 //!
 //! A game opts in with [`EngineBuilder::sequences`](crate::EngineBuilder::sequences), schedules
@@ -18,6 +18,8 @@ mod events;
 mod update;
 
 use ludion_camera::RigConfig;
+use ludion_components::path_follow::PathOrient;
+use ludion_components::ui::UiEase;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
@@ -29,7 +31,7 @@ use serde::{Deserialize, Serialize};
 pub use bound::{EntityClock, SequenceBound, entity_clock};
 pub use docs::{
     AnimationKey, AudioKey, CameraKey, DialogueKey, DialogueWait, EventKey, EventWait, OnSkip,
-    SequenceClock, SequenceDoc, SequenceTracks, UiKey,
+    SequenceClock, SequenceDoc, SequenceTracks, TransformKey, TransformTo, UiKey,
 };
 pub use events::{SequenceEnd, SequenceEvent, SequenceEvents, SequenceTrack};
 pub use update::sequence_update;
@@ -95,6 +97,63 @@ pub struct SequencePlayer {
     /// A [`release`] latch: clears the current `wait: release`, or the next one reached.
     #[serde(default, skip_serializing_if = "is_false")]
     pub released: bool,
+    /// The transform spans still moving a role, at most one per role; empty when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<TransformSpan>,
+}
+
+/// A `transform` key in flight, self-contained so a document reload cannot re-point it.
+///
+/// ```
+/// use ludion_engine::sequences::TransformSpan;
+///
+/// let span: TransformSpan = serde_json::from_value(serde_json::json!({
+///     "role": "hero", "at": 4, "over": 10,
+///     "motion": { "to": { "from": [0.0, 0.0, 0.0], "from_rotation": [0.0, 0.0, 0.0, 1.0],
+///                         "to": [0.0, 0.0, 2.0] } },
+/// }))
+/// .unwrap();
+/// assert_eq!(span.over, 10);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+pub struct TransformSpan {
+    /// The role it moves.
+    pub role: String,
+    /// The tick the key applied on.
+    pub at: u32,
+    /// Its length in ticks.
+    pub over: u32,
+    /// The easing of its progress.
+    #[serde(default)]
+    pub ease: UiEase,
+    /// What it moves along.
+    pub motion: SpanMotion,
+}
+
+/// What a [`TransformSpan`] moves along.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpanMotion {
+    /// From the role's world pose when the key applied to a world pose.
+    To {
+        /// The world translation at the start.
+        from: [f32; 3],
+        /// The world rotation at the start, a unit quaternion `[x, y, z, w]`.
+        from_rotation: [f32; 4],
+        /// The world translation at the end.
+        to: [f32; 3],
+        /// The world rotation at the end; none leaves the rotation alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_rotation: Option<[f32; 4]>,
+    },
+    /// Along a `kind: path`, in the role's parent frame.
+    Path {
+        /// The path's content-root path.
+        path: String,
+        /// How it turns the role.
+        #[serde(default, skip_serializing_if = "PathOrient::is_none")]
+        orient: PathOrient,
+    },
 }
 
 /// A wait the playhead is parked on.
@@ -250,6 +309,7 @@ pub fn play(
             waited: 0,
             wait: None,
             released: false,
+            spans: Vec::new(),
         },
     );
     for (role, entity) in bindings {

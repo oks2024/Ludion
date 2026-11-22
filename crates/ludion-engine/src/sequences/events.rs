@@ -7,6 +7,8 @@ use super::SequenceHandle;
 pub enum SequenceTrack {
     /// A camera key.
     Camera,
+    /// A transform key.
+    Transform,
     /// An animation key.
     Animation,
     /// A ui key.

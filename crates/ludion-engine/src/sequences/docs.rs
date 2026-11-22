@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 use ludion_camera::RigConfig;
-use ludion_components::ui::UiTweenTrack;
+use ludion_components::path_follow::PathOrient;
+use ludion_components::ui::{UiEase, UiTweenTrack};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
 use ludion_ecs::{SemanticValidate, World};
@@ -86,13 +87,16 @@ fn yes() -> bool {
     true
 }
 
-/// A sequence's six track lists; each is in ascending `at` order.
+/// A sequence's seven track lists; each is in ascending `at` order.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SequenceTracks {
     /// Writes a role's `CameraRig`.
     #[serde(default)]
     pub camera: Vec<CameraKey>,
+    /// Moves a role's `Transform` to a pose or along a `kind: path`.
+    #[serde(default)]
+    pub transform: Vec<TransformKey>,
     /// Crossfades a role's `Animation`.
     #[serde(default)]
     pub animation: Vec<AnimationKey>,
@@ -128,6 +132,57 @@ pub struct CameraKey {
     /// Cuts to the pose instead of blending (default `false`).
     #[serde(default)]
     pub snap: bool,
+}
+
+/// One transform key: moves a role's `Transform` over `over` ticks, from the pose it has when the
+/// key applies, to a pose (`to`) or along a `kind: path` (`path`); exactly one of the two.
+///
+/// ```yaml
+/// - at: 10
+///   role: hero
+///   over: 30
+///   ease: smooth
+///   to: { anchor: door, offset: [0, 0, 1.5], yaw_deg: 180 }
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TransformKey {
+    /// The tick the key applies on.
+    pub at: u32,
+    /// The role whose `Transform` it moves.
+    #[serde(default)]
+    pub role: String,
+    /// The pose to move to, fixed when the key applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<TransformTo>,
+    /// A `kind: path` (content-root path) to travel along, in the role's parent frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// How a `path` span turns the role (default `none`); only with `path`.
+    #[serde(default, skip_serializing_if = "PathOrient::is_none")]
+    pub orient: PathOrient,
+    /// The span's length in ticks; `0` is a jump (default `0`). `at + over` is at most `length_ticks`.
+    #[serde(default)]
+    pub over: u32,
+    /// The easing of the span's progress (default `linear`).
+    #[serde(default)]
+    pub ease: UiEase,
+}
+
+/// The pose a [`TransformKey`] moves to, in world space.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TransformTo {
+    /// A declared role the pose is relative to; its world pose when the key applies (default none:
+    /// `offset` and `yaw_deg` are absolute).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+    /// The position, in the anchor's frame (world space without an anchor; default `[0, 0, 0]`).
+    #[serde(default)]
+    pub offset: [f32; 3],
+    /// The facing, degrees about +Y added to the anchor's rotation; absent leaves the rotation alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yaw_deg: Option<f32>,
 }
 
 /// One animation key.
@@ -356,6 +411,11 @@ fn validate_doc(
     };
     ats("camera", tracks.camera.iter().map(|k| k.at).collect(), out);
     ats(
+        "transform",
+        tracks.transform.iter().map(|k| k.at).collect(),
+        out,
+    );
+    ats(
         "animation",
         tracks.animation.iter().map(|k| k.at).collect(),
         out,
@@ -404,6 +464,63 @@ fn validate_doc(
                 RigConfig::validate_semantics(&value),
                 doc_path,
                 &prefix,
+            ));
+        }
+    }
+    for (n, key) in tracks.transform.iter().enumerate() {
+        role_of("transform", n, &key.role, true, out);
+        let pointer = format!("/tracks/transform/{n}");
+        if key.to.is_some() == key.path.is_some() {
+            out.push(diagnostic(
+                code::SEQUENCE_INVALID,
+                "a transform key needs exactly one of `to:` and `path:`".to_owned(),
+                at(&pointer),
+            ));
+        }
+        if let Some(to) = &key.to {
+            if let Some(anchor) = &to.anchor
+                && !roles.contains(anchor.as_str())
+            {
+                out.push(diagnostic(
+                    code::SEQUENCE_UNKNOWN_ROLE,
+                    format!(
+                        "a transform key anchors to `{anchor}`, which `roles:` does not declare"
+                    ),
+                    at(&format!("{pointer}/to/anchor")),
+                ));
+            }
+            let finite =
+                to.offset.iter().all(|c| c.is_finite()) && to.yaw_deg.is_none_or(f32::is_finite);
+            if !finite {
+                out.push(diagnostic(
+                    code::SEQUENCE_INVALID,
+                    "`offset` and `yaw_deg` must be finite".to_owned(),
+                    at(&format!("{pointer}/to")),
+                ));
+            }
+        }
+        if key.path.as_ref().is_some_and(|p| p.trim().is_empty()) {
+            out.push(diagnostic(
+                code::SEQUENCE_INVALID,
+                "`path` is blank; name a `kind: path` document".to_owned(),
+                at(&format!("{pointer}/path")),
+            ));
+        }
+        if key.path.is_none() && !key.orient.is_none() {
+            out.push(diagnostic(
+                code::SEQUENCE_INVALID,
+                "`orient` only applies to a `path` span".to_owned(),
+                at(&format!("{pointer}/orient")),
+            ));
+        }
+        if u64::from(key.at) + u64::from(key.over) > u64::from(length) {
+            out.push(diagnostic(
+                code::SEQUENCE_INVALID,
+                format!(
+                    "a transform key at tick {} with `over: {}` ends past `length_ticks` {length}",
+                    key.at, key.over
+                ),
+                at(&format!("{pointer}/over")),
             ));
         }
     }
@@ -553,6 +670,60 @@ mod tests {
             )),
             ["L1730"]
         );
+    }
+
+    #[test]
+    fn a_transform_key_is_checked_for_shape_anchor_and_span() {
+        let doc = |key: serde_json::Value| json!({ "roles": ["hero", "door"], "length_ticks": 10, "tracks": { "transform": [key] } });
+        let to = json!({ "anchor": "door", "offset": [0, 0, 1], "yaw_deg": 90 });
+        assert!(
+            run(
+                doc(json!({ "at": 2, "role": "hero", "over": 8, "to": to })),
+                true
+            )
+            .is_empty()
+        );
+        assert!(
+            run(
+                doc(json!({ "at": 0, "role": "hero", "path": "paths/a.yaml", "orient": "yaw" })),
+                true
+            )
+            .is_empty()
+        );
+        let neither = run(doc(json!({ "at": 0, "role": "hero" })), true);
+        assert_eq!(codes(&neither), ["L1730"]);
+        let both = run(
+            doc(json!({ "at": 0, "role": "hero", "to": {}, "path": "p.yaml" })),
+            true,
+        );
+        assert_eq!(codes(&both), ["L1730"]);
+        let ghost = run(
+            doc(json!({ "at": 0, "role": "hero", "to": { "anchor": "ghost" } })),
+            true,
+        );
+        assert_eq!(codes(&ghost), ["L1731"]);
+        assert_eq!(
+            ghost[0].path.as_deref(),
+            Some("sequence/sequences/t.yaml/tracks/transform/0/to/anchor")
+        );
+        let long = run(
+            doc(json!({ "at": 5, "role": "hero", "over": 6, "to": {} })),
+            true,
+        );
+        assert_eq!(codes(&long), ["L1730"]);
+        assert!(long[0].message.contains('5') && long[0].message.contains('6'));
+        let orient = run(
+            doc(json!({ "at": 0, "role": "hero", "to": {}, "orient": "yaw" })),
+            true,
+        );
+        assert_eq!(codes(&orient), ["L1730"]);
+        let blank = run(doc(json!({ "at": 0, "role": "hero", "path": " " })), true);
+        assert_eq!(codes(&blank), ["L1730"]);
+        let nan = run(
+            doc(json!({ "at": 0, "role": "hero", "to": { "offset": [0, 1e39, 0] } })),
+            true,
+        );
+        assert_eq!(codes(&nan), ["L1730"]);
     }
 
     #[test]
