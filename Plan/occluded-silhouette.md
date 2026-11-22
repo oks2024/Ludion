@@ -1,6 +1,6 @@
 # Plan: Occluded silhouette
 
-> Status: **W1–W2 mechanized** (Neon Shroud request 0015, r2384; W2a, W2b 2026-11-21). Usage is `ludion docs occluded-silhouette`; the gallery
+> Status: **W1–W2 mechanized** (Neon Shroud request 0015, r2384, W2 r2440). Usage is `ludion docs occluded-silhouette`; the gallery
 > scene is `examples/gallery/occluded-silhouette.yaml`.
 
 ## Why
@@ -55,11 +55,11 @@ decision and is not settled by this.
 - **W2a:** scanline or hatch pattern fills, an inner outline, and the game's slice golden
   (`occluded-silhouette-styles`).
 - **W2b:** the per-style `film` option to exclude the silhouette from vignette and grain (decision 10).
-- **Later:** carried bodies via `ParentJoint`, if `Parent` inheritance does not already follow them.
+- **Carried bodies:** no wave needed. A `ParentJoint` child always carries a `Parent` (`L1318` refuses one without),
+  so nearest-ancestor inheritance already reaches it.
 
 ## Out of scope / deferred
 
-- **A per-style post opt-out (`film`).** Trigger: W2b.
 - **Body-anchored patterns.** Trigger: a game asks for one; needs UVs in the mask (MRT).
 - **Silhouettes for sprites, particles, text and ground markers.** Trigger: a game asks for one.
 - **Whole-frame stylized outlines.** Trigger: an art-direction decision (`Plan/post-process-pipeline.md`).
@@ -84,11 +84,11 @@ decision and is not settled by this.
   composite; scenes without the component keep the same frame graph and pixels. The `occluded-silhouette`
   gallery golden is blessed on the RTX 3090. No replay content hash, `WorldHash`, existing golden or protocol
   schema moved.
-- **W2a mechanized (2026-11-21):** `pattern` (scanlines or hatch, screen-anchored) and `inner_outline` on
+- **W2a mechanized (r2440, 2026-11-21):** `pattern` (scanlines or hatch, screen-anchored) and `inner_outline` on
   `OccludedSilhouette`; `L2350` covers the new paths; composite style lanes grew to four vec4 per style (lane 3 `.y`
   is the `film` slot, held at 1 for W2b). The `occluded-silhouette-styles` gallery golden is blessed on the RTX 3090
   (macOS twin owed to the M4). No existing golden, dump-graph, replay, `WorldHash` or protocol schema moved.
-- **W2b mechanized (2026-11-21):** `film` on `OccludedSilhouette` (default true, not written when true). The composite fades
+- **W2b mechanized (r2440, 2026-11-21):** `film` on `OccludedSilhouette` (default true, not written when true). The composite fades
   the vignette and scales the grain by `f = 1 - a`; under SMAA or a render-scale resample it carries `f` in the LDR alpha
   (`film_carry`) and `smaa_blend`, `resolve` and `upscale` read it from the nearest source texel. The
   `occluded-silhouette-film` gallery golden is blessed on the RTX 3090 (macOS twin and M4 proof of the four edited
