@@ -552,7 +552,8 @@ fn scene_file_world(
         return Err(diagnostics);
     }
     let project_root = path.parent().unwrap_or(Path::new("."));
-    let (scene, world) = expanded_world(project_root, registry, &scene)?;
+    let (scene, mut world) = expanded_world(project_root, registry, &scene)?;
+    crate::scene_nav::install(&mut world, &scene)?;
     Ok((scene, world, applied_overrides))
 }
 
@@ -621,6 +622,9 @@ fn extract_driver(
             crate::localization::set_locale(world, tag);
         }
         crate::localization::resolve_pass(world);
+    }
+    if driver.world().resource::<crate::Nav>().is_some() {
+        crate::nav::refresh(driver.world_mut());
     }
     let mut render_scene = extract_at(
         driver.world(),

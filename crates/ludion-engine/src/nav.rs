@@ -759,10 +759,25 @@ fn dirty_rect(
 /// # let _ = engine;
 /// ```
 pub fn nav_update(world: &mut World, _ctx: &SystemCtx) {
+    run(world, false);
+}
+
+/// `nav_update`'s body for the built-in hosts, which extract over a world no schedule ticks: before
+/// the first tick the grid samples the physics the scene's load primed, as a tick-0 cast does.
+pub(crate) fn refresh(world: &mut World) {
+    run(world, true);
+}
+
+fn run(world: &mut World, primed: bool) {
     let Some(mut nav) = world.remove_resource::<Nav>() else {
         return;
     };
-    let outcome = match world.resource::<PhysicsWorld>() {
+    let physics = if primed {
+        crate::ground_marker_clip::physics_of(world)
+    } else {
+        world.resource::<PhysicsWorld>()
+    };
+    let outcome = match physics {
         Some(physics) => update(&mut nav, physics),
         None => Ok(()),
     };

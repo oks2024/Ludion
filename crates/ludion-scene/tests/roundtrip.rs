@@ -255,6 +255,7 @@ fn scene() -> impl Strategy<Value = Scene> {
                     generated_from,
                     seed,
                     physics,
+                    nav: None,
                     preload,
                     render_layers: Vec::new(),
                     entities,
@@ -403,6 +404,7 @@ proptest! {
             generated_from: None,
             seed: None,
             physics: None,
+            nav: None,
             preload: Vec::new(),
             render_layers: Vec::new(),
             entities: vec![SceneEntity {
@@ -429,6 +431,7 @@ proptest! {
             generated_from: None,
             seed: None,
             physics: None,
+            nav: None,
             preload: Vec::new(),
             render_layers: Vec::new(),
             entities: vec![],
@@ -510,6 +513,7 @@ fn generated_from_round_trips_between_name_and_seed() {
         generated_from: Some("plaza.map.yaml".into()),
         seed: Some(3),
         physics: None,
+        nav: None,
         preload: Vec::new(),
         render_layers: Vec::new(),
         entities: vec![],
@@ -771,6 +775,49 @@ fn a_prefab_document_refuses_render_layers() {
         errors
             .iter()
             .any(|d| d.path.as_deref() == Some("/render_layers")),
+        "{errors:?}"
+    );
+}
+
+/// `nav` emits between `physics` and `render_layers` in `NavConfig` field order (a class list
+/// included), unknown keys after the known ones in document order, and re-emits idempotently.
+#[test]
+fn nav_block_emits_canonically_and_is_idempotent() {
+    let registry = registry();
+    let text = "format: 1\nnav:\n  nx: 48\n  cell_size: 0.25\n  zzz: 1\n  classes:\n    - radius: 0.35\n      name: walker\n      height: 1.8\n      max_slope_deg: 45\n      max_step: 0.4\nentities: []\n";
+    let scene = parse(text).unwrap();
+    let canonical = emit(&scene, &registry);
+    assert_eq!(
+        canonical,
+        "format: 1\nnav:\n  cell_size: 0.25\n  nx: 48\n  classes:\n    - name: walker\n      radius: 0.35\n      height: 1.8\n      max_step: 0.4\n      max_slope_deg: 45\n  zzz: 1\nentities: []\n"
+    );
+    let again = parse(&canonical).unwrap();
+    assert_eq!(again, scene);
+    assert_eq!(emit(&again, &registry), canonical);
+}
+
+/// A non-mapping `nav` is a type mismatch at `/nav`.
+#[test]
+fn nav_block_must_be_a_mapping() {
+    let errors = parse("format: 1\nnav: 3\nentities: []\n").unwrap_err();
+    let hit = errors
+        .iter()
+        .find(|d| d.path.as_deref() == Some("/nav"))
+        .unwrap_or_else(|| panic!("no diagnostic at /nav: {errors:?}"));
+    assert_eq!(hit.code.as_str(), "L1009");
+}
+
+/// `--set` cannot reach the nav block.
+#[test]
+fn nav_block_is_not_overridable() {
+    let mut scene = parse("format: 1\nnav:\n  nx: 4\nentities: []\n").unwrap();
+    let over = ludion_scene::SceneOverride {
+        pointer: "/nav/nx".to_string(),
+        value: json!(4),
+    };
+    let errors = ludion_scene::apply_overrides(&mut scene, &[over]).unwrap_err();
+    assert!(
+        errors[0].help.as_deref().unwrap().contains("nav"),
         "{errors:?}"
     );
 }

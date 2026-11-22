@@ -126,6 +126,7 @@ mod lod;
 mod map;
 mod mesh;
 mod mesh_edit;
+mod nav_block;
 mod overrides;
 mod paired;
 mod palette;
@@ -203,6 +204,7 @@ pub use mesh_edit::{
     MESH_EDIT_FORMAT_VERSION, MeshEditDocument, MeshEditKey, MeshEditMap, MeshEditOp,
     MeshEditRegion, MeshEditRegionShape,
 };
+pub use nav_block::{NAV_CLASS_KEY_ORDER, NAV_KEY_ORDER};
 pub use overrides::{AppliedOverride, SceneOverride, apply_overrides, parse_sweep};
 pub use paired::{
     PAIRED_FORMAT_VERSION, PairedAlign, PairedContact, PairedDocument, PairedEvent, PairedMoves,
@@ -276,6 +278,10 @@ pub struct Scene {
     /// `sleep_after_ticks` resolves it against this block's value (else the pinned default) at
     /// body-creation time, in the solver, never by rewriting the authored component.
     pub physics: Option<ScenePhysics>,
+    /// The scene's optional `nav:` block (`Plan/debug-draw.md` decision 8): a `NavConfig` as an
+    /// erased mapping, every key optional. Only the built-in hosts read it; a game's engine
+    /// configures nav itself. Emitted after `physics` in `NavConfig` field order.
+    pub nav: Option<serde_json::Value>,
     /// The scene's `render_layers:` block (`Plan/secondary-views.md` D14): the render layer names it
     /// authors, declared once. Validation only: `check-scene` reports `L2376` for an undeclared name,
     /// extract still interns names per frame. Emitted after `physics`, omitted when empty.

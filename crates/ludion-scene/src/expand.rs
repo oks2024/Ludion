@@ -110,6 +110,7 @@ pub(crate) fn expand(
             generated_from: scene.generated_from.clone(),
             seed: scene.seed,
             physics: scene.physics.clone(),
+            nav: scene.nav.clone(),
             render_layers: scene.render_layers.clone(),
             preload: scene.preload.clone(),
             entities: level.entities,

@@ -32,7 +32,7 @@ Engine::builder()
 
 ## Format
 
-`NavConfig` (Rust only, no scene text). Distances are metres.
+`NavConfig` (`.nav(..)` in Rust; the built-in render host also reads a scene `nav:` block, below). Distances are metres.
 
 | Field | Default | Valid |
 | --- | --- | --- |
@@ -50,6 +50,8 @@ Engine::builder()
 | `max_path_requests_per_tick` | `8` | `>= 1`; routes `nav_steer` plans per tick |
 
 A bad value is `L4032` with a JSON Pointer to the field; `ludion explain L4032`.
+
+A scene may author the same fields as a top-level `nav:` block (every key optional, merged over the defaults; a class sets all five of its keys; needs a `physics:` block, `L2331`; an unknown key or wrong type is `L2330`). Only the built-in hosts read it (`ludion render`, `ludion test`, the testkit goldens), so `ludion render --debug-draw nav` draws the grid with no game; a game's engine ignores it and uses `.nav(..)`. `examples/gallery/nav.yaml`.
 
 `NavAgent` fields and defaults: `ludion docs components`. `class` is `""` (the first class), `target` is `[0,0,0]`, `speed` `4`,
 `flying` `false`, `arrive_radius` `0.5`, `separation_radius` `0.75`, `separation_strength` `2`,

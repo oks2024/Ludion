@@ -2,6 +2,7 @@
   "anti-aliasing": { "anti_aliasing": "smaa" },
   "prefab-clips": { "frames": 21 },
   "collider-wireframes": { "frames": 2, "debug_draw": ["colliders"] },
+  "nav": { "frames": 2, "debug_draw": ["nav"] },
   "surface-tags": { "frames": 2, "debug_draw": ["surfaces"] },
   "ragdoll-skinned": { "frames": 150 },
   "sprite-flipbook": { "frames": 23 },

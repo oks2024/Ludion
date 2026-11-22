@@ -1668,6 +1668,7 @@ pub fn scene_engine_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
     diagnostics.extend(crate::perception_check::scene_perception_diagnostics(scene));
     diagnostics.extend(crate::secondary_view::scene_render_view_diagnostics(scene));
     diagnostics.extend(crate::render_layers::scene_render_layer_diagnostics(scene));
+    diagnostics.extend(crate::scene_nav::scene_nav_diagnostics(scene));
     diagnostics.extend(crate::rain::scene_rain_diagnostics(scene));
     diagnostics.extend(crate::screen_effect::scene_screen_effect_diagnostics(scene));
     diagnostics.extend(scene_ground_marker_clip_diagnostics(scene));

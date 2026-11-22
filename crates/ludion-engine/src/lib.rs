@@ -134,6 +134,7 @@ mod rumble;
 mod run_recording;
 mod run_save;
 mod scene_check;
+mod scene_nav;
 mod scene_physics;
 mod scene_session;
 mod screen_effect;

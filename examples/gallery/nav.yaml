@@ -1,0 +1,169 @@
+# Feature: the scene-level `nav:` block and the `nav` debug-draw category. The block configures a
+# 48 x 48 grid at 0.25 m with two agent classes, so the built-in render host builds it with no game:
+# the walker's grid (white nodes) and the forklift's (blue, which keeps a wider berth from the
+# platform and the blockers). On the 12 m floor: a 3 m platform the walker reaches only by the `NavLink` ladder (the
+# magenta arc), and three `NavBlocker`s — block (red), cost (amber) and interact (blue). Rendered with
+# `debug_draw: ["nav"]` after 2 ticks (goldens/manifest.json).
+format: 1
+name: "nav - debug draw: nav classes, a link and blockers on a floor"
+physics:
+  space: free
+nav:
+  origin:
+    - -6.0
+    - -6.0
+  cell_size: 0.25
+  nx: 48
+  nz: 48
+  y_min: -1.0
+  y_max: 4.0
+  classes:
+    - name: walker
+      radius: 0.35
+      height: 1.8
+      max_step: 0.4
+      max_slope_deg: 45.0
+    - name: forklift
+      radius: 1.0
+      height: 2.0
+      max_step: 0.4
+      max_slope_deg: 45.0
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 10.0
+          - 10.0
+        rotation:
+          - -45.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: sun
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.45
+          - -0.75
+          - -0.5
+        color:
+          - 1.0
+          - 0.96
+          - 0.86
+        intensity: 1.1
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 12.0
+          - 1.0
+          - 12.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.16
+          - 0.19
+          - 0.23
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 6.0
+              - 0.5
+              - 6.0
+        body: static
+  - name: platform
+    components:
+      Transform:
+        translation:
+          - 3.0
+          - 0.5
+          - -1.0
+        scale:
+          - 3.0
+          - 1.0
+          - 3.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.28
+          - 0.3
+          - 0.34
+          - 1.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 1.5
+              - 0.5
+              - 1.5
+        body: static
+  - name: ladder
+    components:
+      NavLink:
+        from:
+          - 0.4
+          - 0.0
+          - -1.0
+        to:
+          - 2.4
+          - 1.0
+          - -1.0
+        classes:
+          - walker
+  - name: wall
+    components:
+      Transform:
+        translation:
+          - -3.5
+          - 1.0
+          - 1.5
+      NavBlocker:
+        shape:
+          box:
+            half_extents:
+              - 0.75
+              - 1.0
+              - 0.75
+  - name: mud
+    components:
+      Transform:
+        translation:
+          - -0.5
+          - 0.5
+          - 3.0
+      NavBlocker:
+        shape:
+          box:
+            half_extents:
+              - 1.25
+              - 0.5
+              - 0.75
+        mode: cost
+        cost: 4.0
+  - name: door
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 1.0
+          - -3.0
+      NavBlocker:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 1.0
+              - 1.25
+        mode: interact

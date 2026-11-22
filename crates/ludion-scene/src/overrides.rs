@@ -26,11 +26,12 @@ use crate::yaml::pointer_token;
 use crate::{Scene, SceneEntity};
 
 /// The scene document's top-level keys, for nearest-match suggestions.
-const SCENE_KEYS: [&str; 7] = [
+const SCENE_KEYS: [&str; 8] = [
     "name",
     "generated_from",
     "seed",
     "physics",
+    "nav",
     "render_layers",
     "preload",
     "entities",
@@ -273,6 +274,11 @@ fn write(scene: &mut Scene, segments: &[String], pointer: &str, value: &Value) -
             pointer,
             "/physics",
             "the physics block is typed scene configuration; edit the scene file",
+        )),
+        "nav" => Err(not_overridable(
+            pointer,
+            "/nav",
+            "the nav block is scene configuration; edit the scene file",
         )),
         "render_layers" => Err(not_overridable(
             pointer,

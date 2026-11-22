@@ -2379,6 +2379,12 @@ pub mod code {
     /// `L2379` — a render names a view that no enabled, in-budget `RenderView` renders this frame.
     pub const RENDER_VIEW_NOT_RENDERED: DiagnosticCode = DiagnosticCode::new("L2379");
 
+    /// `L2330` — a scene's top-level `nav:` block has an unknown key, a wrong type or a class missing a field.
+    pub const SCENE_NAV_INVALID: DiagnosticCode = DiagnosticCode::new("L2330");
+
+    /// `L2331` — a scene authors a `nav:` block without a `physics:` block, so the grid would sample no colliders.
+    pub const SCENE_NAV_NEEDS_PHYSICS: DiagnosticCode = DiagnosticCode::new("L2331");
+
     /// `L2380` — a `Rain` field is non-finite or out of range.
     pub const RAIN_INVALID: DiagnosticCode = DiagnosticCode::new("L2380");
 
@@ -11601,6 +11607,33 @@ Fix: give each profile its own name, put it beside a `PostProcess`, and spell `R
     PostProfile: { name: radar-feed }",
     },
     CodeEntry {
+        code: code::SCENE_NAV_INVALID,
+        severity: Severity::Error,
+        title: "the scene's `nav:` block is invalid",
+        explanation: "A scene's top-level `nav:` block is a `NavConfig` as YAML, every key optional: it has an unknown key (the
+help names the nearest), a value of the wrong type, or a `classes` entry that does not set all of `name`, `radius`,
+`height`, `max_step` and `max_slope_deg`. The path points into `/nav`. A value that parses but is out of range is
+`L4032`.
+
+Fix: spell the key as `NavConfig` does and give a class every field.
+
+    nav:
+      cell_size: 0.25
+      classes:
+        - {name: walker, radius: 0.35, height: 1.8, max_step: 0.4, max_slope_deg: 45}",
+    },
+    CodeEntry {
+        code: code::SCENE_NAV_NEEDS_PHYSICS,
+        severity: Severity::Error,
+        title: "a `nav:` block needs a `physics:` block",
+        explanation: "The nav grid is sampled from static colliders, and a scene with no `physics:` block installs no physics
+world, so the grid would be empty.
+
+Fix: add a `physics:` block beside `nav:`.
+
+    physics: {space: free}",
+    },
+    CodeEntry {
         code: code::RENDER_VIEW_NOT_RENDERED,
         severity: Severity::Error,
         title: "the named view is not rendered",
@@ -15142,6 +15175,8 @@ mod tests {
         code::POST_PROFILE_VIEW_IGNORED,
         code::POST_PROFILE_INVALID,
         code::RENDER_VIEW_NOT_RENDERED,
+        code::SCENE_NAV_INVALID,
+        code::SCENE_NAV_NEEDS_PHYSICS,
         code::RAIN_INVALID,
         code::RAIN_DUPLICATE,
         code::RAIN_STREAK_BUDGET,

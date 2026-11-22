@@ -7885,6 +7885,7 @@ impl Engine {
             generated_from,
             seed,
             physics: self.scene_physics.clone(),
+            nav: authored.and_then(|scene| scene.nav.clone()),
             render_layers: authored.map_or_else(Vec::new, |scene| scene.render_layers.clone()),
             preload: authored.map_or_else(Vec::new, |scene| scene.preload.clone()),
             entities,

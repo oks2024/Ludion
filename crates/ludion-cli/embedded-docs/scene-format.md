@@ -48,6 +48,8 @@ name: "level-1"        # optional string
 seed: 42               # optional non-negative integer; seeds the sim's DeterministicRng (0 if absent)
 physics:               # optional; declares rigid-body physics — `ludion docs physics`
   space: free
+nav:                   # optional; a NavConfig for the built-in hosts, needs `physics` — `ludion docs nav`
+  cell_size: 0.25
 render_layers:         # optional; the render layer names the scene uses, declared once — `ludion docs render-views`
   - name: radar
 preload:               # optional; prefab paths a system will `spawn_prefab`, readied at load (a bad path fails the load, `L1230`)
@@ -64,7 +66,7 @@ entities:              # required shape: a sequence of mappings (use `entities: 
   - components: {}
 ```
 
-- Top-level keys: exactly `format`, `name`, `generated_from`, `seed`, `physics`, `render_layers`, `preload`, `entities`. Entity keys: exactly `name`, `presentation`, `components`. Anything else is `L1010`; a missing `format` is `L1011`. An entry with a `prefab:` key is an instance of a prefab file, not a plain entity (`ludion docs prefab-instances`).
+- Top-level keys: exactly `format`, `name`, `generated_from`, `seed`, `physics`, `nav`, `render_layers`, `preload`, `entities`. Entity keys: exactly `name`, `presentation`, `components`. Anything else is `L1010`; a missing `format` is `L1011`. An entry with a `prefab:` key is an instance of a prefab file, not a plain entity (`ludion docs prefab-instances`).
 - Component *names* must exist in the component registry (`L1013`, with nearest-match suggestion). Component *values* are validated against that component's JSON Schema (`L1014`): wrong types, missing required fields, undeclared fields (typos are errors), out-of-range values — each with a JSON Pointer like `/entities/0/components/Transform/yy` and a fix suggestion.
 - Entity order is data: entities instantiate (and re-emit) in document order.
 
@@ -73,7 +75,7 @@ entities:              # required shape: a sequence of mappings (use `entities: 
 One scene has exactly one canonical text (per registry). Any client's edit re-emits to a minimal git diff. The engine's writer produces:
 
 - LF line endings, 2-space indent, block style; `[]`/`{}` only for empty collections.
-- Stable key order — top-level `format`, `name`, `generated_from`, `seed`, `physics`, `render_layers` (omitted when empty), `preload`, `entities`; entity `name`, `presentation` (only when true), `components`; components in registry registration order; component fields in struct declaration order; an enum variant, an `Option` or an untagged value orders by the alternative it matches (an internally tagged enum's `type` leads, as serde writes it), and map keys sort in byte order — the order `scene.save` writes a `BTreeMap<String, _>` in.
+- Stable key order — top-level `format`, `name`, `generated_from`, `seed`, `physics`, `nav` (omitted when absent; keys in `NavConfig` field order), `render_layers` (omitted when empty), `preload`, `entities`; entity `name`, `presentation` (only when true), `components`; components in registry registration order; component fields in struct declaration order; an enum variant, an `Option` or an untagged value orders by the alternative it matches (an internally tagged enum's `type` leads, as serde writes it), and map keys sort in byte order — the order `scene.save` writes a `BTreeMap<String, _>` in.
 - Floats in ryu shortest-round-trip form (`1.5`, not `1.50000`); never rounded, never fixed precision. A field the schema types `f32` is written as its shortest f32 decimal (`0.3`, not `0.30000001192092896`) — the same `f32` on read-back. An integer field stays an integer (`1`, and a schema with `integer` rejects `1.0`); a float field is written with a fraction digit (`1.0`), whatever spelling the source used, and committed hand-authored scenes and prefabs use the writer's spelling, gated by `ludion_testkit::assert_saves_respell_nothing`.
 - Strings quoted with double quotes whenever they are not simple identifier-ish text; anything that could resolve as a number/bool/null is always quoted.
 - Emission is idempotent: parsing canonical text and re-emitting reproduces the bytes exactly.
