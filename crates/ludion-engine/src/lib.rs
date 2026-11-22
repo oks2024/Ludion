@@ -200,10 +200,10 @@ pub use components::{
     NavRouteStatus, NavSteering, PARTICLE_MAX_LIVE_PER_EMITTER, ParentJoint, ParticleBlend,
     ParticleEmitter, Perceiver, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe,
     Require, Residue, SightPoint, SightTarget, SightZone, SkinBone, SpotLight, Sprite, SpriteBlend,
-    Static, Text, TextOutline, TileAppearance, Tilemap, Transform, UiAnchorBehind, UiAnchorShow,
-    UiClipShape, UiClock, UiEase, UiGroup, UiList, UiListItem, UiRect, UiText, UiTween,
-    UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens, Visibility,
-    builtin_registry, crossfade,
+    Static, Text, TextOutline, TextShadow, TileAppearance, Tilemap, Transform, UiAnchorBehind,
+    UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiList, UiListItem, UiRect, UiText,
+    UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor, Viewmodel, ViewmodelLens,
+    Visibility, builtin_registry, crossfade,
 };
 pub use components::{AnimGraphState, PoseSnapshot, SnapshotPart};
 pub use components::{

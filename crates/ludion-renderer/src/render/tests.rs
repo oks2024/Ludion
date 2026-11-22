@@ -1000,6 +1000,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
         font: None,
         clip: UiClip::NONE,
         outline: None,
+        shadow: None,
         rotation: crate::UiRotation::NONE,
     };
 
@@ -1034,6 +1035,7 @@ fn needs_gpu_ui_batches_respect_kind_and_texture_boundaries() {
         font,
         clip: UiClip::NONE,
         outline: None,
+        shadow: None,
         rotation: crate::UiRotation::NONE,
     };
     scene.ui = vec![
@@ -3654,6 +3656,7 @@ fn needs_gpu_ui_is_rasterized_at_the_output_extent_below_native() {
             font: None,
             clip: UiClip::NONE,
             outline: None,
+            shadow: None,
             rotation: crate::UiRotation::NONE,
         },
     ];

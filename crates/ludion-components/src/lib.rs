@@ -113,8 +113,9 @@ pub use screen_effect::{
 };
 pub use subtitle::{Channel, SubtitleView};
 pub use ui::{
-    TextOutline, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav,
-    UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
+    TextOutline, TextShadow, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup,
+    UiNav, UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack,
+    UiWorldAnchor,
 };
 pub use ui_shape::{UiDash, UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
 
@@ -5551,6 +5552,10 @@ pub struct UiText {
     /// An outline drawn under the glyphs (default none). Ink only: layout and hit tests ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline: Option<TextOutline>,
+    /// A shadow drawn under the glyphs and the outline (default none). Ink only: layout and hit tests
+    /// ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<TextShadow>,
     /// Rotation about the centre of the glyph bounds, degrees, clockwise on screen (default `0`).
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub rotation: f32,
@@ -5602,6 +5607,7 @@ impl Default for UiText {
             font: None,
             group: None,
             outline: None,
+            shadow: None,
             rotation: 0.0,
             key: None,
             args: std::collections::BTreeMap::new(),
@@ -5620,6 +5626,7 @@ impl SemanticValidate for UiText {
             require_positive_finite_ui_size(size, "/size", &mut out);
         }
         ui::validate_text_outline(value, &mut out);
+        ui::validate_text_shadow(value, &mut out);
         ui::validate_rotation(value, &mut out);
         out
     }
@@ -5745,6 +5752,9 @@ pub struct UiList {
     /// the background are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline: Option<TextOutline>,
+    /// A shadow drawn under every line's glyphs and outline (default none). Ink only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<TextShadow>,
 }
 
 impl Default for UiList {
@@ -5768,6 +5778,7 @@ impl Default for UiList {
             font: None,
             group: None,
             outline: None,
+            shadow: None,
         }
     }
 }
@@ -5784,6 +5795,7 @@ impl SemanticValidate for UiList {
             require_positive_finite_ui_size(size, "/size", &mut out);
         }
         ui::validate_text_outline(value, &mut out);
+        ui::validate_text_shadow(value, &mut out);
         out
     }
 }
@@ -9682,6 +9694,7 @@ mod tests {
                 width: 2.0,
                 color: [0.0, 0.0, 0.0, 1.0],
             }),
+            shadow: None,
             rotation: -15.0,
             key: Some("hud.over".to_string()),
             args: [("score".to_string(), "12".to_string())].into(),
@@ -11918,6 +11931,7 @@ entities:
                 width: 1.5,
                 color: [0.0, 0.0, 0.0, 1.0],
             }),
+            shadow: None,
         };
         let json = serde_json::to_value(&list).unwrap();
         assert_eq!(serde_json::from_value::<UiList>(json).unwrap(), list);
@@ -11954,6 +11968,80 @@ entities:
             (negative, "/outline/width"),
             (huge, "/outline/width"),
             (bad_color, "/outline/color"),
+        ] {
+            assert_eq!(pointers(UiText::validate_semantics(&value)), [pointer]);
+            assert_eq!(pointers(UiList::validate_semantics(&value)), [pointer]);
+        }
+    }
+
+    /// A `shadow` round-trips through JSON on both components; an absent one, and `softness: 0`, are not
+    /// serialized.
+    #[test]
+    fn text_shadow_round_trips_and_stays_absent() {
+        let shadow = TextShadow {
+            offset: [2.0, 3.0],
+            color: [0.0, 0.0, 0.0, 0.5],
+            softness: 0.25,
+        };
+        let text = UiText {
+            shadow: Some(shadow),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&text).unwrap();
+        assert_eq!(serde_json::from_value::<UiText>(json).unwrap(), text);
+        let list = UiList {
+            shadow: Some(shadow),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&list).unwrap();
+        assert_eq!(serde_json::from_value::<UiList>(json).unwrap(), list);
+
+        assert!(
+            serde_json::to_value(UiText::default())
+                .unwrap()
+                .get("shadow")
+                .is_none()
+        );
+        assert!(
+            serde_json::to_value(UiList::default())
+                .unwrap()
+                .get("shadow")
+                .is_none()
+        );
+        let hard = UiText {
+            shadow: Some(TextShadow {
+                softness: 0.0,
+                ..shadow
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&hard).unwrap();
+        assert!(json["shadow"].get("softness").is_none());
+    }
+
+    /// A bad `shadow` is `L1622` at its pointer, on both components.
+    #[test]
+    fn text_shadow_validates() {
+        let pointers = |out: Vec<Diagnostic>| -> Vec<String> {
+            out.iter()
+                .filter(|d| d.code == code::UI_TEXT_SHADOW_INVALID)
+                .filter_map(|d| d.path.clone())
+                .collect()
+        };
+        let ok = serde_json::json!({"shadow": {"offset": [2, 2], "color": [0, 0, 0, 1], "softness": 1.0}});
+        assert!(UiText::validate_semantics(&ok).is_empty());
+        assert!(UiList::validate_semantics(&ok).is_empty());
+        let bad_offset =
+            serde_json::json!({"shadow": {"offset": [1e300, 0], "color": [0, 0, 0, 1]}});
+        let bad_color =
+            serde_json::json!({"shadow": {"offset": [1, 1], "color": [0, 1e300, 0, 1]}});
+        let too_soft = serde_json::json!({"shadow": {"offset": [1, 1], "color": [0, 0, 0, 1], "softness": 1.5}});
+        let negative = serde_json::json!({"shadow": {"offset": [1, 1], "color": [0, 0, 0, 1], "softness": -0.1}});
+        for (value, pointer) in [
+            (bad_offset, "/shadow/offset"),
+            (bad_color, "/shadow/color"),
+            (too_soft, "/shadow/softness"),
+            (negative, "/shadow/softness"),
         ] {
             assert_eq!(pointers(UiText::validate_semantics(&value)), [pointer]);
             assert_eq!(pointers(UiList::validate_semantics(&value)), [pointer]);

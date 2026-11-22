@@ -2,7 +2,7 @@
 //! packing (including the outline's quad growth) that `ui_text.wgsl` reads.
 
 use super::{ui_clip_raw, ui_cos_sin};
-use crate::scene::{GlyphOutline, UiClip, UiRotation};
+use crate::scene::{GlyphOutline, GlyphShadow, UiClip, UiRotation};
 use bytemuck::{Pod, Zeroable};
 use ludion_font::GlyphQuad;
 
@@ -40,6 +40,11 @@ pub(super) const UI_TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 11] = wgpu::verte
 ///
 /// A `rotation` with `radians != 0` turns every corner about its pivot here, on the CPU; an unrotated
 /// run's positions are untouched.
+///
+/// A `shadow` emits the run's quads first, moved by `offset_px` before the turn and packed in the
+/// shadow's colour (the outline's too when outlined, so the composite is one flat silhouette); then the
+/// fill follows exactly as without one.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn push_ui_text_verts(
     verts: &mut Vec<UiTextVertexRaw>,
     quads: &[GlyphQuad],
@@ -48,6 +53,7 @@ pub(super) fn push_ui_text_verts(
     clip: &UiClip,
     rotation: &UiRotation,
     outline: Option<(&GlyphOutline, u32, [u32; 2])>,
+    shadow: Option<&GlyphShadow>,
 ) {
     let [clip_a, clip_b, clip_r, clip_t] = ui_clip_raw(clip);
     let turn = (rotation.radians != 0.0).then(|| ui_cos_sin(rotation.radians));
@@ -70,6 +76,47 @@ pub(super) fn push_ui_text_verts(
             (o.color, [1.0, edge, 0.0, 0.0])
         }
     };
+    let mut pass = |offset: [f32; 2], color: [f32; 4], ol_color: [f32; 4], ol_param: [f32; 4]| {
+        push_pass(
+            verts,
+            quads,
+            sdf,
+            outline,
+            &place,
+            offset,
+            color,
+            ol_color,
+            ol_param,
+            [clip_a, clip_b, clip_r, clip_t],
+        );
+    };
+    if let Some(s) = shadow {
+        let softness = if sdf { s.softness } else { 0.0 };
+        let (ol_color, ol_param) = match outline {
+            Some(_) => (s.color, [1.0, ol_param[1], softness, 0.0]),
+            None if softness > 0.0 => ([0.0; 4], [1.0, 0.5, softness, 0.0]),
+            None => ([0.0; 4], [0.0; 4]),
+        };
+        pass(s.offset_px, s.color, ol_color, ol_param);
+    }
+    pass([0.0; 2], color, ol_color, ol_param);
+}
+
+/// One pass over `quads`: every glyph quad as 6 vertices, moved by `offset` (after the outline's
+/// bitmap growth, before `place` turns it).
+#[allow(clippy::too_many_arguments)]
+fn push_pass(
+    verts: &mut Vec<UiTextVertexRaw>,
+    quads: &[GlyphQuad],
+    sdf: bool,
+    outline: Option<(&GlyphOutline, u32, [u32; 2])>,
+    place: &dyn Fn(f32, f32) -> [f32; 2],
+    offset: [f32; 2],
+    color: [f32; 4],
+    ol_color: [f32; 4],
+    ol_param: [f32; 4],
+    [clip_a, clip_b, clip_r, clip_t]: [[f32; 4]; 4],
+) {
     for q in quads {
         let [mut l, mut t, mut r, mut b] = q.pos;
         let [mut u0, mut v0, mut u1, mut v1] = q.uv;
@@ -94,6 +141,12 @@ pub(super) fn push_ui_text_verts(
                 grow(&mut u0, &mut u1, &mut l, &mut r, dims[0]);
                 grow(&mut v0, &mut v1, &mut t, &mut b, dims[1]);
             }
+        }
+        if offset != [0.0; 2] {
+            l += offset[0];
+            r += offset[0];
+            t += offset[1];
+            b += offset[1];
         }
         let vert = |x: f32, y: f32, u: f32, v: f32| UiTextVertexRaw {
             position: place(x, y),
@@ -145,6 +198,7 @@ mod tests {
                 &UiClip::NONE,
                 &UiRotation::NONE,
                 None,
+                None,
             );
             let (mut max_x, mut max_y) = (0.0_f32, 0.0_f32);
             for v in &verts {
@@ -173,6 +227,7 @@ mod tests {
             &UiClip::NONE,
             &UiRotation::NONE,
             None,
+            None,
         );
         assert!(verts.is_empty(), "empty string emits nothing");
         // 'é' has no glyph in the embedded face → no quad.
@@ -183,6 +238,7 @@ mod tests {
             false,
             &UiClip::NONE,
             &UiRotation::NONE,
+            None,
             None,
         );
         assert!(verts.is_empty(), "unmapped code points emit no quads");
@@ -202,6 +258,7 @@ mod tests {
             false,
             &UiClip::NONE,
             &UiRotation::NONE,
+            None,
             None,
         );
         assert!(
@@ -224,6 +281,7 @@ mod tests {
             &UiClip::NONE,
             &UiRotation::NONE,
             Some((&outline, 0, dims)),
+            None,
         );
         let q = &quads[0];
         let (du, dv) = (2.0 / 128.0, 2.0 / 64.0);
@@ -249,6 +307,7 @@ mod tests {
             &UiClip::NONE,
             &UiRotation::NONE,
             Some((&outline, 8, dims)),
+            None,
         );
         assert_eq!(sdf[0].uv, q.uv[..2]);
         assert_eq!(sdf[0].position, [q.pos[0], q.pos[1]]);
@@ -270,6 +329,7 @@ mod tests {
                 false,
                 &UiClip::NONE,
                 rotation,
+                None,
                 None,
             );
         };
@@ -294,5 +354,140 @@ mod tests {
         assert!(near(turned[0].position, want(q.pos[0], q.pos[1])));
         assert!(near(turned[1].position, want(q.pos[2], q.pos[1])));
         assert!(near(turned[2].position, want(q.pos[2], q.pos[3])));
+    }
+
+    fn bytes(verts: &[UiTextVertexRaw]) -> &[u8] {
+        bytemuck::cast_slice(verts)
+    }
+
+    fn shadow(softness: f32) -> GlyphShadow {
+        GlyphShadow {
+            offset_px: [3.0, 5.0],
+            color: [0.0, 0.0, 0.0, 0.5],
+            softness,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pack(
+        quads: &[GlyphQuad],
+        sdf: bool,
+        rotation: &UiRotation,
+        outline: Option<(&GlyphOutline, u32, [u32; 2])>,
+        shadow: Option<&GlyphShadow>,
+    ) -> Vec<UiTextVertexRaw> {
+        let mut verts = Vec::new();
+        push_ui_text_verts(
+            &mut verts,
+            quads,
+            [1.0; 4],
+            sdf,
+            &UiClip::NONE,
+            rotation,
+            outline,
+            shadow,
+        );
+        verts
+    }
+
+    /// A shadowed run emits twice the vertices, the shadow first (moved by `offset_px`, in the
+    /// shadow's colour), then the fill byte-identical to the unshadowed run — outlined or not.
+    #[test]
+    fn ui_text_verts_emit_the_shadow_before_the_fill() {
+        let quads = test_quads("HI", 8.0);
+        let outline = GlyphOutline {
+            color: [1.0, 0.0, 0.0, 1.0],
+            texels: 2.0,
+        };
+        for outlined in [None, Some((&outline, 0, [128, 64]))] {
+            let plain = pack(&quads, false, &UiRotation::NONE, outlined, None);
+            assert_eq!(plain.len(), quads.len() * 6);
+            let s = shadow(0.0);
+            let both = pack(&quads, false, &UiRotation::NONE, outlined, Some(&s));
+            assert_eq!(both.len(), plain.len() * 2);
+            let (under, over) = both.split_at(plain.len());
+            assert_eq!(
+                bytes(over),
+                bytes(&plain),
+                "the fill packs as without a shadow"
+            );
+            for (a, b) in under.iter().zip(&plain) {
+                assert_eq!(a.position, [b.position[0] + 3.0, b.position[1] + 5.0]);
+                assert_eq!(a.uv, b.uv);
+                assert_eq!(a.color, s.color);
+            }
+        }
+    }
+
+    /// The shadow moves before the turn: it equals the fill of a run whose quads were moved by
+    /// `offset_px`, then rotated.
+    #[test]
+    fn ui_text_verts_move_the_shadow_before_the_turn() {
+        let quads = test_quads("H", 8.0);
+        let rotation = UiRotation {
+            radians: 0.4,
+            pivot_px: [10.0, 10.0],
+        };
+        let s = shadow(0.0);
+        let both = pack(&quads, false, &rotation, None, Some(&s));
+        let moved: Vec<GlyphQuad> = quads
+            .iter()
+            .map(|q| {
+                let mut m = *q;
+                m.pos = [
+                    q.pos[0] + 3.0,
+                    q.pos[1] + 5.0,
+                    q.pos[2] + 3.0,
+                    q.pos[3] + 5.0,
+                ];
+                m
+            })
+            .collect();
+        let reference = pack(&moved, false, &rotation, None, None);
+        for (a, b) in both.iter().zip(&reference) {
+            assert_eq!(a.position, b.position);
+        }
+    }
+
+    /// An outlined shadow carries its colour as the outline colour; an SDF soft shadow carries its
+    /// softness in `ol_param.z`, with no outline it is `[1, 0.5, s, 0]`; a bitmap one stays hard.
+    #[test]
+    fn ui_text_verts_pack_the_shadow_params() {
+        let quads = test_quads("H", 8.0);
+        let outline = GlyphOutline {
+            color: [1.0, 0.0, 0.0, 1.0],
+            texels: 2.0,
+        };
+        let s = shadow(0.4);
+
+        let outlined = pack(
+            &quads,
+            false,
+            &UiRotation::NONE,
+            Some((&outline, 0, [128, 64])),
+            Some(&s),
+        );
+        assert_eq!(outlined[0].ol_color, s.color);
+        assert_eq!(outlined[0].ol_param, [1.0, 2.0, 0.0, 0.0], "bitmap: hard");
+        let outlined_sdf = pack(
+            &quads,
+            true,
+            &UiRotation::NONE,
+            Some((&outline, 8, [128, 64])),
+            Some(&s),
+        );
+        assert_eq!(outlined_sdf[0].ol_color, s.color);
+        assert_eq!(outlined_sdf[0].ol_param, [1.0, 0.5 - 2.0 / 16.0, 0.4, 0.0]);
+
+        let soft = pack(&quads, true, &UiRotation::NONE, None, Some(&s));
+        assert_eq!(soft[0].ol_param, [1.0, 0.5, 0.4, 0.0]);
+        assert_eq!(soft[0].ol_color, [0.0; 4]);
+        let fill = &soft[soft.len() / 2];
+        assert_eq!(fill.ol_param, [0.0; 4], "the fill is untouched");
+
+        let hard = pack(&quads, false, &UiRotation::NONE, None, Some(&s));
+        assert_eq!(hard[0].ol_param, [0.0; 4]);
+        let zero = pack(&quads, true, &UiRotation::NONE, None, Some(&shadow(0.0)));
+        assert_eq!(zero[0].ol_param, [0.0; 4]);
     }
 }

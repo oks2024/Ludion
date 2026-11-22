@@ -142,6 +142,7 @@ pub fn ui_hit(
             font: None,
             clip: UiClip::NONE,
             outline: None,
+            shadow: None,
             rotation: UiRotation::NONE,
         };
         if probe.hit(

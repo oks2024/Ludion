@@ -105,5 +105,21 @@ fn main() -> ExitCode {
         resolve_ui_text(face, &outlined, viewport)
     );
 
+    // A shadow is ink too: a copy of the glyphs (and outline) drawn under them, moved by `offset`.
+    // `softness` blurs it on an SDF face such as `body`; a bitmap face draws it hard.
+    let shadowed = UiText {
+        shadow: Some(TextShadow {
+            offset: [3.0, 3.0],
+            color: [0.0, 0.0, 0.0, 0.6],
+            softness: 0.5,
+        }),
+        ..label(None)
+    };
+    assert_eq!(
+        resolve_ui_text(face, &label(None), viewport),
+        resolve_ui_text(face, &shadowed, viewport)
+    );
+    println!("shadowed text keeps its block too");
+
     ExitCode::SUCCESS
 }

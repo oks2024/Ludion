@@ -299,7 +299,7 @@ pub use ludion_engine::{
     SequenceEvents, Settings, SettingsView, ShakeConfig, Shutdown, SightPoint, SightSample,
     SightSampleRecord, SightTarget, SightZone, SkinBone, SpotLight, Springs, Sprite, SpriteBlend,
     Static, Stimulus, StimulusRecord, Subtitles, SurfaceNoise, SuspendInfo, SweepShape, SwitchTo,
-    Text, TextOutline, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
+    Text, TextOutline, TextShadow, TileAppearance, Tilemap, TimelineEntry, TrackRig, Transform,
     TransformHierarchy, TurnSpec, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase,
     UiGroup, UiList, UiListItem, UiRect, UiText, UiTween, UiTweenField, UiTweenRepeat,
     UiTweenTrack, UiWorldAnchor, VOLLEY_MAX_BULLETS, VOLLEY_SALT, VerticalAnchor, Viewmodel,

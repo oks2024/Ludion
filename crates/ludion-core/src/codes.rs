@@ -2096,6 +2096,8 @@ pub mod code {
     pub const UI_ROTATION_INVALID: DiagnosticCode = DiagnosticCode::new("L1620");
     /// `L1621` — a `UiShape` has a non-finite number, a bad radius, thickness, sweep, size or stroke width, a fill or missing stroke on a stroke-only kind, a bad polygon (non-finite or over 256 points, or a stroke), or a bad `dash`.
     pub const UI_SHAPE_INVALID: DiagnosticCode = DiagnosticCode::new("L1621");
+    /// `L1622` — a `UiText` or `UiList` `shadow` has a non-finite offset or colour, or a softness that is non-finite or outside `[0, 1]`.
+    pub const UI_TEXT_SHADOW_INVALID: DiagnosticCode = DiagnosticCode::new("L1622");
     /// `L2302` — a UI element's `group` could not be resolved; drawn ungrouped.
     pub const UI_GROUP_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2302");
     /// `L2303` — more than two clipping groups in a UI element's chain; the outer ones are dropped.
@@ -2106,6 +2108,8 @@ pub mod code {
     pub const UI_POLYGON_DEGENERATE: DiagnosticCode = DiagnosticCode::new("L2305");
     /// `L2306` — a `UiShape` `dash` would draw more than 1024 dashes; the stroke draws solid.
     pub const UI_DASH_TOO_DENSE: DiagnosticCode = DiagnosticCode::new("L2306");
+    /// `L2307` — a `UiText` or `UiList` shadow `softness` on a bitmap face; the shadow draws hard.
+    pub const UI_TEXT_SHADOW_SOFTNESS_IGNORED: DiagnosticCode = DiagnosticCode::new("L2307");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
     pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
@@ -10522,6 +10526,19 @@ Fix: correct the field; give a `line` or `arc` a `stroke` and drop its `fill`; g
 an `off` of 0 or more, and a `stroke`.",
     },
     CodeEntry {
+        code: code::UI_TEXT_SHADOW_INVALID,
+        severity: Severity::Error,
+        title: "a UI text shadow is invalid",
+        explanation: "\
+A `UiText` or `UiList` `shadow` has an `offset` with a non-finite component (pointer
+`/entities/{i}/components/{Component}/shadow/offset`), a `color` with a non-finite channel
+(`.../shadow/color`), or a `softness` that is not finite or is outside `[0, 1]` (`.../shadow/softness`).
+A scene with one is refused.
+
+Fix: give `offset` finite canvas units, `color` finite linear straight RGBA, and `softness` a value from
+0 (hard) to 1 (the widest blur the face's field allows).",
+    },
+    CodeEntry {
         code: code::UI_GROUP_UNRESOLVED,
         severity: Severity::Warning,
         title: "a UI element's group could not be resolved",
@@ -10579,6 +10596,18 @@ by `on + off`, in pixels), so the stroke draws solid instead. Reported once per 
 warning at render time; the message names the count and the limit.
 
 Fix: lengthen `on` and `off`, or shorten the stroked path.",
+    },
+    CodeEntry {
+        code: code::UI_TEXT_SHADOW_SOFTNESS_IGNORED,
+        severity: Severity::Warning,
+        title: "a UI text shadow softness is ignored on a bitmap face",
+        explanation: "\
+A `UiText` or `UiList` `shadow.softness` above 0 draws on a face that is not SDF (a bitmap face, the
+embedded 8x8 among them). Only an SDF face can blur the shadow, so that run draws a hard copy and the
+softness is ignored. Reported once per element as a degraded warning at render time; the message names
+the face (its name, or `embedded`).
+
+Fix: set `softness` to 0 for a bitmap face, or use an SDF face (`ludion docs fonts`).",
     },
     CodeEntry {
         code: code::STATIC_INELIGIBLE,
@@ -15005,11 +15034,13 @@ mod tests {
         code::UI_RADIAL_INVALID,
         code::UI_ROTATION_INVALID,
         code::UI_SHAPE_INVALID,
+        code::UI_TEXT_SHADOW_INVALID,
         code::UI_GROUP_UNRESOLVED,
         code::UI_CLIP_NESTING,
         code::UI_TEXT_OUTLINE_CLAMPED,
         code::UI_POLYGON_DEGENERATE,
         code::UI_DASH_TOO_DENSE,
+        code::UI_TEXT_SHADOW_SOFTNESS_IGNORED,
         code::STATIC_INELIGIBLE,
         code::STATIC_PARENT_NOT_STATIC,
         code::STATIC_REWRITTEN,
@@ -15458,6 +15489,7 @@ mod tests {
             code::UI_TEXT_OUTLINE_CLAMPED,
             code::UI_POLYGON_DEGENERATE,
             code::UI_DASH_TOO_DENSE,
+            code::UI_TEXT_SHADOW_SOFTNESS_IGNORED,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
             code::STATIC_REWRITTEN,

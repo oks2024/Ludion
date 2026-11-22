@@ -18,7 +18,7 @@
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
 > component schema snapshot moved); W3c-1: filled `polygon` (decisions 67–73, `L2305`, `ui_polygon.wgsl`; the `ui-polygons`
 > golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455); W3c-2: polygon strokes and `polyline` (decisions 74–80, `UiLineJoin`,
-> `push_ui_stroke_verts` on the polygon pipeline; the `ui-strokes` golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455). W3c-3: `dash` (decisions 81–87; the `ui-dashes` golden is owed on the RTX 3090 and its macOS twin on the M4). Waves 5b and 7 are recorded below and not started. Owed: the
+> `push_ui_stroke_verts` on the polygon pipeline; the `ui-strokes` golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455). W3c-3: `dash` (decisions 81–87; the `ui-dashes` golden is owed on the RTX 3090 and its macOS twin on the M4). W5b: `shadow` on `UiText`/`UiList` (decisions 88–94; the `ui-text-shadow` golden is owed on the RTX 3090 and its macOS twin on the M4). Wave 7 is recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -394,6 +394,40 @@ separate. Request differences: `cap` on polyline (the request lists only `join`)
 `offset`/phase field (marching ants; trigger: a request); the closed-path seam not joined; round joins on flattened analytic
 outlines; the 1024-dash cap with a solid fallback; facets under scale; gaps not hit. Request differences: none.
 
+88. **`TextShadow { offset, color, softness }`** is in `ludion-components/src/ui.rs`, beside `TextOutline`. `offset` (canvas
+    units, +Y down) and `color` (linear straight RGBA) are required. `softness` is `#[serde(default, skip_serializing_if = zero)]`.
+    The `shadow` field on `UiText` and `UiList` goes after `outline`, `#[serde(default, skip_serializing_if = "Option::is_none")]`.
+    **`L1622 UI_TEXT_SHADOW_INVALID`** (error) is raised for a non-finite `offset` (`/shadow/offset`), a non-finite `color`
+    (`/shadow/color`), and a `softness` that is non-finite or outside `[0, 1]` (`/shadow/softness`). A colour alpha of 0 draws
+    nothing.
+89. **Resolved in extract** to `ludion_renderer::GlyphShadow { offset_px: [f32; 2], color: [f32; 4], softness: f32 }`, with
+    `offset_px = offset · pixel_scale(viewport)`. It rides `UiInstance::Text.shadow` (after `outline`), so batching is unchanged.
+    For each text run, a run whose face is not SDF (`font.map_or(true, |f| !f.sdf)`) gets `softness: 0`. If the authored softness
+    was above 0, that run also records the degraded **`L2307 UI_TEXT_SHADOW_SOFTNESS_IGNORED`** (warning), keyed
+    `"{key}/ui-shadow-softness"`, naming the face (its name, or `embedded`).
+90. **The shape of the shadow** is the run's own ink: the same quads (bitmap quads grown by the outline's `k` when outlined), moved
+    by `offset_px` *before* the rotation turn. The shadow therefore turns and scales with the text, as CSS `text-shadow` does.
+    The packing is the fill's packing with `color := shadow.color`, and with `ol_color := shadow.color` when the run is outlined,
+    so the composite (decision 35) gives the union of fill and outline in one colour.
+91. **Order.** `push_ui_text_verts` emits every shadow quad of the run, then every fill quad. Within one run, a later glyph's
+    shadow never covers an earlier glyph's fill. Across runs (a fallback-face run, or a later `UiList` line), a later run's
+    shadow can reach an earlier run's fill when the offset spans the line gap. This is accepted and documented.
+92. **Softness (SDF only).** It is carried in `ol_param.z`. When softness is above 0, `ol_param.x = 1`, even with no outline (then
+    `ol_color = 0` and `ol_param.y = 0.5`). In the shader's SDF branch, `z > 0` widens each smoothstep edge `E` (0.5 for the fill,
+    `ol_param.y` for the outline) by `h = z · max(E − 2w, 0)`, giving `smoothstep(E − w − h, E + w + h, raw)`. The lower bound
+    stays ≥ `w` > 0, so coverage is 0 at the quad's padded edge and no quad seam shows. When `z == 0`, the existing two lines run
+    verbatim, in an `else`.
+93. **Groups and tweens.** Group opacity multiplies `shadow.color[3]` (`hud.rs::multiply_alpha`). Every group scale of a text
+    quad (`transform_instances` and the rotated-group apply) multiplies `offset_px` by the same scale. Tweens of `color` leave the
+    shadow alone.
+94. **Not on** `UiRadial`, `SubtitleView` or world `Text` (they pass `shadow: None`). Trigger: a request.
+
+**Proposed — owner ruling owed (W5b):** the shadow turning and scaling with the text (decision 90); `softness` as a 0–1 fraction of
+the field band, ignored with `L2307` on bitmap faces; the shadow as the union of fill and outline; the cross-run overlap
+(decision 91); no shadow on `UiRadial`, `SubtitleView` or world `Text`; an unrounded offset on bitmap faces. Request differences:
+the type name `TextShadow` (the request named only the field); `softness` is optional (default 0), and the request left its
+meaning open.
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -419,7 +453,7 @@ outlines; the 1024-dash cap with a solid fallback; facets under scale; gaps not 
   `ui_rect.wgsl`/`ui_text.wgsl`, the `ui-groups` gallery golden; `ui_hit` walks groups, tweens, anchors
   and the clip.
 - **W5a — text outline** (decisions 31–36): SDF from the field, bitmap by in-shader dilation; `ui-text-outline` golden.
-- **W5b — text shadow.**
+- **W5b — text shadow** (decisions 88–94, `L1622`, `L2307`, the `ui-text-shadow` golden).
 - Order, accepted by the owner 2026-11-19: W6a → W3a → W3b → W6b.
 - **W6a — `UiRadial`, `UiRadialNav`, `radial_layout`/`radial_hit`** (decisions 37–44): CPU only, no renderer change;
   item text, detail and icons through the existing UI instances; the 1/2/8-thread replay and the snapshot test
@@ -449,7 +483,7 @@ and adds `icon_size`, `selected_color`, `visible` and `outline`.
 ## Out of scope (triggers recorded)
 
 a dash phase/offset, dashes on `UiRadial` strokes (trigger: a request), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
-when stretched), slicing `UiList`/`UiText`, text shadow (W5b), a wedge `disabled_fill` or per-item colour, sub-wheels, item-level `ui_hit`,
+when stretched), slicing `UiList`/`UiText`, a shadow on `UiRadial`, `SubtitleView` or world `Text` (trigger: a request), a wedge `disabled_fill` or per-item colour, sub-wheels, item-level `ui_hit`,
 anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see
 `Plan/font-assets.md` for the SDF outline path).

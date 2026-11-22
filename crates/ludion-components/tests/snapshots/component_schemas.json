@@ -10919,6 +10919,17 @@
             "type": "null"
           }
         ]
+      },
+      "shadow": {
+        "description": "A shadow drawn under every line's glyphs and outline (default none). Ink only.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TextShadow"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "$defs": {
@@ -11010,6 +11021,41 @@
         },
         "required": [
           "width",
+          "color"
+        ]
+      },
+      "TextShadow": {
+        "description": "A copy of the text's ink (the fill, plus the outline when there is one) drawn under it, moved by\n`offset`. A `color` alpha of `0` draws nothing.\n\n```\nuse ludion_components::TextShadow;\n\nlet shadow: TextShadow = serde_json::from_value(\n    serde_json::json!({ \"offset\": [2.0, 2.0], \"color\": [0.0, 0.0, 0.0, 0.6] }),\n)\n.unwrap();\nassert_eq!(shadow.softness, 0.0);\n```",
+        "type": "object",
+        "properties": {
+          "offset": {
+            "description": "Canvas units, +Y down. Turns and scales with the text. Finite.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "color": {
+            "description": "Linear straight RGBA of the shadow.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "softness": {
+            "description": "Blur as a fraction (`0..=1`) of the face's field band (default `0`: a hard copy). Only an SDF\nface can blur; a bitmap face draws it hard and warns (`L2307`).",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "required": [
+          "offset",
           "color"
         ]
       }
@@ -12268,6 +12314,17 @@
           }
         ]
       },
+      "shadow": {
+        "description": "A shadow drawn under the glyphs and the outline (default none). Ink only: layout and hit tests\nignore it.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TextShadow"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "rotation": {
         "description": "Rotation about the centre of the glyph bounds, degrees, clockwise on screen (default `0`).",
         "type": "number",
@@ -12361,6 +12418,41 @@
         },
         "required": [
           "width",
+          "color"
+        ]
+      },
+      "TextShadow": {
+        "description": "A copy of the text's ink (the fill, plus the outline when there is one) drawn under it, moved by\n`offset`. A `color` alpha of `0` draws nothing.\n\n```\nuse ludion_components::TextShadow;\n\nlet shadow: TextShadow = serde_json::from_value(\n    serde_json::json!({ \"offset\": [2.0, 2.0], \"color\": [0.0, 0.0, 0.0, 0.6] }),\n)\n.unwrap();\nassert_eq!(shadow.softness, 0.0);\n```",
+        "type": "object",
+        "properties": {
+          "offset": {
+            "description": "Canvas units, +Y down. Turns and scales with the text. Finite.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "color": {
+            "description": "Linear straight RGBA of the shadow.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "softness": {
+            "description": "Blur as a fraction (`0..=1`) of the face's field band (default `0`: a hard copy). Only an SDF\nface can blur; a bitmap face draws it hard and warns (`L2307`).",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "required": [
+          "offset",
           "color"
         ]
       }

@@ -688,6 +688,81 @@ pub(crate) fn validate_text_outline(value: &Value, out: &mut Vec<Diagnostic>) {
     }
 }
 
+/// A copy of the text's ink (the fill, plus the outline when there is one) drawn under it, moved by
+/// `offset`. A `color` alpha of `0` draws nothing.
+///
+/// ```
+/// use ludion_components::TextShadow;
+///
+/// let shadow: TextShadow = serde_json::from_value(
+///     serde_json::json!({ "offset": [2.0, 2.0], "color": [0.0, 0.0, 0.0, 0.6] }),
+/// )
+/// .unwrap();
+/// assert_eq!(shadow.softness, 0.0);
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct TextShadow {
+    /// Canvas units, +Y down. Turns and scales with the text. Finite.
+    pub offset: [f32; 2],
+    /// Linear straight RGBA of the shadow.
+    pub color: [f32; 4],
+    /// Blur as a fraction (`0..=1`) of the face's field band (default `0`: a hard copy). Only an SDF
+    /// face can blur; a bitmap face draws it hard and warns (`L2307`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub softness: f32,
+}
+
+/// Rejects a `shadow` with a non-finite `offset` or `color` channel, or a `softness` that is
+/// non-finite or outside `[0, 1]` (`L1622`, `/shadow/offset`, `/shadow/color`, `/shadow/softness`).
+/// Shared by `UiText` and `UiList`.
+pub(crate) fn validate_text_shadow(value: &Value, out: &mut Vec<Diagnostic>) {
+    let Some(shadow) = value.get("shadow") else {
+        return;
+    };
+    let mut reject = |pointer: &str, what: &str| {
+        out.push(
+            Diagnostic::new(code::UI_TEXT_SHADOW_INVALID, what.to_string())
+                .with_path(pointer)
+                .with_help("fix the field; `ludion explain L1622`"),
+        );
+    };
+    let non_finite = |field: &str| {
+        shadow
+            .get(field)
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_f64)
+                    .map(engine_number)
+                    .any(|channel| !channel.is_finite())
+            })
+    };
+    if non_finite("offset") {
+        reject(
+            "/shadow/offset",
+            "the text shadow offset must have finite components",
+        );
+    }
+    if non_finite("color") {
+        reject(
+            "/shadow/color",
+            "the text shadow color must have finite channels",
+        );
+    }
+    if let Some(softness) = shadow
+        .get("softness")
+        .and_then(Value::as_f64)
+        .map(engine_number)
+        && !(softness.is_finite() && (0.0..=1.0).contains(&softness))
+    {
+        reject(
+            "/shadow/softness",
+            "the text shadow softness must be finite and within 0..1",
+        );
+    }
+}
+
 /// Rejects a `rotation` that is not finite (`L1620`, `/rotation`). Shared by `UiRect`, `UiText` and
 /// `UiGroup`.
 pub(crate) fn validate_rotation(value: &Value, out: &mut Vec<Diagnostic>) {

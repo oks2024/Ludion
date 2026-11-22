@@ -1,0 +1,271 @@
+# Feature: `shadow` on UiText and UiList (Plan/ui-hud.md W5b): a copy of the ink drawn under the glyph
+# fill in the one UI text draw, over saturated and white bands that stand in for a bright bloom scene.
+# - White band: Inter (SDF) with a hard shadow and a soft one (`softness` blurs the SDF).
+# - Yellow band: Silkscreen (bitmap) with a hard shadow, and an outlined and shadowed Inter line.
+# - Magenta band: the embedded 8x8 face with a hard shadow, and a shadowed UiList on the right.
+# - Cyan band: shadowed text inside a scaled (0.8), rotated (10 degrees), half-opaque `UiGroup` with a
+#   `rect` clip cutting it.
+# No softness sits on a bitmap face, so the scene is warning-free.
+format: 1
+name: "ui-text-shadow - UiText and UiList shadows on SDF, bitmap and embedded faces"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - name: band-white
+    components:
+      UiRect:
+        offset:
+          - 0.0
+          - 0.0
+        size:
+          - 1920.0
+          - 270.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        order: 0
+  - name: band-yellow
+    components:
+      UiRect:
+        offset:
+          - 0.0
+          - 270.0
+        size:
+          - 1920.0
+          - 270.0
+        color:
+          - 1.0
+          - 0.85
+          - 0.1
+          - 1.0
+        order: 0
+  - name: band-magenta
+    components:
+      UiRect:
+        offset:
+          - 0.0
+          - 540.0
+        size:
+          - 1920.0
+          - 270.0
+        color:
+          - 1.0
+          - 0.1
+          - 0.6
+          - 1.0
+        order: 0
+  - name: band-cyan
+    components:
+      UiRect:
+        offset:
+          - 0.0
+          - 810.0
+        size:
+          - 1920.0
+          - 270.0
+        color:
+          - 0.1
+          - 0.9
+          - 1.0
+          - 1.0
+        order: 0
+  - name: inter-hard
+    components:
+      UiText:
+        text: Shadow Inter
+        size: 110.0
+        offset:
+          - 40.0
+          - 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: body
+        order: 1
+        shadow:
+          offset:
+            - 6.0
+            - 6.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 0.7
+  - name: inter-soft
+    components:
+      UiText:
+        text: Shadow Inter
+        size: 110.0
+        offset:
+          - 40.0
+          - 140.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: body
+        order: 1
+        shadow:
+          offset:
+            - 8.0
+            - 8.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 0.8
+          softness: 0.8
+  - name: silk-hard
+    components:
+      UiText:
+        text: PIXEL SHADOW
+        size: 40.0
+        offset:
+          - 40.0
+          - 290.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: pixel
+        order: 1
+        shadow:
+          offset:
+            - 4.0
+            - 4.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 0.7
+  - name: inter-outlined
+    components:
+      UiText:
+        text: "Outline + shadow"
+        size: 80.0
+        offset:
+          - 40.0
+          - 360.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: body
+        order: 1
+        outline:
+          width: 3.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 1.0
+        shadow:
+          offset:
+            - 5.0
+            - 5.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 0.8
+  - name: embedded-hard
+    components:
+      UiText:
+        text: EMBEDDED SHADOW
+        size: 32.0
+        offset:
+          - 40.0
+          - 560.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        order: 1
+        shadow:
+          offset:
+            - 4.0
+            - 4.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 0.7
+  - name: menu
+    components:
+      UiList:
+        anchor: top_right
+        offset:
+          - -40.0
+          - 560.0
+        title: Menu
+        items:
+          - text: Resume
+          - text: Options
+          - text: Quit
+        size: 56.0
+        padding: 0.0
+        font: body
+        order: 1
+        shadow:
+          offset:
+            - 4.0
+            - 4.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 0.8
+  - name: clip-group
+    components:
+      UiGroup:
+        offset:
+          - 960.0
+          - 830.0
+        size:
+          - 880.0
+          - 200.0
+        scale: 0.8
+        rotation: 10.0
+        opacity: 0.5
+        clip: rect
+  - name: clip-text
+    components:
+      UiText:
+        text: CLIPPED SHADOW TEXT
+        size: 120.0
+        offset:
+          - 20.0
+          - 50.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        font: body
+        order: 2
+        shadow:
+          offset:
+            - 8.0
+            - 8.0
+          color:
+            - 0.0
+            - 0.0
+            - 0.0
+            - 0.8
+        group:
+          index: 11
+          generation: 0

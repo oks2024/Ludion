@@ -420,10 +420,16 @@ pub(crate) fn transform_instances(
                 turn(rotation);
             }
             UiInstance::Text {
-                quads, rotation, ..
+                quads,
+                shadow,
+                rotation,
+                ..
             } => {
                 for q in quads {
                     q.pos = [x(q.pos[0]), y(q.pos[1]), x(q.pos[2]), y(q.pos[3])];
+                }
+                if let Some(shadow) = shadow {
+                    shadow.offset_px = shadow.offset_px.map(|c| c * scale);
                 }
                 turn(rotation);
             }
@@ -479,10 +485,18 @@ fn multiply_alpha(instances: &mut [UiEntry], opacity: f32) {
     for (_, _, instance) in instances {
         match instance {
             UiInstance::Rect { color, .. } => color[3] *= opacity,
-            UiInstance::Text { color, outline, .. } => {
+            UiInstance::Text {
+                color,
+                outline,
+                shadow,
+                ..
+            } => {
                 color[3] *= opacity;
                 if let Some(outline) = outline {
                     outline.color[3] *= opacity;
+                }
+                if let Some(shadow) = shadow {
+                    shadow.color[3] *= opacity;
                 }
             }
             UiInstance::Shape { fill, stroke, .. } => {
@@ -735,11 +749,14 @@ fn rotate_into_group(instances: &mut [UiEntry], xf: &GroupXf) {
                 let [x, y] = place([r[0], r[1]]);
                 *r = [x, y, r[2] * xf.scale, r[3] * xf.scale];
             }
-            UiInstance::Text { quads, .. } => {
+            UiInstance::Text { quads, shadow, .. } => {
                 for q in quads {
                     let [x0, y0] = place([q.pos[0], q.pos[1]]);
                     let [x1, y1] = place([q.pos[2], q.pos[3]]);
                     q.pos = [x0, y0, x1, y1];
+                }
+                if let Some(shadow) = shadow {
+                    shadow.offset_px = shadow.offset_px.map(|c| c * xf.scale);
                 }
             }
             UiInstance::Shape {
@@ -929,6 +946,7 @@ mod tests {
                 font: None,
                 clip: UiClip::NONE,
                 outline: None,
+                shadow: None,
                 rotation: UiRotation::NONE,
             },
         )
@@ -975,6 +993,46 @@ mod tests {
             };
             assert_eq!(color[3], 0.5);
         }
+    }
+
+    /// A group of scale 2 and opacity 0.5 doubles a shadow's offset and halves its alpha, on both
+    /// the plain and the rotated-group path.
+    #[test]
+    fn a_group_scales_a_shadow_offset_and_fades_its_alpha() {
+        let shadowed = || {
+            let mut row = text([2.0, 3.0, 9.0, 11.0]);
+            let UiInstance::Text { shadow, .. } = &mut row.2 else {
+                unreachable!()
+            };
+            *shadow = Some(ludion_renderer::GlyphShadow {
+                offset_px: [3.0, -5.0],
+                color: [0.0, 0.0, 0.0, 0.8],
+                softness: 0.5,
+            });
+            row
+        };
+        let shadow_of = |row: &UiEntry| {
+            let UiInstance::Text { shadow, .. } = &row.2 else {
+                unreachable!()
+            };
+            shadow.unwrap()
+        };
+        let mut rows = vec![shadowed()];
+        transform_instances(&mut rows, [5.0, 5.0], 2.0, [0.0, 0.0]);
+        multiply_alpha(&mut rows, 0.5);
+        let s = shadow_of(&rows[0]);
+        assert_eq!(s.offset_px, [6.0, -10.0]);
+        assert_eq!(s.color[3], 0.4);
+        assert_eq!(s.softness, 0.5);
+
+        let mut rows = vec![shadowed()];
+        let xf = GroupXf {
+            scale: 2.0,
+            rotation: 0.3,
+            ..identity_xf()
+        };
+        apply_group(&mut rows, 0, Some(xf));
+        assert_eq!(shadow_of(&rows[0]).offset_px, [6.0, -10.0]);
     }
 
     fn identity_xf() -> GroupXf {

@@ -109,8 +109,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var fill_cov: f32;
     var out_cov: f32;
     if in.sdf > 0.5 {
-        fill_cov = smoothstep(0.5 - w, 0.5 + w, raw);
-        out_cov = smoothstep(in.ol_param.y - w, in.ol_param.y + w, raw);
+        if in.ol_param.z > 0.0 {
+            // A soft shadow widens each edge by a fraction of the field band below it; the lower
+            // bound stays above 0, so coverage is 0 at the quad's padded edge.
+            let hf = in.ol_param.z * max(0.5 - 2.0 * w, 0.0);
+            let ho = in.ol_param.z * max(in.ol_param.y - 2.0 * w, 0.0);
+            fill_cov = smoothstep(0.5 - w - hf, 0.5 + w + hf, raw);
+            out_cov = smoothstep(in.ol_param.y - w - ho, in.ol_param.y + w + ho, raw);
+        } else {
+            fill_cov = smoothstep(0.5 - w, 0.5 + w, raw);
+            out_cov = smoothstep(in.ol_param.y - w, in.ol_param.y + w, raw);
+        }
     } else {
         let texel = 1.0 / vec2<f32>(textureDimensions(atlas_tex, 0));
         let k = i32(in.ol_param.y);

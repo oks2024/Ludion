@@ -3376,6 +3376,7 @@ impl Renderer {
                         font,
                         clip,
                         outline,
+                        shadow,
                         rotation,
                         ..
                     }) = ui.get(i)
@@ -3391,6 +3392,7 @@ impl Renderer {
                             clip,
                             rotation,
                             outline.as_ref().map(|o| (o, spread_px, atlas_dims)),
+                            shadow.as_ref(),
                         );
                         i += 1;
                     }

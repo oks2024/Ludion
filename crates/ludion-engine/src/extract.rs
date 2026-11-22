@@ -1128,6 +1128,7 @@ fn extract_inner(
             let text = &*text_motion;
             let face = fonts.face(text.font.as_deref(), locale);
             let quads = ui::ui_text_draw(face, text, viewport);
+            let key = crate::diagnostics::offender_key(world, id);
             let draws = resolve_faces(
                 FaceSite {
                     fonts: &fonts,
@@ -1137,7 +1138,7 @@ fn extract_inner(
                     outline: text.outline.as_ref(),
                     size: text.size,
                     viewport,
-                    key: &crate::diagnostics::offender_key(world, id),
+                    key: &key,
                 },
                 &ui::faces_in(&quads),
                 project_root,
@@ -1147,7 +1148,15 @@ fn extract_inner(
                 &mut errors,
                 degraded,
             );
+            let shadow = ui::resolve_shadow(text.shadow.as_ref(), viewport);
             for (quads, font, outline) in ui::text_runs(quads, &draws) {
+                let shadow = ui::run_shadow(
+                    shadow,
+                    font.as_ref(),
+                    text.font.as_deref().unwrap_or("embedded"),
+                    &key,
+                    degraded,
+                );
                 ui_entries.push((
                     text.order,
                     id,
@@ -1158,6 +1167,7 @@ fn extract_inner(
                         font,
                         clip: UiClip::NONE,
                         outline,
+                        shadow,
                         rotation: UiRotation::NONE,
                     },
                 ));
@@ -1191,6 +1201,7 @@ fn extract_inner(
             if !list.items.is_empty() {
                 let face = fonts.face(list.font.as_deref(), locale);
                 let (layout, lines) = ui::ui_list_draw(face, list, viewport);
+                let key = crate::diagnostics::offender_key(world, id);
                 let draws = resolve_faces(
                     FaceSite {
                         fonts: &fonts,
@@ -1200,7 +1211,7 @@ fn extract_inner(
                         outline: list.outline.as_ref(),
                         size: list.size,
                         viewport,
-                        key: &crate::diagnostics::offender_key(world, id),
+                        key: &key,
                     },
                     &ui::faces_in(lines.iter().flat_map(|(_, quads)| quads)),
                     project_root,
@@ -1229,6 +1240,7 @@ fn extract_inner(
                 }
                 // Clamped, never a diagnostic: a game that shrinks a list mid-frame must not be able
                 // to author an error.
+                let shadow = ui::resolve_shadow(list.shadow.as_ref(), viewport);
                 let selected = (list.selected as usize).min(list.items.len() - 1);
                 // The line's own item index comes from `ui_list_lines`, so neither the title offset
                 // nor the visible window's start is re-derived here.
@@ -1242,6 +1254,13 @@ fn extract_inner(
                         Some(_) => list.color,
                     };
                     for (quads, font, outline) in ui::text_runs(quads, &draws) {
+                        let shadow = ui::run_shadow(
+                            shadow,
+                            font.as_ref(),
+                            list.font.as_deref().unwrap_or("embedded"),
+                            &key,
+                            degraded,
+                        );
                         ui_entries.push((
                             list.order,
                             id,
@@ -1255,6 +1274,7 @@ fn extract_inner(
                                 font,
                                 clip: UiClip::NONE,
                                 outline,
+                                shadow,
                                 rotation: UiRotation::NONE,
                             },
                         ));
@@ -1401,6 +1421,7 @@ fn extract_inner(
                             font,
                             clip: UiClip::NONE,
                             outline,
+                            shadow: None,
                             rotation: UiRotation::NONE,
                         },
                     ));

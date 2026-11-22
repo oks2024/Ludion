@@ -215,6 +215,18 @@ hit tests ignore it, and a group's opacity fades it with the text. A negative or
 
 `examples/gallery/ui-text-outline.yaml` shows each case over bright bands; `cargo run -p ludion --example font_text` builds one.
 
+## Shadow
+
+`shadow: { offset, color, softness }` on `UiText` and `UiList` draws a copy of the ink (the glyphs, plus the outline when there is one) in `color`, moved by `offset` canvas units (+Y down), under the text. `softness` (`0`..`1`, default `0`) blurs it. A `color` alpha of `0` draws nothing. It is ink, not layout: measuring, wrapping, the rotation pivot and `ui_hit` ignore it, and a group's opacity fades it and its scale scales `offset`. A non-finite `offset` or `color`, or a `softness` outside `[0, 1]`, is `L1622`.
+
+- **The shadow is the text's silhouette**, so it turns and scales with the text (a rotated text's shadow turns about the same pivot), and an outlined text casts one flat shape in the shadow colour.
+- **SDF faces** blur it by `softness`, a fraction of the face's field band (`1` is the widest the field allows).
+- **Bitmap faces** (the embedded 8x8 among them) draw it hard; a `softness` above `0` there is ignored and warns `L2307` once per element, naming the face. The offset is not rounded to source pixels.
+- **Order.** A run draws every shadow glyph before its fills, so a later glyph's shadow never covers an earlier glyph. Across runs (a `UiList` line, or a fallback-face run) a later run's shadow can reach an earlier run's fill when the offset spans the line gap.
+- **Not on** `UiRadial`, `SubtitleView` or world `Text`.
+
+`examples/gallery/ui-text-shadow.yaml` shows each case over bright bands; `cargo run -p ludion --example font_text` builds one.
+
 ## Rotation
 
 `rotation: <degrees>` on `UiRect`, `UiText` and `UiGroup` turns the element **clockwise on screen** (`0`, the default, draws as before; a non-finite value is `L1620`). The pivot is the centre of what the element draws: a rect's box (a nine-slice's nine pieces share one), a text run's glyph bounds, a group's box. A `UiTween` `rotation` track adds to the authored value. `UiList` and `UiRadial` have no field; rotate them through a group. A `UiShape` has its own `rotation`, about its origin (`ludion docs ui-shapes`).

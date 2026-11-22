@@ -226,6 +226,7 @@ pub(crate) fn radial_draw(
                     font,
                     clip: UiClip::NONE,
                     outline,
+                    shadow: None,
                     rotation: UiRotation::NONE,
                 });
             }

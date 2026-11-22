@@ -50,7 +50,7 @@ pub use ludion_components::ui::UiNav;
 pub use radial::{RadialItemLayout, RadialLayout, radial_hit, radial_layout};
 pub use shape::ui_shape_hit;
 
-use crate::components::{Anchor, TextOutline, UiList, UiRect, UiText};
+use crate::components::{Anchor, TextOutline, TextShadow, UiList, UiRect, UiText};
 use ludion_components::ui::{
     UiClock, UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat,
 };
@@ -60,7 +60,7 @@ use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::time::TickRate;
 pub use ludion_font::FontFace;
 use ludion_font::{GlyphQuad, TextLayout, YAxis, fold_line_breaks, layout};
-use ludion_renderer::{FontDraw, GlyphOutline};
+use ludion_renderer::{FontDraw, GlyphOutline, GlyphShadow};
 
 /// The reference canvas is always this many units tall; width is `CANVAS_HEIGHT * aspect`.
 const CANVAS_HEIGHT: f32 = 1080.0;
@@ -445,6 +445,52 @@ pub(crate) fn resolve_outline(
         color: outline.color,
         texels: resolved,
     })
+}
+
+/// Resolves a text `shadow` to pixels (`offset_px = offset * pixel_scale`), or `None` when it draws
+/// nothing (no shadow, alpha 0).
+pub(crate) fn resolve_shadow(
+    shadow: Option<&TextShadow>,
+    viewport: (u32, u32),
+) -> Option<GlyphShadow> {
+    let shadow = shadow?;
+    if shadow.color[3] <= 0.0 {
+        return None;
+    }
+    let scale = pixel_scale(viewport);
+    Some(GlyphShadow {
+        offset_px: [shadow.offset[0] * scale, shadow.offset[1] * scale],
+        color: shadow.color,
+        softness: shadow.softness,
+    })
+}
+
+/// The shadow one text run draws: a face that is not SDF cannot blur it, so its softness is zeroed
+/// and the degraded `L2307` is recorded once, keyed `"{key}/ui-shadow-softness"`, naming `face_name`.
+pub(crate) fn run_shadow(
+    shadow: Option<GlyphShadow>,
+    font: Option<&FontDraw>,
+    face_name: &str,
+    key: &str,
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> Option<GlyphShadow> {
+    let mut shadow = shadow?;
+    if font.is_some_and(|f| f.sdf) || shadow.softness <= 0.0 {
+        return Some(shadow);
+    }
+    shadow.softness = 0.0;
+    let key = format!("{key}/ui-shadow-softness");
+    if !degraded.iter().any(|(k, _)| *k == key) {
+        degraded.push((
+            key,
+            Diagnostic::new(
+                code::UI_TEXT_SHADOW_SOFTNESS_IGNORED,
+                format!("the shadow softness is ignored on the `{face_name}` face, which is not SDF; drawn hard"),
+            )
+            .with_help("set `shadow.softness` to 0, or use an SDF face; `ludion explain L2307`"),
+        ));
+    }
+    Some(shadow)
 }
 
 /// Resolves a [`UiText`] to the pixel-space rect `[x, y, w, h]` of the block it draws — wrapped to
@@ -1397,6 +1443,56 @@ mod tests {
         assert!((sdf.texels - (4.0 - 1.0 / ppt)).abs() < 1e-4);
         assert_eq!(degraded.len(), 2);
         assert_eq!(degraded[1].0, "e2/ui-outline-width");
+    }
+
+    fn shadow(softness: f32, alpha: f32) -> TextShadow {
+        TextShadow {
+            offset: [4.0, 2.0],
+            color: [0.0, 0.0, 0.0, alpha],
+            softness,
+        }
+    }
+
+    /// `offset_px` is the canvas offset times the pixel scale; alpha 0 draws nothing.
+    #[test]
+    fn shadow_resolves_to_pixels() {
+        let at_1080 = resolve_shadow(Some(&shadow(0.5, 1.0)), (1920, 1080)).unwrap();
+        assert_eq!(at_1080.offset_px, [4.0, 2.0]);
+        assert_eq!(at_1080.softness, 0.5);
+        let at_4k = resolve_shadow(Some(&shadow(0.0, 1.0)), (3840, 2160)).unwrap();
+        assert_eq!(at_4k.offset_px, [8.0, 4.0]);
+        assert!(resolve_shadow(Some(&shadow(0.5, 0.0)), (1920, 1080)).is_none());
+        assert!(resolve_shadow(None, (1920, 1080)).is_none());
+    }
+
+    /// A bitmap face zeroes the softness and records `L2307` once under its key; an SDF face keeps it.
+    #[test]
+    fn shadow_softness_is_ignored_on_a_bitmap_face() {
+        let resolved = resolve_shadow(Some(&shadow(0.6, 1.0)), (1920, 1080));
+        let sdf = FontDraw {
+            texture: 0,
+            sdf: true,
+            spread_px: 4,
+        };
+        let bitmap = FontDraw { sdf: false, ..sdf };
+        let mut degraded = Vec::new();
+
+        let kept = run_shadow(resolved, Some(&sdf), "body", "e1", &mut degraded).unwrap();
+        assert_eq!(kept.softness, 0.6);
+        assert!(degraded.is_empty());
+
+        for face in [None, Some(&bitmap)] {
+            let hard = run_shadow(resolved, face, "embedded", "e1", &mut degraded).unwrap();
+            assert_eq!(hard.softness, 0.0);
+        }
+        assert_eq!(degraded.len(), 1, "once per key");
+        assert_eq!(degraded[0].0, "e1/ui-shadow-softness");
+        assert_eq!(degraded[0].1.code, code::UI_TEXT_SHADOW_SOFTNESS_IGNORED);
+        assert!(degraded[0].1.message.contains("embedded"));
+
+        let hard_authored = resolve_shadow(Some(&shadow(0.0, 1.0)), (1920, 1080));
+        run_shadow(hard_authored, None, "embedded", "e2", &mut degraded);
+        assert_eq!(degraded.len(), 1, "no softness, no warning");
     }
 
     use super::*;

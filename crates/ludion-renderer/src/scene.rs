@@ -990,6 +990,18 @@ pub struct GlyphOutline {
     pub texels: f32,
 }
 
+/// A shadow drawn under a UI text run: a copy of its ink (fill plus outline) in `color`, moved by
+/// `offset_px` before the run's rotation turns it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct GlyphShadow {
+    /// Pixel-space offset, +Y down.
+    pub offset_px: [f32; 2],
+    /// Linear straight RGBA of the shadow.
+    pub color: [f32; 4],
+    /// Blur as a `0..=1` fraction of the SDF field band; `0` on a bitmap face (a hard copy).
+    pub softness: f32,
+}
+
 /// A run of text placed in world space.
 ///
 /// `ludion-engine`'s extract lays the text out (`ludion_font::layout`) and hands the renderer the
@@ -1200,6 +1212,8 @@ pub enum UiInstance {
         clip: UiClip,
         /// An outline drawn under the glyphs, or `None`.
         outline: Option<GlyphOutline>,
+        /// A shadow drawn under the outline and glyphs, or `None`.
+        shadow: Option<GlyphShadow>,
         /// The element's rotation; `quads` stay axis-aligned.
         rotation: UiRotation,
     },
