@@ -2347,6 +2347,13 @@ pub mod code {
     /// declared under the scene's `render_layers:`.
     pub const RENDER_LAYER_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L2376");
 
+    /// `L2377` — a `PostProfile` a `RenderView` names authors a field a view never runs (`ssao`, `ssr`,
+    /// `dof`, `shafts`, `fog_density`).
+    pub const POST_PROFILE_VIEW_IGNORED: DiagnosticCode = DiagnosticCode::new("L2377");
+
+    /// `L2378` — a `PostProfile` is not valid, or a `RenderView.post` names no profile.
+    pub const POST_PROFILE_INVALID: DiagnosticCode = DiagnosticCode::new("L2378");
+
     /// `L2380` — a `Rain` field is non-finite or out of range.
     pub const RAIN_INVALID: DiagnosticCode = DiagnosticCode::new("L2380");
 
@@ -11455,6 +11462,30 @@ Fix: declare the layer once at the top of the scene, or correct the spelling.
       - name: radar",
     },
     CodeEntry {
+        code: code::POST_PROFILE_VIEW_IGNORED,
+        severity: Severity::Warning,
+        title: "a view ignores a PostProfile field",
+        explanation: "A `PostProfile` that a `RenderView.post` names authors `ssao`, `ssr`, `dof`, `shafts` or a
+`fog_density` above 0 on its `PostProcess` (JSON Pointer `/entities/<i>/components/PostProcess/<field>`). A view
+never runs those passes, and it takes its medium (`fog_*`) from the scene's own `PostProcess`, so the field has no
+effect there. `check-scene` and `scene.check` report it; extract does not.
+
+Fix: remove the field from the profile; the profile carries the look (grade, bloom, tonemap, exposure, LUT).",
+    },
+    CodeEntry {
+        code: code::POST_PROFILE_INVALID,
+        severity: Severity::Error,
+        title: "PostProfile is not valid",
+        explanation: "A `PostProfile` has an empty `name` or the reserved name `none` (JSON Pointer `/name`), shares its
+name with another profile, or sits on an entity without a `PostProcess`. Also raised when a `RenderView.post` names no
+profile (`/entities/<i>/components/RenderView/post`, with the nearest profile name when one is close); `none` is the
+one name that is not a profile: it renders the view with no look at all.
+
+Fix: give each profile its own name, put it beside a `PostProcess`, and spell `RenderView.post` as the profile does.
+
+    PostProfile: { name: radar-feed }",
+    },
+    CodeEntry {
         code: code::RAIN_INVALID,
         severity: Severity::Error,
         title: "Rain field out of range",
@@ -14940,6 +14971,8 @@ mod tests {
         code::RENDER_VIEW_BUDGET,
         code::RENDER_LAYERS_INVALID,
         code::RENDER_LAYER_UNKNOWN,
+        code::POST_PROFILE_VIEW_IGNORED,
+        code::POST_PROFILE_INVALID,
         code::RAIN_INVALID,
         code::RAIN_DUPLICATE,
         code::RAIN_STREAK_BUDGET,
@@ -15341,6 +15374,7 @@ mod tests {
             code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
             code::MESH_BLEND_ON_VIEWMODEL,
             code::RENDER_VIEW_BUDGET,
+            code::POST_PROFILE_VIEW_IGNORED,
             code::RAIN_DUPLICATE,
             code::RAIN_STREAK_BUDGET,
             code::SCREEN_EFFECT_CAP,

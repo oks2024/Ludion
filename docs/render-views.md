@@ -25,6 +25,10 @@ entities:
         enabled: true          # default true
         order: 0               # lowest first; ties by entity
         layers: [default, radar]   # what the view draws; absent draws [default] (Render layers below)
+        background: { color: [0.0, 0.03, 0.01] }  # linear HDR clear; default sky
+        shading: unlit         # lit (default) | unlit: albedo + emissive only
+        fog: false             # default true; false drops the medium in this view
+        post: radar-feed       # absent = the scene's PostProcess; none = no look; else a PostProfile name
   - name: radar-window
     components:
       UiRect:
@@ -80,6 +84,26 @@ the nearest declared name, for an undeclared name in `RenderLayers`, `Camera.lay
 `RenderView.layers`/`lights`. Load and extract do not, so a name inserted at runtime still renders. A scene file only: a
 prefab, an override and `generate-map` carry none.
 
+## Look
+A view can look different from the world it draws:
+- `background`: `sky` (default) or `{ color: [r, g, b] }`, linear HDR, each component finite and `>= 0`. A colour replaces
+  the clear and drops the sky draw in that view; the lighting still uses the `Environment`. The texture is opaque: a
+  translucent panel is `UiRect.color`'s alpha.
+- `shading: unlit`: albedo plus emissive (and rim); no lights, sun, shadows from lights, GI, probes or environment light.
+- `fog: false`: the medium (`fog_*`) is off in this view only. A view's fog always comes from the scene's `PostProcess`.
+- `post`: absent renders with the scene's imaging, `none` with no look at all (no tonemap, bloom, meter or LUT; a
+  neutral grade; dither stays), a name with that `PostProfile`'s look. A `PostProfile { name }` beside a `PostProcess`
+  makes that `PostProcess` a named profile: it carries the grade, bloom, tonemap, exposure and LUT a view takes, and it
+  is **not** the scene's `PostProcess`. A view's `ScreenEffect` still runs last.
+
+```yaml
+  - name: radar-look
+    presentation: true
+    components:
+      PostProfile: { name: radar-feed }
+      PostProcess: { tonemap: none, exposure: 1.0, bloom_strength: 0.0, gain: [0.4, 1.0, 0.5] }
+```
+
 ## Light layers
 A light joins layers through `RenderLayers` like any entity (a child light inherits its parent's). A point or spot light
 lights an image when its layers meet that image's **light mask**:
@@ -110,8 +134,10 @@ release) prints the summed pass GPU time at 512² and 256².
 - `L2374` (warning): more than 4 enabled views.
 - `L2375` (error): an empty `layers`/`lights` list, an empty or repeated layer name, more than 31 names besides `default`, or a bad `render_layers:` entry.
 - `L2376` (error): a layer name the scene's `render_layers:` does not declare (check-scene only).
+- `L2377` (warning): a `PostProfile` a view names authors `ssao`, `ssr`, `dof`, `shafts` or `fog_density > 0`: a view never runs those and takes its fog from the scene (check-scene only).
+- `L2378` (error): a `PostProfile` with an empty name, the name `none`, a repeated name or no `PostProcess` beside it, or a `RenderView.post` naming no profile (extract raises it too, with the nearest name).
 
-`ludion check-scene` reports `L2370`–`L2373` and the list shape of `L2375` statically, with pointers. `ludion explain L2370` gives the fix.
+`ludion check-scene` reports `L2370`–`L2373`, the list shape of `L2375`, `L2377` and `L2378` statically, with pointers. `ludion explain L2370` gives the fix.
 
 ## Gotchas
 - A view is a presentation read: it sees the world as the last extract left it, never writes sim state, and a game
@@ -119,10 +145,15 @@ release) prints the summed pass GPU time at 512² and 256².
 - The windowed presenter does not interpolate a view's camera between ticks, so a fast-moving view camera may judder
   live; headless renders are exact.
 - A rect whose view is disabled shows nothing, not the clear colour.
+- `unlit` is a derived scene, not a shader variant: it drops the lights, sun, GI, probes and environment lighting and
+  lights with a flat ambient of 1, so a surface reads its albedo. The sky still draws unless `background` is a colour.
+- A profile's fog is ignored (the world's medium, `fog: false` to drop it), and `ssao`, `ssr`, `dof` and `shafts` never run
+  in a view. A view with a `post` takes the profile's LUT, not the scene's; `none` takes none.
 - A view whose `lights` or `sun` differ from the main frame's draws without global illumination, so it never rebakes
   the main frame's volume and does not pick up its bounce light. Probes keep the main frame's capture: a lit view near
   a probe reflects the main frame's lights.
 
 The gallery scenes are `examples/gallery/render-view-radar.yaml` (the room in perspective, and from above in the
-corner) `render-view-layers.yaml` (a blue marker only on the radar, a green one only in the main frame) and
-`render-view-portrait.yaml` (a figure lit only by its own key light in a bottom-left panel, absent from the main frame).
+corner) `render-view-layers.yaml` (a blue marker only on the radar, a green one only in the main frame) 
+`render-view-portrait.yaml` (a figure lit only by its own key light in a bottom-left panel, absent from the main frame) and
+`render-view-unlit.yaml` (a flat green unlit radar with its own background, no fog and a `PostProfile`, beside a fogged lit room).

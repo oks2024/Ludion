@@ -8253,6 +8253,21 @@
       }
     }
   },
+  "PostProfile": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PostProfile",
+    "description": "Makes the `PostProcess` on this entity a named look a [`RenderView`] takes with `post: <name>`, and\nremoves it from the main frame: the main frame's `PostProcess` is the lowest-id one without a profile.\nA view takes the profile's grade, bloom, tonemap, exposure and LUT; its fog is the scene's, and its\n`ssao`, `ssr`, `dof` and `shafts` never run in a view (`L2377`).\n\n```\nuse ludion_components::PostProfile;\n\nlet p: PostProfile = serde_json::from_value(serde_json::json!({ \"name\": \"radar-feed\" })).unwrap();\nassert_eq!(p.name, \"radar-feed\");\n```",
+    "type": "object",
+    "properties": {
+      "name": {
+        "description": "The name a `RenderView.post` uses; unique per scene, not empty, not `none`.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
   "PrefabInstance": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "PrefabInstance",
@@ -8629,11 +8644,76 @@
       "sun": {
         "description": "Whether the scene's `DirectionalLight` lights the view (default true). `false` drops the sun from the\nview only; it needs no layer.",
         "type": "boolean"
+      },
+      "background": {
+        "description": "What the view clears to: `sky` (default) or `{ color: [r, g, b] }`, linear HDR, each component finite and\n`>= 0`. A colour replaces the clear and drops the sky draw in this view.",
+        "$ref": "#/$defs/ViewBackground"
+      },
+      "shading": {
+        "description": "`lit` (default) or `unlit`: albedo and emissive only, with no lights, sun, GI, probes or environment.",
+        "$ref": "#/$defs/ViewShading"
+      },
+      "fog": {
+        "description": "Whether the scene's fog applies in this view (default true). `false` zeroes the medium here only.",
+        "type": "boolean"
+      },
+      "post": {
+        "description": "The look the view takes: absent is the scene's `PostProcess`, `none` is no look at all, else the name of a\n`PostProfile`. The fog always comes from the scene. Absent is omitted from the document.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [
       "name"
-    ]
+    ],
+    "$defs": {
+      "ViewBackground": {
+        "description": "What a [`RenderView`] clears to.",
+        "oneOf": [
+          {
+            "description": "The scene's sky, as the main frame draws it.",
+            "type": "string",
+            "const": "sky"
+          },
+          {
+            "description": "A flat linear HDR colour `[r, g, b]`; the view texture has no alpha.",
+            "type": "object",
+            "properties": {
+              "color": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "float"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              }
+            },
+            "required": [
+              "color"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ViewShading": {
+        "description": "How a [`RenderView`] shades.",
+        "oneOf": [
+          {
+            "description": "The scene's lighting.",
+            "type": "string",
+            "const": "lit"
+          },
+          {
+            "description": "Albedo plus emissive; no lights, sun, GI, probes or environment.",
+            "type": "string",
+            "const": "unlit"
+          }
+        ]
+      }
+    }
   },
   "Residue": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

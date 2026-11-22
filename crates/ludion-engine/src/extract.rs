@@ -52,9 +52,9 @@ use crate::components::{
     Animation, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
     DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
     GroundMarkerGrid, GroundMarkerShape, MapWrap, Mesh, MeshBlend, MeshGrid, MeshSource,
-    ParentJoint, ParticleEmitter, PointLight, PostProcess, ProbeShape, Projection, ReflectionProbe,
-    Rim, SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap, TonemapOperator, Transform,
-    UiList, UiRadial, UiRect, UiShape, UiText,
+    ParentJoint, ParticleEmitter, PointLight, PostProcess, PostProfile, ProbeShape, Projection,
+    ReflectionProbe, Rim, SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap, TonemapOperator,
+    Transform, UiList, UiRadial, UiRect, UiShape, UiText,
 };
 use crate::components::{AnimationLayer, AnimationLayers, BlendClock, LayerMode, layer_weight_at};
 use crate::components::{ExposureMode, GrainMotion, Metering};
@@ -1024,7 +1024,7 @@ fn extract_inner(
         rate: sim_now.rate(),
     };
     let mut groups = ui::group::UiGroups::default();
-    let view_table = crate::secondary_view::extract_views(
+    let mut view_table = crate::secondary_view::extract_views(
         world,
         &ids,
         frame_layers.as_ref(),
@@ -1878,6 +1878,14 @@ fn extract_inner(
     let sun = extract_sun(world, &ids);
     let post = extract_post(world, &ids, now);
     let lut = extract_lut(world, &ids, project_root, assets)?;
+    crate::secondary_view::resolve_view_posts(
+        &mut view_table,
+        world,
+        &ids,
+        now,
+        project_root,
+        assets,
+    )?;
     assets.extract_end(ExtractPhase::Lights);
     let screen_effects = crate::screen_effect::extract_screen_effects(
         world,
@@ -1898,6 +1906,8 @@ fn extract_inner(
         cull_camera: None,
         lod: scene_lod(world, &ids),
         ambient,
+        background: None,
+        unlit: false,
         textures,
         mesh_assets,
         statics: static_flat.range,
@@ -2341,8 +2351,22 @@ fn extract_environment(world: &World, ids: &[EntityId]) -> Option<EnvironmentDat
 /// post defaults, which are field for field the ones `PostProcess::default()` carries — a test in
 /// `ludion-renderer` pins the two together).
 fn extract_post(world: &World, ids: &[EntityId], now: GameTime) -> Option<PostData> {
-    let post = ids.iter().find_map(|&id| get::<PostProcess>(world, id))?;
-    Some(PostData {
+    main_post(world, ids).map(|(_, post)| post_data(post, now))
+}
+
+/// The `PostProcess` that images the main frame and its entity index: the lowest-`EntityId` one
+/// without a `PostProfile` (a profile is a view's named look, never the scene's).
+fn main_post<'w>(world: &'w World, ids: &[EntityId]) -> Option<(usize, &'w PostProcess)> {
+    ids.iter().enumerate().find_map(|(index, &id)| {
+        get::<PostProcess>(world, id)
+            .filter(|_| !world.has::<PostProfile>(id))
+            .map(|post| (index, post))
+    })
+}
+
+/// One `PostProcess` as the renderer's baked imaging.
+pub(crate) fn post_data(post: &PostProcess, now: GameTime) -> PostData {
+    PostData {
         bloom_threshold: post.bloom_threshold,
         bloom_strength: post.bloom_strength,
         exposure: post.exposure,
@@ -2402,7 +2426,7 @@ fn extract_post(world: &World, ids: &[EntityId], now: GameTime) -> Option<PostDa
         ssr_fade: post.ssr_fade,
         ssr_max_distance: post.ssr_max_distance,
         ssr_thickness: post.ssr_thickness,
-    })
+    }
 }
 
 /// The `.cube` LUT of the lowest-`EntityId` `PostProcess`, resolved through `assets`. A load failure
@@ -2413,13 +2437,20 @@ fn extract_lut(
     project_root: AssetRoot<'_>,
     assets: &mut dyn SceneAssets,
 ) -> Result<Option<ludion_renderer::LutData>, Vec<Diagnostic>> {
-    let Some((index, post)) = ids
-        .iter()
-        .enumerate()
-        .find_map(|(index, &id)| get::<PostProcess>(world, id).map(|post| (index, post)))
-    else {
+    let Some((index, post)) = main_post(world, ids) else {
         return Ok(None);
     };
+    lut_for(index, post, project_root, assets)
+}
+
+/// The `.cube` LUT of `post`, the `PostProcess` of entity `index`; a load failure is reported at its
+/// `lut/path`.
+pub(crate) fn lut_for(
+    index: usize,
+    post: &PostProcess,
+    project_root: AssetRoot<'_>,
+    assets: &mut dyn SceneAssets,
+) -> Result<Option<ludion_renderer::LutData>, Vec<Diagnostic>> {
     let Some(lut) = &post.lut else {
         return Ok(None);
     };
@@ -3937,10 +3968,19 @@ pub(crate) fn asset_refs(world: &World, project_root: AssetRoot<'_>) -> AssetRef
         GameTime::from_ticks(0, TickRate::DEFAULT),
     );
     let mut refs = AssetRefs::default();
-    if let Some(post) = ids.iter().find_map(|&id| get::<PostProcess>(world, id))
-        && let Some(lut) = &post.lut
+    // The main frame's LUT, and every profile's: a view takes the profile's.
+    let profile_luts = ids
+        .iter()
+        .filter(|&&id| world.has::<PostProfile>(id))
+        .filter_map(|&id| get::<PostProcess>(world, id));
+    for post in main_post(world, &ids)
+        .map(|(_, post)| post)
+        .into_iter()
+        .chain(profile_luts)
     {
-        refs.luts.insert(ludion_core::paths::normalize(&lut.path));
+        if let Some(lut) = &post.lut {
+            refs.luts.insert(ludion_core::paths::normalize(&lut.path));
+        }
     }
     for sprite in &placed.sprites {
         match (sprite.atlas, sprite.texture) {

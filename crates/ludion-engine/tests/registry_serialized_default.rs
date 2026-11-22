@@ -137,7 +137,12 @@ fn fixtures(name: &str) -> Vec<Value> {
         "RenderView" => vec![
             json!({ "name": "v" }),
             json!({ "name": "v", "size": [64, 32], "enabled": false, "order": -1, "layers": ["radar"] }),
+            json!({
+                "name": "v", "background": { "color": [0.0, 0.5, 0.25] }, "shading": "unlit",
+                "fog": false, "post": "p",
+            }),
         ],
+        "PostProfile" => vec![json!({ "name": "p" })],
         "RenderLayers" => vec![
             json!({ "layers": ["radar"] }),
             json!({ "layers": ["a", "b"] }),

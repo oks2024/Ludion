@@ -1,6 +1,6 @@
 # Plan: Secondary views
 
-> Status: **IN PROGRESS** (Neon Shroud request 0017; W1 and W2a mechanized). Usage is `ludion docs render-views`; the gallery scene is
+> Status: **IN PROGRESS** (Neon Shroud request 0017; W1–W2c mechanized). Usage is `ludion docs render-views`; the gallery scene is
 > `examples/gallery/render-view-radar.yaml`.
 
 ## Why
@@ -64,12 +64,29 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
 18. **GI follows the main frame.** The GI bake and inject are keyed on the light list and the sun, so a view whose `lights`
     or `sun` differ from the main frame's draws without GI and never rebakes the main volume. Probes keep the main frame's
     capture (D12): a lit view near a probe reflects the main frame's lights.
+20. **Background.** `ViewBackground { Sky, Color([f32; 3]) }`, the `ScreenEffectTarget` serde shape (`sky` | `{color: [..]}`),
+    skipped when `Sky`. Components finite and `>= 0` (`L2370` at `/background/color/<i>`). Opaque: the view texture has no
+    alpha; a translucent panel is `UiRect.color`'s alpha. A colour replaces the clear and drops the sky draw in that view.
+21. **Unlit is a derived scene, not a shader variant.** `view_scene` clears lights, spot lights, sun, GI, voxel, probes and
+    `probe_world`, sets `ambient = [1; 3]` and `RenderScene.unlit = true`; the renderer then resolves IBL as absent
+    (flat-ambient branch) while still drawing the sky. No new pipeline, no new pass.
+22. **Fog is the world's.** A view's `fog_*` fields are the scene `PostProcess`'s whatever its `post`; `fog: false` zeroes
+    `fog_density` only in that view.
+23. **`PostProfile { name }`.** A marker; it needs a `PostProcess` beside it. The main frame's singleton (and its LUT) is the
+    lowest-id `PostProcess` without `PostProfile`. A profile's LUT is honoured in its views. `L2378`: name not empty, not
+    `none`, unique; a view's `post` must name one.
+24. **`post: none`** is passthrough: `PostData::passthrough()` (bloom 0, exposure 1, no tonemap, no meter, no LUT, neutral
+    grade, every effect off; dither kept).
+25. **`L2377` (warning).** A profile a view names authors `ssao`, `ssr`, `dof`, `shafts` or `fog_density > 0`: a view never
+    runs those (D1) and takes the medium from the scene (D22). Static only (check-scene, `scene.check`).
+    Request differences: `L2377`/`L2378` stand for the request's `L2125`/`L2127`; `background.color` is RGB; a profile's fog is
+    ignored.
 19. **The main frame filters by `Camera.lights` too,** so a portrait key light on `portrait` stays out of a main camera on
     `[default]`.
 
 ## Waves
 
-- **W1** (this one): `RenderView`, `UiRect.view`, `views::render_views`, the budget, the gallery scene
+- **W1** (shipped): `RenderView`, `UiRect.view`, `views::render_views`, the budget, the gallery scene
   `render-view-radar`.
 - **W2a** (shipped): `RenderLayers` with `Parent` inheritance, `Camera.layers`, `RenderView.layers`, layer-filtered
   meshes, sprites, markers, shadows, decals, particles and text, `L2375`, the gallery scene `render-view-layers`.
@@ -77,7 +94,7 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   undeclared name from check-scene and `scene.check`.
 - **W2c** (shipped): lights join layers through `RenderLayers`, `Camera.lights`, `RenderView.lights` and `sun`, and the
   portrait gallery.
-- **W3:** `background`, `shading: unlit`, `fog`, `PostProfile`/`post`, and `L2125`.
+- **W3:** `background`, `shading: unlit`, `fog`, `PostProfile`/`post`, and `L2377`/`L2378`.
 - **W4:** `ludion render --view`/`--views-sheet`, `render.view {view}`, `render.bounds {camera}`, the `golden(view=)`
   test hook, `dump-graph` sub-graphs, a profile `views` section with a budget file, and presenter interpolation of
   view cameras.
@@ -108,6 +125,15 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   RTX 3090). A scene without a view keeps the same frame graph and bytes (`dump-graph` and the full gallery unchanged).
   View GPU time on the RTX 3090, a lit room, summed passes: 0.71 ms at 512², 0.65 ms at 256²
   (`needs_gpu_bench_view_gpu_ms`). Owed: the macOS twin of `render-view-radar` (M4).
+- **W3:** mechanized. `RenderView.background`/`shading`/`fog`/`post` and `PostProfile` (`ludion-components`), `L2377`/`L2378`,
+  `ViewPost`, `RenderViewData`'s look fields, `RenderScene.background`/`unlit` and `PostData::passthrough` (`ludion-renderer`),
+  `resolve_view_posts` and the profile-aware `extract_post`/`extract_lut` (`ludion-engine`), docs `render-views` and
+  `post-processing`, and the gallery scene `render-view-unlit` (blessed on the RTX 3090). A scene that authors none keeps the
+  same frame graph and bytes (`dump-graph` of `post-full`, `render-view-radar`, `render-view-portrait` and
+  `screen-effect-view` identical, the full gallery unchanged). API break: `RenderView` is not `Eq`; no external game names
+  it. Owed: the macOS twin of `render-view-unlit` (M4).
+- **W2b + W2c:** mechanized (r2410): the `render_layers:` block and `L2376`, `Camera.lights`, `RenderView.lights`/`sun`,
+  light masks, GI dropped for a view that lights differently, golden `render-view-portrait`. Owed: its macOS twin (M4).
 - **W2a:** mechanized. `RenderLayers` (`ludion-components`), `Camera.layers` and `RenderView.layers`, `L2375`,
   `RenderScene::retain`/`split_layers` and `RenderScene.layered` (`ludion-renderer`), the extract split with the blend keys
   following the filtered lists, `ludion docs render-views`, and the gallery scene `render-view-layers` (blessed on the

@@ -322,6 +322,10 @@ mod tests {
                     layers: u32::MAX,
                     lights: u32::MAX,
                     sun: true,
+                    background: None,
+                    unlit: false,
+                    fog: true,
+                    post: ludion_renderer::ViewPost::Scene,
                     screen_effects: Vec::new(),
                 });
             } else {

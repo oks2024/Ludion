@@ -354,6 +354,7 @@ pub use ludion_engine::{
 pub use ludion_engine::{
     PoseSnapshot, RagdollToAssembly, SnapshotPart, ragdoll_landing, switch_ragdoll_to_assembly,
 };
+pub use ludion_engine::{PostProfile, ViewBackground, ViewShading};
 pub use ludion_engine::{ScreenEffect, ScreenEffectPreset, ScreenEffectTarget, ScreenMaskKind};
 pub use ludion_engine::{UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
 pub use ludion_engine::{VoiceFilter, VoiceSpatial};

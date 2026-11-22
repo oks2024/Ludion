@@ -10,7 +10,7 @@
 use super::{CacheEviction, Renderer};
 use crate::graph::{AntiAliasing, FrameSize, PostChain, build_frame_graph};
 use crate::layers::Keep;
-use crate::scene::{RenderScene, Silhouettes, StaticRange};
+use crate::scene::{PostData, RenderScene, Silhouettes, StaticRange, ViewPost};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_render_graph::{RenderedImage, schedule};
 
@@ -19,14 +19,17 @@ use ludion_render_graph::{RenderedImage, schedule};
 /// other views, viewmodel, silhouettes, debug view, SSAO, SSR, depth of field, light shafts or light
 /// scatter, and with the view's own screen effects in place of the main frame's. Everything else,
 /// lights with their shadows, the sun with the main camera's cascade fit, the environment, GI and
-/// the probes, stays.
+/// the probes, stays, unless the view is `unlit`: then it has no lights, sun, GI, voxel grid or
+/// probes, a flat ambient of 1 and no environment lighting. The view's `background` replaces the
+/// clear and the sky; its `post` replaces the imaging (never the scene's fog, which `fog: false`
+/// zeroes for the view).
 ///
 /// # Panics
 /// If `index` is not a view of `scene`.
 ///
 /// # Example
 /// ```
-/// use ludion_renderer::{RenderScene, RenderViewData, view_scene};
+/// use ludion_renderer::{RenderScene, RenderViewData, ViewPost, view_scene};
 ///
 /// let mut scene = RenderScene::empty((1280, 720));
 /// scene.views.push(RenderViewData {
@@ -36,6 +39,10 @@ use ludion_render_graph::{RenderedImage, schedule};
 ///     layers: u32::MAX,
 ///     lights: u32::MAX,
 ///     sun: true,
+///     background: None,
+///     unlit: false,
+///     fog: true,
+///     post: ViewPost::Scene,
 ///     screen_effects: Vec::new(),
 /// });
 /// let derived = view_scene(&scene, 0);
@@ -80,9 +87,22 @@ pub fn view_scene(scene: &RenderScene, index: usize) -> RenderScene {
         keep.spot_lights = by_layer.spot_lights;
     }
     out.retain(&keep);
-    if !scene.views[index].sun {
+    let view = &scene.views[index];
+    if !view.sun {
         out.sun = None;
     }
+    if view.unlit {
+        out.lights.clear();
+        out.spot_lights.clear();
+        out.sun = None;
+        out.gi = None;
+        out.voxel = None;
+        out.probes.clear();
+        out.probe_world = None;
+        out.ambient = [1.0; 3];
+        out.unlit = true;
+    }
+    out.background = view.background;
     // The GI bake and inject are keyed on the lights and the sun: a view that lights differently draws
     // without GI rather than rebaking the main frame's volume.
     if out.lights != scene.lights || out.sun != scene.sun {
@@ -107,12 +127,30 @@ pub fn view_scene(scene: &RenderScene, index: usize) -> RenderScene {
     for light in &mut out.spot_lights {
         light.scatter = 0.0;
     }
-    let mut post = out.post.unwrap_or_default();
+    let world = out.post.unwrap_or_default();
+    let (mut post, lut) = match &view.post {
+        ViewPost::Scene => (world, out.lut.clone()),
+        ViewPost::Passthrough => (PostData::passthrough(), None),
+        ViewPost::Profile { post, lut } => (**post, lut.clone()),
+    };
+    // The medium is the world's, whatever the look.
+    post.fog_density = world.fog_density;
+    post.fog_color = world.fog_color;
+    post.fog_start = world.fog_start;
+    post.fog_height = world.fog_height;
+    post.fog_height_falloff = world.fog_height_falloff;
+    post.fog_albedo = world.fog_albedo;
+    post.fog_sky = world.fog_sky;
+    post.fog_anisotropy = world.fog_anisotropy;
+    if !view.fog {
+        post.fog_density = 0.0;
+    }
     post.ssao = 0.0;
     post.ssr = 0.0;
     post.shafts = 0.0;
     post.dof = 0.0;
     out.post = Some(post);
+    out.lut = lut;
     out
 }
 
@@ -175,7 +213,7 @@ impl Renderer {
     ///
     /// # Example
     /// ```no_run
-    /// use ludion_renderer::{RenderScene, RenderViewData, Renderer};
+    /// use ludion_renderer::{RenderScene, RenderViewData, Renderer, ViewPost};
     ///
     /// let renderer = Renderer::new()?;
     /// let mut scene = RenderScene::empty((1280, 720));
@@ -186,6 +224,10 @@ impl Renderer {
     ///     layers: u32::MAX,
     ///     lights: u32::MAX,
     ///     sun: true,
+    ///     background: None,
+    ///     unlit: false,
+    ///     fog: true,
+    ///     post: ViewPost::Scene,
     ///     screen_effects: Vec::new(),
     /// });
     /// let image = renderer.render_view(&scene, 0)?;

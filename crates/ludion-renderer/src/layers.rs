@@ -309,8 +309,8 @@ mod tests {
     use crate::render::view_scene;
     use crate::scene::{
         DecalBlend, DecalInstance, DecalMaps, DropShadowInstance, GiData, GroundMarkerShape,
-        MeshInstance, MeshShape, PointLightData, RenderViewData, SilhouetteMesh, SilhouetteStyle,
-        SpotLightData, SunData,
+        MeshInstance, MeshShape, PointLightData, PostData, RenderViewData, SilhouetteMesh,
+        SilhouetteStyle, SpotLightData, SunData, ViewPost,
     };
     use crate::viewmodel::{ViewmodelData, ViewmodelLocal, ViewmodelParticle};
     use ludion_core::ids::EntityId;
@@ -491,6 +491,10 @@ mod tests {
             layers,
             lights: layers,
             sun: true,
+            background: None,
+            unlit: false,
+            fog: true,
+            post: crate::scene::ViewPost::Scene,
             screen_effects: Vec::new(),
         });
         main
@@ -681,5 +685,140 @@ mod tests {
         assert_eq!(view.meshes.len(), 1);
         assert_eq!(view.meshes[0].model.w_axis.x, 5.0);
         assert_eq!(view.decals[0].receivers, DecalReceivers::Only(vec![0]));
+    }
+
+    fn lit_scene_with_view(edit: impl FnOnce(&mut RenderViewData)) -> RenderScene {
+        let mut scene = RenderScene::empty((64, 64));
+        scene.meshes = vec![mesh(0.0)];
+        scene.lights = vec![point(0.0)];
+        scene.sun = Some(sun());
+        scene.ambient = [0.1; 3];
+        let mut scene = with_view(scene, u32::MAX);
+        edit(&mut scene.views[0]);
+        scene
+    }
+
+    fn fogged(mut scene: RenderScene) -> RenderScene {
+        scene.post = Some(PostData {
+            fog_density: 0.04,
+            fog_color: [0.2, 0.3, 0.4],
+            fog_height: 3.0,
+            bloom_strength: 0.5,
+            contrast: 1.5,
+            ssao: 1.0,
+            ..PostData::default()
+        });
+        scene
+    }
+
+    #[test]
+    fn an_unlit_view_drops_every_light_and_the_environment() {
+        let mut scene = lit_scene_with_view(|v| v.unlit = true);
+        scene.probes = vec![crate::probe::ProbeData {
+            entity: EntityId::new(1, 0),
+            position: Vec3::ZERO,
+            rotation: ludion_core::math::glam::Quat::IDENTITY,
+            volume: crate::probe::ProbeVolume::Sphere { radius: 1.0 },
+            blend: 0.5,
+            priority: 0,
+        }];
+        scene.probe_world = Some(ProbeWorld::new(scene.clone()));
+        let view = view_scene(&scene, 0);
+        assert!(view.lights.is_empty() && view.spot_lights.is_empty() && view.sun.is_none());
+        assert!(view.gi.is_none() && view.voxel.is_none() && view.probes.is_empty());
+        assert!(view.probe_world.is_none());
+        assert_eq!(view.ambient, [1.0; 3]);
+        assert!(view.unlit);
+        assert_eq!(view.meshes.len(), 1);
+        // The main frame keeps its lights.
+        assert_eq!(scene.lights.len(), 1);
+        assert!(!scene.unlit);
+    }
+
+    #[test]
+    fn a_lit_view_keeps_its_lights_and_carries_a_background() {
+        let scene = lit_scene_with_view(|v| v.background = Some([0.0, 0.5, 0.25]));
+        let view = view_scene(&scene, 0);
+        assert_eq!(view.lights.len(), 1);
+        assert!(view.sun.is_some() && !view.unlit);
+        assert_eq!(view.ambient, [0.1; 3]);
+        assert_eq!(view.background, Some([0.0, 0.5, 0.25]));
+        assert_eq!(view_scene(&lit_scene_with_view(|_| {}), 0).background, None);
+    }
+
+    #[test]
+    fn fog_false_zeroes_only_the_density() {
+        let on = view_scene(&fogged(lit_scene_with_view(|_| {})), 0)
+            .post
+            .unwrap();
+        let off = view_scene(&fogged(lit_scene_with_view(|v| v.fog = false)), 0)
+            .post
+            .unwrap();
+        assert_eq!(on.fog_density, 0.04);
+        assert_eq!(off.fog_density, 0.0);
+        assert_eq!(
+            PostData {
+                fog_density: 0.04,
+                ..off
+            },
+            on
+        );
+    }
+
+    #[test]
+    fn a_profile_replaces_the_imaging_and_keeps_the_worlds_medium() {
+        let profile = PostData {
+            contrast: 0.5,
+            tonemap: crate::scene::TonemapOperator::None,
+            fog_density: 0.9,
+            fog_color: [1.0; 3],
+            ssao: 1.0,
+            ..PostData::default()
+        };
+        let scene = fogged(lit_scene_with_view(|v| {
+            v.post = ViewPost::Profile {
+                post: Box::new(profile),
+                lut: None,
+            }
+        }));
+        let post = view_scene(&scene, 0).post.unwrap();
+        assert_eq!(post.contrast, 0.5);
+        assert_eq!(post.tonemap, crate::scene::TonemapOperator::None);
+        assert_eq!(post.bloom_strength, PostData::default().bloom_strength);
+        assert_eq!((post.fog_density, post.fog_color), (0.04, [0.2, 0.3, 0.4]));
+        assert_eq!(post.fog_height, 3.0);
+        assert_eq!(post.ssao, 0.0);
+    }
+
+    #[test]
+    fn passthrough_is_neutral_and_drops_the_lut() {
+        let mut scene = fogged(lit_scene_with_view(|v| v.post = ViewPost::Passthrough));
+        scene.lut = Some(crate::scene::LutData {
+            lut: std::sync::Arc::new(ludion_assets::cube::identity(17)),
+            strength: 1.0,
+        });
+        let view = view_scene(&scene, 0);
+        let post = view.post.unwrap();
+        assert_eq!(post.tonemap, crate::scene::TonemapOperator::None);
+        assert_eq!(
+            (post.exposure, post.bloom_strength, post.contrast),
+            (1.0, 0.0, 1.0)
+        );
+        assert_eq!(post.fog_density, 0.04);
+        assert!(view.lut.is_none());
+    }
+
+    #[test]
+    fn a_default_look_equals_the_scene_post_with_the_view_zeroing() {
+        let scene = fogged(lit_scene_with_view(|_| {}));
+        let post = view_scene(&scene, 0).post.unwrap();
+        let expected = PostData {
+            ssao: 0.0,
+            ssr: 0.0,
+            shafts: 0.0,
+            dof: 0.0,
+            ..scene.post.unwrap()
+        };
+        assert_eq!(post, expected);
     }
 }

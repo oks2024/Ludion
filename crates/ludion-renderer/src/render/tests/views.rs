@@ -29,6 +29,10 @@ fn scene() -> RenderScene {
         layers: u32::MAX,
         lights: u32::MAX,
         sun: true,
+        background: None,
+        unlit: false,
+        fog: true,
+        post: crate::scene::ViewPost::Scene,
         screen_effects: Vec::new(),
     }];
     scene
@@ -415,4 +419,72 @@ fn needs_gpu_a_view_effect_moves_only_the_rect_that_shows_it() {
     }
     assert!(inside > 0, "the rect shows the filtered view");
     assert_eq!(outside, 0, "nothing outside the rect moves");
+}
+
+const ALBEDO: [f32; 3] = [0.6, 0.1, 0.1];
+const BACKDROP: [f32; 3] = [0.0, 0.25, 0.0];
+
+/// A red cube under a blue point light and a sun, beneath a lit sky; the main camera looks away from it
+/// and the view looks at it, unlit when asked, over a flat colour.
+fn look_scene(unlit: bool) -> RenderScene {
+    let mut scene = scene();
+    scene.meshes = vec![slab(Vec3::new(0.0, 0.0, -5.0), 2.0, ALBEDO)];
+    scene.meshes[0].material = [1.0, 0.0, 0.0];
+    scene.lights = vec![crate::scene::PointLightData {
+        position: Vec3::new(0.0, 1.0, -3.0),
+        color: Vec3::new(0.0, 0.0, 1.0),
+        intensity: 40.0,
+        range: 20.0,
+        dynamic: false,
+        shadow: None,
+        scatter: 0.0,
+    }];
+    scene.sun = Some(crate::scene::SunData {
+        direction: Vec3::new(0.3, -1.0, -0.4).normalize(),
+        color: Vec3::ONE,
+        light_space: Mat4::IDENTITY,
+        bias: 0.001,
+        angular_radius: 0.0,
+        cascades: None,
+    });
+    scene.environment = Some(test_env());
+    scene.ambient = [0.05; 3];
+    scene.views[0].unlit = unlit;
+    scene.views[0].background = Some(BACKDROP);
+    scene.views[0].post = crate::scene::ViewPost::Passthrough;
+    scene
+}
+
+/// An unlit view of a red cube under a blue light and a sun shows the albedo, over its own colour, and the
+/// main frame does not change whether the view is unlit or lit. Skips with no GPU.
+#[test]
+fn needs_gpu_an_unlit_view_shows_albedo_over_its_background() {
+    let Some(renderer) = skip_or_renderer("an_unlit_view_shows_albedo_over_its_background") else {
+        return;
+    };
+    let view = renderer.render_view(&look_scene(true), 0).expect("unlit");
+    let mid = VIEW_PX / 2;
+    let centre = px(&view, mid, mid);
+    for (i, channel) in ALBEDO.iter().enumerate() {
+        let want = srgb8_from_linear(*channel);
+        assert!(
+            (f32::from(centre[i]) - want).abs() <= 2.0,
+            "cube centre {centre:?} vs albedo channel {i} = {want}"
+        );
+    }
+    let corner = px(&view, 1, 1);
+    for (i, channel) in BACKDROP.iter().enumerate() {
+        let want = srgb8_from_linear(*channel);
+        assert!(
+            (f32::from(corner[i]) - want).abs() <= 1.0,
+            "corner {corner:?} vs background channel {i} = {want}"
+        );
+    }
+    let lit = renderer.render_view(&look_scene(false), 0).expect("lit");
+    assert_ne!(px(&lit, mid, mid), centre, "the lights shade the lit view");
+
+    let size = FrameSize::native(PX, PX);
+    let main_unlit = renderer.render(&look_scene(true), size).expect("main");
+    let main_lit = renderer.render(&look_scene(false), size).expect("main");
+    assert_eq!(main_unlit.rgba, main_lit.rgba);
 }

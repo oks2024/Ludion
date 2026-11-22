@@ -2085,14 +2085,17 @@ impl Renderer {
                 // `Environment`, else the 1×1 fallback cubes + flag off. The group's bind group is
                 // built in `record_scene`, where the graph's AO transient is resolved. The sky bind
                 // group is built only when present.
+                // An unlit view resolves no IBL (flat ambient) and still draws the sky; a `None` here
+                // returns the fallback without evicting the main frame's cached sky.
                 let resolved_env = self.ibl.resolve(
                     &self.gpu,
-                    scene.environment.as_ref(),
+                    scene.environment.as_ref().filter(|_| !scene.unlit),
                     self.quality_params.ibl_specular_size,
                 );
                 let sky_bg = scene
                     .environment
                     .as_ref()
+                    .filter(|_| scene.background.is_none())
                     .map(|env| self.sky_bind_group(device, scene, env));
                 (textures, mesh_assets, cull_bounds_buf, resolved_env, sky_bg)
             });
@@ -2537,6 +2540,7 @@ impl Renderer {
             gi_inject,
             gi_strengths,
             sky_bg,
+            background: scene.background,
             environment: scene.environment,
             post: scene.post.unwrap_or_default(),
             view_proj,
@@ -4237,6 +4241,8 @@ struct FrameRecorder<'a> {
     /// The sky bind group, `Some` only when the scene carries an `Environment`. Drives the far-depth
     /// sky fill inside the scene pass; `None` keeps the exact clear-color background.
     sky_bg: Option<wgpu::BindGroup>,
+    /// A flat linear colour the scene pass clears to in place of the default clear; a secondary view's.
+    background: Option<[f32; 3]>,
     /// The scene's `Environment` as plain data, or `None`. The composite reads the sky gradient out of
     /// it for the medium's ambient in-scatter, which is a *fullscreen* pass and so cannot go through
     /// `sky_bg` (that group belongs to the scene pass's sky triangle).
@@ -5122,12 +5128,20 @@ impl FrameRecorder<'_> {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // A dark ambient clear so an empty scene is deep blue-grey, not pure black.
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.02,
-                            g: 0.02,
-                            b: 0.035,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(self.background.map_or(
+                            wgpu::Color {
+                                r: 0.02,
+                                g: 0.02,
+                                b: 0.035,
+                                a: 1.0,
+                            },
+                            |[r, g, b]| wgpu::Color {
+                                r: f64::from(r),
+                                g: f64::from(g),
+                                b: f64::from(b),
+                                a: 1.0,
+                            },
+                        )),
                         store: wgpu::StoreOp::Store,
                     },
                 }),

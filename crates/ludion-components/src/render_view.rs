@@ -24,7 +24,7 @@ pub const RENDER_VIEW_SIZE_RANGE: std::ops::RangeInclusive<u32> = 16..=2048;
 /// assert_eq!(view.order, 0);
 /// assert!(view.sun && view.lights.is_none());
 /// ```
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct RenderView {
     /// The name a `UiRect.view` uses; unique per scene, not empty.
     pub name: String,
@@ -48,6 +48,90 @@ pub struct RenderView {
     /// view only; it needs no layer.
     #[serde(default = "default_enabled", skip_serializing_if = "is_true")]
     pub sun: bool,
+    /// What the view clears to: `sky` (default) or `{ color: [r, g, b] }`, linear HDR, each component finite and
+    /// `>= 0`. A colour replaces the clear and drops the sky draw in this view.
+    #[serde(default, skip_serializing_if = "ViewBackground::is_sky")]
+    pub background: ViewBackground,
+    /// `lit` (default) or `unlit`: albedo and emissive only, with no lights, sun, GI, probes or environment.
+    #[serde(default, skip_serializing_if = "ViewShading::is_lit")]
+    pub shading: ViewShading,
+    /// Whether the scene's fog applies in this view (default true). `false` zeroes the medium here only.
+    #[serde(default = "default_enabled", skip_serializing_if = "is_true")]
+    pub fog: bool,
+    /// The look the view takes: absent is the scene's `PostProcess`, `none` is no look at all, else the name of a
+    /// `PostProfile`. The fog always comes from the scene. Absent is omitted from the document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<String>,
+}
+
+/// What a [`RenderView`] clears to.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ViewBackground {
+    /// The scene's sky, as the main frame draws it.
+    #[default]
+    Sky,
+    /// A flat linear HDR colour `[r, g, b]`; the view texture has no alpha.
+    Color([f32; 3]),
+}
+
+impl ViewBackground {
+    fn is_sky(&self) -> bool {
+        matches!(self, ViewBackground::Sky)
+    }
+}
+
+/// How a [`RenderView`] shades.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewShading {
+    /// The scene's lighting.
+    #[default]
+    Lit,
+    /// Albedo plus emissive; no lights, sun, GI, probes or environment.
+    Unlit,
+}
+
+impl ViewShading {
+    fn is_lit(&self) -> bool {
+        matches!(self, ViewShading::Lit)
+    }
+}
+
+/// Makes the `PostProcess` on this entity a named look a [`RenderView`] takes with `post: <name>`, and
+/// removes it from the main frame: the main frame's `PostProcess` is the lowest-id one without a profile.
+/// A view takes the profile's grade, bloom, tonemap, exposure and LUT; its fog is the scene's, and its
+/// `ssao`, `ssr`, `dof` and `shafts` never run in a view (`L2377`).
+///
+/// ```
+/// use ludion_components::PostProfile;
+///
+/// let p: PostProfile = serde_json::from_value(serde_json::json!({ "name": "radar-feed" })).unwrap();
+/// assert_eq!(p.name, "radar-feed");
+/// ```
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct PostProfile {
+    /// The name a `RenderView.post` uses; unique per scene, not empty, not `none`.
+    pub name: String,
+}
+
+impl SemanticValidate for PostProfile {
+    /// Rejects an empty `name` and the reserved `none` (`L2378` at `/name`).
+    fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
+        let Some(name) = value.get("name").and_then(Value::as_str) else {
+            return Vec::new();
+        };
+        let what = match name {
+            "" => "`name` is empty; a `RenderView.post` needs it to find the profile",
+            "none" => "`name` is `none`, which `RenderView.post` reserves for no look at all",
+            _ => return Vec::new(),
+        };
+        vec![
+            Diagnostic::new(code::POST_PROFILE_INVALID, format!("`PostProfile` {what}"))
+                .with_path("/name")
+                .with_help("see `ludion docs render-views`; `ludion explain L2378`"),
+        ]
+    }
 }
 
 fn default_size() -> [u32; 2] {
@@ -101,6 +185,21 @@ impl SemanticValidate for RenderView {
                             RENDER_VIEW_SIZE_RANGE.start(),
                             RENDER_VIEW_SIZE_RANGE.end()
                         ),
+                    );
+                }
+            }
+        }
+        if let Some(color) = value
+            .get("background")
+            .and_then(|b| b.get("color"))
+            .and_then(Value::as_array)
+        {
+            for (i, c) in color.iter().enumerate() {
+                let Some(n) = c.as_f64() else { continue };
+                if !n.is_finite() || n < 0.0 {
+                    reject(
+                        format!("/background/color/{i}"),
+                        format!("`background.color[{i}]` is {n}; it takes a finite value >= 0"),
                     );
                 }
             }
@@ -206,6 +305,56 @@ mod tests {
             ["/lights/1"]
         );
         assert_eq!(paths(json!({ "name": "p", "lights": [] })), ["/lights"]);
+    }
+
+    #[test]
+    fn the_look_fields_round_trip_and_default_away() {
+        let v: RenderView = serde_json::from_value(json!({ "name": "r" })).unwrap();
+        assert_eq!(v.background, ViewBackground::Sky);
+        assert_eq!(v.shading, ViewShading::Lit);
+        assert!(v.fog && v.post.is_none());
+        let value = json!({
+            "name": "r", "size": [256, 256], "background": { "color": [0.0, 0.5, 0.25] },
+            "shading": "unlit", "fog": false, "post": "radar-feed"
+        });
+        let v: RenderView = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(v.background, ViewBackground::Color([0.0, 0.5, 0.25]));
+        assert_eq!(v.shading, ViewShading::Unlit);
+        assert!(!v.fog);
+        assert_eq!(serde_json::to_value(&v).unwrap(), value);
+        let sky: RenderView =
+            serde_json::from_value(json!({ "name": "r", "background": "sky" })).unwrap();
+        assert_eq!(sky.background, ViewBackground::Sky);
+    }
+
+    #[test]
+    fn a_bad_background_colour_names_its_component() {
+        assert_eq!(
+            paths(json!({ "name": "a", "background": { "color": [0.0, -0.1, 1.0] } })),
+            ["/background/color/1"]
+        );
+        assert!(
+            paths(json!({ "name": "a", "background": { "color": [4.0, 0.0, 9.0] } })).is_empty()
+        );
+        assert!(paths(json!({ "name": "a", "background": "sky" })).is_empty());
+    }
+
+    #[test]
+    fn a_profile_round_trips_and_rejects_reserved_names() {
+        let p: PostProfile = serde_json::from_value(json!({ "name": "p" })).unwrap();
+        assert_eq!(serde_json::to_value(&p).unwrap(), json!({ "name": "p" }));
+        let bad = |name: &str| {
+            PostProfile::validate_semantics(&json!({ "name": name }))
+                .into_iter()
+                .map(|d| (d.code, d.path.unwrap()))
+                .collect::<Vec<_>>()
+        };
+        assert!(bad("radar").is_empty());
+        assert_eq!(bad(""), [(code::POST_PROFILE_INVALID, "/name".to_string())]);
+        assert_eq!(
+            bad("none"),
+            [(code::POST_PROFILE_INVALID, "/name".to_string())]
+        );
     }
 
     #[test]

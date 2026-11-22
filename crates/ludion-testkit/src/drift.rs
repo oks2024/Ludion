@@ -72,6 +72,7 @@ fn probe_seed(name: &str) -> Value {
         "UiWorldAnchor" => json!({ "target": { "index": 0, "generation": 0 } }),
         "SightTarget" => json!({ "class": "c" }),
         "RenderView" => json!({ "name": "v" }),
+        "PostProfile" => json!({ "name": "p" }),
         "RenderLayers" => json!({ "layers": ["l"] }),
         "IgnoreCollisions" => json!({ "with": [{ "index": 0, "generation": 0 }] }),
         "StimulusRecord" => json!({

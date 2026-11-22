@@ -774,6 +774,19 @@ pub struct PostData {
     pub ssr_thickness: f32,
 }
 
+impl PostData {
+    /// Imaging that does nothing: no tonemap, no bloom, exposure 1, no meter, neutral grade, every effect
+    /// off; the dither stays. A secondary view with `post: none` draws with it.
+    pub fn passthrough() -> PostData {
+        PostData {
+            bloom_strength: 0.0,
+            exposure: 1.0,
+            tonemap: TonemapOperator::None,
+            ..PostData::default()
+        }
+    }
+}
+
 impl Default for PostData {
     /// **The engine's shipped imaging**, in one place: what the composite and bloom passes do for a
     /// scene that declares no `PostProcess`, and equally what a fully-default `PostProcess`
@@ -1818,6 +1831,22 @@ pub struct BlendedMesh {
 /// The most secondary views one frame renders.
 pub const MAX_RENDER_VIEWS: usize = 4;
 
+/// The look a secondary view takes in place of the scene's imaging.
+#[derive(Clone, PartialEq, Debug)]
+pub enum ViewPost {
+    /// The scene's `PostProcess` and LUT, as the main frame has them.
+    Scene,
+    /// No look: [`PostData::passthrough`] and no LUT.
+    Passthrough,
+    /// A named profile's imaging and LUT; the medium (`fog_*`) still comes from the scene.
+    Profile {
+        /// The profile's baked imaging.
+        post: Box<PostData>,
+        /// The profile's LUT, if it has one.
+        lut: Option<LutData>,
+    },
+}
+
 /// A secondary view: a camera drawn into its own texture that a [`UiInstance::Rect`] shows.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RenderViewData {
@@ -1834,6 +1863,14 @@ pub struct RenderViewData {
     pub lights: u32,
     /// Whether the sun lights the view.
     pub sun: bool,
+    /// A flat linear colour the view clears to in place of the sky; `None` draws the sky.
+    pub background: Option<[f32; 3]>,
+    /// Whether the view draws unlit: albedo and emissive only, no lights, sun, GI, probes or environment.
+    pub unlit: bool,
+    /// Whether the scene's fog applies in the view.
+    pub fog: bool,
+    /// The look the view takes.
+    pub post: ViewPost,
     /// Screen effects applied as the last step of the view's frame, in draw order; empty leaves the
     /// view unchanged.
     pub screen_effects: Vec<crate::screen_effect::ScreenEffectData>,
@@ -1851,6 +1888,12 @@ pub struct RenderScene {
     pub lod: LodSettings,
     /// Small constant ambient light added to every lit surface (linear RGB).
     pub ambient: [f32; 3],
+    /// A flat linear colour the scene pass clears to in place of the sky; `None` draws the sky. Set on a
+    /// derived secondary view only.
+    pub background: Option<[f32; 3]>,
+    /// Resolve the environment as absent (flat `ambient` light, the sky still drawn). Set on an unlit
+    /// secondary view only.
+    pub unlit: bool,
     /// Unique decoded textures, referenced by index from [`SpriteInstance::texture`]. Their colour
     /// is **premultiplied** by alpha (the engine converts a loose PNG at load; an atlas is baked
     /// that way), which is the convention the sprite pass's `One, OneMinusSrcAlpha` blend needs.
@@ -1926,11 +1969,11 @@ pub struct RenderScene {
     /// with no `Environment` — in which case the engine's historical ambient/clear pipeline is kept
     /// byte-for-byte.
     pub environment: Option<EnvironmentData>,
-    /// The scene's post-process settings (lowest-`EntityId` `PostProcess`), or `None` for a scene
+    /// The scene's post-process settings (lowest-`EntityId` `PostProcess` without a `PostProfile`), or `None` for a scene
     /// with no `PostProcess` — in which case the renderer's own shipped post defaults apply and the
     /// image is byte-identical to the pre-`PostProcess` pipeline.
     pub post: Option<PostData>,
-    /// The `.cube` LUT of the lowest-`EntityId` `PostProcess`, applied in the composite's step 7a.
+    /// The `.cube` LUT of that same `PostProcess`, applied in the composite's step 7a.
     /// `None` skips the step and the image is byte-identical to a scene without one.
     pub lut: Option<LutData>,
     /// World-space text runs.
@@ -1987,6 +2030,8 @@ impl RenderScene {
             cull_camera: None,
             lod: LodSettings::default(),
             ambient: DEFAULT_AMBIENT,
+            background: None,
+            unlit: false,
             textures: Vec::new(),
             mesh_assets: Vec::new(),
             prewarm: Vec::new(),

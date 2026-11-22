@@ -145,7 +145,7 @@ pub use scene::{
     RenderScene, RenderViewData, SilhouetteMesh, SilhouetteStyle, Silhouettes, SkinJoint,
     SpotLightData, SpriteInstance, StaticRange, SunCascadeConfig, SunData, TextRun, TextureImage,
     TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance, UiRotation, UiShapeGeometry,
-    UiShapeStroke, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
+    UiShapeStroke, ViewPost, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
 };
 pub use scene::{UiPathJoin, UiPathStroke};
 pub use screen_effect::{MAX_SCREEN_EFFECTS, ScreenEffectData, ScreenMask};

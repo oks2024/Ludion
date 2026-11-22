@@ -9,8 +9,8 @@ range. The nine `fog_*`/`shafts` fields have their own topic, `ludion docs atmos
 IBL are lighting; surface material is materials.
 
 `PostProcess` is the *imaging* singleton, the same opt-in shape as `Environment` and
-`DirectionalLight`: at most one is active (extract takes the lowest `EntityId` and ignores the rest,
-no error), and **absent, the renderer is byte-identical to a pipeline with no `PostProcess` support
+`DirectionalLight`: at most one is active (extract takes the lowest `EntityId` without a `PostProfile` and ignores
+the rest, no error; a `PostProcess` beside a `PostProfile` is a named look for secondary views, `ludion docs render-views`), and **absent, the renderer is byte-identical to a pipeline with no `PostProcess` support
 at all**. `Environment` describes how the world is *lit*, `PostProcess` what the post stack does to
 the *image* the scene pass produced. One entity can carry both, as separate components:
 

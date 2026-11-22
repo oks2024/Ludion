@@ -107,6 +107,9 @@ pub(crate) fn world_key(
         // probe capture runs no cull, so every mesh draws level 0 whatever the knobs say
         lod: _,
         ambient,
+        // set on a derived view only; a capture is the main frame's world, drawn lit under the sky
+        background: _,
+        unlit: _,
         // only sprites, particles, text and the UI index it, and the face scene has none
         textures: _,
         mesh_assets,

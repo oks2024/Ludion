@@ -266,3 +266,173 @@ fn a_hidden_view_rect_leaves_the_entitys_text_drawn() {
         "the hidden view's rect does not"
     );
 }
+
+/// A radar view entity with `extra` lines (indented 8) added to its `RenderView`.
+fn look_view(name: &str, extra: &str) -> String {
+    format!(
+        "  - name: {name}-cam
+    presentation: true
+    components:
+      Camera: {{}}
+      RenderView:
+        name: {name}
+{extra}"
+    )
+}
+
+/// A presentation entity carrying a `PostProfile` and a `PostProcess` with `extra` lines (indented 8).
+fn profile_entity(name: &str, extra: &str) -> String {
+    format!(
+        "  - name: {name}-look
+    presentation: true
+    components:
+      PostProfile:
+        name: {name}
+      PostProcess:
+{extra}"
+    )
+}
+
+#[test]
+fn a_view_takes_the_background_shading_and_fog_it_authors() {
+    let view = look_view(
+        "radar",
+        "        background:\n          color:\n            - 0.0\n            - 0.5\n            - 0.25\n        shading: unlit\n        fog: false\n",
+    );
+    let mut engine = engine_for(&document(&[view, look_view("plain", "")]));
+    let scene = extract(&mut engine);
+    let [radar, plain] = &scene.views[..] else {
+        panic!("two views");
+    };
+    assert_eq!(radar.background, Some([0.0, 0.5, 0.25]));
+    assert!(radar.unlit && !radar.fog);
+    assert_eq!(radar.post, ludion_renderer::ViewPost::Scene);
+    assert_eq!(plain.background, None);
+    assert!(!plain.unlit && plain.fog);
+}
+
+#[test]
+fn a_profile_resolves_to_its_grade_and_leaves_the_scene_post_alone() {
+    let scene_post = "  - name: world\n    components:\n      PostProcess:\n        contrast: 1.25\n        fog_density: 0.05\n";
+    let mut engine = engine_for(&document(&[
+        look_view("radar", "        post: feed\n"),
+        profile_entity("feed", "        contrast: 2.0\n        tonemap: none\n"),
+        scene_post.to_string(),
+    ]));
+    let scene = extract(&mut engine);
+    let post = scene.post.expect("the scene post is the unprofiled one");
+    assert_eq!((post.contrast, post.fog_density), (1.25, 0.05));
+    let ludion_renderer::ViewPost::Profile { post, lut } = &scene.views[0].post else {
+        panic!("a profile: {:?}", scene.views[0].post);
+    };
+    assert_eq!(post.contrast, 2.0);
+    assert_eq!(post.tonemap, ludion_renderer::TonemapOperator::None);
+    assert!(lut.is_none());
+}
+
+#[test]
+fn a_scene_whose_only_post_process_is_a_profile_has_no_scene_post() {
+    let mut engine = engine_for(&document(&[
+        look_view("radar", "        post: feed\n"),
+        profile_entity("feed", "        contrast: 2.0\n"),
+    ]));
+    let scene = extract(&mut engine);
+    assert!(scene.post.is_none() && scene.lut.is_none());
+    assert!(matches!(
+        scene.views[0].post,
+        ludion_renderer::ViewPost::Profile { .. }
+    ));
+}
+
+#[test]
+fn post_none_is_passthrough() {
+    let mut engine = engine_for(&document(&[look_view("radar", "        post: none\n")]));
+    let scene = extract(&mut engine);
+    assert_eq!(scene.views[0].post, ludion_renderer::ViewPost::Passthrough);
+}
+
+#[test]
+fn an_unknown_profile_is_l2378_at_the_view() {
+    let mut engine = engine_for(&document(&[
+        look_view("radar", "        post: fede\n"),
+        profile_entity("feed", "        contrast: 2.0\n"),
+    ]));
+    engine.advance_live();
+    let error = engine
+        .extract_present_scene()
+        .expect_err("an unknown profile");
+    assert_eq!(error.code.as_str(), "L2378");
+    assert_eq!(
+        error.path.as_deref(),
+        Some("/entities/2/components/RenderView/post")
+    );
+    assert!(error.help.as_deref().unwrap_or("").contains("`feed`"));
+}
+
+#[test]
+fn check_scene_reports_each_post_profile_mistake_at_its_pointer() {
+    let orphan =
+        "  - name: orphan\n    components:\n      PostProfile:\n        name: lone\n".to_string();
+    assert_eq!(
+        static_codes(&document(&[orphan])),
+        [(
+            "L2378".to_string(),
+            Some("/entities/2/components/PostProfile".to_string())
+        )]
+    );
+    let found = static_codes(&document(&[
+        profile_entity("feed", "        contrast: 2.0\n"),
+        profile_entity("feed", "        contrast: 3.0\n"),
+    ]));
+    assert_eq!(
+        found,
+        [(
+            "L2378".to_string(),
+            Some("/entities/3/components/PostProfile/name".to_string())
+        )]
+    );
+    let found = static_codes(&document(&[
+        look_view("radar", "        post: fede\n"),
+        profile_entity("feed", "        contrast: 2.0\n"),
+    ]));
+    assert_eq!(
+        found,
+        [(
+            "L2378".to_string(),
+            Some("/entities/2/components/RenderView/post".to_string())
+        )]
+    );
+}
+
+#[test]
+fn a_profile_a_view_names_warns_for_every_field_the_view_ignores() {
+    let profile = profile_entity(
+        "feed",
+        "        ssao: 1.0\n        ssr: 0.5\n        dof: 0.2\n        shafts: 1.0\n        fog_density: 0.1\n        contrast: 2.0\n",
+    );
+    let found = static_codes(&document(&[
+        look_view("radar", "        post: feed\n"),
+        profile.clone(),
+    ]));
+    let fields: Vec<_> = found
+        .iter()
+        .map(|(code, path)| (code.as_str(), path.clone().unwrap()))
+        .collect();
+    assert_eq!(fields.len(), 5);
+    assert!(
+        fields.iter().all(|(code, path)| *code == "L2377"
+            && path.starts_with("/entities/3/components/PostProcess/"))
+    );
+    // A profile no view names says nothing.
+    assert!(static_codes(&document(&[profile])).is_empty());
+}
+
+#[test]
+fn a_clean_look_scene_has_no_diagnostics() {
+    let found = static_codes(&document(&[
+        look_view("radar", "        post: feed\n        shading: unlit\n"),
+        look_view("flat", "        post: none\n"),
+        profile_entity("feed", "        contrast: 2.0\n        tonemap: none\n"),
+    ]));
+    assert!(found.is_empty(), "{found:?}");
+}
