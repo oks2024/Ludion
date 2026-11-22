@@ -163,8 +163,10 @@ release) prints the summed pass GPU time at 512² and 256².
 ## Gotchas
 - A view is a presentation read: it sees the world as the last extract left it, never writes sim state, and a game
   system cannot read its pixels.
-- The windowed presenter does not interpolate a view's camera between ticks, so a fast-moving view camera may judder
-  live; headless renders are exact.
+- The windowed presenter interpolates a view with the main frame: its camera moves between ticks as the main camera does,
+  and so do the items a layered frame's views draw. `NoInterpolate` on the view's entity cuts that view for the tick.
+  An orthographic view's height takes the newer tick, and the late latch (fresh mouse look) applies to the main camera
+  only, so a view driven by the main camera's look trails it by up to one tick. Headless renders are exact.
 - A rect whose view is disabled shows nothing, not the clear colour.
 - `unlit` is a derived scene, not a shader variant: it drops the lights, sun, GI, probes and environment lighting and
   lights with a flat ambient of 1, so a surface reads its albedo. The sky still draws unless `background` is a colour.

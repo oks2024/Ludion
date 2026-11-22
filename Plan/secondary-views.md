@@ -110,6 +110,15 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
     release median over 120 frames, the measured value in a comment.
     Request differences: the request's `views` profile section is `view:`-named `gpu.passes` rows (a section would move the
     protocol schema, an R14 item); live captures carry no view rows.
+34. **View cameras blend like the main camera.** `BlendData.views: Vec<Option<CameraBlend>>`, parallel to
+    `RenderScene::views` (empty = unkeyed), keyed by the view's entity. A view camera pairs with the previous tick's entry of
+    the same key (a search, not an index: a toggled view shifts the list). A snapped (`NoInterpolate`, `PresentCuts`) or
+    unpaired view takes the newer tick. The view camera ignores `CameraOffset`, and the late latch stays main-only.
+35. **A layered frame blends its source too.** `BlendData.layered: Option<Box<BlendData>>` carries item keys parallel to
+    `layered.scene`'s lists (its `poses`, `snaps`, `camera`, `views` and `epoch` are unused: the outer ones serve). The pose
+    table covers the union of both key sets, so an item on a view-only layer is keyed.
+36. **What stays the newer tick:** an orthographic view's height, a view's projection when its `size` aspect changes between
+    ticks, and the viewmodel (views drop it).
 
 ## Waves
 
@@ -137,6 +146,9 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
 - **Split screen.** Trigger: a local-multiplayer game.
 - **Portals.** Trigger: a game needs a view through a doorway.
 - **Per-view shadow maps.** Trigger: a view looks at a region the main cascades do not cover.
+- **The late latch for a view camera.** Trigger: a game shows a view driven by the main camera's look (a helmet cam): the
+  view then trails the main view by up to one tick. **Proposed — owner ruling owed.**
+- **Interpolating an orthographic view's height.** Trigger: a game animates a radar zoom that must be smooth live.
 
 ## Owner rulings (2026-11-19)
 
@@ -144,7 +156,7 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
 - Accepted. The 4-view budget and the 16..=2048 size range.
 - Accepted. A view at native size, which ignores `render_scale` (the request wanted it scaled).
 - Accepted. Views are not interpolated by the windowed presenter (`blend.rs` takes `next`'s views), so a fast-moving view camera
-  may judder live.
+  may judder live (fixed in W4b-2).
 - Accepted. The main camera's sun cascades only, with no per-view shadow fit.
 - Accepted. Request differences: a disabled or over-budget view draws nothing where the request draws the clear colour; W1 has no
   `background` field.
@@ -185,3 +197,8 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   `post-full`, `ui-hud`); the four view scenes differ only by the appended `views` key. No schema, replay, golden or hash
   moved. API break: `Budget` gains a pub field. Owed: the macOS twin of the budget (M4) and the TeamCity step's
   re-provisioning. W4b-2 and W4c are open.
+- **W4b-2:** mechanized. `BlendData.views` and `BlendData.layered` (`ludion-renderer`), `blend_camera`/`blend_items` factored out of
+  `blend` and used for the main frame, each view camera and a layered frame's unfiltered source, `ViewTable.entities` and
+  the extract fill of both (`ludion-engine`), docs `render-views` and `camera`. `NoInterpolate`/`PresentCuts` cut a view camera;
+  `alpha >= 1` is still `next.clone()`. No `WorldHash`, replay, schema, `SnapshotDoc` or golden moved. API break: `BlendData` gains two
+  pub fields (a struct literal needs `..Default::default()`; none found outside `crates/`). W4c is open.

@@ -1896,6 +1896,12 @@ fn extract_inner(
         &view_table,
         degraded,
     );
+    let view_entities: Vec<(EntityId, (u32, u32))> = view_table
+        .entities
+        .iter()
+        .zip(&view_table.views)
+        .map(|(&entity, view)| (entity, view.size))
+        .collect();
     let mut views = view_table.views;
     for (view, effects) in views.iter_mut().zip(screen_effects.per_view) {
         view.screen_effects = effects;
@@ -2025,6 +2031,7 @@ fn extract_inner(
     });
     // A layered frame keeps in the main scene only what the main camera draws; the full scene rides on
     // it for the views. The blend keys follow the filtered lists, so they stay parallel to them.
+    let mut full_keys = None;
     if let Some(layers) = frame_layers.as_mut() {
         let masks = layers.masks(
             world,
@@ -2045,6 +2052,7 @@ fn extract_inner(
         let full = std::mem::replace(&mut scene, RenderScene::empty(viewport));
         let (main, remap) = ludion_renderer::split_layers(full, masks);
         scene = main;
+        full_keys = keys.clone();
         if let Some(keys) = keys.as_mut() {
             keys.retain(&remap);
         }
@@ -2055,12 +2063,22 @@ fn extract_inner(
         } else {
             None
         };
-        fill_blend(blend, world, &mut poses, &ids, viewport, camera_key, keys);
+        fill_blend(
+            blend,
+            world,
+            &mut poses,
+            &ids,
+            viewport,
+            camera_key,
+            (keys, full_keys),
+            &view_entities,
+        );
     }
     Ok(scene)
 }
 
 /// The entities behind each keyed `RenderScene` list, as extract collected them.
+#[derive(Clone)]
 struct BlendKeys {
     meshes: Vec<Option<EntityId>>,
     sprites: Vec<Option<EntityId>>,
@@ -2139,19 +2157,10 @@ fn socket_key(world: &World, id: EntityId) -> EntityId {
     key
 }
 
-/// Fills `blend` from the keys extract collected: the pose table over every unique key, the snap
-/// set, and the camera. Reads the same `render_pose` the extract drew with.
-fn fill_blend(
-    blend: &mut BlendData,
-    world: &World,
-    poses: &mut WorldAffines,
-    ids: &[EntityId],
-    viewport: (u32, u32),
-    camera_key: Option<EntityId>,
-    keys: BlendKeys,
-) {
-    // A socket child and its descendants take their skin's blend delta, never their own: the
-    // presenter then moves `skin_new × J × L` by the skin's delta, exactly as it moves the skin.
+/// Writes `keys` into the per-list key vectors of `blend` and returns the owners of its particle and
+/// bullet instances. A socket child and its descendants take their skin's blend delta, never their
+/// own: the presenter then moves `skin_new × J × L` by the skin's delta, exactly as it moves the skin.
+fn fill_keys(blend: &mut BlendData, world: &World, keys: BlendKeys) -> BTreeSet<EntityId> {
     let some = |ids: Vec<EntityId>| -> Vec<Option<EntityId>> {
         ids.into_iter()
             .map(|id| Some(socket_key(world, id)))
@@ -2179,8 +2188,12 @@ fn fill_blend(
     blend.particles = keys.particles;
     blend.bullets = keys.bullets;
     blend.projectiles = keys.projectiles;
+    instance_owners
+}
 
-    let unique: BTreeSet<EntityId> = [
+/// The entities that drive the keyed lists of `blend`.
+fn keyed_entities(blend: &BlendData) -> impl Iterator<Item = EntityId> + '_ {
+    [
         &blend.meshes,
         &blend.sprites,
         &blend.lights,
@@ -2192,7 +2205,32 @@ fn fill_blend(
     ]
     .into_iter()
     .flat_map(|list| list.iter().flatten().copied())
-    .collect();
+}
+
+/// Fills `blend` from the keys extract collected: the pose table over every unique key, the snap
+/// set, the camera and each view's camera. `keys` is the main lists' and, for a layered frame, the
+/// unfiltered source's; `views` is each rendered view's entity and size. Reads the same
+/// `render_pose` the extract drew with.
+#[allow(clippy::too_many_arguments)]
+fn fill_blend(
+    blend: &mut BlendData,
+    world: &World,
+    poses: &mut WorldAffines,
+    ids: &[EntityId],
+    viewport: (u32, u32),
+    camera_key: Option<EntityId>,
+    (keys, full): (BlendKeys, Option<BlendKeys>),
+    views: &[(EntityId, (u32, u32))],
+) {
+    let mut instance_owners = fill_keys(blend, world, keys);
+    if let Some(full) = full {
+        let mut source = BlendData::default();
+        instance_owners.extend(fill_keys(&mut source, world, full));
+        blend.layered = Some(Box::new(source));
+    }
+    let unique: BTreeSet<EntityId> = keyed_entities(blend)
+        .chain(blend.layered.iter().flat_map(|l| keyed_entities(l)))
+        .collect();
     // Clip poses keep the newer tick (display-paced-present decision 15), so the pose table holds
     // stored transforms, not the clip-posed ones in `poses`.
     let mut stored = WorldAffines::new();
@@ -2206,7 +2244,8 @@ fn fill_blend(
             .iter()
             .copied()
             .chain(instance_owners)
-            .chain(camera_key),
+            .chain(camera_key)
+            .chain(views.iter().map(|&(entity, _)| entity)),
     );
     let offset = camera_key.and_then(|_| crate::camera_offset::active_entity(world, ids));
     // A `NoInterpolate` on the offset entity cuts the camera for the tick, as one on the camera does.
@@ -2238,6 +2277,29 @@ fn fill_blend(
             aspect: aspect_ratio(viewport),
         }
     });
+    // A view's camera is drawn without the presentation offset, and keyed even when the main camera
+    // is not (the editor override and pixel snapping concern the main camera only).
+    blend.views = views
+        .iter()
+        .map(|&(key, size)| {
+            let cam = get::<Camera>(world, key).cloned().unwrap_or_default();
+            let (near, far) = cam.depth_range();
+            let pose = render_pose(world, poses, key);
+            let (rotation, translation, projection) =
+                compose_camera(pose.quat(), Vec3::from(pose.translation()), &cam, None);
+            Some(CameraBlend {
+                key,
+                model: Mat4::from_rotation_translation(rotation, translation),
+                fov_y_deg: match projection {
+                    Projection::Perspective { fov_y_deg } => Some(fov_y_deg),
+                    Projection::Orthographic { .. } => None,
+                },
+                near,
+                far,
+                aspect: aspect_ratio(size),
+            })
+        })
+        .collect();
 }
 
 /// The renderer's [`GiData`] for a finished grid: the authored knobs verbatim, plus the probe

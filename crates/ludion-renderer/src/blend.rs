@@ -4,11 +4,15 @@
 //! The previous *scene* is never kept. Extract records, per tick, a [`BlendData`]: the world model of
 //! every entity that drives a render item, plus a parallel key list per `RenderScene` list. [`blend`]
 //! turns two ticks' `BlendData` and the newer scene into the scene to draw at `alpha` between them.
+//!
+//! Secondary views follow the main frame: each view camera blends like the main one (paired by its
+//! entity), and a layered frame's unfiltered source, the scene a view draws from, is blended with its
+//! own keys against the same pose table.
 
 use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat3, Mat4, Quat};
 
-use crate::scene::{RenderScene, SpotLightData};
+use crate::scene::{RenderCamera, RenderScene, SpotLightData};
 use crate::viewmodel::compose_viewmodel;
 
 /// The poses and per-item keys one extracted tick records for [`blend`].
@@ -52,6 +56,13 @@ pub struct BlendData {
     /// Projectile-pool shots: each key (`index << 32 | generation`) with the scene item that draws
     /// it, ascending by key. A shot has no owner entity, so its mesh entry in `meshes` is `None`.
     pub projectiles: Vec<(u64, ProjectileItem)>,
+    /// Each secondary view's camera, parallel to [`RenderScene::views`], or empty (every view
+    /// unkeyed). A view camera pairs with the previous tick's entry of the same `key`; a missing or
+    /// snapped one takes the newer tick.
+    pub views: Vec<Option<CameraBlend>>,
+    /// Keys parallel to the lists of [`RenderScene::layered`]'s unfiltered scene. Only its item
+    /// keys are read: the outer `poses`, `snaps` and `epoch` serve, and the pose table covers both.
+    pub layered: Option<Box<BlendData>>,
 }
 
 /// The scene item that draws one pool projectile.
@@ -111,7 +122,10 @@ pub struct CameraBlend {
 /// ticks; a snapped, newly spawned, unmoved or degenerate key gets no delta. A particle or bullet
 /// found in both ticks by [`InstanceKey`] is lerped between its two samples; a birth or death takes
 /// the newer tick. Everything not pose-driven comes from `next`. A keyed list whose length differs
-/// from its scene list is treated as unkeyed.
+/// from its scene list is treated as unkeyed. Each secondary view's camera blends like the main
+/// camera when the previous tick holds the same key (a perspective field of view lerps, an
+/// orthographic projection takes the newer tick); a layered frame's source scene blends when both
+/// ticks are layered.
 ///
 /// ```
 /// use ludion_renderer::{BlendData, RenderScene, blend};
@@ -136,17 +150,122 @@ pub fn blend(
         || (prev.poses.is_empty()
             && prev.particles.is_empty()
             && prev.bullets.is_empty()
-            && prev.projectiles.is_empty())
+            && prev.projectiles.is_empty()
+            && prev.views.iter().all(Option::is_none))
     {
         return next.clone();
     }
-    let delta = |key: Option<EntityId>| -> Option<Mat4> { delta_for(prev, next_data, key?, alpha) };
+    let poses = Poses {
+        prev,
+        next: next_data,
+    };
     let mut out = next.clone();
+    blend_items(prev_scene, prev, next, next_data, poses, alpha, &mut out);
+
+    // A layered frame's views draw from its unfiltered source: blend that with the outer poses.
+    if let (Some(prev_layered), Some(next_layered), Some(prev_source), Some(next_source)) = (
+        prev.layered.as_deref(),
+        next_data.layered.as_deref(),
+        prev_scene.layered.as_deref(),
+        next.layered.as_deref(),
+    ) && let Some(mut source) = out.layered.take()
+    {
+        blend_items(
+            &prev_source.scene,
+            prev_layered,
+            &next_source.scene,
+            next_layered,
+            poses,
+            alpha,
+            &mut source.scene,
+        );
+        out.layered = Some(source);
+    }
+
+    for (i, view) in out.views.iter_mut().enumerate() {
+        let Some(n) = next_data.views.get(i).and_then(Option::as_ref) else {
+            continue;
+        };
+        let Some(p) = prev.views.iter().flatten().find(|p| p.key == n.key) else {
+            continue;
+        };
+        blend_camera(p, n, &next_data.snaps, alpha, &mut view.camera);
+    }
+
+    let locals_moved = blend_viewmodel(prev_scene, prev, next_data, alpha, &mut out);
+
+    // The drawn camera the viewmodel composes onto: the blended one, else the newer tick's when
+    // only a local pose or flash centre moved.
+    let mut camera_model = None;
+    if let (Some(p), Some(n)) = (&prev.camera, &next_data.camera) {
+        camera_model = blend_camera(p, n, &next_data.snaps, alpha, &mut out.camera);
+    }
+    if camera_model.is_none() && locals_moved {
+        camera_model = next_data.camera.map(|c| c.model);
+    }
+    if let Some(model) = camera_model {
+        compose_viewmodel(&mut out, model);
+    }
+    out
+}
+
+/// Moves `camera` (the newer tick's) to its pose at `alpha` between `p` and `n`: the model lerped
+/// (scale and translation) and slerped (rotation), a perspective field of view lerped. Returns the
+/// blended model, or `None` when the camera took the newer tick (another entity, snapped, unmoved,
+/// or a degenerate blend).
+fn blend_camera(
+    p: &CameraBlend,
+    n: &CameraBlend,
+    snaps: &[EntityId],
+    alpha: f32,
+    camera: &mut RenderCamera,
+) -> Option<Mat4> {
+    if p.key != n.key
+        || snaps.binary_search(&n.key).is_ok()
+        || (p.model == n.model && p.fov_y_deg == n.fov_y_deg)
+    {
+        return None;
+    }
+    let model = trs_lerp(p.model, n.model, alpha);
+    if !model.is_finite() || model.determinant().abs() <= DET_EPS {
+        return None;
+    }
+    camera.view = model.inverse();
+    camera.position = model.w_axis.truncate();
+    if let (Some(a), Some(b)) = (p.fov_y_deg, n.fov_y_deg) {
+        let fov = a + (b - a) * alpha;
+        camera.projection = Mat4::perspective_rh(fov.to_radians(), n.aspect, n.near, n.far);
+    }
+    Some(model)
+}
+
+/// The two ticks' pose tables and snaps: what moves an item, apart from the keys that name its entity.
+#[derive(Clone, Copy)]
+struct Poses<'a> {
+    prev: &'a BlendData,
+    next: &'a BlendData,
+}
+
+/// Moves every keyed list of `out` (a clone of `next`) from the newer tick's pose toward the pose at
+/// `alpha`. `prev_keys` and `next_keys` hold the per-list keys of the two scenes; `poses` supplies the
+/// poses and snaps they resolve against (the same data for the main lists, the outer data for a
+/// layered source's).
+fn blend_items(
+    prev_scene: &RenderScene,
+    prev_keys: &BlendData,
+    next: &RenderScene,
+    next_keys: &BlendData,
+    poses: Poses<'_>,
+    alpha: f32,
+    out: &mut RenderScene,
+) {
+    let delta =
+        |key: Option<EntityId>| -> Option<Mat4> { delta_for(poses.prev, poses.next, key?, alpha) };
 
     for (inst, key) in out
         .meshes
         .iter_mut()
-        .zip(keys(&next_data.meshes, next.meshes.len()))
+        .zip(keys(&next_keys.meshes, next.meshes.len()))
     {
         if let Some(d) = delta(key) {
             inst.model = d * inst.model;
@@ -159,7 +278,7 @@ pub fn blend(
     for (inst, key) in out
         .sprites
         .iter_mut()
-        .zip(keys(&next_data.sprites, next.sprites.len()))
+        .zip(keys(&next_keys.sprites, next.sprites.len()))
     {
         if let Some(d) = delta(key) {
             inst.center = d.transform_point3(inst.center);
@@ -170,7 +289,7 @@ pub fn blend(
     for (inst, key) in out
         .lights
         .iter_mut()
-        .zip(keys(&next_data.lights, next.lights.len()))
+        .zip(keys(&next_keys.lights, next.lights.len()))
     {
         if let Some(d) = delta(key) {
             inst.position = d.transform_point3(inst.position);
@@ -179,7 +298,7 @@ pub fn blend(
     for (inst, key) in out
         .spot_lights
         .iter_mut()
-        .zip(keys(&next_data.spot_lights, next.spot_lights.len()))
+        .zip(keys(&next_keys.spot_lights, next.spot_lights.len()))
     {
         if let Some(d) = delta(key) {
             move_spot(inst, d);
@@ -188,7 +307,7 @@ pub fn blend(
     for (inst, key) in out
         .texts
         .iter_mut()
-        .zip(keys(&next_data.texts, next.texts.len()))
+        .zip(keys(&next_keys.texts, next.texts.len()))
     {
         if let Some(d) = delta(key) {
             inst.position = d.transform_point3(inst.position);
@@ -197,7 +316,7 @@ pub fn blend(
     for (inst, key) in out
         .ground_markers
         .iter_mut()
-        .zip(keys(&next_data.ground_markers, next.ground_markers.len()))
+        .zip(keys(&next_keys.ground_markers, next.ground_markers.len()))
     {
         if let Some(d) = delta(key) {
             // The shape is already scaled to world units: only the translation follows the entity.
@@ -208,7 +327,7 @@ pub fn blend(
     for (inst, key) in out
         .drop_shadows
         .iter_mut()
-        .zip(keys(&next_data.drop_shadows, next.drop_shadows.len()))
+        .zip(keys(&next_keys.drop_shadows, next.drop_shadows.len()))
     {
         if let Some(d) = delta(key) {
             inst.anchor = d.transform_point3(inst.anchor);
@@ -217,7 +336,7 @@ pub fn blend(
     for (inst, key) in out
         .decals
         .iter_mut()
-        .zip(keys(&next_data.decals, next.decals.len()))
+        .zip(keys(&next_keys.decals, next.decals.len()))
     {
         if let Some(d) = delta(key) {
             inst.box_to_world = d * inst.box_to_world;
@@ -225,39 +344,24 @@ pub fn blend(
         }
     }
 
-    blend_particles(prev_scene, prev, next, next_data, alpha, &mut out);
-    blend_bullets(prev_scene, prev, next_data, alpha, &mut out);
-    blend_projectiles(prev_scene, prev, next_data, alpha, &mut out);
-
-    let locals_moved = blend_viewmodel(prev_scene, prev, next_data, alpha, &mut out);
-
-    // The drawn camera the viewmodel composes onto: the blended one, else the newer tick's when
-    // only a local pose or flash centre moved.
-    let mut camera_model = None;
-    if let (Some(p), Some(n)) = (&prev.camera, &next_data.camera)
-        && p.key == n.key
-        && next_data.snaps.binary_search(&n.key).is_err()
-        && (p.model != n.model || p.fov_y_deg != n.fov_y_deg)
-    {
-        let model = trs_lerp(p.model, n.model, alpha);
-        if model.is_finite() && model.determinant().abs() > DET_EPS {
-            out.camera.view = model.inverse();
-            out.camera.position = model.w_axis.truncate();
-            camera_model = Some(model);
-            if let (Some(a), Some(b)) = (p.fov_y_deg, n.fov_y_deg) {
-                let fov = a + (b - a) * alpha;
-                out.camera.projection =
-                    Mat4::perspective_rh(fov.to_radians(), n.aspect, n.near, n.far);
-            }
-        }
-    }
-    if camera_model.is_none() && locals_moved {
-        camera_model = next_data.camera.map(|c| c.model);
-    }
-    if let Some(model) = camera_model {
-        compose_viewmodel(&mut out, model);
-    }
-    out
+    blend_particles(
+        prev_scene,
+        prev_keys,
+        next,
+        next_keys,
+        &poses.next.snaps,
+        alpha,
+        out,
+    );
+    blend_bullets(
+        prev_scene,
+        prev_keys,
+        next_keys,
+        &poses.next.snaps,
+        alpha,
+        out,
+    );
+    blend_projectiles(prev_scene, prev_keys, next_keys, alpha, out);
 }
 
 /// Interpolates the viewmodel's camera-local poses and flash centres between the two ticks, so a
@@ -391,6 +495,7 @@ fn blend_particles(
     prev: &BlendData,
     next: &RenderScene,
     next_data: &BlendData,
+    snaps: &[EntityId],
     alpha: f32,
     out: &mut RenderScene,
 ) {
@@ -403,7 +508,7 @@ fn blend_particles(
         &prev.particles,
         &next_data.particles,
         |k| *k,
-        &next_data.snaps,
+        snaps,
         |i, j| {
             let (a, b) = (&prev_scene.particles[i], &next.particles[j]);
             let o = &mut out.particles[j];
@@ -420,6 +525,7 @@ fn blend_bullets(
     prev_scene: &RenderScene,
     prev: &BlendData,
     next_data: &BlendData,
+    snaps: &[EntityId],
     alpha: f32,
     out: &mut RenderScene,
 ) {
@@ -434,7 +540,7 @@ fn blend_bullets(
         &prev.bullets,
         &next_data.bullets,
         |(k, _)| *k,
-        &next_data.snaps,
+        snaps,
         |i, j| {
             let a = prev_scene.sprites[prev.bullets[i].1 as usize].center;
             let o = &mut out.sprites[next_data.bullets[j].1 as usize];
@@ -1080,5 +1186,171 @@ mod tests {
         let out = blend(&ps, &pd, &ns, &nd, 0.5);
         assert_eq!(out.sprites[1].center.x, 1.0);
         assert_eq!(out.sprites[0], ns.sprites[0]);
+    }
+
+    fn view_data(name: &str, camera: RenderCamera) -> crate::scene::RenderViewData {
+        crate::scene::RenderViewData {
+            name: name.into(),
+            size: (64, 64),
+            camera,
+            layers: u32::MAX,
+            lights: u32::MAX,
+            sun: true,
+            background: None,
+            unlit: false,
+            fog: true,
+            post: crate::scene::ViewPost::Scene,
+            screen_effects: Vec::new(),
+        }
+    }
+
+    fn view_camera(key: EntityId, x: f32, fov: Option<f32>) -> CameraBlend {
+        CameraBlend {
+            key,
+            model: at(x),
+            fov_y_deg: fov,
+            near: 0.1,
+            far: 100.0,
+            aspect: 1.0,
+        }
+    }
+
+    fn view_ticks(
+        prev_views: Vec<Option<CameraBlend>>,
+        next_views: Vec<Option<CameraBlend>>,
+    ) -> (RenderScene, BlendData, RenderScene, BlendData) {
+        let mut ps = RenderScene::empty((64, 64));
+        let mut ns = RenderScene::empty((64, 64));
+        let drawn = |c: &Option<CameraBlend>, name: &str| {
+            let c = c.unwrap();
+            view_data(
+                name,
+                RenderCamera {
+                    view: c.model.inverse(),
+                    projection: Mat4::IDENTITY,
+                    position: c.model.w_axis.truncate(),
+                },
+            )
+        };
+        ps.views = prev_views.iter().map(|c| drawn(c, "v")).collect();
+        ns.views = next_views.iter().map(|c| drawn(c, "v")).collect();
+        let pd = BlendData {
+            epoch: 1,
+            views: prev_views,
+            ..BlendData::default()
+        };
+        let nd = BlendData {
+            epoch: 1,
+            views: next_views,
+            ..BlendData::default()
+        };
+        (ps, pd, ns, nd)
+    }
+
+    #[test]
+    fn view_camera_midpoint_position_and_fov() {
+        let (ps, pd, ns, nd) = view_ticks(
+            vec![Some(view_camera(E1, 0.0, Some(60.0)))],
+            vec![Some(view_camera(E1, 2.0, Some(90.0)))],
+        );
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        let cam = out.views[0].camera;
+        assert_eq!(cam.position, Vec3::new(1.0, 0.0, 0.0));
+        assert!(cam.view.abs_diff_eq(at(1.0).inverse(), 1e-6));
+        let want = Mat4::perspective_rh(75f32.to_radians(), 1.0, 0.1, 100.0);
+        assert!(cam.projection.abs_diff_eq(want, 1e-5));
+        assert_eq!(out.camera, ns.camera);
+    }
+
+    #[test]
+    fn a_snapped_view_camera_takes_next() {
+        let (ps, pd, ns, mut nd) = view_ticks(
+            vec![Some(view_camera(E1, 0.0, Some(60.0)))],
+            vec![Some(view_camera(E1, 2.0, Some(60.0)))],
+        );
+        nd.snaps = vec![E1];
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        assert_eq!(out.views[0].camera, ns.views[0].camera);
+    }
+
+    #[test]
+    fn a_view_camera_pairs_by_key_not_slot() {
+        let (ps, pd, ns, nd) = view_ticks(
+            vec![
+                Some(view_camera(E1, 0.0, None)),
+                Some(view_camera(E2, 4.0, None)),
+            ],
+            vec![Some(view_camera(E2, 6.0, None))],
+        );
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        assert_eq!(out.views[0].camera.position, Vec3::new(5.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn an_orthographic_view_keeps_next_projection() {
+        let (ps, pd, mut ns, nd) = view_ticks(
+            vec![Some(view_camera(E1, 0.0, None))],
+            vec![Some(view_camera(E1, 2.0, None))],
+        );
+        ns.views[0].camera.projection = Mat4::orthographic_rh(-1.0, 1.0, -1.0, 1.0, 0.1, 10.0);
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        assert_eq!(
+            out.views[0].camera.projection,
+            ns.views[0].camera.projection
+        );
+        assert_eq!(out.views[0].camera.position.x, 1.0);
+    }
+
+    fn layered_ticks(x_prev: f32, x_next: f32) -> (RenderScene, BlendData, RenderScene, BlendData) {
+        let layered = |x: f32| {
+            let mut source = RenderScene::empty((64, 64));
+            source.meshes.push(mesh(at(x)));
+            let mut outer = RenderScene::empty((64, 64));
+            outer.layered = Some(Box::new(crate::layers::LayeredSource {
+                scene: source,
+                masks: crate::layers::LayerMasks::default(),
+            }));
+            outer
+        };
+        let data = |x: f32| BlendData {
+            epoch: 1,
+            poses: vec![(E1, at(x))],
+            layered: Some(Box::new(BlendData {
+                meshes: vec![Some(E1)],
+                ..BlendData::default()
+            })),
+            ..BlendData::default()
+        };
+        (layered(x_prev), data(x_prev), layered(x_next), data(x_next))
+    }
+
+    #[test]
+    fn a_layered_source_item_lands_halfway() {
+        let (ps, pd, ns, nd) = layered_ticks(0.0, 2.0);
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        let source = out.layered.as_ref().unwrap();
+        assert_eq!(source.scene.meshes[0].model.w_axis.x, 1.0);
+        assert!(out.meshes.is_empty());
+    }
+
+    #[test]
+    fn a_layered_source_in_one_tick_only_is_left_as_next() {
+        let (ps, pd, ns, nd) = layered_ticks(0.0, 2.0);
+        let mut ps = ps;
+        ps.layered = None;
+        let mut pd = pd;
+        pd.layered = None;
+        let out = blend(&ps, &pd, &ns, &nd, 0.5);
+        assert_eq!(out.layered, ns.layered);
+    }
+
+    #[test]
+    fn alpha_one_is_next_with_views_and_layers() {
+        let (ps, pd, mut ns, mut nd) = layered_ticks(0.0, 2.0);
+        ns.views = vec![view_data("v", ns.camera)];
+        nd.views = vec![Some(view_camera(E1, 2.0, Some(60.0)))];
+        let mut pd = pd;
+        pd.views = vec![Some(view_camera(E1, 0.0, Some(60.0)))];
+        assert_eq!(blend(&ps, &pd, &ns, &nd, 1.0), ns);
     }
 }

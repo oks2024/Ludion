@@ -24,6 +24,8 @@ use ludion_assets::AssetRoot;
 pub(crate) struct ViewTable {
     /// The views that render, in `(order, entity)` order.
     pub(crate) views: Vec<RenderViewData>,
+    /// The entity behind each of `views`, parallel to it.
+    pub(crate) entities: Vec<EntityId>,
     /// Every authored name: its index in `views`, or `None` when the view is disabled or over budget.
     pub(crate) by_name: BTreeMap<String, Option<u32>>,
     /// The profile each rendered view names, as `(slot in views, name, entity index)`, until
@@ -105,6 +107,7 @@ pub(crate) fn extract_views(
             let index = ids.iter().position(|&other| other == id).unwrap_or(0);
             table.profile_refs.push((slot, name.to_string(), index));
         }
+        table.entities.push(id);
         table.views.push(RenderViewData {
             name: view.name.clone(),
             size,

@@ -205,5 +205,6 @@ mod ui_list_nav;
 mod ui_radial;
 mod ui_shape;
 mod ui_slice;
+mod view_blend;
 mod viewmodel;
 mod voxelizer;
