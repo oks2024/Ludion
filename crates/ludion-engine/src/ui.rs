@@ -33,6 +33,7 @@
 //!
 //! then `top_left * scale` and `element_size * scale` give the pixel-space rect.
 
+pub(crate) mod dash;
 pub(crate) mod group;
 pub(crate) mod hit;
 pub mod hud;

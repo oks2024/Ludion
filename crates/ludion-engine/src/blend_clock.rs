@@ -22,6 +22,7 @@ use crate::components::{
     Animation, AnimationLayer, AnimationLayers, BlendClock, LayerPhase, Mesh, MeshSource,
 };
 use crate::extract::{clip_elapsed, clock_elapsed, fade_weight};
+use crate::sequences::entity_clock;
 use ludion_components::animation_layers::MAX_ANIMATION_LAYERS;
 
 /// The most cycles one tick's crossings visit, the latest: a tick that spans more (an absurd rate)
@@ -85,8 +86,6 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
     let Some(mut library) = world.remove_resource::<AnimationLibrary>() else {
         return;
     };
-    let ticks = ctx.game_instant.ticks_floor();
-    let seconds = f64::from(ctx.game_dt);
     let mut candidates: Vec<(EntityId, Animation, Model)> = world
         .query_ids::<(&Animation, &Mesh)>()
         .filter_map(|(id, (animation, mesh))| match &mesh.shape {
@@ -101,6 +100,9 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
         .collect();
     candidates.sort_by_key(|(id, _, _)| *id);
     for (id, animation, model) in candidates {
+        let own = entity_clock(world, id, ctx);
+        let ticks = own.frame.as_u64();
+        let seconds = f64::from(own.dt);
         let blends = library.blends(&model);
         let blend_named = |name: &str| blends.iter().find(|blend| blend.name == name);
         let incoming = (!animation.clip.is_empty())
@@ -108,7 +110,7 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
             .flatten();
         let fading = animation.fade > 0.0
             && !animation.from.is_empty()
-            && fade_weight(&animation, ctx.game_instant).is_some();
+            && fade_weight(&animation, own.instant).is_some();
         let outgoing = fading.then(|| blend_named(&animation.from)).flatten();
         // Unrecorded: engine-optional components must not demand a game's query declaration.
         let layer_blends: Vec<(&AnimationLayer, &BlendSpaceData)> = world
@@ -144,7 +146,7 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
             .cloned()
             .unwrap_or_default();
         let fresh = !had;
-        if !ctx.game_advanced() {
+        if !own.advanced {
             if fresh {
                 continue;
             }
@@ -169,7 +171,7 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
                         name: layer.name.clone(),
                         blend: blend.name.clone(),
                         started: layer.started,
-                        phase: layer_fallback_phase(blend, layer, ctx.game_instant),
+                        phase: layer_fallback_phase(blend, layer, own.instant),
                         prev: -1.0,
                     },
                     Some(entry) => LayerPhase {
@@ -205,10 +207,9 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
             };
             clock.blend = name;
             clock.started = animation.started;
-            clock.reset = ctx.game_frame;
-            clock.phase = incoming.map_or(0.0, |blend| {
-                fallback_phase(blend, &animation, ctx.game_instant)
-            });
+            clock.reset = own.frame;
+            clock.phase =
+                incoming.map_or(0.0, |blend| fallback_phase(blend, &animation, own.instant));
             clock.prev = -1.0;
         } else {
             clock.prev = clock.phase;

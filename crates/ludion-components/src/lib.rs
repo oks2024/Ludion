@@ -116,7 +116,7 @@ pub use ui::{
     TextOutline, UiAnchorBehind, UiAnchorShow, UiClipShape, UiClock, UiEase, UiGroup, UiNav,
     UiSlice, UiSliceCenter, UiTween, UiTweenField, UiTweenRepeat, UiTweenTrack, UiWorldAnchor,
 };
-pub use ui_shape::{UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
+pub use ui_shape::{UiDash, UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
 
 /// An entity's human-readable name — the world-side home of a scene entity's `name:` field.
 ///

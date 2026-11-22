@@ -114,6 +114,19 @@ fn assert_hit_agrees_with_pixels(
     region: (u32, u32),
     min_drawn: u32,
 ) {
+    assert_hit_agrees_within(image, world, fills, region, min_drawn, 0.02);
+}
+
+/// [`assert_hit_agrees_with_pixels`] with the share of edge pixels allowed to disagree: a dashed stroke
+/// has many square ends, whose corner pixels the fringe covers a little under the exact hit.
+fn assert_hit_agrees_within(
+    image: &ludion_renderer::RenderedImage,
+    world: &ludion_ecs::World,
+    fills: &[ludion_core::ids::EntityId],
+    region: (u32, u32),
+    min_drawn: u32,
+    max_share: f64,
+) {
     let now = SimTime::from_ticks(0, TickRate::DEFAULT);
     let hit = |x: f32, y: f32| {
         fills
@@ -172,7 +185,7 @@ fn assert_hit_agrees_with_pixels(
     );
     assert!(edge > 100, "the shapes have edges ({edge} px)");
     assert!(
-        f64::from(band_mismatch) < f64::from(edge) * 0.02,
+        f64::from(band_mismatch) < f64::from(edge) * max_share,
         "{band_mismatch} of {edge} edge pixels disagree"
     );
 }
@@ -495,4 +508,130 @@ fn needs_gpu_ui_hit_agrees_with_drawn_strokes() {
         return;
     };
     assert_hit_agrees_with_pixels(&image, &world, &[ids[2], ids[3], ids[4]], (960, 540), 2_000);
+}
+
+/// A dashed circle stroke, a dashed filled rounded rect and a dashed round-capped zigzag, each inside a
+/// rect-clipped group turned 20 degrees and themselves turned 25.
+const DASHES_SCENE: &str = "format: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 5.0
+      Camera: {}
+  - components:
+      UiGroup:
+        offset:
+          - 300.0
+          - 150.0
+        size:
+          - 360.0
+          - 360.0
+        clip: rect
+        rotation: 20.0
+  - components:
+      UiShape:
+        anchor: center
+        group:
+          index: 1
+          generation: 0
+        offset:
+          - 0
+          - -105
+        shape:
+          type: circle
+          radius: 45
+        stroke:
+          width: 10.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        dash:
+          on: 30.0
+          off: 20.0
+        rotation: 25
+  - components:
+      UiShape:
+        anchor: center
+        group:
+          index: 1
+          generation: 0
+        offset:
+          - 0
+          - 0
+        shape:
+          type: rounded_rect
+          size:
+            - 220
+            - 60
+          corner_radius: 16
+        fill:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        stroke:
+          width: 10.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        dash:
+          on: 34.0
+          off: 22.0
+        rotation: 25
+  - components:
+      UiShape:
+        anchor: center
+        group:
+          index: 1
+          generation: 0
+        offset:
+          - 0
+          - 105
+        shape:
+          type: polyline
+          join: round
+          cap: round
+          points:
+          - - -110
+            - 0
+          - - -40
+            - 30
+          - - 40
+            - -25
+          - - 110
+            - 10
+        stroke:
+          width: 10.0
+          color:
+            - 1.0
+            - 1.0
+            - 1.0
+            - 1.0
+        dash:
+          on: 30.0
+          off: 24.0
+        rotation: 25
+";
+
+#[test]
+fn needs_gpu_ui_hit_agrees_with_drawn_dashes() {
+    let Some((image, world, ids)) = render(DASHES_SCENE) else {
+        return;
+    };
+    assert_hit_agrees_within(
+        &image,
+        &world,
+        &[ids[2], ids[3], ids[4]],
+        (960, 540),
+        2_000,
+        0.04,
+    );
 }

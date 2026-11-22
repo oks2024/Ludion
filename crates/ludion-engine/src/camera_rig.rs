@@ -210,6 +210,7 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
     let mut rig = rig;
     crate::camera_zone::apply(world, entity, &mut rig, target, target_position);
     let cut = rig.state.snap || rig.state.last_applied.is_none();
+    let own = crate::sequences::entity_clock(world, entity, ctx);
     let physics = world.resource::<PhysicsWorld>();
     let no_physics = rig.rig.collision.enabled && physics.is_none();
     let cast = physics
@@ -220,9 +221,9 @@ pub fn camera_rig(world: &mut World, ctx: &SystemCtx) {
         &RigInput {
             target: Some(target_position),
             path: sampler.as_deref(),
-            game_dt: ctx.game_dt,
+            game_dt: own.dt,
             dt: ctx.dt,
-            game_frame: ctx.game_frame,
+            game_frame: own.frame,
             camera_fov_y_deg,
             collision: cast.as_ref().map(|cast| cast as &dyn RigCollision),
         },

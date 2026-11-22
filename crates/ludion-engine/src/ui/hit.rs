@@ -15,7 +15,7 @@ use ludion_renderer::{SpriteInstance, UiClip, UiInstance, UiRotation};
 use super::group::{UiGroups, clip_contains, cos_sin};
 use super::hud::{self, Grouping, HudElement, HudFrame, UiEntry};
 use super::shape::path_contains;
-use super::shape::{shape_contains, shape_instance};
+use super::shape::{shape_contains, shape_instances};
 use super::{FontFace, radial_hit, radial_layout, ui_list_draw, ui_text_draw};
 use crate::components::{Anchor, UiList, UiRadial, UiRect, UiShape, UiText};
 use crate::fonts::FontLibrary;
@@ -178,17 +178,19 @@ pub fn ui_hit(
         && shape.visible
     {
         let shape = hud::pre_shape(&probe.frame, entity, shape, &mut probe.degraded);
-        if let Ok(Some(row)) = shape_instance(&shape, viewport)
-            && probe.hit(
-                HudElement::Shape,
-                shape.anchor,
-                shape.group,
-                false,
-                shape.rotation,
-                row,
-            )
-        {
-            return true;
+        if let Ok(rows) = shape_instances(&shape, viewport) {
+            for row in rows.rows {
+                if probe.hit(
+                    HudElement::Shape,
+                    shape.anchor,
+                    shape.group,
+                    false,
+                    shape.rotation,
+                    row,
+                ) {
+                    return true;
+                }
+            }
         }
     }
     if let Some(radial) = world.get::<UiRadial>(entity).ok().flatten()

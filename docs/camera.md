@@ -253,7 +253,7 @@ add_trauma(rig, 0.4);            // clamped to 1; a non-finite amount is ignored
 
 ## The clock
 
-The pipeline runs on the **gameplay clock**: a `GameClock::hold` on frame f freezes springs, blend and shake from f+1, and the rig re-poses from the frozen state, so a pause neither drifts nor jumps. Trauma and the kicks decay, and shake advances, on gameplay seconds only. Shake is applied last and never moves `CameraRig::yaw_deg()`.
+The pipeline runs on the **gameplay clock**: a `GameClock::hold` on frame f freezes springs, blend and shake from f+1, and the rig re-poses from the frozen state, so a pause neither drifts nor jumps. Trauma and the kicks decay, and shake advances, on gameplay seconds only. Shake is applied last and never moves `CameraRig::yaw_deg()`. A rig bound to a `holds_gameplay` sequence keeps its own clock through the hold (`ludion docs sequences`).
 
 ## Ordering and `camera_relative`
 

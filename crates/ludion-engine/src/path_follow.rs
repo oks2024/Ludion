@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::lane::CentreLine;
+use crate::sequences::entity_clock;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -345,7 +346,14 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
         world.insert_resource(FollowerMotions::default());
         return;
     }
-    let advance = ctx.game_advanced().then_some(f64::from(ctx.game_dt));
+    // Each follower reads its own clock: a bound actor keeps moving through a held beat.
+    let advances: Vec<Option<f64>> = followers
+        .iter()
+        .map(|(id, _)| {
+            let own = entity_clock(world, *id, ctx);
+            own.advanced.then_some(f64::from(own.dt))
+        })
+        .collect();
     let previous = world
         .resource::<FollowerMotions>()
         .map(|m| m.0.clone())
@@ -358,7 +366,7 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
     let mut poses = Vec::with_capacity(followers.len());
     let mut failures = Vec::new();
     let mut non_finite = Vec::new();
-    for (id, follower) in followers {
+    for ((id, follower), advance) in followers.into_iter().zip(advances) {
         if let Some(field) = non_finite_field(&follower) {
             non_finite.push((id, field));
             continue;
@@ -380,12 +388,13 @@ pub fn path_follow(world: &mut World, ctx: &SystemCtx) {
                     rotations,
                     posed,
                     Arc::clone(&loaded.polyline),
+                    advance,
                 ));
             }
             Err(causes) => failures.push((id, follower.path, causes.to_vec())),
         }
     }
-    for (id, speed, orientation, rotations, posed, polyline) in poses {
+    for (id, speed, orientation, rotations, posed, polyline, advance) in poses {
         let Pose {
             phase,
             position,
@@ -574,7 +583,7 @@ fn pose(sampler: &PathSampler, follower: &PathFollower, advance: Option<f64>) ->
 }
 
 /// The Euler XYZ degrees to write for a follower posed at `s` (`None`: leave the rotation alone).
-fn orient(sampler: &PathSampler, orient: PathOrient, s: f64, direction: f32) -> Option<[f32; 3]> {
+pub(crate) fn orient(sampler: &PathSampler, orient: PathOrient, s: f64, direction: f32) -> Option<[f32; 3]> {
     let facing = f64::from(direction);
     let quat = match orient {
         PathOrient::None => return None,

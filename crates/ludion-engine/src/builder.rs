@@ -1320,12 +1320,14 @@ impl EngineBuilder {
     #[must_use]
     pub fn sequences(mut self) -> Self {
         use crate::sequences::{
-            SEQUENCE_KIND, SequenceBinding, SequenceDoc, SequencePlayer, validate_sequence_docs,
+            SEQUENCE_KIND, SequenceBinding, SequenceBound, SequenceDoc, SequencePlayer,
+            validate_sequence_docs,
         };
         self.sequences = true;
         self.components(|registry| {
             registry.register::<SequencePlayer>("SequencePlayer")?;
-            registry.register::<SequenceBinding>("SequenceBinding")
+            registry.register::<SequenceBinding>("SequenceBinding")?;
+            registry.register::<SequenceBound>("SequenceBound")
         })
         .doc_kind_engine_owned::<SequenceDoc>(SEQUENCE_KIND)
         .validate_docs(validate_sequence_docs)

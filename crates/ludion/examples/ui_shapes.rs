@@ -75,4 +75,16 @@ fn main() {
     assert!(ui_shape_hit(&zigzag, viewport, [60.0, 30.0]));
     assert!(!ui_shape_hit(&zigzag, viewport, [30.0, 30.0]));
     println!("polyline: band hit, bend miss");
+
+    // The same zigzag dashed: it hits on a dash and misses in the gap between two.
+    let dashed = UiShape {
+        dash: Some(UiDash {
+            on: 20.0,
+            off: 20.0,
+        }),
+        ..zigzag
+    };
+    assert!(ui_shape_hit(&dashed, viewport, [10.0, 2.0]));
+    assert!(!ui_shape_hit(&dashed, viewport, [30.0, 2.0]));
+    println!("dash: dash hit, gap miss");
 }

@@ -145,6 +145,30 @@ fn arc_segments(theta: f32, outer: f32) -> usize {
     ((theta.abs() / step.max(1e-3)).ceil() as usize).clamp(1, 32)
 }
 
+/// Drops a vertex a dash run keeps within `reach` of its start or end when the path barely turns there
+/// (a flattened curve's facet): a join next to a segment that short clamps its inner edge into a notch.
+/// A real corner stays.
+fn trim_short_ends(mut run: Vec<Pt>, reach: f32) -> Vec<Pt> {
+    let gentle = |a: Pt, b: Pt, c: Pt| {
+        let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
+        let (lu, lv) = (dot2(u, u).sqrt(), dot2(v, v).sqrt());
+        lu > 0.0 && lv > 0.0 && dot2(u, v) > 0.9 * lu * lv
+    };
+    let len = |a: Pt, b: Pt| dot2([b[0] - a[0], b[1] - a[1]], [b[0] - a[0], b[1] - a[1]]).sqrt();
+    while run.len() >= 3 && len(run[0], run[1]) < reach && gentle(run[0], run[1], run[2]) {
+        run.remove(1);
+    }
+    while run.len() >= 3 {
+        let n = run.len();
+        if len(run[n - 2], run[n - 1]) < reach && gentle(run[n - 3], run[n - 2], run[n - 1]) {
+            run.remove(n - 2);
+        } else {
+            break;
+        }
+    }
+    run
+}
+
 /// Appends one path's stroke to `verts`: per segment a strip of four rails (a 1 px fringe on each side
 /// of the core, so the 0.5-coverage contour is the stroke edge), with joins and caps between them.
 /// Miter joins keep the shared point up to a miter limit of 4 half-widths, then bevel; round joins and
@@ -159,6 +183,18 @@ pub(super) fn push_ui_stroke_verts(
     clip: &UiClip,
     rotation: &UiRotation,
 ) {
+    if let Some([on, off]) = stroke.dash {
+        let solid = UiPathStroke {
+            dash: None,
+            ..*stroke
+        };
+        let reach = stroke.width_px.max(1.0) * 0.5 + 1.0;
+        for run in crate::ui_dash::ui_dash_runs(points, closed, on, off) {
+            let run = trim_short_ends(run, reach);
+            push_ui_stroke_verts(verts, origin_px, &run, false, &solid, clip, rotation);
+        }
+        return;
+    }
     let mut pts: Vec<Pt> = Vec::with_capacity(points.len());
     for &p in points {
         if pts.last() != Some(&p) {
@@ -492,23 +528,81 @@ mod tests {
         join: UiPathJoin,
         round_cap: bool,
     ) -> Vec<UiPolygonVertexRaw> {
-        let mut verts = Vec::new();
         let stroke = UiPathStroke {
             width_px,
             color: [1.0; 4],
             join,
             round_cap,
+            dash: None,
         };
+        verts_of(points, closed, &stroke)
+    }
+
+    fn verts_of(
+        points: &[[f32; 2]],
+        closed: bool,
+        stroke: &UiPathStroke,
+    ) -> Vec<UiPolygonVertexRaw> {
+        let mut verts = Vec::new();
         push_ui_stroke_verts(
             &mut verts,
             [0.0, 0.0],
             points,
             closed,
-            &stroke,
+            stroke,
             &UiClip::NONE,
             &UiRotation::NONE,
         );
         verts
+    }
+
+    #[test]
+    fn a_dashed_stroke_packs_the_verts_of_its_runs_stroked_open() {
+        let points = [[0.0, 0.0], [20.0, 0.0], [20.0, 20.0]];
+        let dashed = UiPathStroke {
+            width_px: 4.0,
+            color: [1.0; 4],
+            join: UiPathJoin::Round,
+            round_cap: true,
+            dash: Some([12.0, 6.0]),
+        };
+        let solid = UiPathStroke {
+            dash: None,
+            ..dashed
+        };
+        let mut expected = Vec::new();
+        for run in crate::ui_dash::ui_dash_runs(&points, false, 12.0, 6.0) {
+            expected.extend(verts_of(&run, false, &solid));
+        }
+        let got = verts_of(&points, false, &dashed);
+        assert!(!got.is_empty());
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&got),
+            bytemuck::cast_slice::<_, u8>(&expected)
+        );
+    }
+
+    #[test]
+    fn a_dash_run_drops_a_gentle_vertex_near_its_end_and_keeps_a_corner() {
+        let facet = trim_short_ends(vec![[0.0, 0.0], [10.0, 0.0], [11.0, 0.1]], 3.0);
+        assert_eq!(facet, vec![[0.0, 0.0], [11.0, 0.1]]);
+        let corner = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 1.0]];
+        assert_eq!(trim_short_ends(corner.clone(), 3.0), corner);
+        let far = vec![[0.0, 0.0], [10.0, 0.0], [20.0, 0.1]];
+        assert_eq!(trim_short_ends(far.clone(), 3.0), far);
+    }
+
+    #[test]
+    fn an_undashed_stroke_packs_exactly_the_solid_path() {
+        // The vertex count of one butt segment, pinned so a dash-free path can't drift.
+        let verts = stroke_verts(
+            &[[0.0, 0.0], [20.0, 0.0]],
+            false,
+            4.0,
+            UiPathJoin::Miter,
+            false,
+        );
+        assert_eq!(verts.len(), 54);
     }
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {

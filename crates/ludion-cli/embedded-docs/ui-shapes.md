@@ -40,7 +40,7 @@ Lengths are canvas units; angles are clock degrees (0 is 12 o'clock, clockwise).
 | `polyline` | `points`, `closed` (`false`), `join` (`miter`), `cap: butt|round` (`butt`) | stroke only; see Polylines |
 
 Other fields: `anchor` (`top_left`), `offset` (`[0,0]`, +Y down), `group`, `fill: [r,g,b,a]`, `stroke: {width, color}`,
-`rotation` (degrees clockwise, `0`), `order` (`0`), `visible` (`true`). A shape with neither fill nor stroke
+`dash: {on, off}` (none; see Dashes), `rotation` (degrees clockwise, `0`), `order` (`0`), `visible` (`true`). A shape with neither fill nor stroke
 draws nothing; so does `sweep_deg: 0` and a zero-length butt line.
 
 ## Rules
@@ -51,7 +51,7 @@ draws nothing; so does `sweep_deg: 0` and a zero-length butt line.
   `fill` on them, or no `stroke`, is `L1621`.
 - `L1621` also covers non-finite numbers, `radius <= 0`, a ring `thickness` outside `(0, radius]`, an
   `inner_radius` outside `[0, radius)`, `sweep_deg` outside `[0, 360]`, a negative `size` or `corner_radius`,
-  and a stroke `width <= 0`.
+  a stroke `width <= 0`, and a bad `dash` (non-finite, `on <= 0`, `off < 0`, or a `dash` with no `stroke`).
 - **Tweens:** `opacity`, `offset`, `scale`, `rotation` and `color` (it replaces `fill`, or the stroke colour
   when there is no fill, and always on `line`/`arc`); `size` is `L2300`. There is no `sweep_deg` track.
 - **Hit:** `ludion::math::ui_shape_hit(&shape, viewport, cursor)` tests the fill (`d < 0`) or the stroke band
@@ -84,6 +84,25 @@ cross itself. `closed: true` joins the last point back to the first, with no cap
 - A translucent polyline darkens where it crosses itself: each part is drawn over the last.
 - Tweens: `scale` multiplies the points and the stroke width, `opacity` the fill and stroke alpha, and
   `color` replaces the fill (the stroke on a polyline). Hit: the stroke band, joins and round caps.
+
+## Dashes
+
+`dash: {on, off}` (canvas units, along the stroke's centre line) cuts the stroke of any kind into dashes: `on`
+drawn, `off` skipped. `off: 0` is valid and draws the stroke solid. The fill is untouched. `UiRadial` strokes take no dash.
+
+- **Pattern.** Dashes start "on" at the path's first point and the start of a closed path is not joined to
+  the end of the last dash. Start points: `line` at `from`; `polygon`/`polyline` at `points[0]`; `circle` at 12
+  o'clock, clockwise; `arc` at `start_deg`; a ring or wedge outline at the outer arc's `start_deg`, clockwise
+  along the outer arc, back along the inner arc (or through the centre), and out along the start edge; a full-sweep
+  ring is two loops, outer then inner. `rounded_rect` starts at the top edge's left end, clockwise.
+- **Caps and joins.** A dash end takes the stroke's cap: only `line` and an open `polyline` can be `round`;
+  everything else ends butt. Corners inside one dash keep their join; flattened analytic outlines use round joins.
+- **Flattening.** The analytic kinds flatten their outline to a polyline (a 0.1 px sagitta), so a group or tween
+  scale of 2x shows 0.4 px facets.
+- **Cap.** A stroke that would make more than 1024 dashes draws solid and warns once per entity (`L2306`):
+  lengthen `on`/`off`.
+- **Hit.** A dashed stroke hits on its dashes only; the gaps miss, the fill still hits (`ui_shape_hit`, `ui_hit`).
+- Group and tween scale multiply `on`/`off` with the stroke width. An absent `dash` extracts and draws as before.
 
 ## Next
 

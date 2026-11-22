@@ -1,9 +1,13 @@
 //! [`sequence_update`]: the one system that plays, skips, cancels and ends sequences.
 //!
-//! Per player, in ascending [`EntityId`] (a later player's write to the same component wins):
+//! First, every `SequenceBound` whose player is no longer a live `holds_gameplay` player is released
+//! (or re-pointed to another holding player), shifting the entity's gameplay stamps back by the lead.
+//!
+//! Then, per player, in ascending [`EntityId`] (a later player's write to the same component wins):
 //!
 //! 1. a vanished document or a cancel ends it `Cancelled`;
-//! 2. a pending player stamps its start from its clock;
+//! 2. a pending player stamps its start from its clock, and a `holds_gameplay` one binds its role
+//!    entities and their `Parent` descendants to their own clock;
 //! 3. a skip applies the end forms and ends it `Skipped` (waits do not stop it);
 //! 4. a pending wait either clears (the line ended, or `release` was called) and the playhead
 //!    resumes from the wait's `at`, or the player stores itself and applies nothing;
@@ -23,6 +27,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::GameClock;
 use ludion_ecs::{SystemCtx, World};
 
+use super::bound::{bind, entity_clock, release_orphans};
 use super::docs::{CameraKey, DialogueWait, EventWait, OnSkip, SequenceClock, SequenceDoc};
 use super::events::{SequenceEnd, SequenceEvent, SequenceEvents, SequenceTrack};
 use super::{
@@ -62,6 +67,7 @@ pub fn sequence_update(world: &mut World, ctx: &SystemCtx) {
     if world.resource::<SequenceEvents>().is_none() {
         return;
     }
+    release_orphans(world, ctx);
     let mut players: Vec<(EntityId, SequencePlayer)> = world
         .query_ids::<(&SequencePlayer,)>()
         .map(|(id, (player,))| (id, player.clone()))
@@ -144,6 +150,10 @@ impl Beat<'_> {
         if self.player.state == PlayerState::Pending {
             self.player.state = PlayerState::Playing;
             self.player.started = now;
+            if doc.holds_gameplay {
+                let entities: Vec<EntityId> = self.roles.iter().map(|r| r.entity).collect();
+                bind(self.world, self.pid, &entities, self.ctx);
+            }
         }
         if self.player.skip {
             self.skip_to_end(&doc);
@@ -341,8 +351,8 @@ impl Beat<'_> {
         let Some(index) = self.resolve(role) else {
             return;
         };
-        let now = self.ctx.game_frame;
         let entity = self.roles[index].entity;
+        let now = entity_clock(self.world, entity, self.ctx).frame;
         let Ok(Some(animation)) = self.world.get_mut::<Animation>(entity) else {
             self.degrade(
                 &format!("animation:{role}"),

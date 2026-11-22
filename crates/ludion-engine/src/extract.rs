@@ -70,6 +70,7 @@ use crate::patterns::{self, BulletKind, PatternDoc, Volley};
 use crate::prefab::PrefabInstance;
 use crate::prefab_clips::{PartRests, PrefabClipData};
 use crate::projectile_draw::ProjectileDraw;
+use crate::sequences::bound::rebased_instant;
 use crate::static_scene::{self, Feed, StaticScene};
 use crate::ui;
 use crate::voxel_mesh::VoxelStaticGrid;
@@ -1411,9 +1412,24 @@ fn extract_inner(
         {
             let hud_start = ui_entries.len();
             let shape = ui::hud::pre_shape(&hud, id, shape, degraded);
-            match ui::shape::shape_instance(&shape, viewport) {
-                Ok(Some(row)) => ui_entries.push((shape.order, id, row)),
-                Ok(None) => {}
+            match ui::shape::shape_instances(&shape, viewport) {
+                Ok(shape_rows) => {
+                    ui_entries.extend(shape_rows.rows.into_iter().map(|row| (shape.order, id, row)));
+                    if let Some(count) = shape_rows.dash_overflow {
+                        degraded.push((
+                            format!("{}/ui-dash", crate::diagnostics::offender_key(world, id)),
+                            Diagnostic::new(
+                                code::UI_DASH_TOO_DENSE,
+                                format!(
+                                    "{id} has a `dash` that would draw {count} dashes (the limit is 1024); its stroke draws solid"
+                                ),
+                            )
+                            .with_help(
+                                "lengthen `on`/`off`; `ludion explain L2306`",
+                            ),
+                        ));
+                    }
+                }
                 Err(fault) => degraded.push((
                     format!("{}/ui-polygon", crate::diagnostics::offender_key(world, id)),
                     Diagnostic::new(
@@ -6858,7 +6874,7 @@ fn prefab_part_poses(
         let Some(animation) = get::<Animation>(world, id) else {
             continue;
         };
-        let now = held(animation, now);
+        let now = held(animation, rebased_instant(world, id, now));
         let Some(instance) = get::<PrefabInstance>(world, id).filter(|i| i.root == id) else {
             continue;
         };
@@ -7019,7 +7035,7 @@ fn flipbook_frame_name(
     if animation.clip.is_empty() {
         return None;
     }
-    let now = held(animation, now);
+    let now = held(animation, rebased_instant(world, id, now));
     let asset = atlases.resolve(assets, atlas).ok()?;
     let flipbook = asset.doc.flipbook(&animation.clip)?;
     let frame = ludion_scene::flipbook_frame(
@@ -7087,6 +7103,7 @@ pub(crate) fn held_ticks(hold: u32, ticks: u64) -> u64 {
 
 /// [`held`] for an entity's own `Animation`; `now` unchanged when it has none.
 fn held_for(world: &World, id: EntityId, now: GameTime) -> GameTime {
+    let now = rebased_instant(world, id, now);
     get::<Animation>(world, id).map_or(now, |animation| held(animation, now))
 }
 

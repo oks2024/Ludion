@@ -1,6 +1,6 @@
 # Plan: Sequencer — `kind: sequence`, keyed tracks, skip
 
-> **Waves 1–2a mechanized — the document, `sequences::play`, six tracks, skip, `holds_gameplay` and `wait: line_end`/`release` ship; the per-entity clock domain (W2b), transform spans and preview are laid out below.**
+> **Waves 1–2b mechanized — the document, `sequences::play`, six tracks, skip, `holds_gameplay`, `wait: line_end`/`release` and the per-entity clock domain (`SequenceBound`) ship; transform spans and preview are laid out below.**
 > Driven by Neon Shroud request 0025 (sequencer / timeline). Game-facing doc: `ludion docs sequences`.
 
 ## Design decisions
@@ -63,6 +63,39 @@
     ends with the player.
 18. **`sequences::holding(world) -> bool`** mirrors `dialogue::holding`: a live `holds_gameplay` sequence is holding
     the clock.
+19. **`SequenceBound { player: EntityId, bound_sim: FrameIndex, bound_game: u64 }`**: `bound_game` is the gameplay
+    instant in Q16, because `GameTime` has no serde. Its derives and `schemars(with = EntityRefSchema)` mirror
+    `SequenceBinding`. It is registered in `sequences()` beside `SequencePlayer`. Its instant is
+    `bound_game + (sim − bound_sim)·Q16`.
+20. **Bind.** On the Pending→Playing tick of a `holds_gameplay` player, `sequence_update` binds every role entity
+    that is alive, plus each of its descendants. A descendant is any entity whose `Parent` chain
+    (`hierarchy::parent_of`, walked up) reaches a role entity. The binding stamps `bound_sim = ctx.frame` and
+    `bound_game = ctx.game_instant.as_q16()`. An entity that is already bound keeps its binding. A descendant spawned
+    later is not bound. A non-holding player never binds.
+21. **The readers take the entity clock.** `sequences::entity_clock(world, id, ctx) -> EntityClock { instant:
+    GameTime, frame: FrameIndex, dt: f32, scale: f32, advanced: bool }`:
+    - bound: the instant above, `frame` its floor, `dt = ctx.dt`, `scale = 1.0`, `advanced = true`;
+    - unbound: exactly `ctx.game_instant/game_frame/game_dt/game_scale()/game_advanced()`.
+    Extract's three leaves (`held_for`, `prefab_part_poses`, `flipbook_frame_name`) use
+    `rebased_instant(world, id, game_now)`, which recovers the sim instant from `GameClock::excluded_q16`. The
+    sequence's own animation key stamps `crossfade` at the role's `entity_clock(..).frame`.
+22. **Release.** At the **start** of `sequence_update`, before any player steps, each `SequenceBound` whose `player`
+    is no longer a live `holds_gameplay` player is handled in one of two ways:
+    - If another live holding player binds the entity (as a role, or through a role ancestor), its `player` is
+      re-pointed to that player, with the stamps unchanged.
+    - Otherwise it is released. `lead = round((instant − ctx.game_instant)/Q16)` whole frames. Every gameplay stamp
+      whose reader takes the entity clock shifts back by `lead` (`saturating_sub`): `Animation.{started,
+      from_started, fade_started}` and `{anchor, from_anchor}.{started, frame}`; `AnimationLayers.layers[].{started,
+      changed}`; `BlendClock.{started, reset}` and `layers[].started`; `CameraRig.state.blend.started`. Then the
+      component is removed.
+    Pre-bind stamps shift too: a clip started before the bind would otherwise jump by the lead. Stamps whose readers
+    use the global clock (`AnimGraphState.entered`, `ParticleEmitter`, `PatternPlayer`) do not shift. The lead is
+    whole when no time scale was active around the bind; otherwise the actor can step by less than one frame. Stamps
+    are unsigned, so a stamp younger than the lead saturates at frame 0.
+23. **The opt-out is engine-owned and scoped:** there is no per-component flag, and `ctx.game_*` never changes. A
+    game system that writes a bound actor's `Animation` during the hold stamps it from `entity_clock(..).frame`.
+24. **Out of the domain:** particles, volleys, patterns, ai and anything else not in decision 22's list follow the
+    global clock. A checkpoint restore mid-bind rebases the global clock but not `bound_*`; this is a known limit.
 
 ## Waves
 
@@ -71,13 +104,12 @@
   `ludion docs sequences`.
 - **W2a holds (shipped):** `holds_gameplay`, `wait: line_end`, `wait: release`, `sequences::release`/`holding`,
   `L1734`/`L1735`.
-- **W2b per-entity clock domain:** `SequenceBound { player, bound_sim, bound_game }`, added and removed by the engine on
+- **W2b per-entity clock domain (shipped):** `SequenceBound { player, bound_sim, bound_game }`, added and removed by the engine on
   the bound roles and their hierarchy children. It gives a per-entity instant `bound_game + (sim_now − bound_sim)`
   while bound. Every gameplay-time reader takes it: `extract.rs` closed forms, `parent_joint.rs`,
   `animation_events.rs`, `blend_clock.rs`, `camera_rig.rs`, `path_follow.rs` and the sequence's own animation stamp.
-  At release the stamps each actor took during the hold (`Animation.started`, crossfades and layers, the rig blend
-  start) shift back by the lead, so nothing jumps. `docs/game-clock.md`'s "no per-component opt-out" line is amended
-  there (request amendment 2, **accepted 2026-11-19, scheduled (W2b)**).
+  At release the gameplay stamps of the entity clock's readers (decision 22) shift back by the lead, so nothing jumps. `docs/game-clock.md`'s "no per-component opt-out" line is amended
+  there (request amendment 2, **accepted 2026-11-19, shipped in W2b**).
 - **W3:** the transform track (anchor pose and ease, `kind: path` spans), audio voices stopped on skip,
   `music_crossfade`, duck keys, the camera-zone override flag (with request 0010).
 - **W4:** built-in schedule placement, `ludion render --sequence --bind --at`, wire `sequence.play/seek/skip` (a
@@ -89,7 +121,7 @@
 
 ## Owner rulings (2026-11-19)
 
-- Accepted, scheduled (W2b, for amendment 2). Request amendments 2 (a per-entity clock domain, W2b) and 3 (waits are not a state machine).
+- Accepted; amendment 2 shipped in W2b. Request amendments 2 (a per-entity clock domain, W2b) and 3 (waits are not a state machine).
 - Shipped in W2a (decision 13). `SequenceDoc.clock` becomes an `Option` (a public field type; no game uses sequences, grep of both game roots
   2026-11-19), and `sequences::release` is a single latch taking a handle, not the request's `release(entity)`.
 - Accepted. `skippable` defaults to `true`.
@@ -99,5 +131,9 @@
 
 - W1 mechanized: `crates/ludion-engine/src/sequences/`, `tests/sequences.rs`, `crates/ludion/examples/sequence.rs`.
 - W2a mechanized: `sequences/{docs,mod,update}.rs`, `tests/sequences.rs`, `L1734`/`L1735` in `codes.rs`,
-  `docs/sequences.md`, `docs/game-clock.md`, the example. Limit until W2b: a `holds_gameplay` beat freezes its bound
-  actors' animation and camera; only real-clock ui tracks, audio, dialogue and events advance.
+  `docs/sequences.md`, `docs/game-clock.md`, the example.
+- W2b mechanized: `sequences/bound.rs` (`SequenceBound`, `entity_clock`, bind and release), `sequence_update`, the
+  readers (`extract.rs` leaves, `animation_events.rs`, `blend_clock.rs`, `camera_rig.rs`, `path_follow.rs`),
+  `GameClock::excluded_q16`, `tests/sequence_clock.rs`, `docs/{sequences,game-clock,camera}.md`, the example. Known
+  limits: a checkpoint restore mid-bind rebases the global clock but not `bound_*`; a stamp younger than the lead
+  saturates at frame 0 on release.

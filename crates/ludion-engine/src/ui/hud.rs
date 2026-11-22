@@ -452,10 +452,19 @@ pub(crate) fn transform_instances(
                 scale_points(points, scale);
                 if let Some(stroke) = stroke {
                     stroke.width_px *= scale;
+                    scale_dash(&mut stroke.dash, scale);
                 }
                 turn(rotation);
             }
         }
+    }
+}
+
+/// Scales a stroke's dash lengths by `k` with its width (decision 87).
+fn scale_dash(dash: &mut Option<[f32; 2]>, k: f32) {
+    if let Some([on, off]) = dash {
+        *on *= k;
+        *off *= k;
     }
 }
 
@@ -755,6 +764,7 @@ fn rotate_into_group(instances: &mut [UiEntry], xf: &GroupXf) {
                 scale_points(points, xf.scale);
                 if let Some(stroke) = stroke {
                     stroke.width_px *= xf.scale;
+                    scale_dash(&mut stroke.dash, xf.scale);
                 }
             }
         }
@@ -1158,6 +1168,43 @@ mod tests {
         assert_eq!(origin, [210.0, 120.0]);
         assert_eq!((outer, inner, stroke), (80.0, 60.0, 8.0));
         assert_eq!(rotation, UiRotation::NONE);
+    }
+
+    #[test]
+    fn a_scaled_group_doubles_a_path_strokes_dash_with_its_width() {
+        let xf = GroupXf {
+            scale: 2.0,
+            ..identity_xf()
+        };
+        let mut rows: Vec<UiEntry> = vec![(
+            0,
+            EntityId::new(0, 0),
+            UiInstance::Polygon {
+                origin_px: [0.0, 0.0],
+                points: vec![[0.0, 0.0], [10.0, 0.0]],
+                closed: false,
+                triangles: Vec::new(),
+                fill: None,
+                stroke: Some(ludion_renderer::UiPathStroke {
+                    width_px: 3.0,
+                    color: [1.0; 4],
+                    join: ludion_renderer::UiPathJoin::Round,
+                    round_cap: false,
+                    dash: Some([6.0, 4.0]),
+                }),
+                clip: UiClip::NONE,
+                rotation: UiRotation::NONE,
+            },
+        )];
+        apply_group(&mut rows, 0, Some(xf));
+        let UiInstance::Polygon {
+            stroke: Some(stroke),
+            ..
+        } = &rows[0].2
+        else {
+            unreachable!()
+        };
+        assert_eq!((stroke.width_px, stroke.dash), (6.0, Some([12.0, 8.0])));
     }
 
     #[test]

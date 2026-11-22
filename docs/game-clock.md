@@ -97,7 +97,8 @@ fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
   `ludion docs patterns`.
 
 - Animation playback — flipbooks and assembly clips alike — follows the gameplay clock too: one
-  clock, no per-component opt-out.
+  clock; the only opt-out is engine-owned: the entities bound to a `holds_gameplay` sequence read their
+  own instant (`ludion docs sequences`).
 - `GameClock` is a resource, so it is never a `WorldHash` term; a diverging hold surfaces
   indirectly, as diverging entity data (volleys reaped or not, timelines fired or not). It **is**
   carried by `engine.snapshot`/`engine.restore` — the `game_clock` field, omitted from the document

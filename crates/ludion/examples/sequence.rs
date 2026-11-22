@@ -25,6 +25,25 @@ fn game(root: PathBuf) -> EngineBuilder {
         .sequences()
         .system("sequence_update", sequence_update)
         .system("dialogue_update", dialogue_update)
+        .system("sample", sample)
+}
+
+/// Per tick: the global gameplay frame and the first `Animation` entity's own frame.
+#[derive(Default)]
+struct Frames(Vec<(u64, u64)>);
+
+/// A game system reads a bound actor's time through `sequences::entity_clock`, never `ctx.game_*`.
+fn sample(world: &mut World, ctx: &SystemCtx) {
+    let Some(actor) = world.query_ids::<(&Animation,)>().next().map(|(id, _)| id) else {
+        return;
+    };
+    let own = sequences::entity_clock(world, actor, ctx).frame.as_u64();
+    if world.resource::<Frames>().is_none() {
+        world.insert_resource(Frames::default());
+    }
+    if let Some(frames) = world.resource_mut::<Frames>() {
+        frames.0.push((ctx.game_frame.as_u64(), own));
+    }
 }
 
 const STRINGS: &str = "format: 1
@@ -92,9 +111,12 @@ tracks:
       name: radar_online
 ";
 
-/// Holds gameplay while it plays and parks after `door_open` until the game releases it.
+/// Holds gameplay while it plays and parks after `door_open` until the game releases it; its `actor`
+/// keeps its own clock through the hold.
 const DOOR: &str = "format: 1
 kind: sequence
+roles:
+  - actor
 length_ticks: 30
 holds_gameplay: true
 tracks:
@@ -175,7 +197,17 @@ fn door(root: &std::path::Path) -> Option<bool> {
     engine
         .load_inline_scene("format: 1\nseed: 1\nentities: []\n")
         .ok()?;
-    let handle = sequences::play(engine.world_mut(), "sequences/door.yaml", &[]).ok()?;
+    let actor = engine.world_mut().spawn();
+    engine
+        .world_mut()
+        .insert(actor, Animation::default())
+        .ok()?;
+    let handle = sequences::play(
+        engine.world_mut(),
+        "sequences/door.yaml",
+        &[("actor", actor)],
+    )
+    .ok()?;
     let step = |engine: &mut Engine| {
         engine
             .execute(Command::SimStep(command::SimStepParams {
@@ -190,13 +222,20 @@ fn door(root: &std::path::Path) -> Option<bool> {
     let parked =
         sequences::is_playing(engine.world(), handle) && sequences::holding(engine.world_mut());
     println!("door: parked on the wait after 20 ticks: {parked}");
+    let frames = engine.world().resource::<Frames>()?.0.clone();
+    let (first, last) = (frames.get(2)?, frames.last()?);
+    let bound = first.0 == last.0 && last.1 > first.1 + 10;
+    println!(
+        "door: global frame {} -> {}, the actor's {} -> {}",
+        first.0, last.0, first.1, last.1
+    );
     sequences::release(engine.world_mut(), handle);
     for _ in 0..30 {
         step(&mut engine)?;
     }
     let ended = !sequences::is_playing(engine.world(), handle);
     println!("door: ended after the release: {ended}");
-    Some(parked && ended)
+    Some(parked && ended && bound)
 }
 
 fn main() -> ExitCode {

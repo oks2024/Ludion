@@ -107,6 +107,22 @@ wait at a time: two at one `at` is `L1735`. `release` is one latch, not a counte
 reached, it clears the next one, so an early release cannot stall the beat; it returns `false` for a dead handle.
 `skip` and `cancel` ignore waits, and the hold ends with the beat.
 
+## Bound actors
+
+While a `holds_gameplay` beat plays, the entities bound to its roles and every `Parent` descendant of one (found when
+the beat starts; a child spawned later is not bound) get a `SequenceBound` and run on their own gameplay instant,
+`bound_game + (sim − bound_sim)`, in Q16 frames. Their animation poses, clip events, blend clocks, camera spring and
+`PathFollower` keep moving through the hold; every unbound entity and every `ctx.game_*` stays frozen. A game system
+reads a bound entity's time with `sequences::entity_clock(world, id, ctx)`, which returns the global `ctx.game_*`
+values for an unbound one.
+
+The bind is released on the tick **after** the beat ends (the two-frame rule), and a bound entity another holding
+beat binds is handed to it instead. On release every gameplay stamp that reads the entity clock (`Animation`,
+`AnimationLayers`, `BlendClock`, `CameraRig` blend) shifts back by the lead, so the actor does not jump. Stamps are
+unsigned: a clip stamped inside a hold that outlasts the game's age saturates at frame 0. Particles, volleys,
+patterns, ai and `AnimGraphState` follow the global clock. A checkpoint restore mid-bind rebases the global clock
+but not `SequenceBound`.
+
 ## Skip and cancel
 
 `skip` returns `false` when the handle is dead or the doc says `skippable: false`. Otherwise, per role, the last
@@ -141,8 +157,8 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
   Entity refs in a list are refused (`L1392`), hence one binding entity per role.
 - Scheduled after `dialogue_update`, a dialogue key starts a tick late.
 - An opted-in game that never plays hashes as if it had not opted in.
-- A `holds_gameplay` beat freezes its bound actors too: their animation and camera read the held
-  gameplay clock. Only real-clock ui tracks, audio, dialogue and events advance.
+- A game system that writes a bound actor's `Animation` during the hold stamps from
+  `sequences::entity_clock(world, id, ctx).frame`, not `ctx.game_frame`.
 
 ## Next
 

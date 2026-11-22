@@ -1146,6 +1146,9 @@ pub struct UiPathStroke {
     pub join: UiPathJoin,
     /// Whether an open path's ends are half-discs (otherwise flush); ignored when closed.
     pub round_cap: bool,
+    /// `[on_px, off_px]`, both above 0: the path is cut into dashes (see `ui_dash_runs`), each stroked
+    /// open. `None` strokes the path solid.
+    pub dash: Option<[f32; 2]>,
 }
 
 /// One resolved screen-space UI element: a colored/textured rect, or a run of screen-space

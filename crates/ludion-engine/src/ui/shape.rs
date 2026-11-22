@@ -8,8 +8,10 @@
 use ludion_core::math::{hypot, sin_cos};
 use ludion_renderer::{
     UiClip, UiInstance, UiPathJoin, UiPathStroke, UiRotation, UiShapeGeometry, UiShapeStroke,
+    ui_dash_runs,
 };
 
+use super::dash::{outlines, path_length};
 use super::group::cos_sin;
 use super::polygon::{PolygonFault, dedup_points, polygon_contains, stroke_contains, triangulate};
 use super::{canvas_anchor_px, pixel_scale};
@@ -17,28 +19,71 @@ use crate::components::{UiLineCap, UiLineJoin, UiShape, UiShapeType};
 
 const TAU: f32 = std::f32::consts::TAU;
 
+/// More dashes than this draw the stroke solid instead (decision 86).
+const MAX_DASHES: usize = 1024;
+
+/// The rows one [`UiShape`] draws, and the dash count when the density cap made its stroke solid.
+pub(crate) struct ShapeRows {
+    pub rows: Vec<UiInstance>,
+    pub dash_overflow: Option<usize>,
+}
+
 /// The shape as `extract` draws it before tweens and groups act: origin and geometry in pixels, the
-/// fill and stroke. `None` when nothing draws: an invisible shape, no fill and no stroke, a zero
-/// sweep or a zero-length butt line.
+/// fill and stroke. No rows when nothing draws: an invisible shape, no fill and no stroke, a zero
+/// sweep or a zero-length butt line. An undashed shape is one row.
 ///
 /// `line` and `arc` carry no stroke in the instance: their geometry is the stroke band, drawn as a
-/// fill of the stroke colour (decision 56).
-pub(crate) fn shape_instance(
+/// fill of the stroke colour (decision 56). A dashed analytic shape is its fill as a `Shape` row,
+/// then one stroke-only `Polygon` row per outline (decision 85).
+pub(crate) fn shape_instances(
     shape: &UiShape,
     viewport: (u32, u32),
-) -> Result<Option<UiInstance>, PolygonFault> {
+) -> Result<ShapeRows, PolygonFault> {
+    let mut out = ShapeRows {
+        rows: Vec::new(),
+        dash_overflow: None,
+    };
     match &shape.shape {
-        UiShapeType::Polygon { points, join } => {
-            path_instance(shape, points, None, *join, UiLineCap::Butt, viewport)
-        }
+        UiShapeType::Polygon { points, join } => out.rows.extend(path_instance(
+            shape,
+            points,
+            None,
+            *join,
+            UiLineCap::Butt,
+            viewport,
+            &mut out.dash_overflow,
+        )?),
         UiShapeType::Polyline {
             points,
             closed,
             join,
             cap,
-        } => path_instance(shape, points, Some(*closed), *join, *cap, viewport),
-        _ => Ok(analytic_instance(shape, viewport)),
+        } => out.rows.extend(path_instance(
+            shape,
+            points,
+            Some(*closed),
+            *join,
+            *cap,
+            viewport,
+            &mut out.dash_overflow,
+        )?),
+        _ => analytic_rows(shape, viewport, &mut out),
     }
+    Ok(out)
+}
+
+/// The shape's dash in pixels: `[on, off]` when it has a stroke and a pattern that cuts (`off` above 0).
+fn dash_px(shape: &UiShape, ps: f32) -> Option<[f32; 2]> {
+    let dash = shape.dash?;
+    shape.stroke?;
+    let (on, off) = (dash.on * ps, dash.off * ps);
+    (on.is_finite() && off.is_finite() && on > 0.0 && off > 0.0).then_some([on, off])
+}
+
+/// The dash count of `length_px` of path under `dash`, when it is over the cap.
+fn too_dense(length_px: f32, dash: [f32; 2]) -> Option<usize> {
+    let count = (length_px / (dash[0] + dash[1])).ceil() as usize;
+    (count > MAX_DASHES).then_some(count)
 }
 
 /// The kind name a path fault is reported under.
@@ -62,7 +107,13 @@ pub(crate) fn path_contains(
         || stroke.is_some_and(|s| {
             // A stroke under 1 px draws at 1 px, so it hits as one.
             let half = s.width_px.max(1.0) * 0.5;
-            stroke_contains(points, closed, half, s.join, s.round_cap, local)
+            match s.dash {
+                // Each dash is an open stroke with the dash cap; the gaps miss (decision 87).
+                Some([on, off]) => ui_dash_runs(points, closed, on, off)
+                    .iter()
+                    .any(|run| stroke_contains(run, false, half, s.join, s.round_cap, local)),
+                None => stroke_contains(points, closed, half, s.join, s.round_cap, local),
+            }
         })
 }
 
@@ -76,6 +127,7 @@ fn path_instance(
     join: UiLineJoin,
     cap: UiLineCap,
     viewport: (u32, u32),
+    dash_overflow: &mut Option<usize>,
 ) -> Result<Option<UiInstance>, PolygonFault> {
     let closed = polyline.unwrap_or(true);
     let fill = shape.fill.filter(|_| polyline.is_none());
@@ -109,6 +161,10 @@ fn path_instance(
             Vec::new()
         }
     };
+    let dash = dash_px(shape, ps).filter(|&dash| {
+        *dash_overflow = too_dense(path_length(&points, closed), dash);
+        dash_overflow.is_none()
+    });
     let stroke = shape.stroke.map(|s| UiPathStroke {
         width_px: s.width * ps,
         color: s.color,
@@ -118,6 +174,7 @@ fn path_instance(
             UiLineJoin::Bevel => UiPathJoin::Bevel,
         },
         round_cap: cap == UiLineCap::Round && !closed,
+        dash,
     });
     Ok(Some(UiInstance::Polygon {
         origin_px: [
@@ -132,6 +189,82 @@ fn path_instance(
         clip: UiClip::NONE,
         rotation: UiRotation::NONE,
     }))
+}
+
+/// The analytic kinds' rows: today's single [`analytic_instance`] row, or when dashed its fill and one
+/// stroke-only path row per outline (decision 85).
+fn analytic_rows(shape: &UiShape, viewport: (u32, u32), out: &mut ShapeRows) {
+    let Some(base) = analytic_instance(shape, viewport) else {
+        return;
+    };
+    let ps = pixel_scale(viewport);
+    let (Some(dash), Some(stroke)) = (dash_px(shape, ps), shape.stroke) else {
+        out.rows.push(base);
+        return;
+    };
+    let loops = outlines(&shape.shape, ps);
+    let length: f32 = loops
+        .iter()
+        .map(|(p, closed)| path_length(p, *closed))
+        .sum();
+    if loops.is_empty() || {
+        out.dash_overflow = too_dense(length, dash);
+        out.dash_overflow.is_some()
+    } {
+        out.rows.push(base);
+        return;
+    }
+    let UiInstance::Shape {
+        origin_px,
+        geometry,
+        fill,
+        clip,
+        rotation,
+        ..
+    } = base
+    else {
+        return;
+    };
+    // `line` and `arc` carry their stroke band as the fill; dashed, only the outline draws.
+    if !matches!(
+        shape.shape,
+        UiShapeType::Line { .. } | UiShapeType::Arc { .. }
+    ) && fill.is_some()
+    {
+        out.rows.push(UiInstance::Shape {
+            origin_px,
+            geometry,
+            fill,
+            stroke: None,
+            clip,
+            rotation,
+        });
+    }
+    let round_cap = matches!(
+        shape.shape,
+        UiShapeType::Line {
+            cap: UiLineCap::Round,
+            ..
+        }
+    );
+    for (points, closed) in loops {
+        out.rows.push(UiInstance::Polygon {
+            origin_px,
+            points,
+            closed,
+            triangles: Vec::new(),
+            fill: None,
+            stroke: Some(UiPathStroke {
+                width_px: stroke.width * ps,
+                color: stroke.color,
+                join: UiPathJoin::Round,
+                round_cap: round_cap && !closed,
+                dash: Some(dash),
+            }),
+            clip: UiClip::NONE,
+            rotation: UiRotation::NONE,
+        });
+    }
 }
 
 fn analytic_instance(shape: &UiShape, viewport: (u32, u32)) -> Option<UiInstance> {
@@ -441,36 +574,40 @@ pub fn ui_shape_hit(shape: &UiShape, viewport: (u32, u32), cursor: [f32; 2]) -> 
     if !cursor.iter().all(|c| c.is_finite()) {
         return false;
     }
-    let Ok(Some(instance)) = shape_instance(shape, viewport) else {
+    let Ok(rows) = shape_instances(shape, viewport) else {
         return false;
     };
-    let origin_px = match &instance {
-        UiInstance::Shape { origin_px, .. } | UiInstance::Polygon { origin_px, .. } => *origin_px,
-        _ => return false,
-    };
-    let (dx, dy) = (cursor[0] - origin_px[0], cursor[1] - origin_px[1]);
-    let local = if shape.rotation == 0.0 {
-        [dx, dy]
-    } else {
-        let (c, s) = cos_sin(shape.rotation.to_radians());
-        [c * dx + s * dy, -s * dx + c * dy]
-    };
-    match &instance {
-        UiInstance::Shape {
-            geometry,
-            fill,
-            stroke,
-            ..
-        } => shape_contains(geometry, fill.is_some(), stroke.map(|s| s.width_px), local),
-        UiInstance::Polygon {
-            points,
-            closed,
-            fill,
-            stroke,
-            ..
-        } => path_contains(points, *closed, fill.is_some(), stroke.as_ref(), local),
-        _ => false,
-    }
+    rows.rows.iter().any(|instance| {
+        let origin_px = match instance {
+            UiInstance::Shape { origin_px, .. } | UiInstance::Polygon { origin_px, .. } => {
+                *origin_px
+            }
+            _ => return false,
+        };
+        let (dx, dy) = (cursor[0] - origin_px[0], cursor[1] - origin_px[1]);
+        let local = if shape.rotation == 0.0 {
+            [dx, dy]
+        } else {
+            let (c, s) = cos_sin(shape.rotation.to_radians());
+            [c * dx + s * dy, -s * dx + c * dy]
+        };
+        match instance {
+            UiInstance::Shape {
+                geometry,
+                fill,
+                stroke,
+                ..
+            } => shape_contains(geometry, fill.is_some(), stroke.map(|s| s.width_px), local),
+            UiInstance::Polygon {
+                points,
+                closed,
+                fill,
+                stroke,
+                ..
+            } => path_contains(points, *closed, fill.is_some(), stroke.as_ref(), local),
+            _ => false,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -605,11 +742,12 @@ mod tests {
             fill: Some([1.0; 4]),
             ..UiShape::default()
         };
-        assert!(shape_instance(&ring, viewport).unwrap().is_none());
+        assert!(shape_instances(&ring, viewport).unwrap().rows.is_empty());
         assert!(
-            shape_instance(&UiShape::default(), viewport)
+            shape_instances(&UiShape::default(), viewport)
                 .unwrap()
-                .is_none()
+                .rows
+                .is_empty()
         );
         let zero_line = UiShape {
             shape: UiShapeType::Line {
@@ -623,7 +761,12 @@ mod tests {
             }),
             ..UiShape::default()
         };
-        assert!(shape_instance(&zero_line, viewport).unwrap().is_none());
+        assert!(
+            shape_instances(&zero_line, viewport)
+                .unwrap()
+                .rows
+                .is_empty()
+        );
     }
 
     #[test]
@@ -640,19 +783,22 @@ mod tests {
             }),
             ..UiShape::default()
         };
-        let Ok(Some(UiInstance::Shape {
-            geometry,
-            fill,
-            stroke,
-            ..
-        })) = shape_instance(&arc, (1080, 1080))
+        let rows = shape_instances(&arc, (1080, 1080)).unwrap().rows;
+        let [
+            UiInstance::Shape {
+                geometry,
+                fill,
+                stroke,
+                ..
+            },
+        ] = rows.as_slice()
         else {
-            panic!("an arc draws");
+            panic!("an arc draws one row");
         };
-        assert_eq!(fill, Some([0.0, 1.0, 0.0, 1.0]));
+        assert_eq!(*fill, Some([0.0, 1.0, 0.0, 1.0]));
         assert!(stroke.is_none());
         assert_eq!(
-            geometry,
+            *geometry,
             UiShapeGeometry::Sector {
                 radius_outer: 35.0,
                 radius_inner: 25.0,
@@ -660,5 +806,157 @@ mod tests {
                 sweep: TAU,
             }
         );
+    }
+
+    fn dashed(shape: UiShapeType, fill: Option<[f32; 4]>, on: f32, off: f32) -> UiShape {
+        UiShape {
+            shape,
+            fill,
+            stroke: Some(crate::components::UiStroke {
+                width: 4.0,
+                color: [1.0, 0.0, 0.0, 1.0],
+            }),
+            dash: Some(crate::components::UiDash { on, off }),
+            ..UiShape::default()
+        }
+    }
+
+    #[test]
+    fn an_undashed_or_zero_off_shape_is_todays_single_row() {
+        let viewport = (1080, 1080);
+        let circle = UiShape {
+            shape: UiShapeType::Circle { radius: 30.0 },
+            fill: Some([1.0; 4]),
+            stroke: Some(crate::components::UiStroke {
+                width: 4.0,
+                color: [0.0, 1.0, 0.0, 1.0],
+            }),
+            ..UiShape::default()
+        };
+        let plain = shape_instances(&circle, viewport).unwrap().rows;
+        assert_eq!(plain.len(), 1);
+        let zero_off = UiShape {
+            dash: Some(crate::components::UiDash { on: 5.0, off: 0.0 }),
+            ..circle.clone()
+        };
+        let rows = shape_instances(&zero_off, viewport).unwrap();
+        assert_eq!(rows.rows, plain);
+        assert!(rows.dash_overflow.is_none());
+        let polyline = |dash| UiShape {
+            shape: UiShapeType::Polyline {
+                points: vec![[0.0, 0.0], [40.0, 0.0], [40.0, 30.0]],
+                closed: false,
+                join: UiLineJoin::Miter,
+                cap: UiLineCap::Butt,
+            },
+            stroke: circle.stroke,
+            dash,
+            ..UiShape::default()
+        };
+        assert_eq!(
+            shape_instances(
+                &polyline(Some(crate::components::UiDash { on: 5.0, off: 0.0 })),
+                viewport
+            )
+            .unwrap()
+            .rows,
+            shape_instances(&polyline(None), viewport).unwrap().rows
+        );
+    }
+
+    #[test]
+    fn a_dashed_filled_circle_is_its_fill_then_an_outline() {
+        let circle = dashed(
+            UiShapeType::Circle { radius: 30.0 },
+            Some([1.0; 4]),
+            6.0,
+            4.0,
+        );
+        let rows = shape_instances(&circle, (1080, 1080)).unwrap().rows;
+        assert!(matches!(
+            rows.as_slice(),
+            [
+                UiInstance::Shape {
+                    fill: Some(_),
+                    stroke: None,
+                    ..
+                },
+                UiInstance::Polygon {
+                    fill: None,
+                    closed: true,
+                    stroke: Some(UiPathStroke {
+                        join: UiPathJoin::Round,
+                        dash: Some([6.0, 4.0]),
+                        ..
+                    }),
+                    ..
+                }
+            ]
+        ));
+    }
+
+    #[test]
+    fn a_dashed_line_is_only_a_path_row_with_the_round_cap() {
+        let line = dashed(
+            UiShapeType::Line {
+                from: [0.0, 0.0],
+                to: [100.0, 0.0],
+                cap: UiLineCap::Round,
+            },
+            None,
+            10.0,
+            5.0,
+        );
+        let rows = shape_instances(&line, (1080, 1080)).unwrap().rows;
+        let [
+            UiInstance::Polygon {
+                stroke: Some(stroke),
+                ..
+            },
+        ] = rows.as_slice()
+        else {
+            panic!("one path row, got {rows:?}");
+        };
+        assert!(stroke.round_cap);
+    }
+
+    #[test]
+    fn a_dash_hits_the_dash_not_the_gap_and_the_fill_still_hits() {
+        let viewport = (1080, 1080);
+        let line = dashed(
+            UiShapeType::Line {
+                from: [0.0, 0.0],
+                to: [100.0, 0.0],
+                cap: UiLineCap::Butt,
+            },
+            None,
+            10.0,
+            10.0,
+        );
+        assert!(ui_shape_hit(&line, viewport, [5.0, 0.0]));
+        assert!(!ui_shape_hit(&line, viewport, [15.0, 0.0]));
+        assert!(ui_shape_hit(&line, viewport, [25.0, 0.0]));
+        let disc = dashed(
+            UiShapeType::Circle { radius: 40.0 },
+            Some([1.0; 4]),
+            6.0,
+            30.0,
+        );
+        assert!(ui_shape_hit(&disc, viewport, [0.0, 0.0]));
+    }
+
+    #[test]
+    fn a_dense_dash_draws_solid_and_reports_the_count() {
+        let circle = dashed(UiShapeType::Circle { radius: 1000.0 }, None, 0.1, 0.1);
+        let rows = shape_instances(&circle, (1080, 1080)).unwrap();
+        assert!(rows.dash_overflow.is_some_and(|n| n > MAX_DASHES));
+        assert_eq!(rows.rows.len(), 1);
+        assert!(matches!(
+            &rows.rows[0],
+            UiInstance::Shape {
+                stroke: Some(_),
+                ..
+            }
+        ));
     }
 }

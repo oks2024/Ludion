@@ -92,6 +92,7 @@ use crate::components::{
 };
 use crate::extract::clock_elapsed;
 use crate::prefab::PrefabInstance;
+use crate::sequences::bound::{self, entity_clock};
 use ludion_components::animation_layers::MAX_ANIMATION_LAYERS;
 
 /// The reserved name of the implicit event a one-shot clip fires when it finishes.
@@ -364,7 +365,7 @@ impl AnimationEvents {
 /// Reading a specific entity's event is `events.fired(entity, "attack", "end")`.
 pub fn animation_events(world: &mut World, ctx: &SystemCtx) {
     let mut fired = Vec::new();
-    if ctx.game_advanced() {
+    if ctx.game_advanced() || bound::any_bound(world) {
         walk(world, ctx, &mut fired);
     }
     match world.resource_mut::<AnimationEvents>() {
@@ -404,8 +405,8 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
     };
     let mut record = world.remove_resource::<AnimationWalk>();
 
-    let now = ctx.game_instant;
-    let ticks = now.ticks_floor();
+    // The record's tick is the world's gameplay tick; each entity walks on its own clock.
+    let record_tick = ctx.game_instant.ticks_floor();
     let mut failures = Vec::new();
     let mut walked = Vec::new();
     // Entities in ascending id order: a mesh model, else the instance's prefab for a root part.
@@ -444,6 +445,18 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
         }
     }
     for (id, (animation, model)) in playing {
+        let own = entity_clock(world, id, ctx);
+        if !own.advanced {
+            // Not walked this tick: its record stays where it stopped.
+            let kept = record.as_ref().and_then(|record| {
+                let index = record.clips.binary_search_by_key(&id, |c| c.entity).ok()?;
+                Some(record.clips[index].clone())
+            });
+            walked.extend(kept);
+            continue;
+        }
+        let (now, ticks) = (own.instant, own.frame.as_u64());
+        let bound = bound::is_bound(world, id);
         let animation = &animation;
         let clip = &animation.clip;
         'base: {
@@ -498,7 +511,8 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
                 .as_ref()
                 // A scaled clock repeats a gameplay tick across sim ticks, so the same tick resumes too.
                 .filter(|(tick, last)| {
-                    (*tick == ticks || tick + 1 == ticks)
+                    // A bound entity advances every tick, so its record is always the previous walk's.
+                    (bound || *tick == ticks || tick + 1 == ticks)
                         && last.clip == *clip
                         && last.started == frame
                 })
@@ -536,7 +550,7 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
     }
     world.insert_resource(library);
     world.insert_resource(AnimationWalk {
-        tick: ticks,
+        tick: record_tick,
         clips: walked,
     });
     for (id, clip, rel, causes) in failures {
@@ -575,9 +589,9 @@ fn walk_layers(
     let Some(stack) = world.get_unrecorded::<AnimationLayers>(id).ok().flatten() else {
         return;
     };
-    let now = ctx.game_instant;
-    let ticks = now.ticks_floor();
-    let step_q16 = (ctx.game_scale() * 65536.0) as u64;
+    let own = entity_clock(world, id, ctx);
+    let (now, ticks) = (own.instant, own.frame.as_u64());
+    let step_q16 = (own.scale * 65536.0) as u64;
     let prev_instant = GameTime::from_q16(now.as_q16().saturating_sub(step_q16), now.rate());
     for layer in stack.layers.iter().take(MAX_ANIMATION_LAYERS) {
         if !layer.events || layer_weight_at(layer, now) <= 0.0 {

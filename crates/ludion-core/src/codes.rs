@@ -2094,7 +2094,7 @@ pub mod code {
     pub const UI_RADIAL_INVALID: DiagnosticCode = DiagnosticCode::new("L1619");
     /// `L1620` — a `UiRect`, `UiText` or `UiGroup` `rotation` is not finite.
     pub const UI_ROTATION_INVALID: DiagnosticCode = DiagnosticCode::new("L1620");
-    /// `L1621` — a `UiShape` has a non-finite number, a bad radius, thickness, sweep, size or stroke width, a fill or missing stroke on a stroke-only kind, or a bad polygon (non-finite or over 256 points, or a stroke).
+    /// `L1621` — a `UiShape` has a non-finite number, a bad radius, thickness, sweep, size or stroke width, a fill or missing stroke on a stroke-only kind, a bad polygon (non-finite or over 256 points, or a stroke), or a bad `dash`.
     pub const UI_SHAPE_INVALID: DiagnosticCode = DiagnosticCode::new("L1621");
     /// `L2302` — a UI element's `group` could not be resolved; drawn ungrouped.
     pub const UI_GROUP_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2302");
@@ -2104,6 +2104,8 @@ pub mod code {
     pub const UI_TEXT_OUTLINE_CLAMPED: DiagnosticCode = DiagnosticCode::new("L2304");
     /// `L2305` — a `UiShape` polygon or polyline is degenerate or self-intersecting; it draws nothing.
     pub const UI_POLYGON_DEGENERATE: DiagnosticCode = DiagnosticCode::new("L2305");
+    /// `L2306` — a `UiShape` `dash` would draw more than 1024 dashes; the stroke draws solid.
+    pub const UI_DASH_TOO_DENSE: DiagnosticCode = DiagnosticCode::new("L2306");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
     pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
@@ -10509,10 +10511,12 @@ A `UiShape` has one of: a non-finite number; a `radius` that is not above 0; a `
 not in `(0, radius]`; a `wedge` `inner_radius` outside `[0, radius)`; a `sweep_deg` outside `[0, 360]`; a
 negative `size` component or `corner_radius`; a stroke `width` that is not above 0; a `fill` on a `line` or
 `arc` (they draw only their stroke); a `line` or `arc` with no `stroke`; a `polygon` point that is not
-finite, more than 256 `polygon` points, or a `stroke` on a `polygon`. The pointer
+finite, more than 256 `polygon` points, or a `stroke` on a `polygon`; a bad `dash` (a non-finite `on` or
+`off`, an `on` not above 0, a negative `off`, or a `dash` with no `stroke`). The pointer
 (`/entities/{i}/components/UiShape/{field}`) names the field. A scene with one is refused.
 
-Fix: correct the field; give a `line` or `arc` a `stroke` and drop its `fill`.",
+Fix: correct the field; give a `line` or `arc` a `stroke` and drop its `fill`; give a `dash` an `on` above 0,
+an `off` of 0 or more, and a `stroke`.",
     },
     CodeEntry {
         code: code::UI_GROUP_UNRESOLVED,
@@ -10561,6 +10565,17 @@ for a polygon self-intersection, the two edge indices.
 
 Fix: write a simple polygon of 3+ distinct points whose edges do not cross, or a polyline of 2+ distinct
 points (a polyline may cross itself).",
+    },
+    CodeEntry {
+        code: code::UI_DASH_TOO_DENSE,
+        severity: Severity::Warning,
+        title: "a UiShape dash would draw too many dashes",
+        explanation: "\
+A `UiShape` `dash` would cut the stroke into more than 1024 dashes (the stroke's total length divided
+by `on + off`, in pixels), so the stroke draws solid instead. Reported once per entity as a degraded
+warning at render time; the message names the count and the limit.
+
+Fix: lengthen `on` and `off`, or shorten the stroked path.",
     },
     CodeEntry {
         code: code::STATIC_INELIGIBLE,
@@ -14981,6 +14996,7 @@ mod tests {
         code::UI_CLIP_NESTING,
         code::UI_TEXT_OUTLINE_CLAMPED,
         code::UI_POLYGON_DEGENERATE,
+        code::UI_DASH_TOO_DENSE,
         code::STATIC_INELIGIBLE,
         code::STATIC_PARENT_NOT_STATIC,
         code::STATIC_REWRITTEN,
@@ -15427,6 +15443,7 @@ mod tests {
             code::UI_CLIP_NESTING,
             code::UI_TEXT_OUTLINE_CLAMPED,
             code::UI_POLYGON_DEGENERATE,
+            code::UI_DASH_TOO_DENSE,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
             code::STATIC_REWRITTEN,

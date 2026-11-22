@@ -176,6 +176,15 @@ pub struct UiStroke {
     pub color: [f32; 4],
 }
 
+/// A dash pattern along a stroke's centre line: `on` drawn, then `off` skipped, repeating.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+pub struct UiDash {
+    /// The drawn length in canvas units, above 0.
+    pub on: f32,
+    /// The gap length in canvas units, 0 or more; `0` draws the stroke solid.
+    pub off: f32,
+}
+
 /// What is wrong with a stroke's JSON, as `(pointer, message)` pairs under `base` (`/stroke`), and whether
 /// every number was finite: a non-finite `width` or `color` channel, and a `width` not above 0 (only
 /// judged when all is finite). `owner` names the component in the messages. Shared by `UiShape` and
@@ -250,6 +259,9 @@ pub struct UiShape {
     /// The edge outline (default none). Required on `line` and `arc`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<UiStroke>,
+    /// Cuts the `stroke` into dashes (default none: solid). Needs a `stroke`; a bad one is `L1621`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash: Option<UiDash>,
     /// Degrees clockwise on screen about the origin (default `0`; non-finite is `L1620`).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rotation: f32,
@@ -270,6 +282,7 @@ impl Default for UiShape {
             shape: UiShapeType::default(),
             fill: None,
             stroke: None,
+            dash: None,
             rotation: 0.0,
             order: 0,
             visible: true,
@@ -372,6 +385,18 @@ impl SemanticValidate for UiShape {
                 }
             }
         }
+        if let Some(dash) = value.get("dash").filter(|d| !d.is_null()) {
+            for key in ["on", "off"] {
+                if let Some(v) = dash.get(key) {
+                    check_finite(
+                        &format!("/dash/{key}"),
+                        &format!("dash {key}"),
+                        v,
+                        &mut reject,
+                    );
+                }
+            }
+        }
         if let Some(stroke) = value.get("stroke") {
             let (stroke_finite, problems) = stroke_problems(stroke, "UiShape");
             finite &= stroke_finite;
@@ -464,6 +489,26 @@ impl SemanticValidate for UiShape {
                 );
             }
         }
+        if let Some(dash) = value.get("dash").filter(|d| !d.is_null()) {
+            if stroke.is_none() {
+                reject(
+                    "/dash".into(),
+                    "a `dash` cuts the stroke; give the shape a `stroke`".into(),
+                );
+            }
+            if number(Some(dash), "on", 1.0) <= 0.0 {
+                reject(
+                    "/dash/on".into(),
+                    "the `dash` `on` length must be above 0".into(),
+                );
+            }
+            if number(Some(dash), "off", 0.0) < 0.0 {
+                reject(
+                    "/dash/off".into(),
+                    "the `dash` `off` length must not be negative".into(),
+                );
+            }
+        }
         out
     }
 }
@@ -513,6 +558,62 @@ mod tests {
             }))
             .is_empty()
         );
+    }
+
+    #[test]
+    fn a_dashed_circle_round_trips_and_an_absent_dash_stays_absent() {
+        let value = json!({
+            "shape": { "type": "circle", "radius": 8.0 },
+            "stroke": { "width": 2.0, "color": [1.0, 1.0, 1.0, 1.0] },
+            "dash": { "on": 4.0, "off": 2.0 }
+        });
+        let shape: UiShape = serde_json::from_value(value).unwrap();
+        assert_eq!(shape.dash, Some(UiDash { on: 4.0, off: 2.0 }));
+        let back = serde_json::to_value(&shape).unwrap();
+        assert_eq!(back["dash"], json!({ "on": 4.0, "off": 2.0 }));
+        assert!(
+            serde_json::to_value(UiShape::default())
+                .unwrap()
+                .get("dash")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn each_bad_dash_names_its_pointer() {
+        let l1621 = |at: &str| vec![("L1621".to_string(), at.to_string())];
+        let shape = |dash: Value| {
+            json!({
+                "shape": { "type": "circle", "radius": 8 },
+                "stroke": { "width": 2, "color": [1, 1, 1, 1] },
+                "dash": dash
+            })
+        };
+        assert_eq!(
+            codes_at(shape(json!({ "on": 1e300, "off": 1 }))),
+            l1621("/dash/on")
+        );
+        assert_eq!(
+            codes_at(shape(json!({ "on": 1, "off": 1e300 }))),
+            l1621("/dash/off")
+        );
+        assert_eq!(
+            codes_at(shape(json!({ "on": 0, "off": 1 }))),
+            l1621("/dash/on")
+        );
+        assert_eq!(
+            codes_at(shape(json!({ "on": 1, "off": -1 }))),
+            l1621("/dash/off")
+        );
+        assert_eq!(
+            codes_at(json!({
+                "shape": { "type": "circle", "radius": 8 },
+                "fill": [1, 1, 1, 1],
+                "dash": { "on": 1, "off": 1 }
+            })),
+            l1621("/dash")
+        );
+        assert!(codes_at(shape(json!({ "on": 3, "off": 0 }))).is_empty());
     }
 
     #[test]

@@ -11722,6 +11722,17 @@
           }
         ]
       },
+      "dash": {
+        "description": "Cuts the `stroke` into dashes (default none: solid). Needs a `stroke`; a bad one is `L1621`.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/UiDash"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "rotation": {
         "description": "Degrees clockwise on screen about the origin (default `0`; non-finite is `L1620`).",
         "type": "number",
@@ -12108,6 +12119,26 @@
         "required": [
           "width",
           "color"
+        ]
+      },
+      "UiDash": {
+        "description": "A dash pattern along a stroke's centre line: `on` drawn, then `off` skipped, repeating.",
+        "type": "object",
+        "properties": {
+          "on": {
+            "description": "The drawn length in canvas units, above 0.",
+            "type": "number",
+            "format": "float"
+          },
+          "off": {
+            "description": "The gap length in canvas units, 0 or more; `0` draws the stroke solid.",
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "required": [
+          "on",
+          "off"
         ]
       }
     }

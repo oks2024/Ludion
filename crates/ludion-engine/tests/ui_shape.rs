@@ -10,7 +10,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::time::{SimTime, TickRate};
 use ludion_engine::Engine;
 use ludion_engine::components::{
-    Anchor, UiLineCap, UiLineJoin, UiRect, UiShape, UiShapeType, UiStroke,
+    Anchor, UiDash, UiLineCap, UiLineJoin, UiRect, UiShape, UiShapeType, UiStroke,
 };
 use ludion_engine::ui::{ui_hit, ui_tween_sample};
 use ludion_protocol::Command;
@@ -679,4 +679,101 @@ fn ui_hit_follows_a_polyline_band_and_a_group_scales_its_width() {
         })
         .expect("the grouped polyline's stroke doubles");
     assert!((stroke.width_px - 20.0 * ps).abs() < 1e-3);
+}
+
+// --- dashes (`Plan/ui-hud.md` decisions 81-87) ---
+
+fn reported_dense(engine: &Engine) -> usize {
+    engine
+        .world()
+        .resource::<ludion_engine::Diagnostics>()
+        .map_or(0, |d| {
+            d.reported(ludion_core::codes::code::UI_DASH_TOO_DENSE)
+                .count()
+        })
+}
+
+#[test]
+fn a_dashed_polyline_emits_one_path_with_its_dash_in_pixels() {
+    let mut engine = engine();
+    let mut dashed = polyline(&ZIGZAG, 10.0);
+    dashed.dash = Some(UiDash { on: 12.0, off: 8.0 });
+    spawn(&mut engine, dashed);
+    let scene = extract(&mut engine);
+    let ps = engine.render_size().1 as f32 / 1080.0;
+    assert_eq!(scene.ui.len(), 1);
+    let UiInstance::Polygon { stroke, .. } = &scene.ui[0] else {
+        panic!("a polyline draws as a path");
+    };
+    assert_eq!(stroke.and_then(|s| s.dash), Some([12.0 * ps, 8.0 * ps]));
+}
+
+#[test]
+fn a_dashed_ring_emits_its_outlines_under_one_order() {
+    let mut engine = engine();
+    let mut dashed = ring();
+    dashed.fill = Some([0.0, 1.0, 0.0, 1.0]);
+    dashed.dash = Some(UiDash { on: 10.0, off: 6.0 });
+    spawn(&mut engine, dashed);
+    let scene = extract(&mut engine);
+    let kinds: Vec<&str> = scene
+        .ui
+        .iter()
+        .map(|row| match row {
+            UiInstance::Shape { stroke, .. } => {
+                assert!(stroke.is_none(), "the fill row carries no stroke");
+                "shape"
+            }
+            UiInstance::Polygon { stroke, closed, .. } => {
+                assert!(*closed && stroke.is_some_and(|s| s.dash.is_some()));
+                "outline"
+            }
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds, ["shape", "outline", "outline"]);
+}
+
+#[test]
+fn a_too_dense_dash_draws_solid_and_warns_once() {
+    let mut engine = engine();
+    let mut dense = ring();
+    dense.dash = Some(UiDash { on: 0.1, off: 0.1 });
+    spawn(&mut engine, dense);
+    for _ in 0..3 {
+        let scene = extract(&mut engine);
+        assert!(matches!(
+            scene.ui.as_slice(),
+            [UiInstance::Shape {
+                stroke: Some(_),
+                ..
+            }]
+        ));
+    }
+    assert_eq!(reported_dense(&engine), 1);
+}
+
+#[test]
+fn ui_hit_misses_in_a_dash_gap() {
+    let mut engine = engine();
+    let mut dashed = polyline(&[[0.0, 0.0], [200.0, 0.0]], 10.0);
+    dashed.dash = Some(UiDash {
+        on: 20.0,
+        off: 20.0,
+    });
+    let id = spawn(&mut engine, dashed);
+    let ps = engine.render_size().1 as f32 / 1080.0;
+    let now = SimTime::from_ticks(0, TickRate::DEFAULT);
+    let hit = |x: f32| {
+        ui_hit(
+            engine.world(),
+            id,
+            engine.render_size(),
+            [(100.0 + x) * ps, 100.0 * ps],
+            now,
+        )
+    };
+    assert!(hit(10.0), "on a dash");
+    assert!(!hit(30.0), "in a gap");
+    assert!(hit(50.0), "on the next dash");
 }

@@ -551,6 +551,22 @@ impl GameClock {
         GameTime::from_q16(self.game_q16(now.ticks), now.rate)
     }
 
+    /// Everything excluded from gameplay time as of the frame now running, in Q16: held frames,
+    /// scaled frames and the deficit already marked this frame. `game_instant(now).as_q16() +
+    /// excluded_q16()` is the sim instant (unless the instant saturated at zero).
+    ///
+    /// ```
+    /// use ludion_core::time::GameClock;
+    /// let mut clock = GameClock::default();
+    /// clock.hold();
+    /// clock.advance();
+    /// clock.hold();
+    /// assert_eq!(clock.excluded_q16(), 2 * 65536);
+    /// ```
+    pub const fn excluded_q16(self) -> u64 {
+        self.held * Q16_PER_TICK + self.slowed_q16 + self.pending_deficit()
+    }
+
     /// This clock with `frames` more frames excluded (saturating): the rewind a checkpoint restore
     /// applies, so gameplay time after the restore resumes where the slot's clock stood.
     ///

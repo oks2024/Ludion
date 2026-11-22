@@ -358,7 +358,7 @@ pub use ludion_engine::{
 };
 pub use ludion_engine::{PostProfile, ViewBackground, ViewShading};
 pub use ludion_engine::{ScreenEffect, ScreenEffectPreset, ScreenEffectTarget, ScreenMaskKind};
-pub use ludion_engine::{UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
+pub use ludion_engine::{UiDash, UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
 pub use ludion_engine::{VoiceFilter, VoiceSpatial};
 
 pub use ludion_ecs::{

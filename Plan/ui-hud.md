@@ -18,7 +18,7 @@
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
 > component schema snapshot moved); W3c-1: filled `polygon` (decisions 67–73, `L2305`, `ui_polygon.wgsl`; the `ui-polygons`
 > golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455); W3c-2: polygon strokes and `polyline` (decisions 74–80, `UiLineJoin`,
-> `push_ui_stroke_verts` on the polygon pipeline; the `ui-strokes` golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455). Waves 3c-3, 5b and 7 are recorded below and not started. Owed: the
+> `push_ui_stroke_verts` on the polygon pipeline; the `ui-strokes` golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455). W3c-3: `dash` (decisions 81–87; the `ui-dashes` golden is owed on the RTX 3090 and its macOS twin on the M4). Waves 5b and 7 are recorded below and not started. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
 > marker (jitter under `present_interpolation`, decision 8).
 
@@ -360,6 +360,40 @@ W3c-2.
 `polyline` `cap` reusing `UiLineCap`; the thin-stroke alpha rule; translucent self-crossings darkening; W3c-3 (dashes) kept
 separate. Request differences: `cap` on polyline (the request lists only `join`).
 
+81. **`UiDash { on: f32, off: f32 }`** (`ui_shape.rs`, `Copy`). It is a `UiShape` field `dash: Option<UiDash>`, skipped when none,
+    placed after `stroke`, as a sibling of `stroke` like the request. It is in canvas units along the stroke's centre line.
+    `UiRadial` wedge strokes take no dash (trigger: a request).
+82. **Validation `L1621`**: a non-finite `on`/`off` at `/dash/on`, `/dash/off`; `on ≤ 0` at `/dash/on`; `off < 0` at `/dash/off`; a
+    `dash` with no `stroke` at `/dash`. `off == 0` is valid and draws the stroke solid, by the undashed path.
+83. **Pattern.** Dashes start "on" at the path's first point and run along it: the start of a closed path is not joined to the end
+    of the last dash (SVG's rule). Dash ends take the stroke's cap: `line`/`polyline` `cap: round` gives round dash ends; a closed
+    path and every analytic kind but `line` give butt ends. Corners inside one dash keep their join. Start points: `line` at `from`;
+    `polygon`/`polyline` at `points[0]`; `circle` at 12 o'clock, clockwise; `arc` at `start_deg`; a ring or wedge outline at the outer
+    arc's `start_deg`. A partial ring or wedge runs clockwise along the outer arc, inward along the end radial edge, back along the
+    inner arc (or through the centre when `inner_radius` is 0), then out along the start edge. A full-sweep ring or wedge is two
+    closed circles, outer then inner (no inner circle at `inner_radius` 0). `rounded_rect` starts at the top edge's left end
+    `(−hw + r, −hh)`, clockwise.
+84. **Flattening** (engine `ui/dash.rs`, px, before tweens' scale and groups): an arc of radius `r` (px) and turn `θ` becomes
+    `n = clamp(ceil(θ / (2·acos(1 − 0.1/r))), 4, 512)` segments, `n = 4` when `r ≤ 0.1`; the trig is `ludion_core::math`. Analytic
+    outlines use round joins, which is what the SDF stroke draws at a corner. A group or tween scale magnifies the facets (0.4 px at
+    2×; accepted, documented).
+85. **Renderer data.** `UiPathStroke` gains `dash: Option<[f32; 2]>`, `[on_px, off_px]`. A dashed analytic shape emits its fill as
+    today's `UiInstance::Shape` with `stroke: None` (skipped when it has no fill), then one stroke-only `UiInstance::Polygon` per
+    outline (empty `triangles`, `fill: None`, the same `origin_px`, `join: Round`, `round_cap` for a round `line`), so stroke over
+    fill holds through the stable sort. A dashed polygon or polyline is today's one instance with `stroke.dash` set.
+    `push_ui_stroke_verts` splits a dashed path with `ludion_renderer::ui_dash_runs` and strokes each run open with `dash: None`;
+    `ui_dash_runs` is the one split, shared with the hit test.
+86. **Density cap.** When the dashes would number more than 1024 (all outlines' length / `(on + off)` in px), extract draws the stroke
+    solid by the undashed path and records the degraded warning `L2306 UI_DASH_TOO_DENSE` once per entity, keyed
+    `"{offender_key}/ui-dash"`, naming the count and the limit. The count does not change under scale.
+87. **Hit, tweens, groups.** A dashed stroke hits only on a dash: `path_contains` runs `stroke_contains` (open, with the dash cap)
+    on each run of `ui_dash_runs`; the gaps miss and the fill still hits. Group and tween scale multiply `dash` with `width_px`.
+    Opacity and the colour tween act in `pre_shape` on the component, before the split, so every instance sees them.
+
+**Proposed — owner ruling owed (W3c-3):** the dash on `UiShape`, not inside `UiStroke`, so radial wedges take none; no dash
+`offset`/phase field (marching ants; trigger: a request); the closed-path seam not joined; round joins on flattened analytic
+outlines; the 1024-dash cap with a solid fallback; facets under scale; gaps not hit. Request differences: none.
+
 ## Waves
 
 - **W1 — `UiTween`, `UiWorldAnchor`, resolved in extract.** CPU-only; the pass lives in
@@ -377,7 +411,7 @@ separate. Request differences: `cap` on polyline (the request lists only `join`)
   `ui_polygon.wgsl`, the `ui-polygons` golden).
 - **W3c-2 — strokes as tessellated paths** on the same pipeline: a polygon `stroke`, and `polyline { points, closed, join, cap }`
   (decisions 74–80, `L2305` for both kinds, the `ui-strokes` golden).
-- **W3c-3 — `dash: { on, off }`** on any stroke.
+- **W3c-3 — dashes** (decisions 81–87, `L2306`, the `ui-dashes` golden): `dash: { on, off }` on any `UiShape` stroke.
 - **W4a — `UiGroup`:** origin, scale, opacity and visibility, CPU only (decisions 18-24;
   `ui/group.rs`, `hud.rs::post`). Docs `ui-groups`; example `ui_groups`. An element without `group`
   extracts byte-identically.
@@ -414,7 +448,7 @@ and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 ## Out of scope (triggers recorded)
 
-dashes (W3c-3), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
+a dash phase/offset, dashes on `UiRadial` strokes (trigger: a request), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
 when stretched), slicing `UiList`/`UiText`, text shadow (W5b), a wedge `disabled_fill` or per-item colour, sub-wheels, item-level `ui_hit`,
 anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see

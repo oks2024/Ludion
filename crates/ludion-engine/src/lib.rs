@@ -219,7 +219,7 @@ pub use components::{
     PerceptionState, Sense, SightSampleRecord, StimulusRecord, SweepShape, ZoneSweep,
 };
 pub use components::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_target_weight_at};
-pub use components::{UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
+pub use components::{UiDash, UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
 pub use cooked_maps::TextureSource;
 pub use cursor_lock::CursorLock;
 pub use debug_draw::{DebugCategories, DebugDraw, DebugPen, debug_draw};
