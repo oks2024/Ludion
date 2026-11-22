@@ -395,6 +395,7 @@ pub enum UiAnchorBehind {
 ///     target: { index: 3, generation: 0 }
 ///     world_offset: [0.0, 2.0, 0.0]
 ///     fade: [20.0, 40.0]
+///     distance_scale: [5.0, 40.0, 1.0, 0.5]
 /// ```
 ///
 /// ```
@@ -425,6 +426,36 @@ pub struct UiWorldAnchor {
     /// `[near, far]` metres: opacity 1 at `near`, 0 at `far`, multiplied into alpha (default none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fade: Option<[f32; 2]>,
+    /// Turns the element so its local "up" points at the target when it is clamped to an edge
+    /// (default false). Adds to the element's rotation; a `UiList` ignores it (`L2300`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub rotate_toward: bool,
+    /// `[near, far, scale_near, scale_far]`: a linear scale between the two distances (metres),
+    /// pivoting on the projected point (default none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance_scale: Option<[f32; 4]>,
+    /// A `Camera` + `RenderView` entity: project through that view into the box of the `UiRect` that
+    /// shows it, instead of through the main camera (default the main camera).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
+    pub camera: Option<EntityId>,
+}
+
+impl UiWorldAnchor {
+    /// An anchor on `target` with every other field at its default.
+    pub fn new(target: EntityId) -> Self {
+        Self {
+            target,
+            world_offset: [0.0; 3],
+            show: UiAnchorShow::default(),
+            behind: UiAnchorBehind::default(),
+            margin: margin_default(),
+            fade: None,
+            rotate_toward: false,
+            distance_scale: None,
+            camera: None,
+        }
+    }
 }
 
 /// What a nine-slice does with its middle piece.
@@ -806,6 +837,9 @@ fn margin_default() -> f32 {
 fn is_margin_default(value: &f32) -> bool {
     value.to_bits() == 48.0f32.to_bits()
 }
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 fn is_zero_vec3(value: &[f32; 3]) -> bool {
     value.iter().all(|c| c.to_bits() == 0)
 }
@@ -898,7 +932,8 @@ impl SemanticValidate for UiTween {
 
 impl SemanticValidate for UiWorldAnchor {
     /// Rejects a non-finite `world_offset` or `margin`, a negative `margin`, and a `fade` that is not
-    /// `0 <= near < far` (`L1611`, pointers `/world_offset/{i}`, `/margin`, `/fade`). A wrong *shape*
+    /// `0 <= near < far`, and a bad `distance_scale` (`L1611`, pointers `/world_offset/{i}`,
+    /// `/margin`, `/fade`, `/distance_scale`). A wrong *shape*
     /// is the schema's job.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
@@ -940,6 +975,29 @@ impl SemanticValidate for UiWorldAnchor {
                 reject(
                     "/fade".into(),
                     "the `UiWorldAnchor` fade must be `[near, far]` with 0 <= near < far".into(),
+                );
+            }
+        }
+        if let Some(scale) = value.get("distance_scale").and_then(Value::as_array)
+            && let [near, far, scale_near, scale_far] = scale.as_slice()
+            && let (Some(near), Some(far), Some(scale_near), Some(scale_far)) = (
+                near.as_f64(),
+                far.as_f64(),
+                scale_near.as_f64(),
+                scale_far.as_f64(),
+            )
+        {
+            let [near, far, scale_near, scale_far] =
+                [near, far, scale_near, scale_far].map(engine_number);
+            let finite = [near, far, scale_near, scale_far]
+                .iter()
+                .all(|v| v.is_finite());
+            if !(finite && near >= 0.0 && near < far && scale_near > 0.0 && scale_far > 0.0) {
+                reject(
+                    "/distance_scale".into(),
+                    "the `UiWorldAnchor` distance_scale must be `[near, far, scale_near, scale_far]` \
+                     with 0 <= near < far and both scales above 0"
+                        .into(),
                 );
             }
         }
@@ -1317,6 +1375,42 @@ mod tests {
         });
         let parsed: UiWorldAnchor = serde_json::from_value(full.clone()).unwrap();
         assert_eq!(serde_json::to_value(&parsed).unwrap(), full);
+    }
+
+    #[test]
+    fn anchor_w7_fields_round_trip_and_new_serializes_only_the_target() {
+        let full = json!({
+            "target": { "index": 4, "generation": 0 }, "rotate_toward": true,
+            "distance_scale": [0.0, 20.0, 1.0, 0.5], "camera": { "index": 9, "generation": 1 }
+        });
+        let parsed: UiWorldAnchor = serde_json::from_value(full.clone()).unwrap();
+        assert!(parsed.rotate_toward);
+        assert_eq!(parsed.distance_scale, Some([0.0, 20.0, 1.0, 0.5]));
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), full);
+        let target = parsed.target;
+        assert_eq!(
+            serde_json::to_value(UiWorldAnchor::new(target)).unwrap(),
+            json!({ "target": { "index": 4, "generation": 0 } })
+        );
+    }
+
+    #[test]
+    fn anchor_distance_scale_is_l1611() {
+        let at = |scale: Value| json!({ "target": { "index": 1, "generation": 0 }, "distance_scale": scale });
+        for value in [
+            at(json!([1.0, 1.0, 1.0, 1.0])),
+            at(json!([5.0, 2.0, 1.0, 1.0])),
+            at(json!([-1.0, 2.0, 1.0, 1.0])),
+            at(json!([0.0, 2.0, 0.0, 1.0])),
+            at(json!([0.0, 2.0, 1.0, -1.0])),
+            at(json!([0.0, 1e60, 1.0, 1.0])),
+        ] {
+            let out = UiWorldAnchor::validate_semantics(&value);
+            assert_eq!(out.len(), 1, "{value}");
+            assert_eq!(out[0].code, code::UI_WORLD_ANCHOR_INVALID);
+            assert_eq!(out[0].path.as_deref(), Some("/distance_scale"));
+        }
+        assert!(UiWorldAnchor::validate_semantics(&at(json!([0.0, 20.0, 1.0, 0.5]))).is_empty());
     }
 
     #[test]

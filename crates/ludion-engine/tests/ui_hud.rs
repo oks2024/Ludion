@@ -99,6 +99,7 @@ fn anchor(target: EntityId) -> UiWorldAnchor {
         behind: UiAnchorBehind::Clamp,
         margin: 48.0,
         fade: None,
+        ..UiWorldAnchor::new(target)
     }
 }
 
@@ -443,4 +444,220 @@ fn a_size_track_on_text_is_skipped_with_l2300() {
         })
         .unwrap_or_default();
     assert_eq!(reported.len(), 1, "{reported:?}");
+}
+
+fn rotated(scene: &RenderScene) -> Vec<([f32; 4], f32, [f32; 2])> {
+    scene
+        .ui
+        .iter()
+        .filter_map(|instance| match instance {
+            UiInstance::Rect {
+                rect_px, rotation, ..
+            } => Some((*rect_px, rotation.radians, rotation.pivot_px)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn rotate_toward_turns_an_edge_marker_about_its_centre_and_leaves_an_on_screen_one() {
+    let mut engine = engine();
+    let target = named(&engine, "target");
+    let mut turning = anchor(target);
+    turning.rotate_toward = true;
+    marker(&mut engine, turning);
+    move_target(&mut engine, [100.0, 0.0, 0.0]);
+    step(&mut engine, 1);
+    let rows = rotated(&extract(&mut engine));
+    let (rect, radians, pivot) = rows[0];
+    assert!(
+        (radians - std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+        "{radians}"
+    );
+    let c = centre(rect);
+    assert!(
+        close(pivot[0], c[0]) && close(pivot[1], c[1]),
+        "{pivot:?} {c:?}"
+    );
+
+    move_target(&mut engine, [2.0, 0.0, 0.0]);
+    let rows = rotated(&extract(&mut engine));
+    assert_eq!(rows[0].1, 0.0, "on screen: no turn");
+}
+
+#[test]
+fn distance_scale_shrinks_about_the_projected_point() {
+    let mut engine = engine();
+    let target = named(&engine, "target");
+    let mut scaled = anchor(target);
+    scaled.distance_scale = Some([0.0, 20.0, 1.0, 0.5]);
+    let id = engine.world_mut().spawn_presentation();
+    let world = engine.world_mut();
+    world
+        .insert(
+            id,
+            UiRect {
+                anchor: Anchor::BottomCenter,
+                size: [40.0, 20.0],
+                ..UiRect::default()
+            },
+        )
+        .unwrap();
+    world.insert(id, scaled).unwrap();
+    move_target(&mut engine, [0.0, 0.0, 0.0]);
+    step(&mut engine, 1);
+    let scene = extract(&mut engine);
+    let expected = place_world_anchor(
+        scene.camera.view,
+        scene.camera.projection,
+        [0.0; 3],
+        engine.render_size(),
+        48.0,
+    )
+    .unwrap();
+    assert!(close(expected.distance, 10.0));
+    let rect = rects(&scene)[0];
+    let ps = pixel_scale(&engine);
+    assert!(
+        close(rect[2], 30.0 * ps) && close(rect[3], 15.0 * ps),
+        "{rect:?}"
+    );
+    assert!(
+        close(rect[0] + rect[2] * 0.5, expected.pixel[0]),
+        "{rect:?}"
+    );
+    assert!(close(rect[1] + rect[3], expected.pixel[1]), "{rect:?}");
+}
+
+const RADAR: &str = "  - name: radar-cam
+    presentation: true
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera: {}
+      RenderView:
+        name: radar
+        size:
+          - 200
+          - 100
+  - name: radar-rect
+    components:
+      UiRect:
+        anchor: top_left
+        offset:
+          - 100.0
+          - 50.0
+        size:
+          - 200.0
+          - 100.0
+        view: radar
+";
+
+fn radar_engine() -> Engine {
+    let mut engine = Engine::builder().build().expect("the game builds");
+    engine
+        .load_inline_scene(&format!("{SCENE}{RADAR}"))
+        .expect("the scene loads");
+    engine
+}
+
+fn reported_l2308(engine: &Engine) -> usize {
+    engine
+        .world()
+        .resource::<Diagnostics>()
+        .map_or(0, |d| d.reported(code::UI_ANCHOR_CAMERA_UNRESOLVED).count())
+}
+
+#[test]
+fn a_camera_anchor_places_the_marker_in_the_box_of_the_rect_that_shows_the_view() {
+    let mut engine = radar_engine();
+    let target = named(&engine, "target");
+    let mut blip = anchor(target);
+    blip.camera = Some(named(&engine, "radar-cam"));
+    blip.margin = 4.0;
+    marker(&mut engine, blip);
+    step(&mut engine, 1);
+    let scene = extract(&mut engine);
+    let ps = pixel_scale(&engine);
+    let view = &scene.views[0].camera;
+    let expected = ludion_engine::ui::place_world_anchor_in(
+        view.view,
+        view.projection,
+        [2.0, 0.0, 0.0],
+        resolve_ui_rect(
+            Anchor::TopLeft,
+            [100.0, 50.0],
+            [200.0, 100.0],
+            engine.render_size(),
+        ),
+        4.0 * ps,
+    )
+    .unwrap();
+    let blips: Vec<[f32; 4]> = scene
+        .ui
+        .iter()
+        .filter_map(|instance| match instance {
+            UiInstance::Rect {
+                rect_px,
+                view: None,
+                ..
+            } => Some(*rect_px),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(blips.len(), 1);
+    let c = centre(blips[0]);
+    assert!(
+        close(c[0], expected.pixel[0]) && close(c[1], expected.pixel[1]),
+        "{c:?} {expected:?}"
+    );
+    assert_eq!(reported_l2308(&engine), 0);
+}
+
+#[test]
+fn an_unresolved_camera_draws_nothing_and_is_l2308() {
+    let mut engine = engine();
+    let target = named(&engine, "target");
+    let mut blip = anchor(target);
+    blip.camera = Some(named(&engine, "cam"));
+    marker(&mut engine, blip);
+    step(&mut engine, 1);
+    assert!(extract(&mut engine).ui.is_empty());
+    extract(&mut engine);
+    assert_eq!(reported_l2308(&engine), 1);
+}
+
+#[test]
+fn rotate_toward_on_a_list_is_l2300() {
+    let mut engine = engine();
+    let target = named(&engine, "target");
+    let id = engine.world_mut().spawn_presentation();
+    let world = engine.world_mut();
+    world
+        .insert(
+            id,
+            ludion_engine::components::UiList {
+                items: vec![ludion_engine::components::UiListItem {
+                    text: "A".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let mut turning = anchor(target);
+    turning.rotate_toward = true;
+    world.insert(id, turning).unwrap();
+    move_target(&mut engine, [100.0, 0.0, 0.0]);
+    step(&mut engine, 1);
+    extract(&mut engine);
+    extract(&mut engine);
+    let reported = engine
+        .world()
+        .resource::<Diagnostics>()
+        .map_or(0, |d| d.reported(code::UI_MOTION_UNSUPPORTED).count());
+    assert_eq!(reported, 1);
 }

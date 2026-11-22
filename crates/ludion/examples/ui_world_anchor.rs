@@ -4,7 +4,9 @@
 //! a [`UiTween`] that fades and slides it in. `extract` does the rest: nothing about the meter is
 //! written per tick. The headless `main` below prints, as the target slides right across the
 //! screen, where the meter lands (`ludion::math::world_anchor`, the same placement `extract` uses)
-//! and how far into its pop-in it is (`ui_tween_sample`).
+//! and how far into its pop-in it is (`ui_tween_sample`). A second element, an arrow, turns toward
+//! the target once it clamps to the edge (`rotate_toward`); the meter shrinks with distance
+//! (`distance_scale`).
 //!
 //! ```text
 //! cargo run -p ludion --example ui_world_anchor
@@ -103,10 +105,38 @@ fn spawn_meter(world: &mut World, target: EntityId) {
                 behind: UiAnchorBehind::Hide,
                 margin: 48.0,
                 fade: Some([20.0, 40.0]),
+                distance_scale: Some([5.0, 40.0, 1.0, 0.5]),
+                ..UiWorldAnchor::new(target)
             },
         )
         .unwrap();
     world.insert(meter, pop_in()).unwrap();
+}
+
+/// Spawns an arrow that rides the screen edge once the target leaves it, turned to point at it
+/// (`rotate_toward`: the art points up).
+fn spawn_arrow(world: &mut World, target: EntityId) {
+    let arrow = world.spawn_presentation();
+    world
+        .insert(
+            arrow,
+            UiRect {
+                anchor: Anchor::Center,
+                size: [24.0, 24.0],
+                color: [1.0, 0.8, 0.2, 1.0],
+                ..UiRect::default()
+            },
+        )
+        .unwrap();
+    world
+        .insert(
+            arrow,
+            UiWorldAnchor {
+                rotate_toward: true,
+                ..UiWorldAnchor::new(target)
+            },
+        )
+        .unwrap();
 }
 
 // --- Headless demo `main` ------------------------------------------------------------------------
@@ -131,6 +161,7 @@ fn main() -> ExitCode {
         .nth(1)
         .expect("the scene has a target");
     spawn_meter(engine.world_mut(), target);
+    spawn_arrow(engine.world_mut(), target);
 
     let tween = pop_in();
     let viewport = (1920, 1080);
@@ -170,12 +201,17 @@ fn main() -> ExitCode {
         )
         .map_or(1.0, |v| v[0]);
         println!(
-            "t={:.1}s target x {:5.1}  meter at ({:6.1}, {:6.1}) on_screen {:5}  pop-in opacity {opacity:.2}",
+            "t={:.1}s target x {:5.1}  meter at ({:6.1}, {:6.1}) on_screen {:5}  pop-in opacity {opacity:.2}  arrow turn {:5.1}",
             (second + 1) as f32 * 0.5,
             at[0],
             placed.pixel[0],
             placed.pixel[1],
             placed.on_screen,
+            if placed.on_screen {
+                0.0
+            } else {
+                placed.angle_deg
+            },
         );
     }
     ExitCode::SUCCESS

@@ -1,0 +1,293 @@
+# Feature: `UiWorldAnchor` `rotate_toward`, `distance_scale` and `camera` (Plan/ui-hud.md W7a, decisions 95-101).
+# A fixed camera 10 m back. Over the scene, in canvas units:
+# - A green meter over the blue cube, `bottom_center` on its head, grown by `distance_scale` (the cube is near).
+# - A yellow arrow clamped to the right edge and a red one on the left edge (its target is behind the camera),
+#   each a `UiShape` polygon drawn pointing up and turned toward its target by `rotate_toward`.
+# - A white square over the far cube, half faded by `fade` mid-range.
+# - A red blip in the top-right radar window: the `camera` anchor places the brown cube through the radar view
+#   into the window's box.
+format: 1
+name: "ui-world-anchor - rotate_toward arrows, a distance-scaled meter, a faded marker and a radar blip"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 10.0
+      Camera: {}
+  - name: radar-cam
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 15.0
+          - 0.0
+        rotation:
+          - -90.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: orthographic
+          height: 13.0
+      RenderView:
+        name: radar
+        size:
+          - 256
+          - 256
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 6.0
+          - 0.0
+      DirectionalLight:
+        direction:
+          - -0.4
+          - -0.8
+          - -0.4
+        color:
+          - 1.0
+          - 0.95
+          - 0.9
+        intensity: 1.4
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.6
+          - 0.0
+        scale:
+          - 14.0
+          - 0.2
+          - 14.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.22
+          - 0.26
+          - 1.0
+        roughness: 0.9
+  - name: cube-meter
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 0.0
+          - 0.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.25
+          - 0.45
+          - 0.6
+          - 1.0
+        roughness: 0.9
+  - name: cube-fade
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - -0.1
+          - -40.0
+        scale:
+          - 8.0
+          - 8.0
+          - 8.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.4
+          - 0.25
+          - 1.0
+        roughness: 0.9
+  - name: cube-blip
+    components:
+      Transform:
+        translation:
+          - 2.0
+          - 0.0
+          - -2.0
+        scale:
+          - 1.0
+          - 1.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.4
+          - 0.25
+          - 1.0
+        roughness: 0.9
+  - name: t-right
+    components:
+      Transform:
+        translation:
+          - 60.0
+          - 0.0
+          - 0.0
+  - name: t-behind
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 0.0
+          - 25.0
+  - name: radar-frame
+    components:
+      UiRect:
+        anchor: top_right
+        offset:
+          - -24.0
+          - 24.0
+        size:
+          - 212.0
+          - 212.0
+        color:
+          - 0.04
+          - 0.05
+          - 0.07
+          - 1.0
+        order: 1
+  - name: radar-window
+    components:
+      UiRect:
+        anchor: top_right
+        offset:
+          - -30.0
+          - 30.0
+        size:
+          - 200.0
+          - 200.0
+        order: 2
+        view: radar
+  - name: meter
+    components:
+      UiRect:
+        anchor: bottom_center
+        size:
+          - 80.0
+          - 10.0
+        color:
+          - 0.2
+          - 0.85
+          - 0.3
+          - 1.0
+        order: 3
+      UiWorldAnchor:
+        target:
+          index: 4
+          generation: 0
+        world_offset:
+          - 0.0
+          - 1.0
+          - 0.0
+        distance_scale:
+          - 5.0
+          - 40.0
+          - 1.4
+          - 0.5
+  - name: arrow-right
+    components:
+      UiShape:
+        anchor: center
+        shape:
+          type: polygon
+          points:
+            - - 0.0
+              - -22.0
+            - - 16.0
+              - 14.0
+            - - 0.0
+              - 6.0
+            - - -16.0
+              - 14.0
+        fill:
+          - 1.0
+          - 0.8
+          - 0.2
+          - 1.0
+        order: 3
+      UiWorldAnchor:
+        target:
+          index: 7
+          generation: 0
+        rotate_toward: true
+  - name: arrow-behind
+    components:
+      UiShape:
+        anchor: center
+        shape:
+          type: polygon
+          points:
+            - - 0.0
+              - -22.0
+            - - 16.0
+              - 14.0
+            - - 0.0
+              - 6.0
+            - - -16.0
+              - 14.0
+        fill:
+          - 0.9
+          - 0.3
+          - 0.3
+          - 1.0
+        order: 3
+      UiWorldAnchor:
+        target:
+          index: 8
+          generation: 0
+        rotate_toward: true
+  - name: fade-marker
+    components:
+      UiRect:
+        anchor: center
+        size:
+          - 36.0
+          - 36.0
+        color:
+          - 0.95
+          - 0.95
+          - 1.0
+          - 1.0
+        order: 3
+      UiWorldAnchor:
+        target:
+          index: 5
+          generation: 0
+        fade:
+          - 30.0
+          - 70.0
+  - name: blip
+    components:
+      UiRect:
+        anchor: center
+        size:
+          - 12.0
+          - 12.0
+        color:
+          - 1.0
+          - 0.2
+          - 0.2
+          - 1.0
+        order: 3
+      UiWorldAnchor:
+        target:
+          index: 6
+          generation: 0
+        camera:
+          index: 1
+          generation: 0
+        margin: 6.0

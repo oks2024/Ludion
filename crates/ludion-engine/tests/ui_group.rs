@@ -280,6 +280,7 @@ fn a_world_anchor_on_the_group_moves_the_group() {
         behind: UiAnchorBehind::Clamp,
         margin: 48.0,
         fade: None,
+        ..UiWorldAnchor::new(target)
     };
     let g = group(
         &mut engine,
@@ -331,6 +332,7 @@ fn a_grouped_element_own_world_anchor_is_l2300() {
             behind: UiAnchorBehind::Clamp,
             margin: 48.0,
             fade: None,
+            ..UiWorldAnchor::new(target)
         },
     );
     let b = resolve_ui_rect(
@@ -672,6 +674,7 @@ fn ui_hit_follows_a_top_level_world_anchor() {
             behind: UiAnchorBehind::Clamp,
             margin: 48.0,
             fade: None,
+            ..UiWorldAnchor::new(target)
         },
     );
     let id = spawn(
@@ -1056,4 +1059,61 @@ fn a_group_opacity_tween_multiplies_the_wedge_fill_alpha() {
         };
         assert_eq!(fill.map(|f| f[3]), Some(0.4));
     }
+}
+
+#[test]
+fn an_anchored_group_with_distance_scale_and_rotate_toward_scales_and_turns_its_child() {
+    let mut engine = engine();
+    let target = engine.world().entities().nth(1).unwrap();
+    engine
+        .world_mut()
+        .get_mut::<ludion_engine::Transform>(target)
+        .unwrap()
+        .unwrap()
+        .translation = [100.0, 0.0, 0.0];
+    let g = group(
+        &mut engine,
+        UiGroup {
+            anchor: Anchor::Center,
+            size: [40.0, 20.0],
+            ..UiGroup::default()
+        },
+    );
+    add(
+        &mut engine,
+        g,
+        UiWorldAnchor {
+            rotate_toward: true,
+            distance_scale: Some([0.0, 200.0, 1.0, 0.5]),
+            ..UiWorldAnchor::new(target)
+        },
+    );
+    spawn(
+        &mut engine,
+        UiRect {
+            group: Some(g),
+            fill_group: true,
+            order: 1,
+            ..UiRect::default()
+        },
+    );
+    let scene = extract(&mut engine);
+    let Some(UiInstance::Rect {
+        rect_px, rotation, ..
+    }) = scene
+        .ui
+        .iter()
+        .find(|i| matches!(i, UiInstance::Rect { .. }))
+    else {
+        panic!("the child rect draws")
+    };
+    let ps = scale(&engine);
+    let (w, h) = engine.render_size();
+    let distance = (100.0f32 * 100.0 + 10.0 * 10.0).sqrt();
+    let k = 1.0 - 0.5 * distance / 200.0;
+    assert!((rect_px[2] - 40.0 * ps * k).abs() < 1e-2, "{rect_px:?} {k}");
+    assert!((rotation.radians - std::f32::consts::FRAC_PI_2).abs() < 1e-3);
+    let c = [rect_px[0] + rect_px[2] * 0.5, rect_px[1] + rect_px[3] * 0.5];
+    assert!((c[0] - (w as f32 - 48.0 * ps)).abs() < 1e-1, "{c:?}");
+    assert!((c[1] - h as f32 * 0.5).abs() < 1e-1, "{c:?}");
 }

@@ -254,6 +254,7 @@ fn a_tween_and_a_world_anchor_move_all_nine_pieces() {
         behind: UiAnchorBehind::Clamp,
         margin: 48.0,
         fade: None,
+        ..UiWorldAnchor::new(target)
     };
     for rect in [plain, sliced] {
         let id = spawn(&mut engine, rect);

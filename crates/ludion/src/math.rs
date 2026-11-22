@@ -120,9 +120,9 @@ pub use ludion_core::math::*;
 pub use ludion_engine::ui::{
     FontFace, NineSlice, RadialItemLayout, RadialLayout, WorldAnchorPlacement, canvas_anchor_px,
     group_delta, list_hit, measure_ui_list, measure_ui_text, nine_slice, place_world_anchor,
-    radial_hit, radial_layout, resolve_ui_list, resolve_ui_rect, resolve_ui_rect_of,
-    resolve_ui_text, sub_uv, ui_hit, ui_list_window, ui_point_in, ui_rect_corners, ui_shape_hit,
-    ui_tween_sample, wrap_ui_text,
+    place_world_anchor_in, radial_hit, radial_layout, resolve_ui_list, resolve_ui_rect,
+    resolve_ui_rect_of, resolve_ui_text, sub_uv, ui_hit, ui_list_window, ui_point_in,
+    ui_rect_corners, ui_shape_hit, ui_tween_sample, wrap_ui_text,
 };
 pub use ludion_engine::{ModelCamera, ModelView, fit_distance_for_aspect, model_camera};
 
@@ -288,7 +288,7 @@ pub fn world_to_pixel(
 ///
 /// Arguments follow [`world_to_pixel`], plus the `margin`. `None` when the camera is degenerate or the
 /// projection is not finite. The result carries the pixel, whether it is `on_screen`, whether the point
-/// is `behind` the camera and its `distance`.
+/// is `behind` the camera, its `distance` and the clockwise `angle_deg` toward it.
 ///
 /// # Example
 ///

@@ -1075,6 +1075,9 @@ pub struct WorldAnchorPlacement {
     pub behind: bool,
     /// Distance from the camera to the point, in world units.
     pub distance: f32,
+    /// Clockwise degrees from 12 o'clock, in `[0, 360)`, of the direction from the box centre toward
+    /// the point (behind the camera: the clamp direction); 0 when there is none.
+    pub angle_deg: f32,
 }
 
 /// Projects `point` through `view` and `projection` and clamps it to the viewport inset by `margin`
@@ -1109,23 +1112,70 @@ pub fn place_world_anchor(
     if viewport.0 == 0 || viewport.1 == 0 {
         return None;
     }
+    place_world_anchor_in(
+        view,
+        projection,
+        point,
+        [0.0, 0.0, viewport.0 as f32, viewport.1 as f32],
+        margin * pixel_scale(viewport),
+    )
+}
+
+/// [`place_world_anchor`] into a pixel box `[x, y, width, height]` inset by `inset_px` pixels: the box
+/// stands where the viewport stood (a view's rect, a radar). `None` for a non-finite projection or a
+/// box with no area.
+///
+/// # Example
+///
+/// ```
+/// use ludion_core::math::glam::{Mat4, Vec3};
+/// use ludion_engine::ui::place_world_anchor_in;
+///
+/// let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+/// let projection = Mat4::perspective_rh(1.0, 2.0, 0.1, 100.0);
+/// let hit = place_world_anchor_in(view, projection, [0.0; 3], [100.0, 50.0, 200.0, 100.0], 4.0).unwrap();
+/// assert!((hit.pixel[0] - 200.0).abs() < 1e-3 && (hit.pixel[1] - 100.0).abs() < 1e-3);
+/// ```
+pub fn place_world_anchor_in(
+    view: Mat4,
+    projection: Mat4,
+    point: [f32; 3],
+    box_px: [f32; 4],
+    inset_px: f32,
+) -> Option<WorldAnchorPlacement> {
+    let [x, y, width, height] = box_px;
+    if !(width > 0.0 && height > 0.0) {
+        return None;
+    }
     let v = view * Vec3::from_array(point).extend(1.0);
     let clip = projection * v;
     if !clip.is_finite() {
         return None;
     }
-    let (width, height) = (viewport.0 as f32, viewport.1 as f32);
     let distance = ludion_core::math::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-    let inset = margin * pixel_scale(viewport);
-    let half = [width * 0.5 - inset, height * 0.5 - inset];
-    let centre = [width * 0.5, height * 0.5];
+    let half = [width * 0.5 - inset_px, height * 0.5 - inset_px];
+    let centre = [x + width * 0.5, y + height * 0.5];
     let behind = clip.w <= 1e-6;
+    let px = [
+        (clip.x / clip.w * 0.5 + 0.5) * width + x,
+        (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * height + y,
+    ];
+    let mut dir = if behind {
+        [v.x, -v.y]
+    } else {
+        [px[0] - centre[0], px[1] - centre[1]]
+    };
+    if behind && dir[0].abs() < 1e-6 && dir[1].abs() < 1e-6 {
+        dir = [0.0, 1.0];
+    }
+    let angle_deg = clock_angle_deg(dir);
     if half[0] <= 0.0 || half[1] <= 0.0 {
         return Some(WorldAnchorPlacement {
             pixel: centre,
             on_screen: false,
             behind,
             distance,
+            angle_deg,
         });
     }
     let clamp = |dir: [f32; 2]| {
@@ -1135,22 +1185,14 @@ pub fn place_world_anchor(
         [centre[0] + dir[0] * s, centre[1] + dir[1] * s]
     };
     if behind {
-        let mut dir = [v.x, -v.y];
-        if dir[0].abs() < 1e-6 && dir[1].abs() < 1e-6 {
-            dir = [0.0, 1.0];
-        }
         return Some(WorldAnchorPlacement {
             pixel: clamp(dir),
             on_screen: false,
             behind: true,
             distance,
+            angle_deg,
         });
     }
-    let px = [
-        (clip.x / clip.w * 0.5 + 0.5) * width,
-        (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * height,
-    ];
-    let dir = [px[0] - centre[0], px[1] - centre[1]];
     let on_screen = dir[0].abs() <= half[0] && dir[1].abs() <= half[1];
     let pixel = if on_screen { px } else { clamp(dir) };
     pixel
@@ -1161,7 +1203,38 @@ pub fn place_world_anchor(
             on_screen,
             behind: false,
             distance,
+            angle_deg,
         })
+}
+
+/// Clockwise degrees from 12 o'clock of a +Y-down direction, in `[0, 360)`; 0 for none.
+fn clock_angle_deg(dir: [f32; 2]) -> f32 {
+    if !(dir[0].is_finite() && dir[1].is_finite()) || (dir[0] == 0.0 && dir[1] == 0.0) {
+        return 0.0;
+    }
+    let degrees = ludion_core::math::atan2(dir[0], -dir[1]).to_degrees();
+    if degrees < 0.0 {
+        degrees + 360.0
+    } else if degrees >= 360.0 {
+        degrees - 360.0
+    } else {
+        degrees
+    }
+}
+
+/// The scale an anchor's `distance_scale` `[near, far, scale_near, scale_far]` gives at `distance`
+/// metres: linear between the two scales, held beyond either end.
+///
+/// ```
+/// use ludion_engine::ui::anchor_distance_scale;
+///
+/// assert_eq!(anchor_distance_scale(10.0, [0.0, 20.0, 1.0, 0.5]), 0.75);
+/// assert_eq!(anchor_distance_scale(99.0, [0.0, 20.0, 1.0, 0.5]), 0.5);
+/// ```
+pub fn anchor_distance_scale(distance: f32, scale: [f32; 4]) -> f32 {
+    let [near, far, scale_near, scale_far] = scale;
+    let t = ((distance - near) / (far - near)).clamp(0.0, 1.0);
+    scale_near + (scale_far - scale_near) * t
 }
 
 #[cfg(test)]
@@ -1327,6 +1400,84 @@ mod motion_tests {
             place_world_anchor(view, projection, [f32::NAN, 0.0, 0.0], VP, 48.0),
             None
         );
+    }
+
+    #[test]
+    fn anchor_angle_is_a_clock_angle_toward_the_target() {
+        assert!((place([50.0, 0.0, 0.0], 48.0).angle_deg - 90.0).abs() < 1e-3);
+        assert!(place([0.0, 50.0, 0.0], 48.0).angle_deg.abs() < 1e-3);
+        assert!((place([-50.0, 0.0, 0.0], 48.0).angle_deg - 270.0).abs() < 1e-3);
+        assert!((place([0.0, 0.0, 20.0], 48.0).angle_deg - 180.0).abs() < 1e-3);
+        let left = place([-5.0, 0.0, 20.0], 48.0);
+        assert!(left.behind && left.angle_deg > 180.0 && left.angle_deg < 360.0);
+        assert!((left.pixel[0] - 48.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn place_world_anchor_is_place_world_anchor_in_on_the_full_box_bit_for_bit() {
+        let (view, projection) = camera();
+        for margin in [0.0, 48.0, 600.0] {
+            for xi in -8..=8 {
+                for yi in -6..=6 {
+                    for z in [-30.0, 0.0, 9.0, 12.0, 40.0] {
+                        let point = [xi as f32 * 3.7, yi as f32 * 2.9, z];
+                        let a = place_world_anchor(view, projection, point, VP, margin);
+                        let b = place_world_anchor_in(
+                            view,
+                            projection,
+                            point,
+                            [0.0, 0.0, 1920.0, 1080.0],
+                            margin * pixel_scale(VP),
+                        );
+                        let bits = |p: Option<WorldAnchorPlacement>| {
+                            p.map(|p| {
+                                (
+                                    p.pixel.map(f32::to_bits),
+                                    p.on_screen,
+                                    p.behind,
+                                    p.distance.to_bits(),
+                                    p.angle_deg.to_bits(),
+                                )
+                            })
+                        };
+                        assert_eq!(bits(a), bits(b), "{point:?} margin {margin}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_box_maps_a_centred_target_to_its_centre() {
+        let (view, _) = camera();
+        let projection = Mat4::perspective_rh(1.0, 2.0, 0.1, 100.0);
+        let hit =
+            place_world_anchor_in(view, projection, [0.0; 3], [100.0, 50.0, 200.0, 100.0], 0.0)
+                .unwrap();
+        assert!(hit.on_screen);
+        assert!((hit.pixel[0] - 200.0).abs() < 1e-2 && (hit.pixel[1] - 100.0).abs() < 1e-2);
+        let right = place_world_anchor_in(
+            view,
+            projection,
+            [500.0, 0.0, 0.0],
+            [100.0, 50.0, 200.0, 100.0],
+            10.0,
+        )
+        .unwrap();
+        assert!(!right.on_screen && (right.pixel[0] - 290.0).abs() < 1e-3);
+        assert!(
+            place_world_anchor_in(view, projection, [0.0; 3], [0.0, 0.0, 0.0, 10.0], 0.0).is_none()
+        );
+    }
+
+    #[test]
+    fn distance_scale_is_linear_and_clamped() {
+        let s = [5.0, 25.0, 1.0, 0.5];
+        assert_eq!(anchor_distance_scale(5.0, s), 1.0);
+        assert_eq!(anchor_distance_scale(25.0, s), 0.5);
+        assert_eq!(anchor_distance_scale(15.0, s), 0.75);
+        assert_eq!(anchor_distance_scale(0.0, s), 1.0);
+        assert_eq!(anchor_distance_scale(1000.0, s), 0.5);
     }
 }
 

@@ -2070,7 +2070,7 @@ pub mod code {
     /// `L1610` — a `UiTween` track has the wrong `from`/`to` arity, a non-finite value or a negative
     /// `duration`.
     pub const UI_TWEEN_INVALID: DiagnosticCode = DiagnosticCode::new("L1610");
-    /// `L1611` — a `UiWorldAnchor` has a non-finite number, a negative `margin` or a bad `fade`.
+    /// `L1611` — a `UiWorldAnchor` has a non-finite number, a negative `margin`, or a bad `fade` or `distance_scale`.
     pub const UI_WORLD_ANCHOR_INVALID: DiagnosticCode = DiagnosticCode::new("L1611");
     /// `L2300` — a `UiTween` or `UiWorldAnchor` names something its element cannot take; skipped.
     pub const UI_MOTION_UNSUPPORTED: DiagnosticCode = DiagnosticCode::new("L2300");
@@ -2110,6 +2110,8 @@ pub mod code {
     pub const UI_DASH_TOO_DENSE: DiagnosticCode = DiagnosticCode::new("L2306");
     /// `L2307` — a `UiText` or `UiList` shadow `softness` on a bitmap face; the shadow draws hard.
     pub const UI_TEXT_SHADOW_SOFTNESS_IGNORED: DiagnosticCode = DiagnosticCode::new("L2307");
+    /// `L2308` — a `UiWorldAnchor` `camera` names no view that renders this frame; the anchor draws nothing.
+    pub const UI_ANCHOR_CAMERA_UNRESOLVED: DiagnosticCode = DiagnosticCode::new("L2308");
 
     /// `L1341` — a `Static` entity holds something the static path cannot; it takes the dynamic path.
     pub const STATIC_INELIGIBLE: DiagnosticCode = DiagnosticCode::new("L1341");
@@ -10378,11 +10380,12 @@ Fix: write the right number of finite values, and a `duration` of zero or more s
         title: "a UI world anchor is invalid",
         explanation: "\
 A `UiWorldAnchor` (pointer `/entities/{i}/components/UiWorldAnchor/{field}`) has a non-finite
-`world_offset` or `margin`, a negative `margin`, or a `fade` that is not `[near, far]` with
-`0 <= near < far`. A scene with one is refused.
+`world_offset` or `margin`, a negative `margin`, a `fade` that is not `[near, far]` with
+`0 <= near < far`, or a `distance_scale` that is not `[near, far, scale_near, scale_far]` with finite
+numbers, `0 <= near < far` and both scales above 0. A scene with one is refused.
 
-Fix: write finite numbers, a `margin` of zero or more canvas units, and a `fade` whose `far` is past
-its `near`.",
+Fix: write finite numbers, a `margin` of zero or more canvas units, a `fade` or `distance_scale` whose
+`far` is past its `near`, and scales above zero.",
     },
     CodeEntry {
         code: code::UI_MOTION_UNSUPPORTED,
@@ -10608,6 +10611,19 @@ softness is ignored. Reported once per element as a degraded warning at render t
 the face (its name, or `embedded`).
 
 Fix: set `softness` to 0 for a bitmap face, or use an SDF face (`ludion docs fonts`).",
+    },
+    CodeEntry {
+        code: code::UI_ANCHOR_CAMERA_UNRESOLVED,
+        severity: Severity::Warning,
+        title: "a UI world anchor camera resolves to no view",
+        explanation: "\
+A `UiWorldAnchor` `camera` names an entity that is dead, has no `RenderView`, is disabled or over the
+view budget, or is shown by no visible `UiRect` (a rect whose `view` names it). The anchor draws
+nothing this frame; it does not fall back to the main camera. Reported once per element as a degraded
+warning at render time.
+
+Fix: point `camera` at an enabled `Camera` + `RenderView` entity and show it in a `UiRect` with
+`view` set to that entity (`ludion docs ui-world-anchor`).",
     },
     CodeEntry {
         code: code::STATIC_INELIGIBLE,
@@ -15041,6 +15057,7 @@ mod tests {
         code::UI_POLYGON_DEGENERATE,
         code::UI_DASH_TOO_DENSE,
         code::UI_TEXT_SHADOW_SOFTNESS_IGNORED,
+        code::UI_ANCHOR_CAMERA_UNRESOLVED,
         code::STATIC_INELIGIBLE,
         code::STATIC_PARENT_NOT_STATIC,
         code::STATIC_REWRITTEN,
@@ -15490,6 +15507,7 @@ mod tests {
             code::UI_POLYGON_DEGENERATE,
             code::UI_DASH_TOO_DENSE,
             code::UI_TEXT_SHADOW_SOFTNESS_IGNORED,
+            code::UI_ANCHOR_CAMERA_UNRESOLVED,
             code::STATIC_INELIGIBLE,
             code::STATIC_PARENT_NOT_STATIC,
             code::STATIC_REWRITTEN,

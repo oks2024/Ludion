@@ -12682,7 +12682,7 @@
   "UiWorldAnchor": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "UiWorldAnchor",
-    "description": "Pins a screen-space element to a 3D target: `extract` projects the target through the camera as\ndrawn and moves the element there, its `anchor` becoming its pivot on the projected point (the\n`offset` still adds, in canvas units). Off screen it clamps to the edge, inset by `margin`.\nA target that is dead or has no pose draws nothing. A `fill: true` rect ignores anchors (`L2300`).\n\n```yaml\ncomponents:\n  UiRect: { anchor: bottom_center, offset: [0, -12], size: [80, 8] }\n  UiWorldAnchor:\n    target: { index: 3, generation: 0 }\n    world_offset: [0.0, 2.0, 0.0]\n    fade: [20.0, 40.0]\n```\n\n```\nuse ludion_components::ui::{UiAnchorBehind, UiWorldAnchor};\n\nlet anchor: UiWorldAnchor = serde_json::from_value(serde_json::json!({ \"target\": { \"index\": 1, \"generation\": 0 } })).unwrap();\nassert_eq!(anchor.margin, 48.0);\nassert_eq!(anchor.behind, UiAnchorBehind::Clamp);\n```",
+    "description": "Pins a screen-space element to a 3D target: `extract` projects the target through the camera as\ndrawn and moves the element there, its `anchor` becoming its pivot on the projected point (the\n`offset` still adds, in canvas units). Off screen it clamps to the edge, inset by `margin`.\nA target that is dead or has no pose draws nothing. A `fill: true` rect ignores anchors (`L2300`).\n\n```yaml\ncomponents:\n  UiRect: { anchor: bottom_center, offset: [0, -12], size: [80, 8] }\n  UiWorldAnchor:\n    target: { index: 3, generation: 0 }\n    world_offset: [0.0, 2.0, 0.0]\n    fade: [20.0, 40.0]\n    distance_scale: [5.0, 40.0, 1.0, 0.5]\n```\n\n```\nuse ludion_components::ui::{UiAnchorBehind, UiWorldAnchor};\n\nlet anchor: UiWorldAnchor = serde_json::from_value(serde_json::json!({ \"target\": { \"index\": 1, \"generation\": 0 } })).unwrap();\nassert_eq!(anchor.margin, 48.0);\nassert_eq!(anchor.behind, UiAnchorBehind::Clamp);\n```",
     "type": "object",
     "properties": {
       "target": {
@@ -12742,6 +12742,47 @@
         },
         "minItems": 2,
         "maxItems": 2
+      },
+      "rotate_toward": {
+        "description": "Turns the element so its local \"up\" points at the target when it is clamped to an edge\n(default false). Adds to the element's rotation; a `UiList` ignores it (`L2300`).",
+        "type": "boolean"
+      },
+      "distance_scale": {
+        "description": "`[near, far, scale_near, scale_far]`: a linear scale between the two distances (metres),\npivoting on the projected point (default none).",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "number",
+          "format": "float"
+        },
+        "minItems": 4,
+        "maxItems": 4
+      },
+      "camera": {
+        "description": "A `Camera` + `RenderView` entity: project through that view into the box of the `UiRect` that\nshows it, instead of through the main camera (default the main camera).",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "x-entity-ref": {
+          "allow_self": false
+        }
       }
     },
     "required": [

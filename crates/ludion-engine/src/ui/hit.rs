@@ -83,6 +83,7 @@ pub fn ui_hit(
         real_frame: now.ticks(),
         game_frame: game_now.ticks_floor(),
         rate: now.rate(),
+        anchor_views: Default::default(),
     };
     let fonts = world.resource::<FontLibrary>();
     let locale = fonts

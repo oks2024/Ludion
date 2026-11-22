@@ -1016,7 +1016,7 @@ fn extract_inner(
     // by construction. Textures resolve through the same `textures`/`path_index` dedup as sprites
     // above, so a UI rect sharing a sprite's texture path is one `RenderScene.textures` entry.
     let mut ui_entries: Vec<(i32, EntityId, UiInstance)> = Vec::new();
-    let hud = ui::hud::HudFrame {
+    let mut hud = ui::hud::HudFrame {
         world,
         view: camera.view,
         projection: camera.projection,
@@ -1024,6 +1024,7 @@ fn extract_inner(
         real_frame: sim_now.ticks(),
         game_frame: now.ticks_floor(),
         rate: sim_now.rate(),
+        anchor_views: Default::default(),
     };
     let mut groups = ui::group::UiGroups::default();
     let mut view_table = crate::secondary_view::extract_views(
@@ -1033,6 +1034,7 @@ fn extract_inner(
         &mut errors,
         degraded,
     );
+    hud.anchor_views = ui::hud::anchor_views(&hud, &view_table, &ids, &mut poses);
     for (index, &id) in ids.iter().enumerate() {
         if let Some(rect) = get::<UiRect>(world, id)
             && rect.visible

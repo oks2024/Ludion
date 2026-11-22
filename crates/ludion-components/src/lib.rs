@@ -12205,7 +12205,10 @@ entities:
             ),
             ("PatternPlayer", vec![("/target", false, true, true)]),
             ("Volley", vec![("/source", true, true, true)]),
-            ("UiWorldAnchor", vec![("/target", false, false, false)]),
+            (
+                "UiWorldAnchor",
+                vec![("/camera", false, true, true), ("/target", false, false, false)],
+            ),
             ("UiGroup", vec![("/group", false, true, true)]),
             ("UiShape", vec![("/group", false, true, true)]),
         ] {

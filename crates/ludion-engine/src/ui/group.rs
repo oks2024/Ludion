@@ -17,7 +17,7 @@ use ludion_renderer::{UiClip, UiClipBox};
 use ludion_scene::Scene;
 
 use super::hud::{HudFrame, pre_group, world_anchor_delta};
-use super::{group_delta, pixel_scale, resolve_ui_rect};
+use super::{canvas_anchor_px, group_delta, pixel_scale, resolve_ui_rect};
 use crate::hierarchy::WorldAffines;
 
 /// The most groups one element may sit inside.
@@ -146,6 +146,8 @@ fn compose(
     }
     let mut opacity = motion.opacity;
     let mut visible = group.visible;
+    let mut anchor_scale = 1.0;
+    let mut anchor_turn_deg = 0.0;
     if let Some(anchor) = frame.world.get::<UiWorldAnchor>(id).ok().flatten() {
         if parent.is_some() {
             let key = crate::diagnostics::offender_key(frame.world, id);
@@ -160,12 +162,23 @@ fn compose(
                 .with_help("anchor the outermost group; `ludion explain L2300`"),
             ));
         } else {
-            match world_anchor_delta(frame, poses, anchor, group.anchor) {
+            match world_anchor_delta(frame, poses, id, anchor, group.anchor, degraded) {
                 None => visible = false,
-                Some((delta, alpha)) => {
-                    box_px[0] += delta[0];
-                    box_px[1] += delta[1];
-                    opacity *= alpha;
+                Some(place) => {
+                    box_px[0] += place.delta[0];
+                    box_px[1] += place.delta[1];
+                    opacity *= place.alpha;
+                    if place.scale != 1.0 {
+                        // Scale about the projected point: shift the box so scaling about its centre
+                        // lands the same.
+                        let pivot = canvas_anchor_px(group.anchor, frame.viewport);
+                        let q = [pivot[0] + place.delta[0], pivot[1] + place.delta[1]];
+                        let c = [box_px[0] + box_px[2] * 0.5, box_px[1] + box_px[3] * 0.5];
+                        box_px[0] += (1.0 - place.scale) * (q[0] - c[0]);
+                        box_px[1] += (1.0 - place.scale) * (q[1] - c[1]);
+                        anchor_scale = place.scale;
+                    }
+                    anchor_turn_deg = place.turn_deg;
                 }
             }
         }
@@ -181,9 +194,17 @@ fn compose(
         depth: 0,
         clip: UiClip::NONE,
     });
-    let scale = motion.scale;
+    let scale = if anchor_scale != 1.0 {
+        motion.scale * anchor_scale
+    } else {
+        motion.scale
+    };
     let composed_scale = outer.scale * scale;
-    let own_rotation = motion.rotation.to_radians();
+    let own_rotation = if anchor_turn_deg != 0.0 {
+        (motion.rotation + anchor_turn_deg).to_radians()
+    } else {
+        motion.rotation.to_radians()
+    };
     let (composed_rotation, composed_offset) = if outer.rotation == 0.0 && own_rotation == 0.0 {
         (
             0.0,
@@ -468,6 +489,7 @@ mod tests {
             real_frame: 0,
             game_frame: 0,
             rate: TickRate::DEFAULT,
+            anchor_views: Default::default(),
         }
     }
 

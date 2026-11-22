@@ -69,8 +69,7 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
 9. **`UiWorldAnchor` fields:** `target` (required entity ref; presentation to sim is allowed, the
    reverse is `L1036`), `world_offset`, `show: always | on_screen | off_screen`,
    `behind: clamp | hide`, `margin` (canvas units, default 48), `fade: [near, far]` metres (alpha 1 at
-   `near`, 0 at `far`, multiplied into alpha). Deferred: `rotate_toward` (needs rotation, W3),
-   `distance.scale` and `camera` (request 0017; `Plan/secondary-views.md`).
+   `near`, 0 at `far`, multiplied into alpha). `rotate_toward`, `distance_scale`, `camera`: decisions 95–101.
 10. **Validation:** a `UiTween` arity mismatch, non-finite value or negative `duration` is `L1610`; a
     `UiWorldAnchor` with non-finite numbers, a negative `margin` or a `fade` without `0 <= near < far`
     is `L1611`. Both are errors with JSON pointers into the track or field.
@@ -413,14 +412,54 @@ outlines; the 1024-dash cap with a solid fallback; facets under scale; gaps not 
     shadow never covers an earlier glyph's fill. Across runs (a fallback-face run, or a later `UiList` line), a later run's
     shadow can reach an earlier run's fill when the offset spans the line gap. This is accepted and documented.
 92. **Softness (SDF only).** It is carried in `ol_param.z`. When softness is above 0, `ol_param.x = 1`, even with no outline (then
-    `ol_color = 0` and `ol_param.y = 0.5`). In the shader's SDF branch, `z > 0` widens each smoothstep edge `E` (0.5 for the fill,
-    `ol_param.y` for the outline) by `h = z · max(E − 2w, 0)`, giving `smoothstep(E − w − h, E + w + h, raw)`. The lower bound
-    stays ≥ `w` > 0, so coverage is 0 at the quad's padded edge and no quad seam shows. When `z == 0`, the existing two lines run
-    verbatim, in an `else`.
+    `ol_color = 0` and `ol_param.y = 0.5`). Soft-shadow quads (SDF, softness > 0) draw through a second fragment entry,
+    `fs_soft_shadow`, on a twin pipeline (one draw per span inside the text batch); `fs_main` stays byte-identical to its
+    pre-shadow text, because an in-shader branch moved a macOS golden by 1 LSB (Metal codegen). `fs_soft_shadow` widens each
+    smoothstep edge `E` (0.5 for the fill, `ol_param.y` for the outline) by `h = z · max(E − 2w, 0)`, giving
+    `smoothstep(E − w − h, E + w + h, raw)`. The lower bound stays ≥ `w` > 0, so coverage is 0 at the quad's padded edge and no
+    quad seam shows.
 93. **Groups and tweens.** Group opacity multiplies `shadow.color[3]` (`hud.rs::multiply_alpha`). Every group scale of a text
     quad (`transform_instances` and the rotated-group apply) multiplies `offset_px` by the same scale. Tweens of `color` leave the
     shadow alone.
 94. **Not on** `UiRadial`, `SubtitleView` or world `Text` (they pass `shadow: None`). Trigger: a request.
+
+### W7a — anchor rotation, distance scale, view camera (request 0020 §6)
+
+95. **Fields, flat** (as `margin`/`fade` shipped flat; the request nested them under `edge:`/`distance:`): `rotate_toward: bool`
+    (default false, skipped), `distance_scale: Option<[f32; 4]>` = `[near, far, scale_near, scale_far]` metres/factors,
+    `camera: Option<EntityId>` (an entity ref, as `UiRect.group`). `UiWorldAnchor::new(target)` sets every other field to its
+    default so literals can end in `..`.
+96. **`WorldAnchorPlacement.angle_deg`**: clockwise degrees from 12 o'clock (decision 38's convention) of the direction from the
+    viewport (or box) centre toward the target: in front `px − centre`, behind `(v.x, −v.y)` (the clamp direction), straight
+    behind 180. 0 when the direction is zero. `atan2(dir.x, −dir.y)` through `ludion_core::math`, in degrees, normalized to
+    `[0, 360)`.
+97. **`rotate_toward`** applies only when the placement is not `on_screen` (edge-clamped, behind-clamped, degenerate inset). It
+    adds `angle_deg` to the element's rotation (authored plus tween), about the pivot `post` already uses (the moved box centre; a
+    shape's origin; a group's centre). Art points up. On a `UiList` it is skipped with `L2300` (lists take no rotation).
+98. **`distance_scale`**: `k = lerp(scale_near, scale_far, clamp((d − near)/(far − near), 0, 1))`, linear. It multiplies the tween
+    scale and pivots on the projected point (where the element's `anchor` lands), so a `bottom_center` meter stays on the head;
+    `offset` scales with it. `L1611` unless all four are finite, `0 <= near < far`, both scales `> 0` (pointer `/distance_scale`).
+99. **`camera`** names an entity with `Camera` + `RenderView` whose view renders this frame. The point projects through that
+    view's camera (as extracted in `ViewTable`) into the pixel box of the first visible `UiRect` (extract's entity order) whose
+    `view` names it. The box is `rect_box` plus `group_delta` for a grouped, non-`fill_group` rect: it follows the rect's position
+    and size, not its tween, rotation or a group's scale/rotation. `margin` insets that box (canvas units × the main pixel scale).
+    The element is not clipped to the box. A camera that cannot resolve (dead, no `RenderView`, disabled or over budget, shown by
+    no rect) draws nothing and records `L2308` (warning), keyed `"{key}/ui-anchor-camera"`. `None` keeps the main camera as drawn.
+100. **Pure twin**: `place_world_anchor_in(view, projection, point, box_px, inset_px)` holds the body of `place_world_anchor`
+    with `[0, 0, w, h]` generalized to a box; `place_world_anchor` delegates with the full viewport and `margin * pixel_scale` and
+    stays bit-identical. `anchor_distance_scale(distance, [f32; 4])` is the decision-98 formula. Both `pub` in
+    `ludion_engine::ui`; `place_world_anchor_in` is re-exported in `ludion::math`.
+101. **Under `present_interpolation`** every anchor (main or view camera) still follows the newest tick until W7b.
+
+**Proposed — owner ruling owed (W7a):** flat field names (`distance_scale` rather than `distance.scale`, `rotate_toward` rather
+than `edge.rotate_toward`); the turn added to authored rotation; `distance_scale` pivoting on the projected point and scaling
+`offset`; `camera` meaning a `RenderView` camera placed in its showing rect's unrotated box, unclipped; `L2308` drawing nothing
+rather than falling back to the main camera. **BREAK**: `UiWorldAnchor` gains public fields, so an exhaustive struct literal stops
+compiling (`..UiWorldAnchor::new(target)` fixes it).
+
+**Status (W7a):** shipped, CPU-only and extract-side; an anchor without the new fields extracts byte-identically and only the
+component schema snapshot moves. The `ui-world-anchor` gallery scene's golden is owed on the RTX 3090, macOS twin on the M4. Wave
+7b is recorded below and not started.
 
 **Proposed — owner ruling owed (W5b):** the shadow turning and scaling with the text (decision 90); `softness` as a 0–1 fraction of
 the field band, ignored with `L2307` on bitmap faces; the shadow as the union of fill and outline; the cross-run overlap
@@ -460,7 +499,10 @@ meaning open.
   (`tests/ui_radial.rs`); `L1619`; docs `ui-radial`; example `ui_radial`. Only the component schema snapshot moved.
 - **W6b — wedge fills and strokes** on W3b's shape pipeline (decisions 62–66): `fill`, `selected_fill`, `stroke` fields and the
   `ui-radial` gallery golden. CPU only, no renderer change. A rotated wheel is a rotated `UiGroup` (W3a).
-- **W7 — anchor blend keys under interpolation, `rotate_toward`, `distance.scale`, `camera`.**
+- **W7a — `rotate_toward`, `distance_scale`, `camera`** (decisions 95–101, `L2308`, the `ui-world-anchor` golden).
+- **W7b — anchor blend keys:** `BlendData` keys each anchored UI instance by its anchor entity with the target point and camera;
+  `blend` re-places the instance with the blended camera and point (the clamp math moves to `ludion-renderer`); fade, show,
+  scale and turn take the newer tick. Not started.
 
 ## Owner rulings (2026-11-19)
 
@@ -484,6 +526,6 @@ and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 a dash phase/offset, dashes on `UiRadial` strokes (trigger: a request), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
 when stretched), slicing `UiList`/`UiText`, a shadow on `UiRadial`, `SubtitleView` or world `Text` (trigger: a request), a wedge `disabled_fill` or per-item colour, sub-wheels, item-level `ui_hit`,
-anchor blending, `rotate_toward`, `distance.scale`, the anchor `camera` field, gallery
+anchor blending (W7b), gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see
 `Plan/font-assets.md` for the SDF outline path).

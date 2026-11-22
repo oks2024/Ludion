@@ -8,6 +8,7 @@
 //! writes the world, and an element with neither component is returned and left untouched.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use ludion_components::ui::{
     UiAnchorBehind, UiAnchorShow, UiGroup, UiTween, UiTweenField, UiWorldAnchor,
@@ -24,8 +25,8 @@ use super::shape::scale_geometry;
 
 use super::group::{GroupXf, UiGroups, cos_sin};
 use super::{
-    canvas_anchor_px, group_delta, nine_slice, pixel_scale, place_world_anchor, sub_uv,
-    ui_tween_sample,
+    anchor_distance_scale, canvas_anchor_px, group_delta, nine_slice, pixel_scale,
+    place_world_anchor, place_world_anchor_in, sub_uv, ui_tween_sample,
 };
 use crate::components::{Anchor, UiList, UiRect, UiShape, UiShapeType, UiText};
 use crate::hierarchy::WorldAffines;
@@ -46,6 +47,79 @@ pub(crate) struct HudFrame<'w> {
     /// The gameplay frame, for `clock: game` tracks.
     pub game_frame: u64,
     pub rate: TickRate,
+    /// The views a `UiWorldAnchor.camera` can name, empty unless some anchor names one.
+    pub anchor_views: BTreeMap<EntityId, AnchorView>,
+}
+
+/// A `RenderView` camera as an anchor sees it: its matrices and the pixel box of the rect that shows it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AnchorView {
+    pub view: Mat4,
+    pub projection: Mat4,
+    /// `[x, y, w, h]` in render-target pixels.
+    pub box_px: [f32; 4],
+}
+
+/// The views the frame's `UiWorldAnchor.camera` fields can name: each rendered view's camera and the box
+/// of the first visible `UiRect` (entity order) that shows it. Empty, and free, when no anchor names a
+/// camera. The box follows the rect's position and size, not its tween, rotation or a group's scale.
+pub(crate) fn anchor_views(
+    frame: &HudFrame<'_>,
+    views: &crate::secondary_view::ViewTable,
+    ids: &[EntityId],
+    poses: &mut WorldAffines,
+) -> BTreeMap<EntityId, AnchorView> {
+    let world = frame.world;
+    let mut out = BTreeMap::new();
+    let wanted = world.component_count::<UiWorldAnchor>() > 0
+        && ids.iter().any(|&id| {
+            world
+                .get::<UiWorldAnchor>(id)
+                .ok()
+                .flatten()
+                .is_some_and(|a| a.camera.is_some())
+        });
+    if !wanted || views.views.is_empty() {
+        return out;
+    }
+    let mut groups = UiGroups::default();
+    let mut scratch = Vec::new();
+    for &id in ids {
+        let Some(rect) = world.get::<UiRect>(id).ok().flatten() else {
+            continue;
+        };
+        let Some(Some(slot)) = rect
+            .view
+            .as_deref()
+            .and_then(|name| views.by_name.get(name))
+        else {
+            continue;
+        };
+        let slot = *slot as usize;
+        if !rect.visible || out.contains_key(&views.entities[slot]) {
+            continue;
+        }
+        let mut box_px = rect_box(frame, poses, &mut groups, rect, &mut scratch);
+        if let Some(group) = rect.group
+            && !rect.fill
+            && !rect.fill_group
+            && let Some(xf) = groups.resolve(frame, poses, group, &mut scratch)
+        {
+            let delta = group_delta(rect.anchor, xf.box_px, frame.viewport);
+            box_px[0] += delta[0];
+            box_px[1] += delta[1];
+        }
+        let camera = &views.views[slot].camera;
+        out.insert(
+            views.entities[slot],
+            AnchorView {
+                view: camera.view,
+                projection: camera.projection,
+                box_px,
+            },
+        );
+    }
+    out
 }
 
 /// Which element a tween or anchor sits on, which decides the fields it can take.
@@ -144,6 +218,24 @@ fn sample(
                 format!("{id} carries a `UiWorldAnchor` on {what}, which ignores its anchor"),
             )
             .with_help(help),
+        ));
+    }
+    if element == HudElement::List
+        && frame
+            .world
+            .get::<UiWorldAnchor>(id)
+            .ok()
+            .flatten()
+            .is_some_and(|anchor| anchor.rotate_toward)
+    {
+        let key = crate::diagnostics::offender_key(frame.world, id);
+        degraded.push((
+            format!("{key}/ui-anchor-rotate"),
+            Diagnostic::new(
+                code::UI_MOTION_UNSUPPORTED,
+                format!("{id} carries a `UiWorldAnchor` with `rotate_toward` on a `UiList`, which takes no rotation"),
+            )
+            .with_help("put the list in a `UiGroup` carrying the anchor, or drop `rotate_toward`; `ludion explain L2300`"),
         ));
     }
     let Some(tween) = frame.world.get::<UiTween>(id).ok().flatten() else {
@@ -540,14 +632,14 @@ pub(crate) fn post(
     anchor: Anchor,
     entries: &mut Vec<UiEntry>,
     start: usize,
-    grouping: Grouping<'_>,
+    mut grouping: Grouping<'_>,
 ) {
     if start >= entries.len() {
         return;
     }
     let world = frame.world;
     let authored_rotation = grouping.rotation_deg;
-    let group_xf = resolve_grouping(frame, poses, id, element, grouping);
+    let group_xf = resolve_grouping(frame, poses, id, element, &mut grouping);
     if let Some((xf, in_box)) = &group_xf {
         if !xf.visible {
             return entries.truncate(start);
@@ -566,7 +658,7 @@ pub(crate) fn post(
         _ => None,
     };
     let scale = tween_at(UiTweenField::Scale);
-    let rotation_deg = authored_rotation + tween_at(UiTweenField::Rotation).unwrap_or(0.0);
+    let mut rotation_deg = authored_rotation + tween_at(UiTweenField::Rotation).unwrap_or(0.0);
     let world_anchor = match element {
         HudElement::Rect { fill: true } | HudElement::Radial => None,
         _ if group_xf.is_some() => None,
@@ -588,17 +680,39 @@ pub(crate) fn post(
     };
     let mut delta = [0.0, 0.0];
     let mut opacity = 1.0;
+    let mut distance_scale = 1.0;
     if let Some(a) = world_anchor {
-        match world_anchor_delta(frame, poses, a, anchor) {
+        match world_anchor_delta(frame, poses, id, a, anchor, grouping.degraded) {
             None => return entries.truncate(start),
-            Some((d, alpha)) => {
-                delta = d;
-                opacity = alpha;
+            Some(place) => {
+                delta = place.delta;
+                opacity = place.alpha;
+                distance_scale = place.scale;
+                if element != HudElement::List {
+                    rotation_deg += place.turn_deg;
+                }
             }
         }
     }
     if scale.is_some() || world_anchor.is_some() {
-        transform_instances(&mut entries[start..], centre, scale.unwrap_or(1.0), delta);
+        let tween_scale = scale.unwrap_or(1.0);
+        if distance_scale != 1.0 {
+            // Scale about the projected point: the tween about `centre`, the move, then the distance
+            // scale about `canvas_anchor + delta`, folded into one transform.
+            let pivot = canvas_anchor_px(anchor, frame.viewport);
+            delta = [
+                delta[0] + (1.0 - distance_scale) * (pivot[0] - centre[0]),
+                delta[1] + (1.0 - distance_scale) * (pivot[1] - centre[1]),
+            ];
+            transform_instances(
+                &mut entries[start..],
+                centre,
+                tween_scale * distance_scale,
+                delta,
+            );
+        } else {
+            transform_instances(&mut entries[start..], centre, tween_scale, delta);
+        }
     }
     if opacity < 1.0 {
         multiply_alpha(&mut entries[start..], opacity);
@@ -641,7 +755,7 @@ fn resolve_grouping(
     poses: &mut WorldAffines,
     id: EntityId,
     element: HudElement,
-    grouping: Grouping<'_>,
+    grouping: &mut Grouping<'_>,
 ) -> Option<(GroupXf, bool)> {
     let group = grouping.group?;
     if matches!(element, HudElement::Rect { fill: true }) {
@@ -788,16 +902,29 @@ fn rotate_into_group(instances: &mut [UiEntry], xf: &GroupXf) {
     }
 }
 
-/// The translation a world anchor gives an element whose canvas anchor is `anchor`, and the fade
-/// alpha it multiplies in; `None` when the anchor hides the element (a dead target, behind the
-/// camera, outside its `show` window, or faded out).
+/// What a world anchor does to an element: the translation that puts the element's canvas anchor on the
+/// projected point, the fade alpha it multiplies in, the distance scale about that point (1 when the
+/// anchor has none) and the turn toward the target in degrees (0 unless `rotate_toward` applies).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AnchorPlace {
+    pub delta: [f32; 2],
+    pub alpha: f32,
+    pub scale: f32,
+    pub turn_deg: f32,
+}
+
+/// The [`AnchorPlace`] of a world anchor on element `id` whose canvas anchor is `anchor`; `None` when
+/// the anchor hides the element (a dead target, behind the camera, outside its `show` window, faded
+/// out, or a `camera` that resolves to no view).
 pub(crate) fn world_anchor_delta(
     frame: &HudFrame<'_>,
     poses: &mut WorldAffines,
+    id: EntityId,
     a: &UiWorldAnchor,
     anchor: Anchor,
-) -> Option<([f32; 2], f32)> {
-    let (p, alpha) = placement(frame, poses, a)?;
+    degraded: &mut Vec<(String, Diagnostic)>,
+) -> Option<AnchorPlace> {
+    let (p, alpha) = placement(frame, poses, id, a, degraded)?;
     let hidden = (p.behind && a.behind == UiAnchorBehind::Hide)
         || (a.show == UiAnchorShow::OnScreen && !p.on_screen)
         || (a.show == UiAnchorShow::OffScreen && p.on_screen)
@@ -806,28 +933,58 @@ pub(crate) fn world_anchor_delta(
         return None;
     }
     let pivot = canvas_anchor_px(anchor, frame.viewport);
-    Some(([p.pixel[0] - pivot[0], p.pixel[1] - pivot[1]], alpha))
+    Some(AnchorPlace {
+        delta: [p.pixel[0] - pivot[0], p.pixel[1] - pivot[1]],
+        alpha,
+        scale: a
+            .distance_scale
+            .map_or(1.0, |s| anchor_distance_scale(p.distance, s)),
+        turn_deg: if a.rotate_toward && !p.on_screen {
+            p.angle_deg
+        } else {
+            0.0
+        },
+    })
 }
 
 /// The anchor's placement and its fade alpha, or `None` when the target cannot be drawn against.
 fn placement(
     frame: &HudFrame<'_>,
     poses: &mut WorldAffines,
+    id: EntityId,
     a: &UiWorldAnchor,
+    degraded: &mut Vec<(String, Diagnostic)>,
 ) -> Option<(super::WorldAnchorPlacement, f32)> {
     let world = frame.world;
     if !world.is_alive(a.target) || !world.has::<crate::components::Transform>(a.target) {
         return None;
     }
     let (model, _) = crate::extract::render_model(world, poses, a.target);
-    let at = model.w_axis.truncate() + Vec3::from_array(a.world_offset);
-    let placed = place_world_anchor(
-        frame.view,
-        frame.projection,
-        at.to_array(),
-        frame.viewport,
-        a.margin,
-    )?;
+    let at = (model.w_axis.truncate() + Vec3::from_array(a.world_offset)).to_array();
+    let placed = match a.camera {
+        None => place_world_anchor(frame.view, frame.projection, at, frame.viewport, a.margin)?,
+        Some(camera) => {
+            let Some(view) = frame.anchor_views.get(&camera) else {
+                let key = crate::diagnostics::offender_key(world, id);
+                degraded.push((
+                    format!("{key}/ui-anchor-camera"),
+                    Diagnostic::new(
+                        code::UI_ANCHOR_CAMERA_UNRESOLVED,
+                        format!("{id} anchors through {camera}, which is not a rendered `RenderView` shown by a visible `UiRect`; the anchor draws nothing"),
+                    )
+                    .with_help("point `camera` at an enabled `Camera` + `RenderView` entity and show it in a `UiRect` whose `view` names it; `ludion explain L2308`"),
+                ));
+                return None;
+            };
+            place_world_anchor_in(
+                view.view,
+                view.projection,
+                at,
+                view.box_px,
+                a.margin * pixel_scale(frame.viewport),
+            )?
+        }
+    };
     let alpha = match a.fade {
         Some([near, far]) => ((far - placed.distance) / (far - near)).clamp(0.0, 1.0),
         None => 1.0,
@@ -1121,6 +1278,7 @@ mod tests {
             real_frame: 0,
             game_frame: 0,
             rate: TickRate::DEFAULT,
+            anchor_views: Default::default(),
         };
         let mut rows = vec![rect(100.0, 100.0, 40.0, 20.0)];
         let (mut groups, mut degraded) = (UiGroups::default(), Vec::new());
@@ -1294,6 +1452,7 @@ mod tests {
             real_frame: 0,
             game_frame: 0,
             rate: TickRate::DEFAULT,
+            anchor_views: Default::default(),
         };
         let mut rows = vec![shape_row([300.0, 200.0])];
         let (mut groups, mut degraded) = (UiGroups::default(), Vec::new());
@@ -1350,6 +1509,7 @@ mod tests {
             real_frame: 0,
             game_frame: 0,
             rate: TickRate::DEFAULT,
+            anchor_views: Default::default(),
         };
         let (mut entries, mut degraded) = (Vec::new(), Vec::new());
         emit_rect(
