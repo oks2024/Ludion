@@ -115,7 +115,7 @@ fn outline_yaml(width: f32) -> String {
 /// An outline draws under the glyph fill (size 64 at 960x540 puts the 8-unit embedded face on whole
 /// 4 px texels, so no pixel centre sits on a texel edge), on the embedded bitmap face and on an SDF face: a width of
 /// 0 renders the same bytes as no `outline` key, a red outline appears only outside the unoutlined
-/// ink, and every fully inked pixel is unchanged.
+/// ink, and every fully inked pixel is unchanged (within one LSB).
 #[test]
 fn needs_gpu_ui_text_outline_draws_under_the_fill() {
     let dir = root("outline");
@@ -168,8 +168,13 @@ fn needs_gpu_ui_text_outline_draws_under_the_fill() {
             );
             red += 1;
         }
+        // One LSB of slack: on the M4 one glyph-edge pixel's fill coverage is just under 1, which
+        // rounds to white over the dark backdrop but to 254 over the red outline beneath it.
         if u[..3].iter().all(|&c| c == 255) {
-            assert_eq!(o, u, "a fully inked pixel changed under the outline");
+            assert!(
+                o.iter().zip(u).all(|(o, u)| o.abs_diff(*u) <= 1),
+                "a fully inked pixel changed under the outline at {px},{py}: {o:?} was {u:?}"
+            );
         }
     }
     assert!(red > 100, "the outline drew only {red} red pixels");

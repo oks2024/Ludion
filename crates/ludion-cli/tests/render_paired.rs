@@ -55,7 +55,7 @@ fn phase_lines(stdout: &str) -> Vec<&str> {
 }
 
 #[test]
-fn the_default_draws_one_phase_per_event() {
+fn needs_gpu_the_default_draws_one_phase_per_event() {
     let Some((output, out)) = render("paired_default.png", &[]) else {
         return;
     };
@@ -70,7 +70,7 @@ fn the_default_draws_one_phase_per_event() {
 }
 
 #[test]
-fn a_strip_draws_n_phases_ending_on_the_clip_end() {
+fn needs_gpu_a_strip_draws_n_phases_ending_on_the_clip_end() {
     let Some((output, _)) = render("paired_strip.png", &["--strip", "4"]) else {
         return;
     };
@@ -82,7 +82,7 @@ fn a_strip_draws_n_phases_ending_on_the_clip_end() {
 }
 
 #[test]
-fn a_time_draws_one_phase_with_its_event() {
+fn needs_gpu_a_time_draws_one_phase_with_its_event() {
     let Some((output, _)) = render("paired_time.png", &["--time", "0.5"]) else {
         return;
     };
@@ -95,7 +95,7 @@ fn a_time_draws_one_phase_with_its_event() {
 
 /// The contact line is the one `check-scene` prints, byte for byte.
 #[test]
-fn the_contact_line_is_check_scenes() {
+fn needs_gpu_the_contact_line_is_check_scenes() {
     let Some((output, _)) = render("paired_contact.png", &[]) else {
         return;
     };

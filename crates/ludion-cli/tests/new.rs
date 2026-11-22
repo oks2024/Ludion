@@ -684,6 +684,14 @@ fn generated_project_passes_cargo_test() {
     // (the CLI's `ludion test --bless` cannot — directory suites are built-in-registry only), then a
     // plain run compares against the fresh golden. Skipped without a GPU adapter: an asked-for bless
     // is a hard failure there by design, which on this machine just means "nothing to exercise".
+    // Skipped on a GPU-forbidden lane too: the nested build drops the knob, so it would bless on
+    // the software rasterizer, where WARP loses the device (L2011).
+    if ludion_core::require_gpu::gpu_forbidden() {
+        eprintln!(
+            "SKIPPED bless/compare half of generated_project_passes_cargo_test: GPU forbidden on this lane"
+        );
+        return;
+    }
 
     let bless = cargo_test(true);
     let bless_text = format!(
