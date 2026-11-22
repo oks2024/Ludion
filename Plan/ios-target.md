@@ -241,6 +241,9 @@ fatal; `ludion_core::par` is plain `std::thread`; arm64 WorldHash identity is al
   first frame on the iPhone 13, the screen policy, the WiFi listener (the LAN bind, decision 3b's open
   call), the replay verdict identical on device, one `profile.capture` for the numbers, and the three
   device-only checks: present pacing under Fifo, the A15's limits, the memory footprint (§Risks).
+  The A15's limits include `engine_limits`' `max_sampled_textures_per_shader_stage = 20` that lit blended meshes
+  need (`Plan/transparent-depth.md` W2b). It is verified on the M4's Metal, but the simulator exposes the Mac's GPU, so the
+  phone's first lit blended frame (`glass-reflections`) is its check.
   M3 also resolves the parked opaque/screen-door mesh pipeline split (a discard-free `fs_opaque` beside
   `fs_main`, so TBDR hidden-surface removal stays on for opaque geometry; a patch against rev 959 in
   `Plan-Private/artifacts/`, folded in by the user 2026-10-10): resolve its SSIM drift on the M4, then
