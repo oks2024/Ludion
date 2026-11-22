@@ -1,0 +1,24 @@
+# Secondary-view budget — pinned RTX 3090, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. The ceiling is roughly twice the median measured by
+# `ludion profile --scene … --frames 120` in `--release` on the pinned RTX 3090, so a failure means a
+# real, reproducible slowdown — never machine noise. All values are milliseconds. Re-calibrate
+# deliberately (a re-bless event) if a cost becomes intended and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/render-view-radar.yaml`, the
+# secondary-views arc's scene (`Plan/secondary-views.md` D33): a 256x256 top-down orthographic `radar`
+# view of a lit room, drawn through the ordinary frame graph into a texture a `UiRect` shows.
+# Checked with:
+#
+#   ludion profile --scene examples/gallery/render-view-radar.yaml --frames 120 --check budgets/pinned-rtx3090-render-views.toml
+#
+# Measured 2026-11-22 over three runs: the `view:radar` GPU frame span 0.2139 / 0.2092 / 0.2064 ms
+# (seventeen `view:radar/<pass>` rows beside it); the main frame's own span read 0.419 / 0.417 / 0.405.
+# The macOS twin is owed.
+
+# The view's median GPU frame span, keyed by its `RenderView` name.
+[views]
+radar = 0.42   # 0.2064-0.2139 measured
+
+# Deliberately absent: `[passes]` (a `view:` row is never a `[passes]` key; the main frame's passes are
+# gated by the other budget files), `frame_total_ms` (the CLI links no game systems) and `[systems]`.

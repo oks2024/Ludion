@@ -98,7 +98,10 @@ The per-file catalogue (one entry per calibration scene and per-OS twin, with me
 - **SSR cost is the `ssr` post group** (the Hi-Z and colour pyramids plus the trace; `reflections` runs
   every frame for the sky, so it is its own `[passes]` line). A pyramid pass is one per level, named
   `hiz_reduce_<k>` / `ssr_color_reduce_<k>`: a `[passes]` key may name any level, and the group sums them all.
-- **A budget with GPU lines needs a GPU measurement.** `[passes]`, `[post_groups]`,
+- **`[views]` gates a secondary view's GPU span** (`view:<name>`, `Plan/secondary-views.md` D32): over is `L4005`; a row
+  with a `null` or 0.0 median is `L4019`; a name with no row while the GPU was measured is `L4006` listing the measured
+  views. A `view:` row is never a `[passes]` key, and live captures carry none.
+- **A budget with GPU lines needs a GPU measurement.** `[passes]`, `[post_groups]`, `[views]`,
   `post_total_ms`, `gpu_frame_ms` and `gpu_frame_max_ms` against a run with no adapter, no timestamp queries, or a graph over `PassTimingRing::MAX_PASSES` (passes named, none timed), is `L4019` (exit non-zero),
   not a quiet pass; a pass merely absent from a run that did measure stays quiet. An empty pass is not budgeted: a
   `[passes]` median of exactly 0.0 reads as not measured (`L4019`), whatever its limit. A CPU-only budget

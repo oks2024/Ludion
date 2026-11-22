@@ -283,19 +283,28 @@ fn wire_view(view: DebugView) -> Option<RenderDebugView> {
 /// The extract is CPU-only, so the chain the live world's content requires is derivable without an
 /// adapter — an adapterless machine still answers, and the reported shape is the one a screenshot of
 /// this world would actually schedule — masked by this host's quality, like
-/// `dump_scene_graph_json`.
+/// `dump_scene_graph_json`. A world that renders views adds each view's graph under `views`.
 pub(crate) fn dump_graph(engine: &mut Engine) -> Result<ResponseBody, Diagnostic> {
     let (width, height) = engine.render_size();
     let scene = engine
         .extract_render_scene(width, height)
         .map_err(collapse)?;
     let quality = engine.quality();
-    let mut chain =
-        ludion_renderer::PostChain::for_scene(&scene).masked(&quality.quality, &quality.params);
-    if !engine.frustum_culling() {
-        chain.cull = None;
-    }
-    let json = ludion_renderer::dump_frame_graph_json(engine.frame_size(width, height)?, chain)?;
+    let culling = engine.frustum_culling();
+    let chain_of = |s: &ludion_renderer::RenderScene| {
+        let mut chain =
+            ludion_renderer::PostChain::for_scene(s).masked(&quality.quality, &quality.params);
+        if !culling {
+            chain.cull = None;
+        }
+        chain
+    };
+    let json = ludion_renderer::dump_scene_frame_graph_json(
+        &scene,
+        engine.frame_size(width, height)?,
+        chain_of(&scene),
+        chain_of,
+    )?;
     let graph = parse_json(&json, "render graph dump")?;
     Ok(ResponseBody::GraphDump { graph })
 }

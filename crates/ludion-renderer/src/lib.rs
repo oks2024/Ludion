@@ -133,7 +133,9 @@ pub use rain::{
     MAX_RAIN_STREAKS, RAIN_TIME_WRAP_S, RainData, RainLayout, drop_position, rain_budget,
     rain_layout, rain_per_tile, rain_tiles,
 };
-pub use render::{GpuUploads, Renderer, SHADER_SOURCE_DIR, view_scene};
+pub use render::{
+    GpuUploads, Renderer, SHADER_SOURCE_DIR, dump_scene_frame_graph_json, view_scene,
+};
 pub use scene::{
     BlendMode, BlendedMesh, CookedMap, DEFAULT_AMBIENT, DEFAULT_POROSITY,
     DROP_SHADOW_ANCHOR_TOLERANCE, DebugSegment, DecalBlend, DecalInstance, DecalMaps,

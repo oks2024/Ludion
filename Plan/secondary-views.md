@@ -94,6 +94,22 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
 29. **View goldens** are named `<stem>.view-<name>.png` beside the frame's golden. The manifest's `views` adds tests named
     `<stem>.view-<name>`; `--filter` matches the test name, so `--filter .view-` selects view tests only.
     Request differences: the wire fields are W4c; the sheet has no drawn labels; `golden(view=)` is `GoldenTest.view`.
+30. **A view's sub-graph is the graph it renders.** `view_scene(scene, i)` at `FrameSize::native(view.size)` with
+    `PostChain { aa: Off, ..chain_of(&derived) }`, where `chain_of` is the same quality mask (and, live, the same
+    frustum-culling switch) the main dump uses. Emitted as `"views": [{ "name", "graph" }]` after `aliasing`, omitted when
+    empty, so a view-free scene dumps byte-identical output.
+31. **View timings are rows, not a section.** `view:<name>` is the view's GPU frame-span median (`null` when the backend
+    proves no span); `view:<name>/<pass>` are its per-pass medians, appended to `gpu.passes`. Offline driver only: a live
+    capture (`perf_live`, the `PassTimingRing`) and `render.dump_timings` carry none. Each view is timed in its own one-shot
+    render beside the measured frame, so a profile pays each view twice (once inside the frame, untimed).
+32. **`[views]` gates the span row.** Over the ceiling is `L4005`; a `view:<name>` row with a `null` or `0.0` median is
+    `L4019`; a `[views]` key with no row while the GPU was measured is `L4006` listing the measured view names; a `[views]`
+    line against a run with no GPU measurement is `L4019`. `[passes]` keeps its static producible check: a `view:` row is
+    not a `[passes]` key.
+33. **Calibration.** `budgets/pinned-rtx3090-render-views.toml` on `examples/gallery/render-view-radar.yaml`, about 2x the
+    release median over 120 frames, the measured value in a comment.
+    Request differences: the request's `views` profile section is `view:`-named `gpu.passes` rows (a section would move the
+    protocol schema, an R14 item); live captures carry no view rows.
 
 ## Waves
 
@@ -108,8 +124,10 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
 - **W3:** `background`, `shading: unlit`, `fog`, `PostProfile`/`post`, and `L2377`/`L2378`.
 - **W4a:** `ludion render --view`/`--views-sheet`, `Engine::render_view_png`, `render_scene_views`, the `GoldenTest.view`
   hook, the manifest's `views`, and the gallery view goldens (D26-D29).
-- **W4b:** `dump-graph` sub-graphs, a profile `views` section with a budget file, and presenter interpolation of view
-  cameras.
+- **W4b-1:** `dump-graph` sub-graphs, `view:` rows in the offline profile, `[views]` in a budget file and the render-views
+  budget file (D30-D33).
+- **W4b-2:** presenter interpolation of view cameras and of a layered frame's view content (today `blend` blends only the
+  main lists, so `scene.layered`'s source and `scene.views[i].camera` come from the newer tick).
 - **W4c:** the wire fields `render.screenshot`/`render.view {view}` and `render.bounds {camera}`. They move the protocol
   schema hash and the replay schema hash (an R14 item), so they are held for the owner.
 
@@ -159,3 +177,11 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   (`ludion-testkit`), the view goldens `render-view-radar.view-radar` and `render-view-portrait.view-portrait` (blessed on the
   RTX 3090), docs `render-views` and `verify-loop`. No wire field, golden, replay or graph moved (`dump-graph` of
   `render-view-radar` and `render-view-unlit` identical). Owed: the macOS twins of the two view goldens (M4). W4b and W4c are open.
+- **W4b-1:** mechanized. A trailing `views` array in `dump-graph`/`render.dump_graph` (`dump_graph_json_with_views`,
+  `dump_scene_frame_graph_json`), `view:<name>` and `view:<name>/<pass>` rows in the offline profile
+  (`Renderer::dump_view_timings_json`, a separate loop after the measured loop so the cull ring never sees a view),
+  `Budget.views` / `[views]` (`L4005`/`L4019`/`L4006`, no new code), and `budgets/pinned-rtx3090-render-views.toml` (`radar = 0.42`,
+  measured 0.2139 / 0.2092 / 0.2064 ms on the RTX 3090, 2026-11-22). View-free scenes dump byte-identical output (`meshes`,
+  `post-full`, `ui-hud`); the four view scenes differ only by the appended `views` key. No schema, replay, golden or hash
+  moved. API break: `Budget` gains a pub field. Owed: the macOS twin of the budget (M4) and the TeamCity step's
+  re-provisioning. W4b-2 and W4c are open.

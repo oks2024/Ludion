@@ -450,3 +450,44 @@ fn a_fogged_sprite_scene_dumps_the_transparent_layer() {
         assert!(!plain.contains("rg16float"));
     }
 }
+
+/// A scene that renders a view dumps that view's own graph under a trailing `views` key: the main graph
+/// is untouched, and the view's graph keeps its scene and composite but none of the screen's passes
+/// (no SSAO, no SMAA, no overlay).
+#[test]
+fn a_view_scene_dumps_the_view_sub_graph() {
+    let dump = |scene: &str, aa| {
+        ludion_engine::dump_scene_graph_json(
+            &gallery(scene),
+            FrameSize::native(64, 64),
+            &QualitySetting::full(),
+            aa,
+        )
+        .expect("the gallery scene validates and schedules")
+    };
+    let json = dump("render-view-radar.yaml", AntiAliasing::Smaa);
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let views = value["views"].as_array().expect("a views array").clone();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0]["name"], "radar");
+    let passes = scheduled_passes(&views[0]["graph"].to_string());
+    assert!(passes.iter().any(|p| p == "scene"), "{passes:?}");
+    assert!(passes.iter().any(|p| p == "composite"), "{passes:?}");
+    for screen in ["ssao", "smaa_edges", "overlay"] {
+        assert!(
+            !passes.iter().any(|p| p.starts_with(screen)),
+            "a view never schedules {screen}: {passes:?}"
+        );
+    }
+    assert!(
+        scheduled_passes(&json).contains(&"smaa_edges".to_string()),
+        "the main frame keeps its AA"
+    );
+
+    // Without the `views` key the dump is the main graph, as the view-free dump of the same scene.
+    value.as_object_mut().unwrap().remove("views");
+    let stripped: serde_json::Value = value;
+    let ui_only = scheduled_passes(&stripped.to_string());
+    assert!(ui_only.contains(&"overlay".to_string()), "{ui_only:?}");
+    assert!(!dump("meshes.yaml", AntiAliasing::Off).contains("\"views\""));
+}

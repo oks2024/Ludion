@@ -200,7 +200,100 @@ pub(super) fn render_views(
     Ok(targets)
 }
 
+/// The `dump-graph` JSON of `scene`'s frame: the main graph for `size` and `chain`, plus, under a
+/// trailing `views` key, the graph each [`RenderScene::views`] entry renders — [`view_scene`] at the
+/// view's own native size with anti-aliasing off. `view_chain` gives a view's chain from its derived
+/// scene (the caller's quality mask, as it masks the main chain). A scene with no view dumps the
+/// bytes [`dump_frame_graph_json`](crate::dump_frame_graph_json) does. CPU-only, no GPU.
+///
+/// # Errors
+/// `L2012` for an unusable view size; `L2001`/`L2002` if a graph does not schedule.
+///
+/// # Example
+/// ```
+/// use ludion_renderer::{FrameSize, PostChain, RenderScene, dump_scene_frame_graph_json};
+///
+/// let scene = RenderScene::empty((1280, 720));
+/// let size = FrameSize::native(1280, 720);
+/// let json = dump_scene_frame_graph_json(&scene, size, PostChain::default(), |_| {
+///     PostChain::default()
+/// })
+/// .unwrap();
+/// assert!(!json.contains("\"views\""));
+/// ```
+pub fn dump_scene_frame_graph_json(
+    scene: &RenderScene,
+    size: FrameSize,
+    chain: PostChain,
+    view_chain: impl Fn(&RenderScene) -> PostChain,
+) -> Result<String, Diagnostic> {
+    let (graph, _output) = build_frame_graph(size, chain);
+    let main = schedule(&graph)?;
+    let mut scheduled = Vec::with_capacity(scene.views.len());
+    for (index, view) in scene.views.iter().enumerate() {
+        let derived = view_scene(scene, index);
+        let chain = PostChain {
+            aa: AntiAliasing::Off,
+            ..view_chain(&derived)
+        };
+        let (graph, _output) = build_frame_graph(view_size(scene, index).validate()?, chain);
+        scheduled.push((view.name.as_str(), schedule(&graph)?));
+    }
+    let views: Vec<(&str, &_)> = scheduled.iter().map(|(n, s)| (*n, s)).collect();
+    Ok(main.dump_graph_json_with_views(&views))
+}
+
 impl Renderer {
+    /// Like [`Renderer::render_view`], but with per-pass timestamp queries: the view's own timings as
+    /// JSON, the shape of [`Renderer::dump_timings_json`] (the numbers are not stable).
+    ///
+    /// # Errors
+    /// `L2012` for an unusable size; `L2005` if timestamp readback fails on a timestamp-capable adapter.
+    ///
+    /// # Panics
+    /// If `index` is not a view of `scene`.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use ludion_renderer::{RenderScene, RenderViewData, Renderer, ViewPost};
+    ///
+    /// let renderer = Renderer::new()?;
+    /// let mut scene = RenderScene::empty((1280, 720));
+    /// scene.views.push(RenderViewData {
+    ///     name: "radar".into(),
+    ///     size: (256, 256),
+    ///     camera: scene.camera,
+    ///     layers: u32::MAX,
+    ///     lights: u32::MAX,
+    ///     sun: true,
+    ///     background: None,
+    ///     unlit: false,
+    ///     fog: true,
+    ///     post: ViewPost::Scene,
+    ///     screen_effects: Vec::new(),
+    /// });
+    /// let json = renderer.dump_view_timings_json(&scene, 0)?;
+    /// assert!(json.contains("timestamps_supported"));
+    /// # Ok::<(), ludion_core::diagnostics::Diagnostic>(())
+    /// ```
+    pub fn dump_view_timings_json(
+        &self,
+        scene: &RenderScene,
+        index: usize,
+    ) -> Result<String, Diagnostic> {
+        let derived = view_scene(scene, index);
+        let size = view_size(scene, index).validate()?;
+        let chain = PostChain {
+            aa: AntiAliasing::Off,
+            ..self.frame_chain(&derived)
+        };
+        let (graph, output) = build_frame_graph(size, chain);
+        let scheduled = schedule(&graph)?;
+        let recorder = self.prepare_frame_with(&derived, size, None, CacheEviction::Keep, chain)?;
+        self.gpu()
+            .dump_timings_json(&scheduled, output, Some(&recorder))
+    }
+
     /// Renders `scene.views[index]` alone, as the image its `UiRect` would show: the same derived scene
     /// and graph as the in-frame view, read back. For tests and tools.
     ///

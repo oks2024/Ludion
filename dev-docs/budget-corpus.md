@@ -64,6 +64,10 @@ vigil's E6 pair carry `threads = 8`; the rest state no worker count.
   Wave 2), gating `[post_groups] ssr` (both pyramids, the trace and the blend), `[passes] scene` and
   `reflections`. Measured on the RTX 3090 2026-10-27: `ssr` 0.4332 ms, `reflections` 0.0512. The M4
   twin is owed.
+- `budgets/pinned-rtx3090-render-views.toml` — the secondary-views arc's, calibrated on
+  `examples/gallery/render-view-radar.yaml` (a 256x256 top-down `radar` view, `Plan/secondary-views.md` D32/D33), gating
+  `[views] radar`, the view's GPU frame span (the report's `view:radar` row). Measured on the RTX 3090 2026-11-22:
+  0.2139 / 0.2092 / 0.2064 ms. The M4 twin is owed.
 - `budgets/image-stats-windows.toml` / `budgets/image-stats-macos.toml` — a different instrument:
   not timing ceilings but per-golden defect ceilings (`banding_score`, `edge_aliasing`,
   `clipped_low`, `clipped_high`), checked with `ludion image-stats --check`. Per-OS because the two

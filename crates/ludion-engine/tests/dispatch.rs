@@ -2455,6 +2455,29 @@ fn dump_graph_is_the_frame_graph() {
     }
 }
 
+/// A world that renders a view adds the view's own graph under `views`; a view-free world has none.
+#[test]
+fn dump_graph_carries_the_view_sub_graphs() {
+    let mut plain = engine();
+    match ok(&mut plain, Command::RenderDumpGraph) {
+        ResponseBody::GraphDump { graph } => assert!(graph.get("views").is_none()),
+        other => panic!("{other:?}"),
+    }
+    let mut radar = Engine::builder()
+        .load_scene_file(
+            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/gallery/render-view-radar.yaml"),
+        )
+        .expect("the scene loads");
+    match ok(&mut radar, Command::RenderDumpGraph) {
+        ResponseBody::GraphDump { graph } => {
+            assert_eq!(graph["views"][0]["name"], "radar", "graph: {graph}");
+            assert!(graph["views"][0]["graph"]["schedule"].is_array());
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 /// The wire dump is masked by the engine's quality, like the CLI's: a sun schedules the shadow pass
 /// at full quality and none at `low`.
 #[test]

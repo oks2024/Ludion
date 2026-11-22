@@ -113,6 +113,8 @@ encode/send it measures is that viewer's own delivery cost, not one the game pay
 Transport columns are filed under the tick that produced the delivered image (the delivered index
 minus one).
 
+**View rows (offline only).** For each rendered secondary view the offline driver (`profile_gpu`) times the view in its own one-shot render (`Renderer::dump_view_timings_json`) after the measured loop, so the cull ring never sees it, and appends `view:<name>` (the view's frame-span median) then `view:<name>/<pass>` rows to `gpu.passes`. `frame_median_ms`/`frame_tail` stay the main graph's, `post_total_ms` and `[passes]` never match a `view:` row, and the live `PassTimingRing` and `render.dump_timings` carry none. No `ProfileReport` field: `PassTiming.name` is a free string, so the protocol schema is untouched (`Plan/secondary-views.md` D31).
+
 **The GPU frame span.** `gpu.frame_median_ms` / `frame_tail` come from stamps the per-pass timing already
 resolves, no new query: the hull (max − min of written stamps) of one frame's begin/end stamps
 (`frame_span_ms`, `ludion-render-graph/src/timings.rs`). It is reported only where one queue timeline is

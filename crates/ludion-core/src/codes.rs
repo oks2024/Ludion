@@ -2751,9 +2751,9 @@ pub mod code {
     /// `profile` (entered via `ludion profile --check`), one diagnostic per over-budget line.
     pub const BUDGET_EXCEEDED: DiagnosticCode = DiagnosticCode::new("L4005");
 
-    /// `L4006` — a budget file names a system or GPU pass that no producible name matches: not a
-    /// registered system of the profiled engine, and not one of the frame graph's fixed pass
-    /// names. Raised by `ludion-engine`'s budget check (`ludion profile --check` / a game's
+    /// `L4006` — a budget file names a system, GPU pass or `[views]` view that no producible name
+    /// matches: not a registered system of the profiled engine, not one of the frame graph's fixed
+    /// pass names, and not a view the run rendered. Raised by `ludion-engine`'s budget check (`ludion profile --check` / a game's
     /// `--profile-check`) — distinct from a name that is producible but simply was not measured this
     /// run (a conditional GPU pass, or no GPU adapter), which is not a violation.
     pub const BUDGET_UNKNOWN_KEY: DiagnosticCode = DiagnosticCode::new("L4006");
@@ -2854,8 +2854,9 @@ pub mod code {
     /// `ludion-ecs`'s `Schedule` when a duplicate is added directly.
     pub const SYSTEM_NAME_DUPLICATE: DiagnosticCode = DiagnosticCode::new("L4018");
 
-    /// `L4019` — a budget file gates GPU timings (`[passes]`, `[post_groups]`, `post_total_ms`,
-    /// `gpu_frame_ms`, `gpu_frame_max_ms`) but the profile run measured none: no adapter, one
+    /// `L4019` — a budget file gates GPU timings (`[passes]`, `[post_groups]`, `[views]`,
+    /// `post_total_ms`, `gpu_frame_ms`, `gpu_frame_max_ms`) but the profile run measured none (or,
+    /// for a `[views]` key, that view's span): no adapter, one
     /// without timestamp queries, a graph over the pass-timing ring's cap (named, untimed), or (for
     /// the frame keys) a backend that cannot prove one queue timeline. Raised by
     /// `ludion-engine`'s budget check — a gate that measured nothing must not read as a pass.
@@ -12963,7 +12964,7 @@ you re-calibrate the budget file to the new measured median.",
         severity: Severity::Error,
         title: "profile budget names an unproducible system, pass, or group",
         explanation: "\
-A budget file's `[systems]`, `[systems_max]`, `[passes]`, or `[post_groups]` table names a key that
+A budget file's `[systems]`, `[systems_max]`, `[passes]`, `[post_groups]`, or `[views]` table names a key that
 does not match anything the profiled engine could ever measure. Each table has its own set of producible names:
 
   - `[systems]` and `[systems_max]`: the names the profiled engine registered its systems under.
@@ -12971,6 +12972,7 @@ does not match anything the profiled engine could ever measure. Each table has i
     `scene`, `shafts`, `shafts_blur`, `dof_coc`, `dof`, `bloom_threshold`,
     `bloom_down_1`..`bloom_down_5`, `bloom_up_0`..`bloom_up_4`, `composite`, `resolve`, `overlay`.
   - `[post_groups]`: the post-process effect groups — `bloom`, `ssao`, `shafts`, `dof`, `lens`.
+  - `[views]`: the `RenderView` names the profiled scene renders (the report's `view:<name>` rows).
 
 This is different from a budgeted name that is simply absent from *this* report — a GPU pass a
 UI-free scene never schedules (`overlay`), one a native-scale run never schedules (`resolve`), the
@@ -13362,8 +13364,9 @@ Fix: give every system a distinct name (the function's own name is the conventio
         severity: Severity::Error,
         title: "profile budget gates GPU timings but none were measured",
         explanation: "\
-A budget file names GPU lines (`[passes]`, `[post_groups]`, `post_total_ms`, `gpu_frame_ms` or
-`gpu_frame_max_ms`), but the profile run measured none of them: the host had no GPU adapter, the
+A budget file names GPU lines (`[passes]`, `[post_groups]`, `[views]`, `post_total_ms`,
+`gpu_frame_ms` or `gpu_frame_max_ms`), but the profile run measured none of them (for a `[views]`
+key, that view's span read `null` or 0.0): the host had no GPU adapter, the
 adapter has no timestamp queries, the graph schedules more passes than the timing ring holds (they are
 named and untimed), or — for the two frame keys — the backend cannot prove one queue
 timeline for a frame, so the report carries no `gpu.frame_median_ms`. Nothing

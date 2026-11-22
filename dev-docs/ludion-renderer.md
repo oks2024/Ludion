@@ -62,6 +62,7 @@ cargo run -p ludion-cli -- dump-graph --scene examples/gallery/ui-hud.yaml    # 
 cargo run -p ludion-cli -- dump-graph --scene examples/gallery/sun-shadows.yaml  # 14 passes: shadow prepended, scene samples shadow_map
 cargo run -p ludion-cli -- dump-graph --scene examples/gallery/night-sky.yaml    # 14 passes: sky + IBL add none — the moon's DirectionalLight is what prepends `shadow`
 cargo run -p ludion-cli -- dump-graph --scene examples/gallery/post-full.yaml    # 21 passes: shadow + the ssao trio + the shafts and dof pairs, all stacked
+# A scene that renders secondary views adds a trailing `views` array: each view's own sub-graph (render-view-radar.yaml).
 cargo run -p ludion-cli -- test --dir examples/gallery                        # full pipeline vs committed goldens
 cargo run -p ludion-shader-bindgen -- --check   # shader-drift: fails if shader_gen.rs is stale
 cargo test -p ludion-server --test shader_reload   # dev-flag reload: valid edit, L2008, L2009 keep-last-good

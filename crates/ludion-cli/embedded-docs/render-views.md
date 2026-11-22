@@ -126,6 +126,16 @@ not rendered; a `UiRect` naming a disabled or skipped view draws nothing. A view
 size, and its passes run before the main frame's. `needs_gpu_bench_view_gpu_ms` in `ludion-renderer` (ignored; run it in
 release) prints the summed pass GPU time at 512² and 256².
 
+## Inspecting a view's cost
+- `ludion dump-graph --scene s.yaml` (and `render.dump_graph`) adds a trailing `views` array, one `{ "name", "graph" }` per
+  rendered view: the view's own frame graph at its size, in the main dump's shape, with anti-aliasing off. A scene with no view
+  dumps the same bytes as before.
+- `ludion profile --scene s.yaml` (and a game's `--profile`) appends to `gpu.passes`, per rendered view in `views` order, a row
+  `view:<name>` (the view's median GPU frame span, `null` where the backend proves none) and rows `view:<name>/<pass>`. A live
+  capture and `render.dump_timings` carry no view rows; a profile pays each view twice, once inside the frame (untimed).
+- A budget file gates the span with a `[views]` table: `radar = 1.2` caps `view:radar` (`L4005` over, `L4019` unmeasured, `L4006`
+  for a name no view renders). `budgets/pinned-rtx3090-render-views.toml` is the example, on `render-view-radar`.
+
 ## Diagnostics
 - `L2370` (error): empty `name`, a `size` axis outside `16..=2048`, or a `RenderView` with no `Camera` beside it.
 - `L2371` (error): two views share a `name`.

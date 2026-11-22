@@ -560,3 +560,43 @@ fn the_views_sheet_is_the_frame_and_the_views_with_gutters() {
     let sheet = ludion_engine::views_sheet(&cell(320, 180), &[cell(256, 256), cell(64, 32)]);
     assert_eq!((sheet.width, sheet.height), (320 + 256 + 64 + 16, 256));
 }
+
+#[test]
+fn needs_gpu_profile_scene_times_each_view_after_the_main_passes() {
+    let profile = |scene: &str| {
+        ludion_engine::profile_scene(
+            &gallery(scene),
+            3,
+            0,
+            None,
+            None,
+            ludion_engine::QualitySetting::full(),
+        )
+        .expect("the scene profiles")
+    };
+    let report = profile("render-view-radar.yaml");
+    if !report.gpu.available {
+        eprintln!("SKIPPED: no GPU adapter available");
+        return;
+    }
+    let names: Vec<&str> = report.gpu.passes.iter().map(|p| p.name.as_str()).collect();
+    let span = names
+        .iter()
+        .position(|n| *n == "view:radar")
+        .expect("a span row");
+    let first_view_pass = names
+        .iter()
+        .position(|n| *n == "view:radar/scene")
+        .expect("a pass row");
+    let last_main = names.iter().rposition(|n| !n.starts_with("view:")).unwrap();
+    assert!(last_main < span && span < first_view_pass, "{names:?}");
+
+    let plain = profile("meshes.yaml");
+    assert!(
+        plain
+            .gpu
+            .passes
+            .iter()
+            .all(|p| !p.name.starts_with("view:"))
+    );
+}

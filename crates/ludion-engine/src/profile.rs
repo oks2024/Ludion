@@ -1191,16 +1191,7 @@ fn profile_gpu(
     let mut span_positions: Vec<u64> = Vec::new();
 
     for position in 0..frames {
-        let raw: RawTimings = serde_json::from_str(&renderer.dump_timings_json(&scene, size)?)
-            .map_err(|error| {
-                Diagnostic::new(
-                    code::RENDER_READBACK_FAILED,
-                    format!("the renderer's GPU timings could not be parsed: {error}"),
-                )
-                .with_help(
-                    "report this as a renderer bug: `dump_timings_json` must emit its schema",
-                )
-            })?;
+        let raw = parse_raw_timings(&renderer.dump_timings_json(&scene, size)?)?;
         cull_samples.extend(renderer.collect_cull_stats(false));
         timestamps_supported = raw.timestamps_supported;
         if let Some(span) = raw.frame_gpu_time_ms {
@@ -1229,18 +1220,40 @@ fn profile_gpu(
         culling.lod_radii = lod_radii;
     }
 
-    let passes = names
+    let mut passes: Vec<PassTiming> = names
         .into_iter()
         .zip(per_pass)
-        .map(|(name, mut samples)| PassTiming {
-            name,
-            median_ms: if samples.is_empty() {
-                None
-            } else {
-                Some(median_f64(&mut samples))
-            },
-        })
+        .map(|(name, samples)| pass_median(name, samples))
         .collect();
+    // Each view is timed in its own one-shot render after the measured loop, so its renders never
+    // reach the cull ring: `view:<name>` is its frame span, `view:<name>/<pass>` its passes.
+    for (index, view) in scene.views.iter().enumerate() {
+        let mut view_spans: Vec<f64> = Vec::new();
+        let mut view_names: Vec<String> = Vec::new();
+        let mut view_passes: Vec<Vec<f64>> = Vec::new();
+        for _ in 0..frames {
+            let raw = parse_raw_timings(&renderer.dump_view_timings_json(&scene, index)?)?;
+            view_spans.extend(raw.frame_gpu_time_ms);
+            for pass in &raw.passes {
+                let column = match view_names.iter().position(|known| *known == pass.name) {
+                    Some(column) => column,
+                    None => {
+                        view_names.push(pass.name.clone());
+                        view_passes.push(Vec::new());
+                        view_names.len() - 1
+                    }
+                };
+                view_passes[column].extend(pass.gpu_time_ms);
+            }
+        }
+        passes.push(pass_median(format!("view:{}", view.name), view_spans));
+        passes.extend(
+            view_names
+                .into_iter()
+                .zip(view_passes)
+                .map(|(name, samples)| pass_median(format!("view:{}/{name}", view.name), samples)),
+        );
+    }
 
     let frame_tail = tail(&spans, &span_positions);
     let frame_median_ms = (!spans.is_empty()).then(|| median_f64(&mut spans));
@@ -1252,6 +1265,29 @@ fn profile_gpu(
         frame_tail,
     };
     Ok((gpu, culling))
+}
+
+/// A renderer timings payload, or `L2005` if it does not follow the schema.
+fn parse_raw_timings(json: &str) -> Result<RawTimings, Diagnostic> {
+    serde_json::from_str(json).map_err(|error| {
+        Diagnostic::new(
+            code::RENDER_READBACK_FAILED,
+            format!("the renderer's GPU timings could not be parsed: {error}"),
+        )
+        .with_help("report this as a renderer bug: `dump_timings_json` must emit its schema")
+    })
+}
+
+/// The median of `samples` as a pass row; `None` when the backend gave no sample.
+fn pass_median(name: String, mut samples: Vec<f64>) -> PassTiming {
+    PassTiming {
+        name,
+        median_ms: if samples.is_empty() {
+            None
+        } else {
+            Some(median_f64(&mut samples))
+        },
+    }
 }
 
 /// One report entry per chained asset; `path` names an asset by its index, `mesh_assets[N]` when it
@@ -1439,6 +1475,10 @@ pub struct Budget {
     /// pyramid is one number, not twelve.
     #[serde(default)]
     pub post_groups: BTreeMap<String, f64>,
+    /// Per-secondary-view ceilings on the median GPU frame span, keyed by `RenderView` name: the
+    /// report's `view:<name>` row. Offline reports only; a live capture carries no view rows.
+    #[serde(default)]
+    pub views: BTreeMap<String, f64>,
 }
 
 /// Reads and parses a budget file. Any read error or malformed TOML is an `L4004`.
@@ -1730,6 +1770,11 @@ fn measured_sum(report: &ProfileReport, members: &[&str]) -> Option<(f64, usize)
 /// `gpu_frame_ms` and `gpu_frame_max_ms` check the frame-spanning GPU time and its tail; a report
 /// without a span (also a backend that cannot prove one queue timeline) is `L4019` too.
 ///
+/// - **`[views]`**: a `RenderView` name, checked against the report's `view:<name>` span row. Over the
+///   ceiling is `L4005`; a row with a `null` or `0.0` median is `L4019`; a name with no row while the
+///   GPU was measured is `L4006` listing the measured views. A `[views]` line joins the GPU lines
+///   above for the no-measurement `L4019`. A `view:` row is never a `[passes]` key.
+///
 /// `post_total_ms` is the same sum across every group's members, under the same skip rule; it is a
 /// ceiling on the whole post chain, so it needs no producible-set check of its own.
 /// `cluster_build_ms` is a single named measurement rather than a lookup, so it has no producible
@@ -1836,7 +1881,8 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
     // measured no GPU at all would skip every line and read as a pass.
     let gates_gpu = !budget.passes.is_empty()
         || !budget.post_groups.is_empty()
-        || budget.post_total_ms.is_some();
+        || budget.post_total_ms.is_some()
+        || !budget.views.is_empty();
     let gates_frame = budget.gpu_frame_ms.is_some() || budget.gpu_frame_max_ms.is_some();
     let no_gpu = !(report.gpu.available && report.gpu.timestamps_supported)
         || all_passes_untimed(&report.gpu);
@@ -1861,7 +1907,11 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
     }
 
     for (name, &limit) in &budget.passes {
-        match report.gpu.passes.iter().find(|p| &p.name == name) {
+        // A `view:` row belongs to `[views]`; a `[passes]` key never names one.
+        let row = (!name.starts_with("view:"))
+            .then(|| report.gpu.passes.iter().find(|p| &p.name == name))
+            .flatten();
+        match row {
             // A median of exactly 0.0 is a pass that was never stamped (an empty pass on Metal, a
             // stuck timestamp), not a free one: it cannot be told apart from the failure.
             Some(pass) if pass.median_ms == Some(0.0) => over.push(pass_unmeasured(name)),
@@ -1889,6 +1939,36 @@ pub fn check_budget(report: &ProfileReport, budget: &Budget) -> Vec<Diagnostic> 
                 )),
             ),
             None => over.push(unknown_budget_key("GPU pass", name, &KNOWN_PASS_NAMES)),
+        }
+    }
+
+    // A view's span row reads 0.0 or absent when the backend proved none; either is unmeasured, never
+    // a pass. With no GPU measurement at all `gpu_unmeasured` above already spoke.
+    let measured_views: Vec<&str> = report
+        .gpu
+        .passes
+        .iter()
+        .filter_map(|p| p.name.strip_prefix("view:").filter(|n| !n.contains('/')))
+        .collect();
+    for (name, &limit) in &budget.views {
+        match report
+            .gpu
+            .passes
+            .iter()
+            .find(|p| p.name == format!("view:{name}"))
+        {
+            Some(row) => match row.median_ms {
+                Some(measured) if measured > limit => over.push(exceeded(
+                    &format!("view `{name}`"),
+                    "median GPU span",
+                    measured,
+                    limit,
+                )),
+                Some(measured) if measured != 0.0 => {}
+                _ => over.push(view_unmeasured(name)),
+            },
+            None if no_gpu => {}
+            None => over.push(unknown_budget_key("view", name, &measured_views)),
         }
     }
 
@@ -1950,6 +2030,18 @@ fn pass_unmeasured(name: &str) -> Diagnostic {
     )
 }
 
+/// Builds the `L4019` for a budgeted `[views]` entry whose span read `null` or exactly 0.0.
+fn view_unmeasured(name: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::BUDGET_GPU_UNMEASURED,
+        format!("budget gates view `{name}`, but its GPU span was not measured (null or 0.0 ms)"),
+    )
+    .with_help(
+        "this backend proved no frame span for the view; run the check on the pinned box the budget \
+         was calibrated on, or remove the view from `[views]`",
+    )
+}
+
 /// Builds the `L4019` for a budget that gates GPU timings against a run that measured none.
 fn gpu_unmeasured(report: &ProfileReport) -> Diagnostic {
     let why = if !report.gpu.available {
@@ -1964,8 +2056,8 @@ fn gpu_unmeasured(report: &ProfileReport) -> Diagnostic {
     Diagnostic::new(
         code::BUDGET_GPU_UNMEASURED,
         format!(
-            "budget gates GPU timings (`[passes]`, `[post_groups]`, `post_total_ms`, `gpu_frame_ms` \
-             or `gpu_frame_max_ms`) but none were measured: {why}"
+            "budget gates GPU timings (`[passes]`, `[post_groups]`, `[views]`, `post_total_ms`, \
+             `gpu_frame_ms` or `gpu_frame_max_ms`) but none were measured: {why}"
         ),
     )
     .with_help(
@@ -2033,7 +2125,7 @@ fn budget_invalid(path: &Path, detail: String) -> Diagnostic {
     .with_help(
         "a budget is TOML: optional `frame_total_ms`, `frame_total_max_ms`, `post_total_ms`, \
          `cluster_build_ms`, `extract_ms`, `load_total_ms`, `gpu_frame_ms` and `gpu_frame_max_ms` scalars, and `[systems]`, \
-         `[systems_max]`, `[passes]` and `[post_groups]` tables of millisecond ceilings — see \
+         `[systems_max]`, `[passes]`, `[post_groups]` and `[views]` tables of millisecond ceilings — see \
          `ludion explain L4004`",
     )
 }
@@ -3783,6 +3875,14 @@ entities:
                     median_ms: Some(1e-9),
                 })
                 .collect();
+            // A `[views]` key names a scene's own view, so the run is given a row for each.
+            report
+                .gpu
+                .passes
+                .extend(budget.views.keys().map(|name| PassTiming {
+                    name: format!("view:{name}"),
+                    median_ms: Some(1e-9),
+                }));
             report.sim.systems = budget
                 .systems
                 .keys()
@@ -4119,6 +4219,109 @@ gpu_frame_max_ms = 9.5
             ..Budget::default()
         };
         assert!(check_budget(&sample_report(), &budget).is_empty());
+    }
+
+    /// `sample_report` plus a `radar` view: its span row and a `scene` and a `bloom_down_1` pass row.
+    fn viewed_report(span: Option<f64>) -> ProfileReport {
+        let mut report = pyramid_report();
+        for (name, median_ms) in [
+            ("view:radar", span),
+            ("view:radar/scene", Some(0.5)),
+            ("view:radar/bloom_down_1", Some(9.0)),
+        ] {
+            report.gpu.passes.push(PassTiming {
+                name: name.to_string(),
+                median_ms,
+            });
+        }
+        report
+    }
+
+    fn views_budget(name: &str, limit: f64) -> Budget {
+        Budget {
+            views: BTreeMap::from([(name.to_string(), limit)]),
+            ..Budget::default()
+        }
+    }
+
+    #[test]
+    fn a_views_key_over_its_ceiling_is_l4005_and_under_passes() {
+        let report = viewed_report(Some(0.8));
+        assert!(check_budget(&report, &views_budget("radar", 1.2)).is_empty());
+        let over = check_budget(&report, &views_budget("radar", 0.5));
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert_eq!(over[0].code, code::BUDGET_EXCEEDED);
+        assert!(over[0].message.contains("view `radar`"), "{over:?}");
+    }
+
+    #[test]
+    fn a_views_key_with_a_null_or_zero_span_is_l4019() {
+        for span in [None, Some(0.0)] {
+            let over = check_budget(&viewed_report(span), &views_budget("radar", 1.2));
+            assert_eq!(over.len(), 1, "{span:?}: {over:?}");
+            assert_eq!(over[0].code, code::BUDGET_GPU_UNMEASURED);
+            assert!(over[0].message.contains("view `radar`"), "{over:?}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_views_key_is_l4006_listing_the_measured_views() {
+        let over = check_budget(&viewed_report(Some(0.8)), &views_budget("radr", 1.2));
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert_eq!(over[0].code, code::BUDGET_UNKNOWN_KEY);
+        assert!(
+            over[0]
+                .help
+                .as_deref()
+                .unwrap_or_default()
+                .contains("`radar`"),
+            "{over:?}"
+        );
+        // A scene with no view at all, GPU measured: still a mistake in the budget.
+        let none = check_budget(&pyramid_report(), &views_budget("radar", 1.2));
+        assert_eq!(none.len(), 1, "{none:?}");
+        assert_eq!(none[0].code, code::BUDGET_UNKNOWN_KEY);
+    }
+
+    #[test]
+    fn a_views_key_against_a_run_with_no_gpu_is_one_l4019() {
+        let mut report = viewed_report(Some(0.8));
+        report.gpu.available = false;
+        let over = check_budget(&report, &views_budget("radar", 1.2));
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert_eq!(over[0].code, code::BUDGET_GPU_UNMEASURED);
+        assert!(over[0].message.contains("[views]"), "{over:?}");
+    }
+
+    #[test]
+    fn view_rows_never_satisfy_or_trip_passes_and_post_total() {
+        let report = viewed_report(Some(0.8));
+        // `view:radar/scene` (0.5) and `view:radar/bloom_down_1` (9.0) are not the main `scene` (3.0).
+        let passes = Budget {
+            passes: BTreeMap::from([("scene".to_string(), 3.5)]),
+            ..Budget::default()
+        };
+        assert!(check_budget(&report, &passes).is_empty());
+        let missing = Budget {
+            passes: BTreeMap::from([("view:radar".to_string(), 3.5)]),
+            ..Budget::default()
+        };
+        assert_eq!(
+            check_budget(&report, &missing)[0].code,
+            code::BUDGET_UNKNOWN_KEY
+        );
+        // The 9.0 ms view bloom row stays out of the post chain's 0.11 ms.
+        let post = Budget {
+            post_total_ms: Some(0.111),
+            ..Budget::default()
+        };
+        assert!(check_budget(&report, &post).is_empty());
+    }
+
+    #[test]
+    fn valid_budget_parses_the_views_table() {
+        let budget: Budget = toml::from_str("[views]\nradar = 1.2\n").unwrap();
+        assert_eq!(budget.views["radar"], 1.2);
     }
 
     #[test]

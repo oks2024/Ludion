@@ -2,7 +2,8 @@
 //!
 //! Validates the scene, then prints the *scheduled* frame graph as canonical JSON — passes
 //! (name, kind, reads, writes), virtual resources with their descriptors, the derived execution
-//! order, and the transient-aliasing assignment. Validation, extraction, graph construction,
+//! order, and the transient-aliasing assignment, and, per rendered view, its own sub-graph under
+//! `views`. Validation, extraction, graph construction,
 //! scheduling, and aliasing are all pure CPU, so this command needs no GPU adapter. The graph is the
 //! one the named scene actually renders at the given size and scale (its UI and sun decide the
 //! conditional passes; the render scale decides the `resolve`/`upscale` pass; `--quality` can mask

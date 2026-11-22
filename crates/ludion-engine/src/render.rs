@@ -436,7 +436,8 @@ pub fn render_scene_with_builder(
 /// shape rather than the minimal graph's five, a supersampled `size` adds the `resolve` pass (which
 /// makes this the way to verify a render scale without a GPU), a masked effect's passes are absent
 /// exactly as if the scene had never authored it, and a machine that lowers `shadow_map_size` dumps
-/// its own shadow map's extent.
+/// its own shadow map's extent. A scene that renders secondary views adds each view's own graph under
+/// a trailing `views` key (anti-aliasing off, the same quality mask).
 ///
 /// # Errors
 /// As [`render_scene`]'s CPU half (`L1015`, `L1001`–`L1014`, `L0004`/`L0006`,
@@ -460,12 +461,17 @@ pub fn dump_scene_graph_json(
         &DebugCategories::None,
         None,
     )?;
-    ludion_renderer::dump_frame_graph_json(
+    let masked = |s: &ludion_renderer::RenderScene| {
+        PostChain::for_scene(s).masked(&quality.quality, &quality.params)
+    };
+    ludion_renderer::dump_scene_frame_graph_json(
+        &scene,
         size,
         PostChain {
             aa: anti_aliasing,
-            ..PostChain::for_scene(&scene).masked(&quality.quality, &quality.params)
+            ..masked(&scene)
         },
+        masked,
     )
     .map_err(|d| vec![d])
 }

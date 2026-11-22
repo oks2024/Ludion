@@ -5,7 +5,8 @@
 //! without a GPU. It records every pass (name, kind, reads, writes), every virtual resource (its
 //! descriptor), the derived execution order, and the transient-aliasing assignment. Graph buffers add a
 //! top-level `buffers` array and per-pass `buffer_reads`/`buffer_writes`, each omitted when empty so
-//! a graph without buffers dumps the bytes it dumped before buffers existed.
+//! a graph without buffers dumps the bytes it dumped before buffers existed. Secondary views add a
+//! trailing `views` array of `{ name, graph }` (each `graph` this same shape), omitted when empty.
 
 use serde::Serialize;
 
@@ -20,6 +21,15 @@ struct GraphDump<'a> {
     buffers: Vec<BufferDump<'a>>,
     schedule: Vec<&'a str>,
     aliasing: AliasingDump<'a>,
+    /// Secondary views' own graphs; omitted when empty so a view-free graph dumps its old bytes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    views: Vec<ViewDump<'a>>,
+}
+
+#[derive(Serialize)]
+struct ViewDump<'a> {
+    name: &'a str,
+    graph: GraphDump<'a>,
 }
 
 #[derive(Serialize)]
@@ -121,6 +131,35 @@ impl Schedule {
     /// assert!(json.ends_with('\n'));
     /// ```
     pub fn dump_graph_json(&self) -> String {
+        self.dump_graph_json_with_views(&[])
+    }
+
+    /// Like [`Schedule::dump_graph_json`], with one nested graph per `(name, schedule)` view appended
+    /// under a trailing top-level `views` key (omitted when `views` is empty).
+    ///
+    /// # Example
+    /// ```
+    /// let (graph, _out) = ludion_render_graph::build_graph(64, 64);
+    /// let schedule = ludion_render_graph::schedule(&graph).unwrap();
+    /// let json = schedule.dump_graph_json_with_views(&[("radar", &schedule)]);
+    /// assert!(json.contains("\"views\""));
+    /// ```
+    pub fn dump_graph_json_with_views(&self, views: &[(&str, &Schedule)]) -> String {
+        let mut dump = self.graph_dump();
+        dump.views = views
+            .iter()
+            .map(|&(name, schedule)| ViewDump {
+                name,
+                graph: schedule.graph_dump(),
+            })
+            .collect();
+        let mut json = serde_json::to_string_pretty(&dump)
+            .expect("dump structs are plain data and always serialize");
+        json.push('\n');
+        json
+    }
+
+    fn graph_dump(&self) -> GraphDump<'_> {
         let resources = self.resources();
 
         let passes = self
@@ -218,7 +257,7 @@ impl Schedule {
             })
             .collect();
 
-        let dump = GraphDump {
+        GraphDump {
             passes,
             resources: resource_dumps,
             buffers: buffer_dumps,
@@ -228,11 +267,36 @@ impl Schedule {
                 physical_textures,
                 assignment,
             },
-        };
+            views: Vec::new(),
+        }
+    }
+}
 
-        let mut json = serde_json::to_string_pretty(&dump)
-            .expect("dump structs are plain data and always serialize");
-        json.push('\n');
-        json
+#[cfg(test)]
+mod tests {
+    use crate::{build_graph, schedule};
+
+    #[test]
+    fn no_views_dumps_the_plain_bytes() {
+        let (graph, _) = build_graph(64, 64);
+        let s = schedule(&graph).unwrap();
+        assert_eq!(s.dump_graph_json_with_views(&[]), s.dump_graph_json());
+        assert!(!s.dump_graph_json().contains("\"views\""));
+    }
+
+    #[test]
+    fn a_view_appends_a_trailing_key_and_leaves_the_rest() {
+        let (graph, _) = build_graph(64, 64);
+        let s = schedule(&graph).unwrap();
+        let (vgraph, _) = build_graph(32, 32);
+        let v = schedule(&vgraph).unwrap();
+        let plain = s.dump_graph_json();
+        let with = s.dump_graph_json_with_views(&[("radar", &v)]);
+        let open = plain.strip_suffix("\n}\n").unwrap();
+        assert!(with.starts_with(open));
+        let parsed: serde_json::Value = serde_json::from_str(&with).unwrap();
+        assert_eq!(parsed["views"][0]["name"], "radar");
+        let nested: serde_json::Value = serde_json::from_str(&v.dump_graph_json()).unwrap();
+        assert_eq!(parsed["views"][0]["graph"], nested);
     }
 }
