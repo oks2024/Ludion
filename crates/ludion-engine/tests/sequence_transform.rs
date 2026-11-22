@@ -7,7 +7,7 @@ use ludion_core::math::{euler_xyz_degrees_to_quat, quat_mul, quat_rotate};
 use ludion_ecs::Parent;
 use ludion_engine::hierarchy::world_transform;
 use ludion_engine::sequences::{self, SequenceEvent, SequenceHandle, SequenceTrack};
-use ludion_engine::{Diagnostics, Engine, SequenceEvents, Transform, sequence_update};
+use ludion_engine::{Diagnostics, Engine, SequenceEvents, Transform};
 use ludion_protocol::command::{EngineRestoreParams, SimStepParams};
 use ludion_protocol::{Command, ResponseBody};
 use serde_json::Value;
@@ -76,7 +76,6 @@ fn stage(name: &str, sequence: &str) -> Stage {
     let mut engine = Engine::builder()
         .project_root(fresh_dir(name))
         .sequences()
-        .system("sequence_update", sequence_update)
         .doc_text(SEQ, sequence)
         .build()
         .expect("the docs are valid");

@@ -1,6 +1,6 @@
 # Plan: Sequencer — `kind: sequence`, keyed tracks, skip
 
-> **Waves 1–3b mechanized — the document, `sequences::play`, seven tracks (transform and the audio voices, `music_crossfade` and `duck` keys included), skip, `holds_gameplay`, `wait: line_end`/`release`, the per-entity clock domain (`SequenceBound`) and the camera-zone override ship; preview and wire are laid out below.**
+> **Waves 1–3b and W4a mechanized — the document, `sequences::play`, seven tracks (transform and the audio voices, `music_crossfade` and `duck` keys included), skip, `holds_gameplay`, `wait: line_end`/`release`, the per-entity clock domain (`SequenceBound`), the camera-zone override, the built-in schedule seat and `ludion render --sequence` ship; the trace, gallery goldens and wire are laid out below.**
 > Driven by Neon Shroud request 0025 (sequencer / timeline). Game-facing doc: `ludion docs sequences`.
 
 ## Design decisions
@@ -10,9 +10,10 @@
    `SequenceBinding` through the builder's `components` closure, and installs an empty `SequenceEvents` at every world
    build. Nothing is builtin, so `component_schemas.json`, the protocol schema, goldens, replays and every existing
    `WorldHash` are untouched; a game that opts in and never plays hashes as if it had not.
-2. **Scheduling.** The game schedules `.system("sequence_update", sequence_update)` before `dialogue_update` (a dialogue
-   key starts the same tick) and before the systems that read `SequenceEvents`. A built-in schedule placement for CLI
-   preview is W4.
+2. **Scheduling.** Amended by decision 37: the engine seats `sequence_update` itself. Before, the game placed the
+   update before `dialogue_update`, so a `play` from a game system above it started that tick. Now a
+   `play`/`skip`/`cancel`/`release` from any game system lands at the next tick's update. A dialogue key still starts
+   the same tick, because the seat stays above every game system, `dialogue_update` included.
 3. **Keyed by path.** The document is keyed by its content-root path (the `PatternPlayer.pattern` rule); the request's
    `name:` is dropped.
 4. **API marks, the system does.** `sequences::play(world, key, &[(role, entity)]) -> Result<SequenceHandle, Diagnostic>`
@@ -141,6 +142,25 @@
 36. **Known limits.** A checkpoint restore or world rebuild mid-beat forgets the voice ids (earlier voices play out,
     a later skip cannot stop them) and drops the duck (the rebuild's blanket stop drops every manual duck). A beat
     that ends without `restore` keeps its rig, and the zone system resumes from it.
+37. **The seat.** `.sequences()` makes `scene_physics::assemble_schedule` put `sequence_update` right after
+    `path_follow` and before every game Sim system. `sequence_update` is no longer public (only `SequenceEvents` is
+    re-exported), and a game system named `"sequence_update"` under `.sequences()` is `L4018`. Calls to
+    `play`/`skip`/`cancel`/`release` made from a game system take effect at the next tick's update; made between
+    ticks, they take effect on the next tick, as before. A schedule without `.sequences()` is unchanged.
+38. **The preview.** `ludion render --scene S --sequence D [--bind role=entity]… [--at T]` runs the bare host
+    (`bare_driver` with the seat on). The doc is keyed under the scene folder (the content root); each binding names
+    the one entity with that `Name`. `--at T` renders after `T + 1` ticks: the world right after the update whose
+    playhead is `T`.
+39. **What a preview does not run.** No dialogue (a dialogue key degrades with `L4353` and sets no wait, decision 15)
+    and no game systems. With no game to release them, every `wait: release` clears the tick it is reached
+    (`sequences::release` before each tick). `GameClock` is installed so holds act. `L4352`/`L4353` warnings are
+    printed to stderr.
+40. **Codes.** `L4355` (`SEQUENCE_PREVIEW_DOC`): the doc is not under the scene's folder, unreadable or not
+    `kind: sequence`. `L4356` (`SEQUENCE_PREVIEW_BIND`): a `--bind` entity name matches no entity, or several.
+41. **The wire design (R14).** `sequence.play { sequence, bindings: {role: entity ref} } -> { player }`;
+    `sequence.skip { player }`; `sequence.seek { player, tick }`, which restores the snapshot captured at play and
+    steps `tick + 1` ticks with the preview's auto-release, so a seek frame equals the CLI frame. Each is a
+    ≤10-line `dispatch.rs` arm into `sequences`; it moves the protocol schema hash, so it ships in R14.
 
 ## Waves
 
@@ -158,8 +178,10 @@
 - **W3a (mechanized):** the transform track (decisions 25–30): anchor pose spans and `kind: path` spans.
 - **W3b (mechanized):** audio voices stopped on skip and cancel, `music_crossfade`, duck keys, the camera-zone override
   (decisions 31–36).
-- **W4:** built-in schedule placement, `ludion render --sequence --bind --at`, wire `sequence.play/seek/skip` (a
-  protocol schema move), a gallery scene and goldens, testkit `sequence_trace`.
+- **W4a (mechanized):** built-in schedule placement and `ludion render --sequence --bind --at` (decisions 37–40).
+- **W4b:** testkit `sequence_trace`, the `sequence-beat` gallery scene, `sequences/demo.yaml`, three-tick `--sequence`
+  render goldens.
+- **Wire (R14):** `sequence.play/seek/skip` (decision 41; a protocol schema move).
 
 ## Out of scope
 
@@ -189,3 +211,6 @@
 - W3b mechanized: `sequences/{audio,docs,mod,update}.rs` (`SequenceAudio`, `MusicCrossfadeKey`, `DuckKey`,
   `overrides_camera`), `camera_rig.rs` guard, `Bus` `JsonSchema`, `tests/sequence_{audio,zone}.rs`,
   `docs/{sequences,camera}.md`, the example.
+- W4a mechanized: `scene_physics.rs` (`assemble_schedule` seat), `sequences/preview.rs`, `render.rs`
+  (`render_sequence_preview`, `sequence_preview_world`), `ludion render --sequence/--bind/--at`, `L4018` for a
+  scheduled `sequence_update`, `L4355`/`L4356`, `tests/sequences.rs`, `docs/sequences.md`.

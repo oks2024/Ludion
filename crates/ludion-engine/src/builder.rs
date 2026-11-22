@@ -1299,20 +1299,21 @@ impl EngineBuilder {
 
     /// Opts into sequences (`ludion docs sequences`): registers the `kind: sequence` document, its
     /// validator, and the `SequencePlayer` and `SequenceBinding` components, and installs empty
-    /// [`SequenceEvents`](crate::SequenceEvents) at every world build. Schedule
-    /// [`sequence_update`](crate::sequence_update) before `dialogue_update` and before the systems
-    /// that read the events, and start a beat with [`sequences::play`](crate::sequences::play).
+    /// [`SequenceEvents`](crate::SequenceEvents) at every world build. The engine seats `sequence_update`
+    /// itself, after `path_follow` and before every game system (naming one `sequence_update` is
+    /// `L4018`), so a dialogue key starts the same tick. Start a beat with
+    /// [`sequences::play`](crate::sequences::play): `play`, `skip`, `cancel` and `release` called from a
+    /// game system take effect at the **next** tick's update; called between ticks, on the next tick.
     ///
     /// Nothing here is a built-in component, so a game that never plays a sequence hashes exactly as
     /// it did before opting in.
     ///
     /// # Example
     /// ```
-    /// use ludion_engine::{Engine, sequence_update};
+    /// use ludion_engine::Engine;
     ///
     /// let engine = Engine::builder()
     ///     .sequences()
-    ///     .system("sequence_update", sequence_update)
     ///     .build()
     ///     .unwrap();
     /// # let _ = engine;
@@ -1528,7 +1529,7 @@ impl EngineBuilder {
         // declared component type that is not registered is a build error (`L1125`), naming the system,
         // the query index, the Rust type, and the fix.
         validate_declared_queries(&registry, &self.systems)?;
-        validate_system_names(&self.systems)?;
+        validate_system_names(&self.systems, self.sequences)?;
         let profile_rel_path = self
             .profile_path
             .unwrap_or_else(crate::player_profile::default_profile_rel_path);
@@ -1541,6 +1542,7 @@ impl EngineBuilder {
             profile_rel_path,
             project_root,
             self.render_size.unwrap_or(DEFAULT_RENDER_SIZE),
+            self.sequences,
         );
         engine.save_root = self.save_root;
         // Before `install_profile`: the boot load decides on it whether an unloadable save is renamed.
@@ -1576,7 +1578,6 @@ impl EngineBuilder {
         engine.dialogue_config = self.dialogue_config;
         engine.localization = self.localization;
         engine.dialogue_channels = self.dialogue_channels;
-        engine.sequences = self.sequences;
         engine.input_actions = self.input_actions;
         if let Some(visuals) = self.projectile_visuals {
             engine.projectile_draw.visuals = visuals;
@@ -1736,8 +1737,8 @@ fn validate_declared_queries(
 /// profiler and `L4007` all key by name, and a scene's `physics:` block installs systems under
 /// [`ludion_physics::WRITE`], [`STEP`](ludion_physics::STEP) and [`MIRROR`](ludion_physics::MIRROR),
 /// so a game system may not take those. Returns the first `L4018`, naming both registration sites
-/// of a duplicate.
-fn validate_system_names(systems: &[SystemSpec]) -> Result<(), Diagnostic> {
+/// of a duplicate. With `sequences`, the name `sequence_update` is reserved for the built-in seat too.
+fn validate_system_names(systems: &[SystemSpec], sequences: bool) -> Result<(), Diagnostic> {
     const RESERVED: [&str; 3] = [
         ludion_physics::WRITE,
         ludion_physics::STEP,
@@ -1755,6 +1756,24 @@ fn validate_system_names(systems: &[SystemSpec]) -> Result<(), Diagnostic> {
             )
             .with_help("give the system a distinct name"));
         }
+    }
+    if sequences
+        && let Some(spec) = systems
+            .iter()
+            .find(|s| s.name == crate::sequences::SYSTEM_NAME)
+    {
+        return Err(Diagnostic::new(
+            code::SYSTEM_NAME_DUPLICATE,
+            format!(
+                "the system name `sequence_update` is already taken by the built-in sequence update, \
+                 but a system registered at {} takes it",
+                spec.registered_at,
+            ),
+        )
+        .with_help(
+            "`.sequences()` already schedules it after `path_follow` and before every game \
+             system; remove the `.system(\"sequence_update\", …)` line",
+        ));
     }
     for (index, spec) in systems.iter().enumerate() {
         if let Some(first) = systems[..index]

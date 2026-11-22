@@ -12,10 +12,10 @@ rig is `ludion docs camera`; UI tweens are `ludion docs ui-tweens`.
 
 1. `Engine::builder().sequences()` opts in (add `.dialogue(..)` if a key says a line).
 2. Write `sequences/<name>.yaml` under the content root; `build` and `check-scene` validate it (`L1730`–`L1735`).
-3. Schedule `.system("sequence_update", sequence_update)` **before** `dialogue_update` (a dialogue key then starts the
-   same tick) and before systems that read `SequenceEvents`.
+3. `.sequences()` schedules the update itself, after `path_follow` and above every game system (a dialogue key starts
+   the same tick; naming a system `sequence_update` is `L4018`).
 4. `sequences::play(world, "sequences/radar.yaml", &[("camera", cam), ("radar", panel)])` returns a `SequenceHandle`.
-   `skip(world, handle)` and `cancel(world, handle)` mark state; the next `sequence_update` applies it.
+   `skip`, `cancel` and `release` mark state; the next tick's update applies it, also when a game system called it.
 5. Read `SequenceEvents` after the system: `fired(handle, "radar_online")`, `ended(handle)`.
 
 ## Format
@@ -155,6 +155,16 @@ unsigned: a clip stamped inside a hold that outlasts the game's age saturates at
 patterns, ai and `AnimGraphState` follow the global clock. A checkpoint restore mid-bind rebases the global clock
 but not `SequenceBound`.
 
+## Preview
+
+`ludion render --scene S --sequence sequences/radar.yaml --bind camera=cam --bind radar=panel --at 30 --out p.png`
+plays the beat in the bare host and renders the world right after the update whose playhead is `--at` (`--at T` steps
+`T + 1` ticks; default 0). A `--bind` value is `role=entity`, the entity found by its `Name`. The document must lie
+under the scene's folder. It runs only the built-in schedule: no game systems, no dialogue (a dialogue key degrades,
+`L4353`), and every `wait: release` clears as it is reached. The summary line names the key, the tick and a beat that
+ended; `L4352`/`L4353` print as warnings. `L4355`: the doc is outside the folder, unreadable or not `kind: sequence`;
+`L4356`: a bind name matches no entity or several. `--frames`, `--view` and the dumps conflict with it.
+
 ## Skip and cancel
 
 `skip` returns `false` when the handle is dead or the doc says `skippable: false`. Otherwise, per role, the last
@@ -182,12 +192,14 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
 | `L4352` | Role unbound or its entity dead (warning, once) |
 | `L4353` | Key degraded: missing `CameraRig`/`Animation`/`Transform`, a `path` that does not load, `say` refused, doc gone (warning, once) |
 | `L4354` | Called without `.sequences()` |
+| `L4355` / `L4356` | Preview: doc outside the scene folder or not a sequence / `--bind` name matches no entity or several |
 
 ## Gotchas
 
 - State is entities (`SequencePlayer`, one `SequenceBinding` per role), so snapshots and checkpoints keep a beat.
   Entity refs in a list are refused (`L1392`), hence one binding entity per role.
-- Scheduled after `dialogue_update`, a dialogue key starts a tick late.
+- `play`, `skip`, `cancel` and `release` from a game system land at the next tick's update; called between ticks,
+  on the next tick.
 - An opted-in game that never plays hashes as if it had not opted in.
 - A transform target is fixed when its key applies: a moving anchor is not tracked. A second key on a role starts
   from its current pose. Only a `kinematic` body follows `Transform`; a dynamic body is the solver's. Scale is never

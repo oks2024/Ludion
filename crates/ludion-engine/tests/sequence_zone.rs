@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use ludion_core::ids::EntityId;
 use ludion_engine::sequences;
-use ludion_engine::{CameraRig, Engine, Name, RigMode, Transform, sequence_update};
+use ludion_engine::{CameraRig, Engine, Name, RigMode, Transform};
 
 const PHYSICS: &str = "physics:\n  space: free\n  layers:\n    - name: wall\n";
 
@@ -44,7 +44,6 @@ fn boot(tag: &str, restore_at: u32) -> Engine {
     let mut engine = Engine::builder()
         .project_root(dir)
         .sequences()
-        .system("sequence_update", sequence_update)
         .doc_text(KEY, &beat(restore_at))
         .build()
         .expect("the game builds");

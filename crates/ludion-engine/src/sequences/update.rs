@@ -56,24 +56,10 @@ struct Role {
 
 /// Plays every [`SequencePlayer`] one tick and rewrites [`SequenceEvents`].
 ///
-/// Schedule it before `dialogue_update` (a dialogue key starts the same tick) and before any system
-/// that reads [`SequenceEvents`]. A no-op for a game that did not opt in.
-///
-/// ```
-/// use ludion_engine::{Engine, SequenceEvents, sequence_update};
-/// use ludion_protocol::{Command, command};
-///
-/// let mut engine = Engine::builder()
-///     .sequences()
-///     .system("sequence_update", sequence_update)
-///     .build()
-///     .unwrap();
-/// engine
-///     .execute(Command::SimStep(command::SimStepParams { ticks: 1, hash: false }))
-///     .unwrap();
-/// assert_eq!(engine.world().resource::<SequenceEvents>().unwrap().iter().count(), 0);
-/// ```
-pub fn sequence_update(world: &mut World, ctx: &SystemCtx) {
+/// The engine seats it after `path_follow` and before every game system (`EngineBuilder::sequences`), so
+/// a dialogue key starts the same tick and every system that reads [`SequenceEvents`] sees this tick's
+/// events. A no-op for a game that did not opt in.
+pub(crate) fn sequence_update(world: &mut World, ctx: &SystemCtx) {
     if world.resource::<SequenceEvents>().is_none() {
         return;
     }

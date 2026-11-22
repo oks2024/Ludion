@@ -590,6 +590,30 @@ enum Command {
         /// requires `--out`, exactly like `--sweep`.
         #[arg(long, value_delimiter = ',', conflicts_with_all = ["model", "sweep"])]
         frames: Vec<u64>,
+        /// (`--scene` only) Preview a `kind: sequence` document: play it over the scene in the bare
+        /// host (the built-in schedule only, no game systems, no dialogue) and render the world at
+        /// tick `--at`. The document must lie under the scene's folder. Needs `--out`. Prints
+        /// `<out>: rendered WxH (sequence <key> at <T>) on <adapter>`. `ludion docs sequences` has the
+        /// detail.
+        #[arg(
+            long,
+            value_name = "DOC",
+            requires = "scene",
+            conflicts_with_all = [
+                "model", "sprite", "atlas", "font", "paired", "sweep", "frames", "view",
+                "views_sheet", "dump_voxels", "dump_gi", "dump_probes", "dump_timings", "debug_view",
+                "debug_draw",
+            ]
+        )]
+        sequence: Option<PathBuf>,
+        /// (`--sequence` only) Bind a role to the scene entity with this `Name`: `--bind cam=camera`,
+        /// repeatable. A name matching no entity or several is `L4356`.
+        #[arg(long, value_name = "ROLE=ENTITY", requires = "sequence")]
+        bind: Vec<String>,
+        /// (`--sequence` only) The playhead tick to render: the world right after the update whose
+        /// playhead is TICK (the preview steps TICK + 1 ticks). Default 0.
+        #[arg(long, value_name = "TICK", default_value_t = 0, requires = "sequence")]
+        at: u64,
         /// (scene only) Render the scene in this locale (`--locale fr`): keyed `UiText`/`Text` resolve
         /// from the `kind: strings` docs under the scene's folder and draw in that locale's font
         /// faces. Absent, a scene with keys renders in the folder's default locale. Not valid with
@@ -2414,6 +2438,9 @@ fn main() -> std::process::ExitCode {
             debug_view,
             view,
             views_sheet,
+            sequence,
+            bind,
+            at,
             look_at,
             azimuth,
             pitch,
@@ -2550,6 +2577,9 @@ fn main() -> std::process::ExitCode {
                 debug_view: debug_view.map(Into::into),
                 view: view.as_deref(),
                 views_sheet,
+                sequence: sequence.as_deref(),
+                bind: &bind,
+                at,
                 framing: framing::FramingArgs {
                     look_at: look_at.as_deref(),
                     azimuth,

@@ -1,11 +1,11 @@
 //! Sequences: linear timelines of keys — camera, transform, animation, ui, audio, dialogue and events — played
 //! over roles bound to entities (`ludion docs sequences`).
 //!
-//! A game opts in with [`EngineBuilder::sequences`](crate::EngineBuilder::sequences), schedules
-//! [`sequence_update`] **before** `dialogue_update` and before any system that reads
-//! [`SequenceEvents`], and drives a beat through the free functions here. **The API only marks
-//! state** — [`play`] spawns a pending [`SequencePlayer`], [`skip`] and [`cancel`] set a flag — and
-//! the system applies every key and emits every event. [`release`] clears a `wait: release` key,
+//! A game opts in with [`EngineBuilder::sequences`](crate::EngineBuilder::sequences), which seats
+//! `sequence_update` after `path_follow` and before every game system, and drives a beat through the
+//! free functions here. **The API only marks state** — [`play`] spawns a pending [`SequencePlayer`],
+//! [`skip`] and [`cancel`] set a flag — and the system applies every key and emits every event at the
+//! next tick's update. [`release`] clears a `wait: release` key,
 //! [`holding`] reports a `holds_gameplay` beat holding the gameplay clock. An audio `play` key is a voice
 //! (see `audio`, a per-build resource, never hashed): skip and cancel stop it, `duck` keys release at every end.
 //!
@@ -17,7 +17,32 @@ pub(crate) mod audio;
 pub(crate) mod bound;
 mod docs;
 mod events;
+pub(crate) mod preview;
 mod update;
+
+/// The system's name in the schedule and in `engine.describe`.
+pub(crate) const SYSTEM_NAME: &str = "sequence_update";
+
+/// Adds `sequence_update` to `schedule`. Called right after `path_follow`, before any game system.
+pub(crate) fn install(schedule: &mut ludion_ecs::Schedule) {
+    schedule.add_system(SYSTEM_NAME, update::sequence_update);
+}
+
+/// The system's `engine.describe` entry, with no call site to attribute; the caller sets its `order`.
+pub(crate) fn describe_entry() -> serde_json::Value {
+    serde_json::json!({
+        "name": SYSTEM_NAME,
+        "order": 0,
+        "fn_path": "ludion_engine::sequences::sequence_update",
+        "registered_at": serde_json::Value::Null,
+        "queries": [{
+            "components": [
+                {"name": "SequencePlayer", "access": "write"},
+                {"name": "SequenceBinding", "access": "write"},
+            ],
+        }],
+    })
+}
 
 use ludion_camera::RigConfig;
 use ludion_components::path_follow::PathOrient;
@@ -37,7 +62,7 @@ pub use docs::{
     TransformTo, UiKey,
 };
 pub use events::{SequenceEnd, SequenceEvent, SequenceEvents, SequenceTrack};
-pub use update::sequence_update;
+pub use preview::SequencePreview;
 
 pub(crate) use docs::{SEQUENCE_KIND, validate_sequence_docs};
 

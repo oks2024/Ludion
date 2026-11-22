@@ -1530,6 +1530,205 @@ fn frames_rejects_descending_values_and_bad_integers() {
     }
 }
 
+/// A scene folder for `--sequence`: a camera, a `crate` mesh and `sequences/move.yaml`, whose one
+/// transform key slides the `mover` role 4 m along +X over 10 ticks. Returns `(scene, doc)`.
+fn sequence_project(name: &str) -> (PathBuf, PathBuf) {
+    let root = out_path(&format!("cli_sequence_{name}"));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sequences")).unwrap();
+    std::fs::write(
+        root.join("scene.yaml"),
+        "format: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - 10.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: crate
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.3
+          - 0.2
+          - 1.0
+",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("sequences/move.yaml"),
+        "format: 1
+kind: sequence
+roles:
+  - mover
+length_ticks: 20
+tracks:
+  transform:
+    - at: 0
+      role: mover
+      over: 10
+      to:
+        offset:
+          - 4.0
+          - 0.0
+          - 0.0
+",
+    )
+    .unwrap();
+    (root.join("scene.yaml"), root.join("sequences/move.yaml"))
+}
+
+/// `--sequence` is a scene-only mode: it conflicts with a `--frames` strip and needs `--scene`.
+#[test]
+fn sequence_flag_conflicts() {
+    let (scene, doc) = sequence_project("conflicts");
+    let out = out_path("cli_sequence_conflicts.png");
+    let with_frames = run_ludion(&[
+        "render",
+        "--scene",
+        scene.to_str().unwrap(),
+        "--sequence",
+        doc.to_str().unwrap(),
+        "--frames",
+        "3",
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(!with_frames.status.success());
+    assert!(
+        String::from_utf8_lossy(&with_frames.stderr).contains("--sequence"),
+        "{}",
+        String::from_utf8_lossy(&with_frames.stderr)
+    );
+    let without_scene = run_ludion(&[
+        "render",
+        "--model",
+        gallery_scene("meshes.yaml").to_str().unwrap(),
+        "--sequence",
+        doc.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert!(!without_scene.status.success());
+}
+
+/// `--bind` and `--at` mean nothing without `--sequence`.
+#[test]
+fn bind_without_sequence_is_refused() {
+    let (scene, _) = sequence_project("bind-alone");
+    for flag in [["--bind", "mover=crate"], ["--at", "5"]] {
+        let output = run_ludion(&[
+            "render",
+            "--scene",
+            scene.to_str().unwrap(),
+            "--out",
+            out_path("cli_sequence_bind_alone.png").to_str().unwrap(),
+            flag[0],
+            flag[1],
+        ]);
+        assert!(!output.status.success(), "{flag:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--sequence"),
+            "{flag:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// A `--bind` value needs exactly one `=` with both sides non-empty.
+#[test]
+fn bind_without_equals_is_a_usage_error() {
+    let (scene, doc) = sequence_project("bind-bad");
+    for bad in ["mover", "=crate", "mover=", "a=b=c"] {
+        let output = run_ludion(&[
+            "render",
+            "--scene",
+            scene.to_str().unwrap(),
+            "--sequence",
+            doc.to_str().unwrap(),
+            "--bind",
+            bad,
+            "--out",
+            out_path("cli_sequence_bind_bad.png").to_str().unwrap(),
+        ]);
+        assert!(!output.status.success(), "{bad}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--bind") && stderr.contains("ROLE=ENTITY"),
+            "{bad}: {stderr}"
+        );
+    }
+}
+
+/// `--sequence` renders the world at tick `--at`, names it on the summary line, and two runs write
+/// byte-identical PNGs; moving `--at` moves the picture. Skips when no GPU adapter is available.
+#[test]
+fn needs_gpu_sequence_preview_renders_and_names_the_tick() {
+    let (scene, doc) = sequence_project("render");
+    let run = |at: &str, out: &std::path::Path| {
+        run_ludion(&[
+            "render",
+            "--scene",
+            scene.to_str().unwrap(),
+            "--sequence",
+            doc.to_str().unwrap(),
+            "--bind",
+            "mover=crate",
+            "--at",
+            at,
+            "--out",
+            out.to_str().unwrap(),
+            "--width",
+            "192",
+            "--height",
+            "108",
+        ])
+    };
+    let (first_out, second_out, later_out) = (
+        out_path("cli_sequence_1.png"),
+        out_path("cli_sequence_2.png"),
+        out_path("cli_sequence_later.png"),
+    );
+    let first = run("5", &first_out);
+    if !first.status.success() {
+        if is_no_adapter(&first) {
+            eprintln!("SKIPPED sequence_preview_renders_and_names_the_tick: no GPU adapter");
+            return;
+        }
+        panic!("render failed: {}", String::from_utf8_lossy(&first.stderr));
+    }
+    let stdout = String::from_utf8_lossy(&first.stdout);
+    assert!(
+        stdout.contains("sequence sequences/move.yaml at 5"),
+        "summary must name the document and tick: {stdout}"
+    );
+    assert!(run("5", &second_out).status.success());
+    assert_eq!(
+        std::fs::read(&first_out).unwrap(),
+        std::fs::read(&second_out).unwrap(),
+        "two runs of the same preview must be byte-identical"
+    );
+    assert!(run("10", &later_out).status.success());
+    assert_ne!(
+        std::fs::read(&first_out).unwrap(),
+        std::fs::read(&later_out).unwrap(),
+        "the crate is further along at tick 10"
+    );
+}
+
 /// `--frames a,b,c` needs `--out` exactly like `--sweep` — enforced by the same clap declaration
 /// that already requires `--out` on every plain `--scene` render (`out`'s
 /// `required_unless_present_any = ["model", "dump_voxels", "dump_gi"]` in `main.rs`; `frames` is not

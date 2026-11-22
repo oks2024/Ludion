@@ -119,7 +119,7 @@
 //!   ([`ExposureQuery`], [`Exposure`]); `ludion docs light-exposure`.
 //! - **Perception** — sight for guards: `Engine::builder().perception(`[`PerceptionConfig`]`)` and [`perception_update`] scheduled after whatever moves them; a [`Perceiver`] with [`SightZone`]s sees every [`SightTarget`] (sample [`SightPoint`]s, a [`Require`] rule) and the tick's [`SightSample`]s are read from [`PerceptionResults`]; `memory:` keeps a [`StimulusRecord`] ghost per source, fed by sight and [`report_stimulus`]; hearing: a [`Perceiver`]'s `hearing:` and [`emit_noise`] queue a [`Noise`] that [`perception_update`] delivers as [`HeardNoise`], scaled by [`NoiseZone`] volumes (`ludion docs perception`).
 //! - **Dialogue** — `Engine::builder().dialogue(`[`DialogueConfig`]`)`, [`dialogue_update`] scheduled after the systems that `say` a line (`ludion::dialogue`), [`DialogueEvents`] and the [`Subtitles`] on air (`ludion docs dialogue`).
-//! - **Sequences** — `Engine::builder().sequences()`, [`sequence_update`] scheduled before `dialogue_update`, `ludion::sequences::play`/`skip`/`cancel` over a `kind: sequence` timeline, and the [`SequenceEvents`] it emits (`ludion docs sequences`).
+//! - **Sequences** — `Engine::builder().sequences()` seats the update, `ludion::sequences::play`/`skip`/`cancel` over a `kind: sequence` timeline, and the [`SequenceEvents`] it emits (`ludion docs sequences`).
 //! - **Navigation** — the opt-in walkability grid built from the static physics colliders:
 //!   `Engine::builder().nav(`[`NavConfig`]`)` and [`nav_update`] scheduled before whatever reads the
 //!   [`Nav`] resource. A [`NavAgent`] entity gets its desired velocity in [`NavSteering`] from [`nav_steer`]
@@ -315,11 +315,10 @@ pub use ludion_engine::{
     path_follower_motion, perception_update, play_layer, play_patterns, play_sound,
     posed_joint_world, prepare_map, prepare_prefab, prewarm_prefab, probe_character_ground,
     projectiles_step, reparent, report_diagnostic, report_full_diagnostic, report_stimulus,
-    resize_character, resume_character, revert_prefab, sequence_update, set_character_posture,
-    set_clip_speed, set_layer_params, set_look, snap_rig, spawn_map, spawn_prefab,
-    spawn_projectile, stimuli, suspend_character, switch_skin_to_ragdoll, switch_to_ragdoll,
-    teleport_character, turn_character, unpack_prefab, validate_pattern_docs, volley_hits,
-    world_transform,
+    resize_character, resume_character, revert_prefab, set_character_posture, set_clip_speed,
+    set_layer_params, set_look, snap_rig, spawn_map, spawn_prefab, spawn_projectile, stimuli,
+    suspend_character, switch_skin_to_ragdoll, switch_to_ragdoll, teleport_character,
+    turn_character, unpack_prefab, validate_pattern_docs, volley_hits, world_transform,
 };
 pub use ludion_engine::{AnimEdge, AnimGate, AnimGraph, AnimGraphState, AnimState};
 pub use ludion_engine::{RootMotion, root_motion_delta};

@@ -2,8 +2,8 @@
 //! handler line and a `radar_online` event — played once to its end and once skipped, the copyable
 //! pattern for `ludion docs sequences`.
 //!
-//! A game opts in with [`EngineBuilder::sequences`], schedules [`sequence_update`] before
-//! `dialogue_update`, starts a beat with `sequences::play` and reads [`SequenceEvents`]. Everything
+//! A game opts in with [`EngineBuilder::sequences`], (the engine seats the update above every game
+//! system), starts a beat with `sequences::play` and reads [`SequenceEvents`]. Everything
 //! above the `main` divider is copyable into a real game. Run it headless (writes the docs to a temp
 //! content root and prints each event with its frame):
 //!
@@ -23,7 +23,6 @@ fn game(root: PathBuf) -> EngineBuilder {
         .project_root(root)
         .dialogue(DialogueConfig::default())
         .sequences()
-        .system("sequence_update", sequence_update)
         .system("dialogue_update", dialogue_update)
         .system("sample", sample)
 }

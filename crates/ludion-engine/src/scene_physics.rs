@@ -170,7 +170,8 @@ pub(crate) fn install(schedule: &mut Schedule, physics: Option<&ScenePhysics>) {
 }
 
 /// Builds a fresh [`Schedule`]: [`path_follow`](crate::path_follow) always first, so a rider reads
-/// this tick's platform pose; then the registered Sim `systems`, in registration order; then the
+/// this tick's platform pose; then `sequence_update` when `sequences` is set, above every game
+/// system so a dialogue key starts the same tick; then the registered Sim `systems`, in registration order; then the
 /// physics triple when `physics` is `Some` — after every game system (`Plan/physics.md` W2), preceded by
 /// [`pose_blend`](crate::pose_blend) so a weight a game writes this tick drives this tick's motor — then
 /// [`camera_rig`](crate::camera_rig) always, so the camera reads this tick's settled target pose;
@@ -180,9 +181,13 @@ pub(crate) fn install(schedule: &mut Schedule, physics: Option<&ScenePhysics>) {
 pub(crate) fn assemble_schedule(
     physics: Option<&ScenePhysics>,
     systems: &[crate::engine::SystemSpec],
+    sequences: bool,
 ) -> Schedule {
     let mut schedule = Schedule::new();
     crate::path_follow::install(&mut schedule);
+    if sequences {
+        crate::sequences::install(&mut schedule);
+    }
     for spec in systems.iter().filter(|s| s.phase == Phase::Sim) {
         schedule.add_system_shared(spec.name, spec.run.clone());
     }
@@ -202,6 +207,7 @@ pub(crate) fn bare_driver(
     mut world: World,
     scene: &ludion_scene::Scene,
     project_root: &std::path::Path,
+    sequences: bool,
 ) -> SimDriver {
     world.insert_resource(crate::collider_mesh::library(project_root.to_path_buf()));
     world.insert_resource(crate::path_follow::PathLibrary::new(
@@ -212,7 +218,7 @@ pub(crate) fn bare_driver(
     )));
     let mut driver = SimDriver::new(
         world,
-        assemble_schedule(scene.physics.as_ref(), &[]),
+        assemble_schedule(scene.physics.as_ref(), &[], sequences),
         SimConfig {
             seed: scene.seed.unwrap_or(0),
             ..SimConfig::default()
@@ -702,7 +708,7 @@ mod tests {
     #[test]
     fn the_assembled_schedule_runs_path_follow_physics_then_camera_rig() {
         let physics = physics_with_layers(Vec::new());
-        let schedule = assemble_schedule(Some(&physics), &[]);
+        let schedule = assemble_schedule(Some(&physics), &[], false);
         let names: Vec<_> = schedule.system_names().collect();
         assert_eq!(
             names,
@@ -712,6 +718,37 @@ mod tests {
                 WRITE,
                 STEP,
                 MIRROR,
+                crate::camera_rig::SYSTEM_NAME
+            ]
+        );
+    }
+
+    #[test]
+    fn the_assembled_schedule_seats_sequence_update_after_path_follow() {
+        let game = crate::engine::SystemSpec {
+            name: "game_system",
+            phase: Phase::Sim,
+            run: std::sync::Arc::new(|_: &mut World, _: &SystemCtx| {}),
+            fn_path: "test",
+            registered_at: std::panic::Location::caller(),
+            declared_queries: Vec::new(),
+        };
+        let on = assemble_schedule(None, std::slice::from_ref(&game), true);
+        assert_eq!(
+            on.system_names().collect::<Vec<_>>(),
+            [
+                crate::path_follow::SYSTEM_NAME,
+                crate::sequences::SYSTEM_NAME,
+                "game_system",
+                crate::camera_rig::SYSTEM_NAME
+            ]
+        );
+        let off = assemble_schedule(None, std::slice::from_ref(&game), false);
+        assert_eq!(
+            off.system_names().collect::<Vec<_>>(),
+            [
+                crate::path_follow::SYSTEM_NAME,
+                "game_system",
                 crate::camera_rig::SYSTEM_NAME
             ]
         );
@@ -1325,7 +1362,7 @@ mod tests {
         }
 
         let world = ludion_scene::instantiate(&parsed, &registry).expect("instantiates");
-        let mut driver = bare_driver(world, &parsed, std::path::Path::new("."));
+        let mut driver = bare_driver(world, &parsed, std::path::Path::new("."), false);
         let mut bare_trace = Vec::with_capacity(TICKS);
         for _ in 0..TICKS {
             driver.run_ticks(1);

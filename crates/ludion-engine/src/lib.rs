@@ -362,9 +362,10 @@ pub use ragdoll::{LimitsFrom, RagdollSwitch, switch_to_ragdoll, switch_to_ragdol
 pub use ragdoll_recover::{RagdollToAssembly, ragdoll_landing, switch_ragdoll_to_assembly};
 pub use rain::scene_rain_diagnostics;
 pub use render::{
-    BuilderRenderOutcome, RenderOutcome, ViewsOutcome, dump_scene_graph_json, engine_at_frame,
-    find_view, gpu_uploads, render_scene, render_scene_views, render_scene_with_builder,
-    render_scene_with_registry,
+    BuilderRenderOutcome, RenderOutcome, SequencePreviewOutcome, SequencePreviewWorld,
+    ViewsOutcome, dump_scene_graph_json, engine_at_frame, find_view, gpu_uploads, render_scene,
+    render_scene_views, render_scene_with_builder, render_scene_with_registry,
+    render_sequence_preview, sequence_preview_world,
 };
 pub use render_extent::RenderExtent;
 pub use render_layers::scene_render_layer_diagnostics;
@@ -398,7 +399,7 @@ pub use scene_check::{
 pub use screen_effect::scene_screen_effect_diagnostics;
 pub use sculpt_mesh::{SculptStats, read_sculpt_sources, sculpt_budget_warning};
 pub use secondary_view::scene_render_view_diagnostics;
-pub use sequences::{SequenceEvents, sequence_update};
+pub use sequences::{SequenceEvents, SequencePreview};
 pub use settings::{
     QualityPreset, Settings, SettingsView, WindowMode, resolve_anti_aliasing,
     settings_window_mode_at,

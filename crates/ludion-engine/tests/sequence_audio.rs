@@ -4,7 +4,7 @@
 use ludion_core::audio::{AudioMessage, Bus};
 use ludion_core::ids::EntityId;
 use ludion_engine::sequences::{self, SequenceEvent, SequenceHandle, SequenceTrack};
-use ludion_engine::{Engine, SequenceEvents, Transform, sequence_update};
+use ludion_engine::{Engine, SequenceEvents, Transform};
 use std::path::PathBuf;
 
 const AUDIO_STEP: u32 = 6;
@@ -48,7 +48,6 @@ fn engine(name: &str, text: &str) -> (Engine, EntityId) {
     let mut engine = Engine::builder()
         .project_root(fresh_dir(name))
         .sequences()
-        .system("sequence_update", sequence_update)
         .doc_text(KEY, text)
         .build()
         .expect("the docs are valid");

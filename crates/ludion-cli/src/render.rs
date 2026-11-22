@@ -170,6 +170,12 @@ pub struct Request<'a> {
     pub view: Option<&'a str>,
     /// `--views-sheet` (scene mode): the frame and every rendered view in one row.
     pub views_sheet: bool,
+    /// `--sequence`: preview this `kind: sequence` document over the scene.
+    pub sequence: Option<&'a Path>,
+    /// `--bind` (with `--sequence`), repeatable: each `<role>=<entity name>`.
+    pub bind: &'a [String],
+    /// `--at` (with `--sequence`): the playhead tick to render.
+    pub at: u64,
     /// `--look-at` and its companions (scene mode): expanded into overrides by `framing::expand`.
     pub framing: crate::framing::FramingArgs<'a>,
     /// `--scale`, if it was given. In scene mode a render-extent multiplier; absent, the extent is
@@ -245,6 +251,9 @@ pub fn run(request: &Request) -> ExitCode {
                 println!("{summary}");
             }
             let set = framed.set.as_slice();
+            if let Some(doc) = request.sequence {
+                return run_sequence(request, scene, doc, set, explicit);
+            }
             if request.view.is_some() || request.views_sheet {
                 if request.frames.len() >= 2 {
                     return crate::diagnostic::usage_error(
@@ -418,6 +427,96 @@ fn run_scene(
                 outcome
                     .metered
                     .map_or_else(String::new, |m| metered_note(&m)),
+                outcome.adapter
+            );
+            ExitCode::SUCCESS
+        }
+        Err(mut diagnostics) => {
+            crate::check_scene::add_project_component_help(scene, &mut diagnostics);
+            report(scene, &diagnostics)
+        }
+    }
+}
+
+/// Splits one `--bind` value into `(role, entity name)`; exactly one `=` with both sides non-empty.
+fn parse_bind(spec: &str) -> Option<(String, String)> {
+    let (role, entity) = spec.split_once('=')?;
+    (!role.is_empty() && !entity.is_empty() && !entity.contains('='))
+        .then(|| (role.into(), entity.into()))
+}
+
+/// `--sequence`: plays the document over the scene in the bare host and renders tick `--at`
+/// ([`ludion_engine::render_sequence_preview`]).
+fn run_sequence(
+    request: &Request,
+    scene: &Path,
+    doc: &Path,
+    set: &[String],
+    explicit: Option<RenderScale>,
+) -> ExitCode {
+    let Some(out) = request.out else {
+        return crate::diagnostic::usage_error(
+            "`--sequence` needs `--out <OUT>`: a preview renders one frame and has no default \
+             output name",
+        );
+    };
+    let mut bindings = Vec::new();
+    for spec in request.bind {
+        match parse_bind(spec) {
+            Some(pair) => bindings.push(pair),
+            None => {
+                return crate::diagnostic::usage_error(format!(
+                    "invalid value '{spec}' for '--bind <ROLE=ENTITY>': expected exactly one `=` \
+                     with a role and an entity name, e.g. `--bind cam=camera`"
+                ));
+            }
+        }
+    }
+    let overrides = match parse_overrides(set) {
+        Ok(overrides) => overrides,
+        Err(diagnostics) => return report(scene, &diagnostics),
+    };
+    let size = FrameSize::scaled(
+        request.width,
+        request.height,
+        ludion_engine::resolve_render_scale(explicit, request.quality),
+    );
+    let preview = ludion_engine::SequencePreview {
+        doc: doc.to_path_buf(),
+        bindings,
+        at: request.at,
+    };
+    match ludion_engine::render_sequence_preview(
+        &crate::check_scene::builtin_registry(),
+        scene,
+        size,
+        request.quality,
+        &overrides,
+        &preview,
+        request.anti_aliasing,
+        request.locale,
+    ) {
+        Ok(outcome) => {
+            for applied in &outcome.applied_overrides {
+                echo(applied);
+            }
+            // Warnings (an unbound role, a degraded key) print and the render still succeeds.
+            report(scene, &outcome.warnings);
+            if let Err(diagnostic) = outcome.image.write_png(out) {
+                eprintln!("{diagnostic}");
+                return ExitCode::FAILURE;
+            }
+            let ended = outcome
+                .ended
+                .map_or_else(String::new, |end| format!(", ended {end:?}"));
+            println!(
+                "{}: rendered {}x{}{} (sequence {} at {}{ended}) on {}",
+                out.display(),
+                request.width,
+                request.height,
+                resample_note(size),
+                outcome.key,
+                request.at,
                 outcome.adapter
             );
             ExitCode::SUCCESS

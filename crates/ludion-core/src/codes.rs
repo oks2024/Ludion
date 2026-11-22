@@ -705,6 +705,11 @@ pub mod code {
     pub const SEQUENCE_KEY_DEGRADED: DiagnosticCode = DiagnosticCode::new("L4353");
     /// `L4354` — a `sequences::` call reached an engine that did not opt in with `.sequences()`.
     pub const SEQUENCES_NOT_ENABLED: DiagnosticCode = DiagnosticCode::new("L4354");
+    /// `L4355` — `ludion render --sequence` named a document it cannot preview: not under the
+    /// scene's folder, unreadable, or not a `kind: sequence` document.
+    pub const SEQUENCE_PREVIEW_DOC: DiagnosticCode = DiagnosticCode::new("L4355");
+    /// `L4356` — a `ludion render --bind` entity name matches no entity in the scene, or several.
+    pub const SEQUENCE_PREVIEW_BIND: DiagnosticCode = DiagnosticCode::new("L4356");
     /// `L4370` — `paired_fit` found no `kind: paired` document at the path it was given: the engine
     /// has no project, or the document fails to load (the loader's diagnostics follow).
     pub const PAIRED_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L4370");
@@ -14369,7 +14374,29 @@ Fix: put the component on the bound entity, fix the line, and keep the document 
 A `sequences::play` call reached an engine that did not opt in, so there is no `kind: sequence`
 document type and no player system data.
 
-Fix: add `.sequences()` to `Engine::builder()` and schedule `sequence_update`.",
+Fix: add `.sequences()` to `Engine::builder()`; the engine schedules the update itself.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_PREVIEW_DOC,
+        severity: Severity::Error,
+        title: "the sequence document cannot be previewed",
+        explanation: "\
+`ludion render --sequence` loads one `kind: sequence` document from the scene's folder (its content root).
+The path is outside that folder, the file cannot be read, or it is not a valid `kind: sequence` document;
+the document's own diagnostics (`L1730`-`L1733`) follow when it fails its checks.
+
+Fix: pass a path under the scene's folder, e.g. `--sequence sequences/intro.yaml` next to `scene.yaml`.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_PREVIEW_BIND,
+        severity: Severity::Error,
+        title: "a --bind entity name does not resolve to one entity",
+        explanation: "\
+`ludion render --bind role=entity` finds the entity by its `Name`. No entity in the scene has that name, or
+more than one does, so the role cannot be bound.
+
+Fix: give the entity a unique `name:` in the scene, or bind the role to another entity; the message lists the
+nearest name when there is one.",
     },
     CodeEntry {
         code: code::PAIRED_UNKNOWN,
@@ -15293,6 +15320,8 @@ mod tests {
         code::SEQUENCE_ROLE_MISSING,
         code::SEQUENCE_KEY_DEGRADED,
         code::SEQUENCES_NOT_ENABLED,
+        code::SEQUENCE_PREVIEW_DOC,
+        code::SEQUENCE_PREVIEW_BIND,
         code::PAIRED_UNKNOWN,
         code::PAIRED_CAST_INVALID,
         code::PAIRED_SCALE_MISMATCH,

@@ -343,7 +343,7 @@ pub fn render_frame_strip(
             return Err(diagnostics);
         }
         let (scene, world) = crate::render::expanded_world(project_root, &registry, &scene)?;
-        let mut driver = crate::scene_physics::bare_driver(world, &scene, project_root);
+        let mut driver = crate::scene_physics::bare_driver(world, &scene, project_root, false);
         driver.run_ticks(frame);
         if let Some(d) = driver.take_system_panic() {
             return Err(vec![d]);
@@ -452,7 +452,7 @@ fn prepare_cell(
         return Err(diagnostics);
     }
     let (scene, world) = crate::render::expanded_world(project_root, registry, &scene)?;
-    let mut driver = crate::scene_physics::bare_driver(world, &scene, project_root);
+    let mut driver = crate::scene_physics::bare_driver(world, &scene, project_root, false);
     driver.run_ticks(0);
 
     let scene = extract(

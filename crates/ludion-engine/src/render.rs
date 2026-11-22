@@ -39,6 +39,7 @@ use crate::debug_draw::{DebugCategories, DebugDraw};
 use crate::engine::Engine;
 use crate::extract::extract_at;
 use crate::quality::QualitySetting;
+use crate::sequences::{SequenceEnd, SequencePreview};
 
 /// The result of a lockstep render: the image plus the adapter it ran on (for logging).
 pub struct RenderOutcome {
@@ -503,6 +504,37 @@ pub(crate) fn scene_file_driver(
     frames: u64,
     debug: &DebugCategories,
 ) -> Result<(SimDriver, Vec<AppliedOverride>), Vec<Diagnostic>> {
+    let (scene, mut world, applied_overrides) = scene_file_world(registry, path, overrides)?;
+    let project_root = path.parent().unwrap_or(Path::new("."));
+
+    // No game schedule is ever installed here — the seed threads through so the shape matches the
+    // full driver, even though nothing here consumes randomness. Physics is the one exception: a
+    // scene's `physics:` block is the only opt-in there is, so a bare host steps it too.
+    if *debug != DebugCategories::None {
+        world.insert_resource(DebugDraw::default());
+    }
+    let mut driver = crate::scene_physics::bare_driver(world, &scene, project_root, false);
+    // `run_ticks` spelled out, so the debug drawing rolls over at each tick boundary as the engine's
+    // own does.
+    driver.step(frames);
+    while driver.advance() {
+        if let Some(draw) = driver.world_mut().resource_mut::<DebugDraw>() {
+            draw.end_tick();
+        }
+    }
+    if let Some(d) = driver.take_system_panic() {
+        return Err(vec![d]);
+    }
+
+    Ok((driver, applied_overrides))
+}
+
+/// read → parse → override → validate → instantiate, the prologue every bare host shares.
+fn scene_file_world(
+    registry: &Registry,
+    path: &Path,
+    overrides: &[SceneOverride],
+) -> Result<(ludion_scene::Scene, World, Vec<AppliedOverride>), Vec<Diagnostic>> {
     let source = std::fs::read_to_string(path).map_err(|error| {
         vec![
             Diagnostic::new(
@@ -520,28 +552,8 @@ pub(crate) fn scene_file_driver(
         return Err(diagnostics);
     }
     let project_root = path.parent().unwrap_or(Path::new("."));
-    let (scene, mut world) = expanded_world(project_root, registry, &scene)?;
-
-    // No game schedule is ever installed here — the seed threads through so the shape matches the
-    // full driver, even though nothing here consumes randomness. Physics is the one exception: a
-    // scene's `physics:` block is the only opt-in there is, so a bare host steps it too.
-    if *debug != DebugCategories::None {
-        world.insert_resource(DebugDraw::default());
-    }
-    let mut driver = crate::scene_physics::bare_driver(world, &scene, project_root);
-    // `run_ticks` spelled out, so the debug drawing rolls over at each tick boundary as the engine's
-    // own does.
-    driver.step(frames);
-    while driver.advance() {
-        if let Some(draw) = driver.world_mut().resource_mut::<DebugDraw>() {
-            draw.end_tick();
-        }
-    }
-    if let Some(d) = driver.take_system_panic() {
-        return Err(vec![d]);
-    }
-
-    Ok((driver, applied_overrides))
+    let (scene, world) = expanded_world(project_root, registry, &scene)?;
+    Ok((scene, world, applied_overrides))
 }
 
 /// The CPU half of the lockstep path: read → parse → override → validate → instantiate → tick →
@@ -588,6 +600,19 @@ pub(crate) fn extract_scene_file(
 ) -> Result<ExtractedScene, Vec<Diagnostic>> {
     let (mut driver, applied_overrides) =
         scene_file_driver(registry, path, overrides, frames, debug)?;
+    let (render_scene, drawn) = extract_driver(&mut driver, path, size, quality, debug, locale)?;
+    Ok((render_scene, applied_overrides, drawn))
+}
+
+/// The extraction half of [`extract_scene_file`], over a world already ticked.
+fn extract_driver(
+    driver: &mut SimDriver,
+    path: &Path,
+    size: FrameSize,
+    quality: &QualityParams,
+    debug: &DebugCategories,
+    locale: Option<&str>,
+) -> Result<(RenderScene, Vec<&'static str>), Vec<Diagnostic>> {
     let project_root = path.parent().unwrap_or(Path::new("."));
     if locale.is_some() || has_keyed_text(driver.world_mut()) {
         let world = driver.world_mut();
@@ -610,7 +635,115 @@ pub(crate) fn extract_scene_file(
         render_scene.debug_lines.extend(marks);
     }
     let drawn = crate::debug_draw::drawn(driver.world());
-    Ok((render_scene, applied_overrides, drawn))
+    Ok((render_scene, drawn))
+}
+
+/// What [`sequence_preview_world`] leaves: the ticked world and what the preview found.
+pub struct SequencePreviewWorld {
+    /// The driver, stopped right after the update whose playhead is the preview's `at`.
+    pub driver: SimDriver,
+    /// What each `--set` override changed.
+    pub applied_overrides: Vec<AppliedOverride>,
+    /// The document's content-root key.
+    pub key: String,
+    /// How the sequence ended by then, `None` while it is still playing.
+    pub ended: Option<SequenceEnd>,
+    /// The warnings the run reported (`L4352` unbound role, `L4353` degraded key).
+    pub warnings: Vec<Diagnostic>,
+}
+
+/// The CPU half of [`render_sequence_preview`]: loads the scene at `path` into the bare host with the
+/// built-in sequence update seated, plays `preview` over it and steps `preview.at + 1` ticks, with no
+/// GPU touched. Only the built-in schedule runs (`path_follow`, `sequence_update`, the scene's physics,
+/// `camera_rig`): no game systems and no dialogue.
+///
+/// # Errors
+/// The scene's diagnostics as [`render_scene_with_registry`] gives them, plus `L4355`, `L4356` and
+/// `L4351` from [`SequencePreview`]'s install.
+pub fn sequence_preview_world(
+    registry: &Registry,
+    path: &Path,
+    overrides: &[SceneOverride],
+    preview: &SequencePreview,
+) -> Result<SequencePreviewWorld, Vec<Diagnostic>> {
+    let (scene, world, applied_overrides) = scene_file_world(registry, path, overrides)?;
+    let project_root = path.parent().unwrap_or(Path::new("."));
+    let mut driver = crate::scene_physics::bare_driver(world, &scene, project_root, true);
+    let (key, handle) =
+        crate::sequences::preview::install(driver.world_mut(), project_root, preview)?;
+    let ended = crate::sequences::preview::run(&mut driver, handle, preview);
+    if let Some(d) = driver.take_system_panic() {
+        return Err(vec![d]);
+    }
+    let warnings = crate::sequences::preview::warnings(driver.world_mut());
+    Ok(SequencePreviewWorld {
+        driver,
+        applied_overrides,
+        key,
+        ended,
+        warnings,
+    })
+}
+
+/// What [`render_sequence_preview`] returns.
+pub struct SequencePreviewOutcome {
+    /// The rendered frame.
+    pub image: RenderedImage,
+    /// A human-readable adapter description.
+    pub adapter: String,
+    /// What each `--set` override changed.
+    pub applied_overrides: Vec<AppliedOverride>,
+    /// The document's content-root key.
+    pub key: String,
+    /// How the sequence ended by the rendered tick, `None` while it is still playing.
+    pub ended: Option<SequenceEnd>,
+    /// The warnings the run reported.
+    pub warnings: Vec<Diagnostic>,
+}
+
+/// Renders the scene at `path` as [`render_scene_with_registry`] does, after playing `preview` over it
+/// ([`sequence_preview_world`]): no timings, debug drawing or view.
+///
+/// # Errors
+/// As [`sequence_preview_world`] and [`render_scene_with_registry`].
+#[allow(clippy::too_many_arguments)]
+pub fn render_sequence_preview(
+    registry: &Registry,
+    path: &Path,
+    size: FrameSize,
+    quality: &QualitySetting,
+    overrides: &[SceneOverride],
+    preview: &SequencePreview,
+    anti_aliasing: AntiAliasing,
+    locale: Option<&str>,
+) -> Result<SequencePreviewOutcome, Vec<Diagnostic>> {
+    let mut run = sequence_preview_world(registry, path, overrides, preview)?;
+    let (render_scene, _) = extract_driver(
+        &mut run.driver,
+        path,
+        size,
+        &quality.params,
+        &DebugCategories::None,
+        locale,
+    )?;
+
+    let mut renderer = Renderer::new().map_err(|d| vec![d])?;
+    renderer.set_quality(quality.quality, quality.params);
+    renderer.set_anti_aliasing(anti_aliasing);
+    let adapter = format!(
+        "{} ({})",
+        renderer.adapter_name(),
+        renderer.adapter_backend()
+    );
+    let image = renderer.render(&render_scene, size).map_err(|d| vec![d])?;
+    Ok(SequencePreviewOutcome {
+        image,
+        adapter,
+        applied_overrides: run.applied_overrides,
+        key: run.key,
+        ended: run.ended,
+        warnings: run.warnings,
+    })
 }
 
 /// Whether any `UiText` or `Text` carries a localization key: the only scenes a bare host resolves

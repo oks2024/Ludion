@@ -889,6 +889,7 @@ impl Engine {
             crate::player_profile::default_profile_rel_path(),
             project_root.into(),
             DEFAULT_RENDER_SIZE,
+            false,
         )
     }
 
@@ -932,6 +933,7 @@ impl Engine {
         profile_rel_path: PathBuf,
         project_root: PathBuf,
         render_size: (u32, u32),
+        sequences: bool,
     ) -> Self {
         // Group the registered systems by definition module and warn on any catch-all module (`L1124`),
         // once, from the metadata — before `systems` is moved into the engine.
@@ -952,7 +954,7 @@ impl Engine {
             dialogue_config: None,
             localization: false,
             dialogue_channels: None,
-            sequences: false,
+            sequences,
             input_actions: false,
             projectile_draw: crate::projectile_draw::ProjectileDraw::default(),
             doc_validation_warnings: Vec::new(),
@@ -1121,7 +1123,7 @@ impl Engine {
     /// the restore and switch paths build the schedule **before** the point of no return, and the
     /// field is committed only after it.
     pub(crate) fn build_schedule(&self, physics: Option<&ScenePhysics>) -> Schedule {
-        scene_physics::assemble_schedule(physics, &self.systems)
+        scene_physics::assemble_schedule(physics, &self.systems, self.sequences)
     }
 
     /// Sets the default screenshot resolution (used when a `render.screenshot` omits dimensions).
@@ -2205,6 +2207,7 @@ impl Engine {
                     ludion_physics::WRITE
                     | ludion_physics::MIRROR
                     | crate::path_follow::SYSTEM_NAME
+                    | crate::sequences::SYSTEM_NAME
                     | crate::pose_blend::SYSTEM_NAME
                     | crate::camera_rig::SYSTEM_NAME => (physics, game),
                     _ => (physics, true),
@@ -7671,6 +7674,8 @@ impl Engine {
                     })
                 } else if name == crate::path_follow::SYSTEM_NAME {
                     crate::path_follow::describe_entry()
+                } else if name == crate::sequences::SYSTEM_NAME {
+                    crate::sequences::describe_entry()
                 } else if name == crate::pose_blend::SYSTEM_NAME {
                     crate::pose_blend::describe_entry()
                 } else if name == crate::camera_rig::SYSTEM_NAME {

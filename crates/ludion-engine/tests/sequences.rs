@@ -8,7 +8,7 @@ use ludion_engine::dialogue::DialogueEvent;
 use ludion_engine::sequences::{self, SequenceEnd, SequenceEvent, SequenceHandle, SequenceTrack};
 use ludion_engine::{
     Animation, CameraRig, Diagnostics, DialogueConfig, DialogueEvents, Engine, EngineBuilder,
-    SequenceEvents, UiTween, dialogue_update, sequence_update,
+    SequenceEvents, UiTween, dialogue_update,
 };
 use ludion_protocol::command::{EngineRestoreParams, SimStepParams};
 use ludion_protocol::{Command, ResponseBody};
@@ -147,7 +147,6 @@ fn bare(name: &str) -> EngineBuilder {
 fn game(name: &str) -> EngineBuilder {
     bare(name)
         .system("control", control)
-        .system("sequence_update", sequence_update)
         .system("dialogue_update", dialogue_update)
         .system("probe", probe)
         .doc_text(BEAT, &beat("game"))
@@ -800,7 +799,6 @@ fn game_waits(name: &str) -> EngineBuilder {
         .sequences()
         .doc_text("strings/en.yaml", STRINGS_WAIT)
         .doc_text("dialogue/main.yaml", DIALOGUE_WAIT)
-        .system("sequence_update", sequence_update)
         .system("dialogue_update", dialogue_update)
         .system("probe", probe)
         .doc_text(BEAT, &beat("game"))
@@ -1104,4 +1102,60 @@ fn a_reused_entity_slot_still_warns_for_its_new_sequence() {
     ticks(&mut beat.engine, 45);
     // `actor` and `panel` are unbound for each of the two sequences.
     assert_eq!(reported(&beat.engine, code::SEQUENCE_ROLE_MISSING).len(), 4);
+}
+
+fn system_names(engine: &mut Engine) -> Vec<String> {
+    match engine.execute(Command::EngineDescribe).unwrap().body {
+        ResponseBody::EngineDescription { description } => description["systems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn sequences_without_a_scheduled_update_play() {
+    let mut engine = bare("unscheduled")
+        .doc_text(BEAT, &beat("game"))
+        .build()
+        .unwrap();
+    assert_eq!(
+        system_names(&mut engine)[..2],
+        ["path_follow", "sequence_update"]
+    );
+    let mut beat = scene(engine);
+    let handle = play(&mut beat, BEAT);
+    ticks(&mut beat.engine, 2);
+    assert!(sequences::is_playing(beat.engine.world(), handle));
+}
+
+#[test]
+fn a_game_scheduling_sequence_update_is_refused() {
+    fn noop(_: &mut World, _: &SystemCtx) {}
+    let diagnostic = bare("refused")
+        .system("sequence_update", noop)
+        .build()
+        .err()
+        .expect("the name is reserved");
+    assert_eq!(diagnostic.code, code::SYSTEM_NAME_DUPLICATE);
+    assert!(
+        diagnostic
+            .help
+            .as_deref()
+            .unwrap_or("")
+            .contains(".sequences()"),
+        "{diagnostic:?}"
+    );
+}
+
+#[test]
+fn a_game_without_sequences_schedules_no_sequence_update() {
+    let mut engine = Engine::builder()
+        .project_root(fresh_dir("not-opted-in"))
+        .build()
+        .unwrap();
+    assert!(!system_names(&mut engine).contains(&"sequence_update".to_string()));
 }

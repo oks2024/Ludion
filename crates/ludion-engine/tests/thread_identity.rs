@@ -422,12 +422,11 @@ fn prefab_scene_hashes_are_thread_count_invariant() {
 /// The per-tick `WorldHash` trace of an engine that plays one sequence through (camera, animation,
 /// ui, dialogue and event keys) and ends it.
 fn sequence_trace(root: &Path) -> Vec<u64> {
-    use ludion_engine::{Animation, CameraRig, DialogueConfig, dialogue_update, sequence_update};
+    use ludion_engine::{Animation, CameraRig, DialogueConfig, dialogue_update};
     let mut engine = Engine::builder()
         .project_root(root)
         .dialogue(DialogueConfig::default())
         .sequences()
-        .system("sequence_update", sequence_update)
         .system("dialogue_update", dialogue_update)
         .build()
         .expect("the engine builds");

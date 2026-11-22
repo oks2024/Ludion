@@ -13,7 +13,6 @@ use ludion_core::time::{SimTime, TickRate};
 use ludion_engine::sequences::{self, SequenceBound};
 use ludion_engine::{
     Animation, Engine, EngineBuilder, Transform, animation_events, blend_clocks, posed_joint_world,
-    sequence_update,
 };
 use ludion_protocol::command::{EngineRestoreParams, SimStepParams};
 use ludion_protocol::{Command, ResponseBody};
@@ -151,7 +150,6 @@ fn builder(root: &Path, opted_in: bool, holds: bool) -> EngineBuilder {
     builder
         .sequences()
         .doc_text(BEAT, &beat(holds))
-        .system("sequence_update", sequence_update)
         .system("blend_clocks", blend_clocks)
         .query::<(&ludion_engine::Animation, &ludion_engine::Mesh)>()
         .query::<(&mut ludion_engine::BlendClock,)>()
