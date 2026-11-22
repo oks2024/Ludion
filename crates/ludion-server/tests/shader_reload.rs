@@ -32,8 +32,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use ludion_engine::Engine;
-use ludion_protocol::Command;
 use ludion_protocol::command::AssetReloadParams;
+use ludion_protocol::Command;
 use ludion_server::Server;
 
 /// A scene: one camera, one warm point light, and one lit cube filling the view — so both the scene
@@ -153,8 +153,8 @@ fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
     // reload path reads the shader from the given path, so write the modified copy into the tree.
     let original = std::fs::read_to_string(tree.join("composite.wgsl")).unwrap();
     let tinted = original.replace(
-        "return vec4<f32>(color, 1.0);",
-        "return vec4<f32>(color.r, 0.0, 0.0, 1.0);",
+        "return vec4<f32>(color,",
+        "return vec4<f32>(vec3<f32>(color.r, 0.0, 0.0),",
     );
     assert_ne!(
         tinted, original,
@@ -190,8 +190,8 @@ fn needs_gpu_dev_host_reloads_a_shader_and_keeps_last_good_on_a_bad_edit() {
         "@group(0) @binding(2) var samp: sampler;",
         "@group(0) @binding(2) var samp: sampler;\n@group(0) @binding(4) var<uniform> extra: vec4<f32>;",
     ).replace(
-        "return vec4<f32>(color.r, 0.0, 0.0, 1.0);",
-        "return vec4<f32>(color.r * extra.r, 0.0, 0.0, 1.0);",
+        "return vec4<f32>(vec3<f32>(color.r, 0.0, 0.0),",
+        "return vec4<f32>(vec3<f32>(color.r * extra.r, 0.0, 0.0),",
     );
     assert_ne!(
         binding_change, tinted,
