@@ -436,3 +436,127 @@ fn a_clean_look_scene_has_no_diagnostics() {
     ]));
     assert!(found.is_empty(), "{found:?}");
 }
+
+// ---- Rendering a view alone (`render_scene_views`, `Engine::render_view_png`, L2379) ----
+
+fn gallery(scene: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/gallery")
+        .join(scene)
+}
+
+/// The offline views render of the radar scene, or `None` (after printing why) with no GPU.
+fn radar_views() -> Option<ludion_engine::ViewsOutcome> {
+    let result = ludion_engine::render_scene_views(
+        &builtin_registry(),
+        &gallery("render-view-radar.yaml"),
+        ludion_engine::FrameSize::native(320, 180),
+        &ludion_engine::QualitySetting::full(),
+        &[],
+        0,
+        None,
+        ludion_renderer::AntiAliasing::Off,
+    );
+    match result {
+        Ok(outcome) => Some(outcome),
+        Err(errors) if ludion_core::require_gpu::is_no_adapter(&errors) => {
+            eprintln!("SKIPPED: no GPU adapter available");
+            None
+        }
+        Err(errors) => panic!("views render failed: {errors:?}"),
+    }
+}
+
+#[test]
+fn needs_gpu_render_scene_views_returns_the_view_at_its_size_and_the_frame_unchanged() {
+    let Some(outcome) = radar_views() else {
+        return;
+    };
+    assert_eq!(outcome.views.len(), 1);
+    let (name, image) = &outcome.views[0];
+    assert_eq!(name, "radar");
+    assert_eq!((image.width, image.height), (256, 256));
+    assert_eq!(outcome.view("radar").unwrap(), image);
+
+    let frame = ludion_engine::render_scene_with_registry(
+        &builtin_registry(),
+        &gallery("render-view-radar.yaml"),
+        ludion_engine::FrameSize::native(320, 180),
+        &ludion_engine::QualitySetting::full(),
+        false,
+        &[],
+        0,
+        &ludion_engine::DebugCategories::None,
+        None,
+        ludion_renderer::AntiAliasing::Off,
+        None,
+    )
+    .expect("the frame renders");
+    assert_eq!(outcome.frame, frame.image, "the frame half is untouched");
+}
+
+#[test]
+fn needs_gpu_render_view_png_through_an_engine_equals_the_offline_view() {
+    let Some(outcome) = radar_views() else {
+        return;
+    };
+    let mut engine = Engine::builder()
+        .load_scene_file(&gallery("render-view-radar.yaml"))
+        .expect("the scene loads");
+    engine.set_quality(ludion_engine::QualitySetting::full());
+    let png = match engine.render_view_png("radar") {
+        Ok(png) => png,
+        Err(error) if error.code.as_str() == "L2003" => return,
+        Err(error) => panic!("{error:?}"),
+    };
+    let offline = outcome.view("radar").unwrap().encode_png().unwrap();
+    assert_eq!(png, offline);
+}
+
+#[test]
+fn an_unknown_view_is_l2379_with_the_rendered_names_and_the_nearest_first() {
+    let mut engine = engine_for(&document(&[view_entity("radar", 0, true)]));
+    engine.advance_live();
+    let error = engine.render_view_png("radr").expect_err("no such view");
+    assert_eq!(error.code.as_str(), "L2379");
+    let help = error.help.expect("help");
+    assert!(help.contains("did you mean `radar`?"), "{help}");
+    assert!(help.contains("rendered views: radar"), "{help}");
+}
+
+#[test]
+fn a_disabled_view_and_a_fifth_view_are_l2379() {
+    let mut entities: Vec<String> = ["a", "b", "c", "d", "e"]
+        .iter()
+        .enumerate()
+        .map(|(order, name)| view_entity(name, order as i32, true))
+        .collect();
+    entities.push(view_entity("off", 9, false));
+    let mut engine = engine_for(&document(&entities));
+    engine.advance_live();
+    for name in ["off", "e"] {
+        let error = engine.render_view_png(name).expect_err(name);
+        assert_eq!(error.code.as_str(), "L2379", "{name}");
+        assert!(error.help.unwrap().contains("rendered views: a, b, c, d"));
+    }
+}
+
+#[test]
+fn a_scene_with_no_view_says_so() {
+    let mut engine = engine_for(&document(&[]));
+    engine.advance_live();
+    let error = engine.render_view_png("radar").expect_err("no views");
+    assert_eq!(error.code.as_str(), "L2379");
+    assert!(error.help.unwrap().contains("renders no view"));
+}
+
+#[test]
+fn the_views_sheet_is_the_frame_and_the_views_with_gutters() {
+    let cell = |width: u32, height: u32| ludion_renderer::RenderedImage {
+        width,
+        height,
+        rgba: vec![200; (width * height * 4) as usize],
+    };
+    let sheet = ludion_engine::views_sheet(&cell(320, 180), &[cell(256, 256), cell(64, 32)]);
+    assert_eq!((sheet.width, sheet.height), (320 + 256 + 64 + 16, 256));
+}

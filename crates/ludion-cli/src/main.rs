@@ -478,6 +478,7 @@ enum Command {
         /// name. A lineup names no single model, so it requires this.
         #[arg(long, required_unless_present_any = [
             "model", "dump_voxels", "dump_gi", "dump_probes", "sprite", "atlas", "font", "paired",
+            "view", "views_sheet",
         ])]
         out: Option<PathBuf>,
         /// Output width in pixels (the sheet width in `--model` mode; integer cell division may
@@ -631,6 +632,33 @@ enum Command {
             conflicts_with_all = ["model", "sprite", "atlas", "font", "sweep"]
         )]
         debug_view: Option<CliDebugView>,
+        /// (`--scene` only) Render the secondary view named NAME alone: the texture its `UiRect` shows,
+        /// at the `RenderView`'s own `size` (`--width`/`--height` size only the main frame). Defaults
+        /// `--out` to `<scene>.view-<name>.png`. A name no enabled, in-budget view carries is `L2379`
+        /// with the rendered names. `--frames N` ticks the world first. Refused beside `--views-sheet`,
+        /// `--sweep`, a `--frames` strip, `--debug-view`, `--debug-draw`, `--dump-*` and `--dump-timings`.
+        /// Not the model-mode `--views`. Prints `view <name>: WxH on <adapter>`.
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with_all = [
+                "model", "sprite", "atlas", "font", "paired", "sweep", "steps", "frame", "debug_view",
+                "debug_draw", "dump_voxels", "dump_gi", "dump_probes", "dump_timings", "views_sheet",
+            ]
+        )]
+        view: Option<String>,
+        /// (`--scene` only) Render the frame and every rendered view into one unlabelled row: the
+        /// frame, then each view in `views` order at its native size, 8 px apart on a dark fill. A
+        /// judging instrument, not a golden. Defaults `--out` to `<scene>.views.png`. Same refusals as
+        /// `--view`. Prints `views-sheet: frame WxH, <name> WxH, ...`.
+        #[arg(
+            long,
+            conflicts_with_all = [
+                "model", "sprite", "atlas", "font", "paired", "sweep", "steps", "frame", "debug_view",
+                "debug_draw", "dump_voxels", "dump_gi", "dump_probes", "dump_timings", "view",
+            ]
+        )]
+        views_sheet: bool,
         /// (scene only) Frame the shot around a target: `--look-at x,y,z` moves the scene's one
         /// `Camera` to orbit that point and focuses the scene's `PostProcess` depth of field on it
         /// (`focus_distance` = the framing distance). Azimuth is degrees about +Y from +Z (0 puts the
@@ -2379,6 +2407,8 @@ fn main() -> std::process::ExitCode {
             locale,
             debug_draw,
             debug_view,
+            view,
+            views_sheet,
             look_at,
             azimuth,
             pitch,
@@ -2513,6 +2543,8 @@ fn main() -> std::process::ExitCode {
                 locale: locale.as_deref(),
                 debug_draw: debug_draw.as_deref(),
                 debug_view: debug_view.map(Into::into),
+                view: view.as_deref(),
+                views_sheet,
                 framing: framing::FramingArgs {
                     look_at: look_at.as_deref(),
                     azimuth,

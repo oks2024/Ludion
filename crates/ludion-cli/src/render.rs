@@ -33,7 +33,10 @@
 //! existed. `--frames a,b,c` (two or more, ascending) instead renders once per value and stitches a
 //! labelled `frame N` strip through the same machinery `--sweep` uses
 //! (`ludion_engine::render_frame_strip`), one row wide; it requires `--out` and conflicts with
-//! `--sweep`/`--model`, exactly as `--sweep` conflicts with a model sheet. `--scale` moves the render
+//! `--sweep`/`--model`, exactly as `--sweep` conflicts with a model sheet. `--view <name>` writes one
+//! secondary view alone at its own size and `--views-sheet` the frame and every rendered view in one row
+//! (`ludion_engine::render_scene_views`, `Plan/secondary-views.md` D26-D28; `L2379` for a view that does
+//! not render). `--scale` moves the render
 //! extent: the chain renders at N× the requested size and is
 //! resampled back after tonemapping, before any UI overlay — resolved down above 1.0, magnified up
 //! below it. Absent, a plain `--scene` render draws at whatever `--quality` asks for (native at
@@ -163,6 +166,10 @@ pub struct Request<'a> {
     pub debug_draw: Option<&'a str>,
     /// `--debug-view` (scene mode): a full-screen view of the SSR trace instead of the finished picture.
     pub debug_view: Option<ludion_engine::DebugView>,
+    /// `--view` (scene mode): render this secondary view alone.
+    pub view: Option<&'a str>,
+    /// `--views-sheet` (scene mode): the frame and every rendered view in one row.
+    pub views_sheet: bool,
     /// `--look-at` and its companions (scene mode): expanded into overrides by `framing::expand`.
     pub framing: crate::framing::FramingArgs<'a>,
     /// `--scale`, if it was given. In scene mode a render-extent multiplier; absent, the extent is
@@ -238,6 +245,16 @@ pub fn run(request: &Request) -> ExitCode {
                 println!("{summary}");
             }
             let set = framed.set.as_slice();
+            if request.view.is_some() || request.views_sheet {
+                if request.frames.len() >= 2 {
+                    return crate::diagnostic::usage_error(
+                        "`--view` and `--views-sheet` render one frame: a `--frames` strip of two or \
+                         more values is refused (a single `--frames N` ticks the world first)",
+                    );
+                }
+                let scale = ludion_engine::resolve_render_scale(explicit, request.quality);
+                return run_views(request, scene, set, FrameSize::scaled(width, height, scale));
+            }
             match request.sweep {
                 // `--dump-voxels`/`--dump-gi` conflict with `--sweep` at the clap level, so `--out`
                 // is still unconditionally required here.
@@ -410,6 +427,85 @@ fn run_scene(
             report(scene, &diagnostics)
         }
     }
+}
+
+/// The default `--out` of `--view` and `--views-sheet`: `<scene stem>.view-<name>.png` and
+/// `<scene stem>.views.png`, in the current directory.
+fn default_view_out(scene: &Path, view: Option<&str>) -> PathBuf {
+    let stem = scene
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("scene");
+    match view {
+        Some(name) => PathBuf::from(format!("{stem}.view-{name}.png")),
+        None => PathBuf::from(format!("{stem}.views.png")),
+    }
+}
+
+/// `--view` / `--views-sheet`: renders the frame's secondary views alone (`render_scene_views`) and
+/// writes the one named view, or the frame and every view in one row ([`ludion_engine::views_sheet`]).
+fn run_views(request: &Request, scene: &Path, set: &[String], size: FrameSize) -> ExitCode {
+    let overrides = match parse_overrides(set) {
+        Ok(overrides) => overrides,
+        Err(diagnostics) => return report(scene, &diagnostics),
+    };
+    let out = request
+        .out
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_view_out(scene, request.view));
+    let outcome = match ludion_engine::render_scene_views(
+        &crate::check_scene::builtin_registry(),
+        scene,
+        size,
+        request.quality,
+        &overrides,
+        request.frames.first().copied().unwrap_or(0),
+        request.locale,
+        request.anti_aliasing,
+    ) {
+        Ok(outcome) => outcome,
+        Err(mut diagnostics) => {
+            crate::check_scene::add_project_component_help(scene, &mut diagnostics);
+            return report(scene, &diagnostics);
+        }
+    };
+    let (image, summary) = match request.view {
+        Some(name) => match outcome.view(name) {
+            Ok(image) => (
+                image.clone(),
+                format!(
+                    "view {name}: {}x{} on {}",
+                    image.width, image.height, outcome.adapter
+                ),
+            ),
+            Err(diagnostic) => return report(scene, &[diagnostic]),
+        },
+        None => {
+            let images: Vec<_> = outcome
+                .views
+                .iter()
+                .map(|(_, image)| image.clone())
+                .collect();
+            let cells: String = outcome
+                .views
+                .iter()
+                .map(|(name, image)| format!(", {name} {}x{}", image.width, image.height))
+                .collect();
+            (
+                ludion_engine::views_sheet(&outcome.frame, &images),
+                format!(
+                    "views-sheet: frame {}x{}{cells}",
+                    outcome.frame.width, outcome.frame.height
+                ),
+            )
+        }
+    };
+    if let Err(diagnostic) = image.write_png(&out) {
+        eprintln!("{diagnostic}");
+        return ExitCode::FAILURE;
+    }
+    println!("{}: {summary}", out.display());
+    ExitCode::SUCCESS
 }
 
 /// The summary clause for a metered frame: the EV the meter chose and the mean it aimed from.

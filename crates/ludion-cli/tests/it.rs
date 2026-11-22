@@ -48,6 +48,7 @@ mod render_gi;
 mod render_model;
 mod render_paired;
 mod render_sprite;
+mod render_views;
 mod render_voxels;
 mod replay;
 mod room_assembly;

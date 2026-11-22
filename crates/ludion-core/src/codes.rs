@@ -2354,6 +2354,9 @@ pub mod code {
     /// `L2378` — a `PostProfile` is not valid, or a `RenderView.post` names no profile.
     pub const POST_PROFILE_INVALID: DiagnosticCode = DiagnosticCode::new("L2378");
 
+    /// `L2379` — a render names a view that no enabled, in-budget `RenderView` renders this frame.
+    pub const RENDER_VIEW_NOT_RENDERED: DiagnosticCode = DiagnosticCode::new("L2379");
+
     /// `L2380` — a `Rain` field is non-finite or out of range.
     pub const RAIN_INVALID: DiagnosticCode = DiagnosticCode::new("L2380");
 
@@ -11486,6 +11489,19 @@ Fix: give each profile its own name, put it beside a `PostProcess`, and spell `R
     PostProfile: { name: radar-feed }",
     },
     CodeEntry {
+        code: code::RENDER_VIEW_NOT_RENDERED,
+        severity: Severity::Error,
+        title: "the named view is not rendered",
+        explanation: "`ludion render --view <name>`, `--views-sheet`, `GoldenTest.view` or a manifest `views` entry named a
+view that no enabled, in-budget `RenderView` renders this frame: the name matches no `RenderView.name`, the view is
+`enabled: false`, or it is a fifth view past the 4-view budget (`L2374`). The help lists the names that do render, the
+nearest first.
+
+Fix: spell the name as the `RenderView` does, enable the view, or drop an over-budget one.
+
+    ludion render --scene s.yaml --view radar --out radar.png",
+    },
+    CodeEntry {
         code: code::RAIN_INVALID,
         severity: Severity::Error,
         title: "Rain field out of range",
@@ -14973,6 +14989,7 @@ mod tests {
         code::RENDER_LAYER_UNKNOWN,
         code::POST_PROFILE_VIEW_IGNORED,
         code::POST_PROFILE_INVALID,
+        code::RENDER_VIEW_NOT_RENDERED,
         code::RAIN_INVALID,
         code::RAIN_DUPLICATE,
         code::RAIN_STREAK_BUDGET,

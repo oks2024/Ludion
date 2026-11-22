@@ -69,6 +69,9 @@ GoldenTest::in_set("scenes/stage-1.yaml", "goldens", "wave-1")
     .check(out_dir);
 ```
 
+**A golden of one secondary view.** `.with_view("radar")` goldens a `RenderView`'s own texture, at its `size`, instead of the
+frame (`ludion docs render-views`); a directory suite's `goldens/manifest.json` adds one per name with `"views": ["radar"]`.
+
 "After the player did X" has two forms, each the same skip/bless/compare recipe: an engine your test
 built and drove, or a frame of a recorded replay:
 

@@ -109,6 +109,7 @@ cargo run -p ludion-cli -- serve --scene crates/ludion-cli/tests/fixtures/good.y
   from variants: `CheckScene` → `check-scene`, `DumpGraph` → `dump-graph`.
 - `ludion render --debug-view ssr_confidence|ssr_footprint|probe_index|local_shadow_atlas|sun_cascades|irradiance` draws the SSR trace, the winning reflection probe per pixel, or the local-light shadow atlas, instead of the picture (`sun_cascades` instead tints the picture by sun cascade; `irradiance` shows the diffuse irradiance as `E / 4`, always draws and is not on the wire) (scene mode only); it never turns its effect on, and the summary line says when the normal frame was drawn (`ludion devdocs renderer-ssr`, `ludion devdocs renderer-probes`, `ludion devdocs renderer-passes`).
 - `ludion render --dump-probes <dir>` writes each reflection probe's captured and prefiltered strips and `probes.json` (scene mode, needs a GPU, captures fresh, never touches the store; `ludion devdocs renderer-probes`).
+- `ludion render --view <name>` writes one secondary view (`RenderView`) alone at its own `size` and `--views-sheet` the frame plus every rendered view in one unlabelled row (scene mode only; `L2379` for a view that does not render; `ludion docs render-views`). Not the model-mode `--views`.
 - `ludion-cli` carries the *strict* determinism clippy denylist even though it is a leaf bin — no
   `std::collections::HashMap` or `Instant::now` in CLI code either.
 - **The CLI links no game code, and three limits follow.** `sim-hash` runs no game systems, so world

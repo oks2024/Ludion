@@ -155,6 +155,7 @@ mod trace;
 pub mod transition;
 pub mod ui;
 mod viewmodel;
+mod views_sheet;
 mod voxel_mesh;
 mod voxel_sheet;
 mod voxelizer;
@@ -358,8 +359,9 @@ pub use ragdoll::{LimitsFrom, RagdollSwitch, switch_to_ragdoll, switch_to_ragdol
 pub use ragdoll_recover::{RagdollToAssembly, ragdoll_landing, switch_ragdoll_to_assembly};
 pub use rain::scene_rain_diagnostics;
 pub use render::{
-    BuilderRenderOutcome, RenderOutcome, dump_scene_graph_json, engine_at_frame, gpu_uploads,
-    render_scene, render_scene_with_builder, render_scene_with_registry,
+    BuilderRenderOutcome, RenderOutcome, ViewsOutcome, dump_scene_graph_json, engine_at_frame,
+    find_view, gpu_uploads, render_scene, render_scene_views, render_scene_with_builder,
+    render_scene_with_registry,
 };
 pub use render_extent::RenderExtent;
 pub use render_layers::scene_render_layer_diagnostics;
@@ -419,6 +421,7 @@ pub use trace::{
     TraceRecord, load_input_script, trace, trace_with, write_jsonl,
 };
 pub use transition::{RESIDUE_MAX_RECORDS_PER_SCENE, RESIDUE_MAX_SCENES, SceneSwitch, SwitchTo};
+pub use views_sheet::views_sheet;
 pub use voxel_mesh::{VoxelMeshStats, voxel_empty_lod_levels, voxel_mesh_stats};
 pub use voxel_sheet::{GiSheetOutcome, VoxelSheetOutcome, render_gi_sheet, render_voxel_sheet};
 

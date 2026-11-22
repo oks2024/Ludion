@@ -191,6 +191,122 @@ pub fn render_scene_with_registry(
     })
 }
 
+/// The frame and every secondary view it renders, from one extract: what [`render_scene_views`] returns.
+pub struct ViewsOutcome {
+    /// The main frame, byte-identical to [`render_scene_with_registry`]'s image of the same scene.
+    pub frame: RenderedImage,
+    /// Each rendered view by name, in `views` order, at its own `size`.
+    pub views: Vec<(String, RenderedImage)>,
+    /// A human-readable adapter description, e.g. `"NVIDIA … (Vulkan)"`.
+    pub adapter: String,
+}
+
+impl ViewsOutcome {
+    /// The image of the view named `name`.
+    ///
+    /// # Errors
+    /// `L2379` if no rendered view has that name.
+    pub fn view(&self, name: &str) -> Result<&RenderedImage, Diagnostic> {
+        match self.views.iter().find(|(view, _)| view == name) {
+            Some((_, image)) => Ok(image),
+            None => Err(view_not_rendered(
+                name,
+                self.views.iter().map(|(view, _)| view.as_str()),
+            )),
+        }
+    }
+}
+
+/// Renders the scene at `path` as [`render_scene_with_registry`] does, then every secondary view the
+/// frame renders alone, each at its own `size` ([`Renderer::render_view`]). The views are the ones the
+/// frame's `UiRect`s sample: an unknown, disabled or over-budget `RenderView` renders nothing here either.
+///
+/// # Errors
+/// As [`render_scene_with_registry`].
+#[allow(clippy::too_many_arguments)]
+pub fn render_scene_views(
+    registry: &Registry,
+    path: &Path,
+    size: FrameSize,
+    quality: &QualitySetting,
+    overrides: &[SceneOverride],
+    frames: u64,
+    locale: Option<&str>,
+    anti_aliasing: AntiAliasing,
+) -> Result<ViewsOutcome, Vec<Diagnostic>> {
+    let (render_scene, _, _) = extract_scene_file(
+        registry,
+        path,
+        size,
+        overrides,
+        frames,
+        &quality.params,
+        &DebugCategories::None,
+        locale,
+    )?;
+    let mut renderer = Renderer::new().map_err(|d| vec![d])?;
+    renderer.set_quality(quality.quality, quality.params);
+    renderer.set_anti_aliasing(anti_aliasing);
+    let adapter = format!(
+        "{} ({})",
+        renderer.adapter_name(),
+        renderer.adapter_backend()
+    );
+    let frame = renderer.render(&render_scene, size).map_err(|d| vec![d])?;
+    let mut views = Vec::with_capacity(render_scene.views.len());
+    for (index, view) in render_scene.views.iter().enumerate() {
+        let image = renderer
+            .render_view(&render_scene, index)
+            .map_err(|d| vec![d])?;
+        views.push((view.name.clone(), image));
+    }
+    Ok(ViewsOutcome {
+        frame,
+        views,
+        adapter,
+    })
+}
+
+/// The index in `scene.views` of the view named `name`.
+///
+/// # Errors
+/// `L2379` if no rendered view has that name (an unknown name, a disabled view or an over-budget one);
+/// the help lists the rendered names, the nearest first.
+pub fn find_view(
+    views: &[ludion_renderer::RenderViewData],
+    name: &str,
+) -> Result<usize, Diagnostic> {
+    views
+        .iter()
+        .position(|view| view.name == name)
+        .ok_or_else(|| view_not_rendered(name, views.iter().map(|view| view.name.as_str())))
+}
+
+/// The `L2379` for `name` against the `rendered` view names.
+fn view_not_rendered<'a>(
+    name: &str,
+    rendered: impl Iterator<Item = &'a str> + Clone,
+) -> Diagnostic {
+    let names: Vec<&str> = rendered.collect();
+    let help = if names.is_empty() {
+        "the scene renders no view; add an enabled `RenderView` (`ludion explain L2379`)"
+            .to_string()
+    } else {
+        let nearest = ludion_core::suggest::nearest(name, names.iter().copied())
+            .map(|near| format!("did you mean `{near}`? "))
+            .unwrap_or_default();
+        format!(
+            "{nearest}rendered views: {}; `ludion explain L2379`",
+            names.join(", ")
+        )
+    };
+    Diagnostic::new(
+        code::RENDER_VIEW_NOT_RENDERED,
+        format!("no enabled, in-budget `RenderView` named `{name}` renders this frame"),
+    )
+    .with_help(help)
+}
+
 /// The result of a render driven through a game's own [`EngineBuilder`]: the encoded frame plus the
 /// adapter it ran on and the output extent it landed at.
 ///

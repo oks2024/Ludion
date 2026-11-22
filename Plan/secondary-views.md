@@ -83,6 +83,17 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
     ignored.
 19. **The main frame filters by `Camera.lights` too,** so a portrait key light on `portrait` stays out of a main camera on
     `[default]`.
+26. **A view render is the frame's view.** The same extract and derived scene the frame's `UiRect` samples
+    (`Renderer::render_view`), at the view's own `size`. `--width`/`--height` size only the main frame; the view's camera
+    takes its aspect from `size` (D4).
+27. **`L2379` (error).** A render names a view that no enabled, in-budget `RenderView` renders this frame: an unknown
+    name, a disabled view or a fifth. The help lists the rendered names (nearest first).
+28. **The views sheet** is one row, top-aligned, at native sizes: the frame, then each rendered view in `views` order,
+    8 px gutters on a dark fill (`[20, 20, 28, 255]`). Unlabelled (a view has no UI pass to draw a label with). A judging
+    instrument, not a golden.
+29. **View goldens** are named `<stem>.view-<name>.png` beside the frame's golden. The manifest's `views` adds tests named
+    `<stem>.view-<name>`; `--filter` matches the test name, so `--filter .view-` selects view tests only.
+    Request differences: the wire fields are W4c; the sheet has no drawn labels; `golden(view=)` is `GoldenTest.view`.
 
 ## Waves
 
@@ -95,9 +106,12 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
 - **W2c** (shipped): lights join layers through `RenderLayers`, `Camera.lights`, `RenderView.lights` and `sun`, and the
   portrait gallery.
 - **W3:** `background`, `shading: unlit`, `fog`, `PostProfile`/`post`, and `L2377`/`L2378`.
-- **W4:** `ludion render --view`/`--views-sheet`, `render.view {view}`, `render.bounds {camera}`, the `golden(view=)`
-  test hook, `dump-graph` sub-graphs, a profile `views` section with a budget file, and presenter interpolation of
-  view cameras.
+- **W4a:** `ludion render --view`/`--views-sheet`, `Engine::render_view_png`, `render_scene_views`, the `GoldenTest.view`
+  hook, the manifest's `views`, and the gallery view goldens (D26-D29).
+- **W4b:** `dump-graph` sub-graphs, a profile `views` section with a budget file, and presenter interpolation of view
+  cameras.
+- **W4c:** the wire fields `render.screenshot`/`render.view {view}` and `render.bounds {camera}`. They move the protocol
+  schema hash and the replay schema hash (an R14 item), so they are held for the owner.
 
 ## Out of scope / deferred
 
@@ -140,3 +154,8 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   RTX 3090). A scene that authors none keeps the same frame graph and bytes (`dump-graph` of `post-full` and
   `render-view-radar` identical, the full gallery unchanged). API break: `Camera` is not `Copy`. Owed: the macOS twin
   of `render-view-layers` (M4).
+- **W4a:** mechanized. `ludion render --view <name>` / `--views-sheet`, `render_scene_views`, `find_view`, `ViewsOutcome`,
+  `Engine::render_view_png` and `views_sheet` (`ludion-engine`), `L2379`, `GoldenTest.view` and the manifest's `views`
+  (`ludion-testkit`), the view goldens `render-view-radar.view-radar` and `render-view-portrait.view-portrait` (blessed on the
+  RTX 3090), docs `render-views` and `verify-loop`. No wire field, golden, replay or graph moved (`dump-graph` of
+  `render-view-radar` and `render-view-unlit` identical). Owed: the macOS twins of the two view goldens (M4). W4b and W4c are open.

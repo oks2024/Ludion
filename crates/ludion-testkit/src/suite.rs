@@ -22,10 +22,12 @@
 //! ```
 //!
 //! Every field (`width`, `height`, `ssim_threshold`, `frames`, `debug_draw` — a list of debug-draw
-//! category names, as `ludion render --debug-draw` takes — and `anti_aliasing`, a mode name as
-//! `ludion render --aa` takes) is optional and falls back to the
+//! category names, as `ludion render --debug-draw` takes — `anti_aliasing`, a mode name as
+//! `ludion render --aa` takes, and `views`, a list of `RenderView` names) is optional and falls back to the
 //! suite default (`frames` defaults to `0`, the scene at rest) when absent or when the manifest
-//! itself is absent. The manifest is strict (`L2208`): no other fields, `ssim_threshold` in
+//! itself is absent. Each name in `views` adds one test, `<stem>.view-<name>`, a golden of that secondary
+//! view alone (`GoldenTest.view`) at `goldens/<os>/<stem>.view-<name>.png`; `--filter` matches test names, so
+//! `--filter .view-` runs the view tests only. The manifest is strict (`L2208`): no other fields, `ssim_threshold` in
 //! `(0, 1]`, `width`/`height` above 0, and every key must be the stem of a scene in `<dir>`.
 
 use std::collections::BTreeMap;
@@ -49,6 +51,7 @@ struct ManifestEntry {
     frames: Option<u64>,
     debug_draw: Option<Vec<String>>,
     anti_aliasing: Option<String>,
+    views: Option<Vec<String>>,
 }
 
 /// Suite-wide defaults, overridable per scene by the manifest.
@@ -91,7 +94,7 @@ fn is_root_table(path: &Path) -> bool {
 
 /// Discovers every scene-vs-golden test in `dir`, in deterministic (filename) order, applying
 /// `defaults` and any `goldens/manifest.json` overrides. `filter`, if given, keeps only tests whose
-/// name contains it as a substring.
+/// name (a scene's file stem, or `<stem>.view-<name>` for a manifest view) contains it as a substring.
 ///
 /// # Errors
 /// `L1015` if `dir` cannot be listed or the manifest read; `L2208` if `goldens/manifest.json`
@@ -158,33 +161,46 @@ pub fn discover(
     let mut tests = Vec::new();
     for scene in scene_paths {
         let stem = scene_stem(&scene);
-        if let Some(needle) = filter
-            && !stem.contains(needle)
-        {
-            continue;
-        }
         let overrides = manifest.get(&stem);
-        let golden = goldens_dir.join(format!("{stem}.png"));
         // Start from `new` (which sets the private built-in registry seam), then apply the suite's
         // resolution/threshold overrides. Directory suites are always built-in-registry scenes.
-        let mut test = GoldenTest::new(scene, golden);
-        test.width = overrides.and_then(|o| o.width).unwrap_or(defaults.width);
-        test.height = overrides.and_then(|o| o.height).unwrap_or(defaults.height);
-        test.ssim_threshold = overrides
-            .and_then(|o| o.ssim_threshold)
-            .unwrap_or(defaults.ssim_threshold);
-        test.frames = overrides.and_then(|o| o.frames).unwrap_or(0);
-        if let Some(names) = overrides.and_then(|o| o.debug_draw.clone()) {
-            test.debug_draw = ludion_engine::DebugCategories::from_names(names);
+        let build = |golden: PathBuf| {
+            let mut test = GoldenTest::new(scene.clone(), golden);
+            test.width = overrides.and_then(|o| o.width).unwrap_or(defaults.width);
+            test.height = overrides.and_then(|o| o.height).unwrap_or(defaults.height);
+            test.ssim_threshold = overrides
+                .and_then(|o| o.ssim_threshold)
+                .unwrap_or(defaults.ssim_threshold);
+            test.frames = overrides.and_then(|o| o.frames).unwrap_or(0);
+            if let Some(names) = overrides.and_then(|o| o.debug_draw.clone()) {
+                test.debug_draw = ludion_engine::DebugCategories::from_names(names);
+            }
+            // Validated at load, so the name always parses.
+            if let Some(mode) = overrides
+                .and_then(|o| o.anti_aliasing.as_deref())
+                .and_then(ludion_engine::AntiAliasing::from_name)
+            {
+                test.anti_aliasing = mode;
+            }
+            test
+        };
+        let matches = |name: &str| filter.is_none_or(|needle| name.contains(needle));
+        if matches(&stem) {
+            let test = build(goldens_dir.join(format!("{stem}.png")));
+            tests.push(DiscoveredTest {
+                name: stem.clone(),
+                test,
+            });
         }
-        // Validated at load, so the name always parses.
-        if let Some(mode) = overrides
-            .and_then(|o| o.anti_aliasing.as_deref())
-            .and_then(ludion_engine::AntiAliasing::from_name)
-        {
-            test.anti_aliasing = mode;
+        // One extra test per named view, beside the frame's own, `<stem>.view-<name>.png`.
+        for view in overrides.and_then(|o| o.views.as_deref()).unwrap_or(&[]) {
+            let name = format!("{stem}.view-{view}");
+            if matches(&name) {
+                let mut test = build(goldens_dir.join(format!("{name}.png")));
+                test.view = Some(view.clone());
+                tests.push(DiscoveredTest { name, test });
+            }
         }
-        tests.push(DiscoveredTest { name: stem, test });
     }
     Ok(tests)
 }
@@ -211,7 +227,7 @@ fn load_manifest(dir: &Path) -> Result<BTreeMap<String, ManifestEntry>, Diagnost
             )
             .with_help(
                 "a manifest is a JSON object mapping scene stems to optional \
-                 {\"width\":.., \"height\":.., \"ssim_threshold\":.., \"frames\":.., \"debug_draw\":[..], \"anti_aliasing\":\"..\"} overrides, \
+                 {\"width\":.., \"height\":.., \"ssim_threshold\":.., \"frames\":.., \"debug_draw\":[..], \"anti_aliasing\":\"..\", \"views\":[..]} overrides, \
                  and no other fields; fix the JSON, or delete the file to use the suite defaults",
             )
         })?;
@@ -267,6 +283,24 @@ fn validate_entry(path: &Path, stem: &str, entry: &ManifestEntry) -> Result<(), 
             format!("`{name}`"),
             &format!("anti_aliasing must be one of {}", modes.join(", ")),
         );
+    }
+    if let Some(views) = &entry.views {
+        for (index, name) in views.iter().enumerate() {
+            if name.trim().is_empty() {
+                return refuse(
+                    "views",
+                    format!("{views:?}"),
+                    "a view name must not be blank",
+                );
+            }
+            if views[..index].contains(name) {
+                return refuse(
+                    "views",
+                    format!("{views:?}"),
+                    &format!("the view `{name}` is listed twice"),
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -566,5 +600,84 @@ mod tests {
         assert_eq!(tests[0].test.frames, 0, "no manifest means tick 0");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn manifest_views_add_one_view_test_each_beside_the_scene() {
+        let dir = std::env::temp_dir().join(format!(
+            "ludion_testkit_manifest_views_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(dir.join("goldens")).unwrap();
+        std::fs::write(
+            dir.join("a.yaml"),
+            "format: 1
+entities: []
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("b.yaml"),
+            "format: 1
+entities: []
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("goldens").join("manifest.json"),
+            r#"{"a": {"views": ["radar", "portrait"], "frames": 3}}"#,
+        )
+        .unwrap();
+        let all = discover(&dir, SuiteDefaults::default(), None);
+        let only_views = discover(&dir, SuiteDefaults::default(), Some(".view-"));
+        let one_scene = discover(&dir, SuiteDefaults::default(), Some("b"));
+        std::fs::remove_dir_all(&dir).ok();
+
+        let Some(tests) = verifiable(all) else {
+            return;
+        };
+        let names: Vec<&str> = tests.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["a", "a.view-radar", "a.view-portrait", "b"]);
+        assert_eq!(tests[0].test.view, None);
+        let radar = &tests[1].test;
+        assert_eq!(radar.view.as_deref(), Some("radar"));
+        assert_eq!(radar.frames, 3, "a view test keeps the scene's overrides");
+        assert!(
+            radar.golden.ends_with("a.view-radar.png"),
+            "{:?}",
+            radar.golden
+        );
+        assert_eq!(
+            radar.golden.parent(),
+            tests[0].test.golden.parent(),
+            "beside the frame's golden"
+        );
+
+        let views: Vec<String> = verifiable(only_views)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(views, ["a.view-radar", "a.view-portrait"]);
+        let b: Vec<String> = verifiable(one_scene)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(b, ["b"]);
+    }
+
+    #[test]
+    fn manifest_refuses_a_blank_or_repeated_view() {
+        for (tag, manifest) in [
+            ("view_blank", r#"{"a": {"views": ["radar", ""]}}"#),
+            ("view_dup", r#"{"a": {"views": ["radar", "radar"]}}"#),
+        ] {
+            let Err(error) = discover_with_manifest(tag, &["a"], manifest) else {
+                panic!("{manifest} must be refused");
+            };
+            assert_eq!(error.code, code::GOLDEN_MANIFEST_INVALID, "{manifest}");
+            assert_eq!(error.path.as_deref(), Some("/a/views"));
+        }
     }
 }

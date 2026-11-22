@@ -7030,6 +7030,37 @@ impl Engine {
             .encode_png()
     }
 
+    /// Renders the secondary view named `name` alone, as PNG bytes at its own `size`: the image the
+    /// frame's `UiRect` shows, from the same extract at this engine's render extent
+    /// ([`render_size`](Engine::render_size)).
+    ///
+    /// # Errors
+    /// `L2379` if no enabled, in-budget `RenderView` has that name; otherwise as
+    /// [`render_png`](Engine::render_png).
+    pub fn render_view_png(&mut self, name: &str) -> Result<Vec<u8>, Diagnostic> {
+        let (width, height) = self.render_size();
+        let image = self
+            .render_view_image(name, width, height)
+            .map_err(crate::commands::collapse)?;
+        image.encode_png()
+    }
+
+    fn render_view_image(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<RenderedImage, Vec<Diagnostic>> {
+        let scene = self.extract_render_scene_through(width, height, false)?;
+        let index = crate::render::find_view(&scene.views, name).map_err(|d| vec![d])?;
+        self.ensure_renderer().map_err(|d| vec![d])?;
+        let renderer = self.renderer.as_ref().expect("just initialized");
+        let image = renderer.render_view(&scene, index);
+        self.finish_gi_frame();
+        self.finish_probe_frame();
+        image.map_err(|d| vec![d])
+    }
+
     /// Renders the current post-step world and returns the image unencoded — the body of
     /// [`render_png_through`](Engine::render_png_through), and the one place the load observer's
     /// first-frame phases are bracketed (the extract, the renderer's creation, its uploads and the

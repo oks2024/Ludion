@@ -126,6 +126,12 @@ pub struct GoldenTest {
     /// default) is every golden that existed before this field. Scene goldens on the built-in path
     /// only: a game builder or a model document renders without it.
     pub anti_aliasing: ludion_engine::AntiAliasing,
+    /// The secondary view (`RenderView.name`) the golden is of instead of the frame, exactly
+    /// `ludion render --view`. `None` (the default) is the frame. The image is the view's own texture at
+    /// its `size`; [`width`](Self::width)/[`height`](Self::height) still size the frame it is extracted
+    /// from. A scene golden, on the built-in path or through a game builder: a replay or a model
+    /// document refuses it, and a name no enabled, in-budget view carries is `L2379`.
+    pub view: Option<String>,
     /// The registry the scene is validated against — built-in by default, a game's own via
     /// [`with_registry`](GoldenTest::with_registry).
     registry: fn() -> Registry,
@@ -168,6 +174,7 @@ impl std::fmt::Debug for GoldenTest {
             .field("debug_draw", &self.debug_draw)
             .field("debug_view", &self.debug_view)
             .field("anti_aliasing", &self.anti_aliasing)
+            .field("view", &self.view)
             .field("registry", &"<fn>")
             .field("builder", &self.builder.as_ref().map(|_| "<fn>"))
             .field(
@@ -237,6 +244,7 @@ impl GoldenTest {
             debug_draw: ludion_engine::DebugCategories::None,
             debug_view: None,
             anti_aliasing: ludion_engine::AntiAliasing::Off,
+            view: None,
             registry: ludion_engine::builtin_registry,
             builder: None,
             replay: None,
@@ -261,7 +269,7 @@ impl GoldenTest {
     /// the numbering is [`ludion_engine::ReplayFramesRequest`]'s. A frame past the replay's end is
     /// `L3021`. [`frames`](GoldenTest::frames), [`clip`](GoldenTest::clip),
     /// [`debug_view`](GoldenTest::debug_view), [`debug_draw`](GoldenTest::debug_draw),
-    /// [`anti_aliasing`](GoldenTest::anti_aliasing) and
+    /// [`anti_aliasing`](GoldenTest::anti_aliasing), [`view`](GoldenTest::view) and
     /// [`with_registry`](GoldenTest::with_registry) do not apply to a replay. Compare with
     /// [`check`](GoldenTest::check).
     pub fn from_replay(
@@ -291,6 +299,13 @@ impl GoldenTest {
     #[must_use]
     pub fn with_debug_view(mut self, view: Option<ludion_engine::DebugView>) -> Self {
         self.debug_view = view;
+        self
+    }
+
+    /// A golden of the secondary view `name`. See [`view`](GoldenTest::view).
+    #[must_use]
+    pub fn with_view(mut self, name: impl Into<String>) -> Self {
+        self.view = Some(name.into());
         self
     }
 
@@ -470,12 +485,23 @@ impl GoldenTest {
     /// `"NVIDIA GeForce RTX 3090 (Vulkan)"`), so a caller can tell a provenance-shaped failure from
     /// a regression-shaped one ([`provenance_label`]).
     fn render(&self) -> Result<(DecodedImage, String), Vec<Diagnostic>> {
+        if self.replay.is_some() && self.view.is_some() {
+            return Err(vec![view_refused("a replay golden")]);
+        }
         if let Some(replay) = &self.replay {
             return self.render_replay(replay);
         }
         let kind = std::fs::read_to_string(&self.scene)
             .ok()
             .and_then(|source| ludion_scene::peek_kind(&source));
+        if self.view.is_some()
+            && kind
+                .as_deref()
+                .and_then(ludion_scene::kind_entry)
+                .is_some_and(|entry| entry.model_sheet)
+        {
+            return Err(vec![view_refused("a model document")]);
+        }
         let (image, adapter) = match (kind.as_deref(), self.builder.as_deref()) {
             (Some(kind), _)
                 if ludion_scene::kind_entry(kind).is_some_and(|entry| entry.model_sheet) =>
@@ -533,6 +559,17 @@ impl GoldenTest {
             // systems where the built-in path below can only move the sim clock. Its frame arrives
             // PNG-encoded (the one render core every live screenshot shares), decoded here with the
             // same decoder the golden itself is read through.
+            (_, Some(builder)) if self.view.is_some() => {
+                let name = self.view.as_deref().unwrap_or_default();
+                let mut engine =
+                    ludion_engine::engine_at_frame(builder(), &self.scene, self.frames)?;
+                engine.set_quality(QualitySetting::full());
+                engine.set_debug_draw(self.debug_draw.clone());
+                let png = engine.render_view_png(name).map_err(|d| vec![d])?;
+                let decoded = image::decode_png(&png).map_err(|d| vec![d])?;
+                let adapter = engine.adapter_label().map_err(|d| vec![d])?;
+                return Ok((decoded, adapter));
+            }
             (_, Some(builder)) => {
                 let outcome = ludion_engine::render_scene_with_builder(
                     builder(),
@@ -546,6 +583,22 @@ impl GoldenTest {
                 )?;
                 let decoded = image::decode_png(&outcome.png).map_err(|d| vec![d])?;
                 return Ok((decoded, outcome.adapter));
+            }
+            (_, None) if self.view.is_some() => {
+                let outcome = ludion_engine::render_scene_views(
+                    &(self.registry)(),
+                    &self.scene,
+                    ludion_engine::FrameSize::native(self.width, self.height),
+                    &ludion_engine::QualitySetting::full(),
+                    &[],
+                    self.frames,
+                    self.locale.as_deref(),
+                    self.anti_aliasing,
+                )?;
+                let view = outcome
+                    .view(self.view.as_deref().unwrap_or_default())
+                    .map_err(|d| vec![d])?;
+                (view.clone(), outcome.adapter)
             }
             (_, None) => {
                 let registry = (self.registry)();
@@ -616,6 +669,15 @@ impl GoldenTest {
             ])
         })
     }
+}
+
+/// The refusal of [`GoldenTest::view`] on a source that has no secondary views to render.
+fn view_refused(what: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::SCENE_OVERRIDE_INVALID,
+        format!("`GoldenTest.view` does not apply to {what}: only a scene has secondary views"),
+    )
+    .with_help("drop `view`, or golden a scene with `RenderView`s")
 }
 
 /// `goldens_root/<os>/<stem>.png`: the golden every recipe form resolves. Off the pinned tier the
@@ -1779,5 +1841,23 @@ mod tests {
         let report = report(&golden, &actual, 0.99);
         assert!(!report.pass);
         assert_eq!(report.diagnostic().code.as_str(), "L2207");
+    }
+
+    #[test]
+    fn a_view_on_a_replay_or_a_model_document_is_refused() {
+        let root = scratch_set("view_refused");
+        let replay = GoldenTest::from_replay(&[], 0, &root, &root, "r").with_view("radar");
+        let error = replay.render().expect_err("a replay has no views");
+        assert_eq!(error[0].code, code::SCENE_OVERRIDE_INVALID);
+        assert!(error[0].message.contains("a replay golden"));
+
+        let model = root.join("m.assembly.yaml");
+        std::fs::write(&model, "format: 1\nkind: assembly\n").unwrap();
+        let error = GoldenTest::in_set(model, &root, "m")
+            .with_view("radar")
+            .render()
+            .expect_err("a model document has no views");
+        assert_eq!(error[0].code, code::SCENE_OVERRIDE_INVALID);
+        assert!(error[0].message.contains("a model document"));
     }
 }

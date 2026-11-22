@@ -139,6 +139,17 @@ release) prints the summed pass GPU time at 512² and 256².
 
 `ludion check-scene` reports `L2370`–`L2373`, the list shape of `L2375`, `L2377` and `L2378` statically, with pointers. `ludion explain L2370` gives the fix.
 
+## Checking a view
+- `ludion render --scene s.yaml --view radar --out radar.png` writes the view's texture alone, at its `size` (default
+  `--out` `<scene>.view-<name>.png`); `--width`/`--height` size only the main frame. It prints `view radar: 256x256 on <adapter>`.
+- `ludion render --scene s.yaml --views-sheet --out sheet.png` writes the frame, then each rendered view in `views` order, in one
+  unlabelled row at native sizes, 8 px apart on a dark fill (default `<scene>.views.png`). A judging instrument, not a golden.
+- `GoldenTest::in_set(..).with_view("radar")` goldens one view instead of the frame, on the built-in path or through
+  `with_builder`; a replay or a model document refuses it. In a directory suite, a `goldens/manifest.json` entry
+  `"render-view-radar": { "views": ["radar"] }` adds a test `<stem>.view-<name>` with the golden `<stem>.view-<name>.png` beside the
+  frame's; `ludion test --filter .view-` runs those alone.
+- `L2379` (error): the name matches no enabled, in-budget view (unknown, disabled or a fifth); the help lists the rendered names.
+
 ## Gotchas
 - A view is a presentation read: it sees the world as the last extract left it, never writes sim state, and a game
   system cannot read its pixels.
