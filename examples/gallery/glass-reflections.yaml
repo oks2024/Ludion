@@ -4,7 +4,7 @@
 # camera; (3) an unlit additive green hologram (`lit: false`), which takes no light and no reflection. Blended meshes are
 # never SSR origins: they reflect the sky and the probes. ludion docs materials.
 format: 1
-name: glass-reflections - blended meshes reflect the sky and a probe, and lit false draws them unlit
+name: "glass-reflections - blended meshes reflect the sky and a probe, and lit false draws them unlit"
 entities:
   - name: environment
     components:

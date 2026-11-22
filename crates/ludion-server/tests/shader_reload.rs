@@ -32,8 +32,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use ludion_engine::Engine;
-use ludion_protocol::command::AssetReloadParams;
 use ludion_protocol::Command;
+use ludion_protocol::command::AssetReloadParams;
 use ludion_server::Server;
 
 /// A scene: one camera, one warm point light, and one lit cube filling the view — so both the scene
