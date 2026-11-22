@@ -9,7 +9,9 @@
 # Fixed targets from Neon Shroud request 0012 §6 (capture <= 4 ms, restore <= 50 ms), not 2x tripwires.
 # Own schema (`threads`, `capture_ms`, `restore_ms`), not a `Budget`. All values are milliseconds.
 #
-# MEASURED: owed (pinned RTX 3090 / 5950X box, release, 8 threads)
+# MEASURED 2026-11-22 (pinned RTX 3090 / 5950X box, release, 8 threads, quiet box, 3 runs x 40 cycles):
+#   capture median 3.646 / 3.743 / 3.772 ms, restore median 5.895 / 6.023 / 6.104 ms (plain frame 0.48 ms).
+#   Capture sits within ~6% of its 4 ms target here (the Apple M4 measures ~1.3 ms).
 threads = 8
 capture_ms = 4.0
 restore_ms = 50.0
