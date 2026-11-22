@@ -1031,8 +1031,10 @@ pub struct RainParams {
     pub look: [f32; 4],
     pub color: [f32; 4],
     pub occ_view: [[f32; 4]; 4],
+    pub splash_grid: [i32; 4],
+    pub splash: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<RainParams>() == 176);
+const _: () = assert!(core::mem::size_of::<RainParams>() == 208);
 const _: () = assert!(core::mem::offset_of!(RainParams, base) == 0);
 const _: () = assert!(core::mem::offset_of!(RainParams, counts) == 16);
 const _: () = assert!(core::mem::offset_of!(RainParams, shape) == 32);
@@ -1041,6 +1043,8 @@ const _: () = assert!(core::mem::offset_of!(RainParams, wind) == 64);
 const _: () = assert!(core::mem::offset_of!(RainParams, look) == 80);
 const _: () = assert!(core::mem::offset_of!(RainParams, color) == 96);
 const _: () = assert!(core::mem::offset_of!(RainParams, occ_view) == 112);
+const _: () = assert!(core::mem::offset_of!(RainParams, splash_grid) == 176);
+const _: () = assert!(core::mem::offset_of!(RainParams, splash) == 192);
 
 /// WGSL `struct RecvDraw`.
 ///
@@ -4180,13 +4184,13 @@ pub fn create_rain_rain_occlusion_bgl(device: &wgpu::Device) -> wgpu::BindGroupL
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(176),
+                    min_binding_size: wgpu::BufferSize::new(208),
                 },
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
                 binding: RAIN_OCCLUSION_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Depth,
                     view_dimension: wgpu::TextureViewDimension::D2,

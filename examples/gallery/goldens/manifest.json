@@ -14,5 +14,6 @@
   "assembly-ground": { "frames": 30 },
   "render-view-radar": { "views": ["radar"] },
   "render-view-portrait": { "views": ["portrait"] },
-  "rain-ripples": { "frames": 12 }
+  "rain-ripples": { "frames": 12 },
+  "rain-splashes": { "frames": 12 }
 }

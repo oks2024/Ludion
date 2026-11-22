@@ -1,7 +1,7 @@
 # Plan: Rain and wet weather
 
-> Status: **W1a, W1b, W2a, W2b, W2c and W3a mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
-> roof occlusion, mesh wetness, authored porosity, `RainOccluder`, the `rain_occlusion` debug view, the `rain_density` quality lever, ripples on wet ground and coat decals, and the `rain-open`, `rain-awning`, `rain-wet`, `rain-porosity` and `rain-occluder` goldens. Usage is `ludion docs weather`; the gallery scenes are
+> Status: **W1a, W1b, W2a, W2b, W2c, W3a and W3b mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
+> roof occlusion, mesh wetness, authored porosity, `RainOccluder`, the `rain_occlusion` debug view, the `rain_density` quality lever, ripples on wet ground and coat decals, splashes on exposed tops (`rain-splashes`), and the `rain-open`, `rain-awning`, `rain-wet`, `rain-porosity` and `rain-occluder` goldens. Usage is `ludion docs weather`; the gallery scenes are
 > `examples/gallery/rain-open.yaml`, `rain-awning.yaml`, `rain-wet.yaml`, `rain-porosity.yaml` and `rain-occluder.yaml`.
 
 ## Why
@@ -99,12 +99,26 @@ for the whole arc; W1a ships the streak field.
     `LitVsOut` flat; `ProjectorDecal.surface.w` carries `Decal.ripples` for coat decals (0 otherwise). `decals_lit` reads
     `rain_occlusion` as its last input only with rain. The five rain scenes of W1-W2c author `ripples: 0.0` so their goldens
     stay still.
-25. **W3b, splashes (laid out, not built).** A second instanced draw in `transparents`/`transparent_depth` after the streaks,
-    from the same rain bind group. Its own lattice: 0.5 m cells over `camera.xz +- min(radius, 12)`; one hashed splash per 0.16 s
-    slot per cell, present when `unit_hash < intensity x splashes x rate`. Height comes from the `rain_occlusion` map in the
-    vertex stage (the topmost surface, roofs included, never under them); none where the map's 2x2 slope exceeds 45 degrees.
-    Each splash is a ring quad plus 4 droplet quads, lit as the streaks are. It adds `Rain.splashes` in `[0, 2]`, default 1, and
-    `L2384` for a budget if one is needed. The request's ring-only splash on puddle decals is Proposed, owner ruling owed.
+25. **The splash field** (W3b; `rain.wgsl`, CPU twin `ludion_renderer::splash_at`, tests only). A world-anchored lattice of
+    `SPLASH_CELL` = 0.5 m cells over `camera.xz +- min(radius, SPLASH_REACH = 12)`. Cell `(i, j)`: `h = pcg(pcg(pcg(seed ^ 0x85ebca6b) ^ i) ^ j)`,
+    `phase = unit_hash(pcg(h + 1))`, `u = time / SPLASH_SLOT (0.16 s) + phase`, `slot = floor(u)`, `age = fract(u)`,
+    `hs = pcg(h ^ slot)`. The cell holds a splash iff `unit_hash(pcg(hs + 1)) < p`, `p = clamp(intensity x splashes x SPLASH_RATE (0.5) x
+    rain_density, 0, 1)`, so a lower `p` draws a subset of the same splashes. Origin inside the cell from `hs + 2`/`hs + 3`, droplet
+    spin from `hs + 4`. Height comes from the `rain_occlusion` map in the vertex stage (the topmost caster, roofs included, never
+    under them); none when the column or its two one-texel neighbours are off the map or `NO_OCCLUDER`, or a neighbour differs by
+    more than one texel (45 degrees). A splash is 5 quads: a horizontal ring (half-size 0.03 to 0.12 m, alpha `a x 1.5 x (1 - age)^2`)
+    and 4 ballistic droplets (`v0` = 1.2 m/s, horizontal speed 0.45 to 0.75, built like a streak, alpha `a x 2 x (1 - age)`). The
+    horizontal fade is `1 - smoothstep(0.85 R, R, |o - cam.xz|)`; a lit rain shades the splash once at its top as the streaks are.
+    Stateless in game time. The request's ring-only splash on puddle decals is Proposed, owner ruling owed.
+26. **Draw and lanes.** One pipeline: the same `vs_main`/`vs_depth`/`fs_main`/`fs_depth`, bind group and graph reads. The vertex stages
+    dispatch on the instance index (`ii >= splash_grid.w` decodes splash part `ii - splash_grid.w`); `record_rain` issues a second
+    draw after the streaks only when splash instances > 0. `RainParams` gains `splash_grid` (base cell, cells per side, first splash
+    instance) and `splash` (x = `p`) after `occ_view`. `RainVert`/`VsOut`/`DepthOut` gain a flat `ring` (0 for streaks and droplets).
+    The map is read in the vertex stage, so `RAIN_OCCLUSION_BINDING` reflects as `VERTEX_FRAGMENT`. No new `ShaderId` or L-code.
+27. **Data and quality.** `RainData.splash_rate` = `intensity x splashes`. `splash_layout(rain, cam, density)` gives `n = ceil(2R / CELL) + 1`,
+    `base = floor((cam.xz - R) / CELL)`, `instances = n^2 x 5` (0 when `p` is 0). `rain_density` multiplies `p`; wetness, ripples and
+    streaks are untouched. `build_rain_draw` returns `None` only when streaks, splashes and wetness are all zero. With
+    `occlusion: false` the map is empty, so no splashes draw. The six earlier rain scenes author `splashes: 0.0`.
 
 ## Waves
 
@@ -117,7 +131,7 @@ for the whole arc; W1a ships the streak field.
 - **W2b, porosity:** the `porosity` field on palettes, sculpt, `Mesh` and mesh documents (D15–D17).
 - **W2c:** `RainOccluder`, `--debug-view rain_occlusion` and a `rain_density` quality lever.
 - **W3a, ripples:** `Rain.ripples` and `Decal.ripples`; a shading-normal perturbation on wet ground and on `coat` decals (D22-D24).
-- **W3b, splashes:** the instanced splash draw (D25).
+- **W3b, splashes** (shipped): the instanced splash draw on exposed tops (D25-D27).
 - **W4:** sun and local shadow taps, `backlight`, `ParticleEmitter.shadowed` and `.stretch`.
 - **W5:** `rain-camera-move`, budget files, and a tile cache if the measured cost asks for one.
 
@@ -172,3 +186,4 @@ for the whole arc; W1a ships the streak field.
 - M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twin of `rain-porosity` is blessed (r2455).
 - **W2c mechanized (2026-11-22):** `RainOccluder { occludes }` (D18; resolved per placed mesh at extract, nearest on the entity or a `Parent` ancestor, into the CPU-only `MeshInstance.rain_occluder`), `L2383` (D19), `ludion render --debug-view rain_occlusion` (D20; `PostChain.rain_view`, `EnvParams.wet.w`, no pass, CLI-only) and `QualityParams.rain_density` (D21; `low` 0.4, a prefix of the same drops). `rain-occluder` and `rain-occluder-view` are new Windows goldens blessed on the RTX 3090; the other 124 gallery goldens passed unblessed. No replay content hash, `WorldHash` or protocol schema moved; the component schema snapshot gained `RainOccluder`. Owed: the macOS twins of both goldens.
 - **W3a mechanized (2026-11-22):** `Rain.ripples` and `Decal.ripples` (both `[0, 2]`, default 1; the decal's is read for `coat` only), the stateless ripple field `rain_ripple.wgsl` with its CPU twin `ripple_slope` (D22), `EnvParams.ripple` (D23) and the decal exposure read at the box top from the `rain_occlusion` map through `decal_lit.wgsl`'s `@group(4) @binding(12)`, which `decals_lit` reads last only with rain (D24). A frame without rain, and `ripples: 0`, render the W2c bytes: the five earlier rain scenes now author `ripples: 0.0`, and every one of them and `decals` re-rendered byte-equal to its pre-edit PNG. `rain-ripples` is the new Windows golden blessed on the RTX 3090; nothing else was re-blessed. No replay content hash, `WorldHash` or protocol schema moved; the component schema snapshot gained the two fields. Owed: the macOS twin of `rain-ripples`, the editor TS types. W3b (splashes, D25) is next.
+- **W3b mechanized (2026-11-22):** `Rain.splashes` (`[0, 2]`, default 1; no new L-code), the stateless splash field in `rain.wgsl` with its CPU twin `splash_at` and `splash_layout` (D25), a second instanced draw after the streaks through the same pipeline and bind group with `RainParams.splash_grid`/`splash` and a flat `ring` varying (D26), and `RainData.splash_rate` with `rain_density` thinning (D27). Splashes land on the `rain_occlusion` map's top: roofs splash, floor under them and tops steeper than 45 degrees do not, and `occlusion: false` draws none. The six earlier rain scenes author `splashes: 0.0` and passed unblessed; the new `rain-splashes` golden is blessed on the RTX 3090. Nothing existing was re-blessed; no replay, `WorldHash` or protocol schema moved; the component schema snapshot moved. Owed: the macOS twin of `rain-splashes` (M4) and the `Rain.splashes` TS type. The ring-only splash on puddle decals stays Proposed, owner ruling owed.

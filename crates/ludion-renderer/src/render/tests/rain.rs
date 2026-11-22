@@ -25,6 +25,7 @@ fn rain(time_s: f32) -> RainData {
         occlusion: true,
         wetness: 0.0,
         ripples: 0.0,
+        splash_rate: 0.0,
         seed: 0,
         time_s,
         per_tile: 96,
@@ -1039,4 +1040,175 @@ fn needs_gpu_a_covered_coat_decal_does_not_ripple() {
         render(scene)
     };
     assert!(dry(0.0).rgba == dry(2.0).rgba, "no rain, no ripples");
+}
+
+// --- Splashes ------------------------------------------------------------------------------------
+
+/// A rain with no streaks and no wetness: only splashes can change a frame.
+fn splashing(rate: f32, time_s: f32) -> RainData {
+    RainData {
+        per_tile: 0,
+        splash_rate: rate,
+        time_s,
+        ..rain(0.0)
+    }
+}
+
+/// `meshes` seen from `camera` under a splashing rain. The plain slab floor writes no map, so every
+/// surface here is a caster.
+fn splash_scene(
+    rain: RainData,
+    camera: crate::scene::RenderCamera,
+    meshes: Vec<MeshInstance>,
+) -> RenderScene {
+    let mut scene = RenderScene::empty((PX, PX));
+    scene.camera = camera;
+    scene.ambient = [0.3; 3];
+    scene.post = Some(exact_post());
+    scene.meshes = meshes;
+    scene.rain = Some(rain);
+    scene
+}
+
+/// A casting floor whose top is y = 0, 30 m across, in front of the head camera.
+fn splash_floor() -> MeshInstance {
+    roof(
+        Vec3::new(0.0, -0.05, -12.0),
+        Vec3::new(30.0, 0.1, 30.0),
+        true,
+    )
+}
+
+fn from_above() -> crate::scene::RenderCamera {
+    let eye = Vec3::new(0.0, 3.0, 0.0);
+    crate::scene::RenderCamera {
+        view: Mat4::look_at_rh(eye, Vec3::new(0.0, 0.0, -7.0), Vec3::Y),
+        position: eye,
+        ..origin_camera(PX, PX)
+    }
+}
+
+/// Splashes change the frame, hold at a held game time and move with it. Skips with no GPU.
+#[test]
+fn needs_gpu_splashes_land_on_a_casting_floor_and_follow_game_time() {
+    let Some(renderer) = skip_or_renderer("splashes_land_on_a_casting_floor_and_follow_game_time")
+    else {
+        return;
+    };
+    let at = |rate: f32, time_s: f32| {
+        renderer
+            .render(
+                &splash_scene(
+                    splashing(rate, time_s),
+                    head_camera(PX, PX),
+                    vec![splash_floor()],
+                ),
+                size(),
+            )
+            .expect("render")
+    };
+    let (off, on, again, later) = (at(0.0, 0.0), at(1.0, 0.0), at(1.0, 0.0), at(1.0, 0.08));
+    assert_ne!(off.rgba, on.rgba, "splashes are drawn");
+    assert!(on.rgba == again.rgba, "one tick, one picture");
+    assert_ne!(on.rgba, later.rgba, "the splashes moved with game time");
+}
+
+/// Floor under a roof gets no splash, byte for byte; the open half of the frame does, and so does the
+/// roof's top. Skips with no GPU.
+#[test]
+fn needs_gpu_splashes_stay_off_covered_floor_and_land_on_the_roof() {
+    let Some(renderer) = skip_or_renderer("splashes_stay_off_covered_floor_and_land_on_the_roof")
+    else {
+        return;
+    };
+    let low_roof = || {
+        roof(
+            Vec3::new(-10.0, 1.25, -10.0),
+            Vec3::new(20.0, 0.1, 20.0),
+            true,
+        )
+    };
+    let under = |rate: f32| {
+        renderer
+            .render(
+                &splash_scene(
+                    splashing(rate, 0.0),
+                    head_camera(PX, PX),
+                    vec![splash_floor(), low_roof()],
+                ),
+                size(),
+            )
+            .expect("under")
+    };
+    let (off, on) = (under(0.0), under(2.0));
+    let mid = PX / 2;
+    assert!(
+        !column_differs(&off, &on, 0..mid - 4),
+        "the roofed floor gets no splash"
+    );
+    assert!(
+        column_differs(&off, &on, mid + 4..PX),
+        "the open floor splashes"
+    );
+    let top = |rate: f32| {
+        renderer
+            .render(
+                &splash_scene(
+                    splashing(rate, 0.0),
+                    from_above(),
+                    vec![roof(
+                        Vec3::new(0.0, 1.25, -7.0),
+                        Vec3::new(12.0, 0.1, 10.0),
+                        true,
+                    )],
+                ),
+                size(),
+            )
+            .expect("top")
+    };
+    assert_ne!(top(0.0).rgba, top(2.0).rgba, "the roof's top splashes");
+}
+
+/// A 60 degree caster takes no splash while a flat one in the same place does, and `occlusion: false`
+/// leaves no map to land on. Skips with no GPU.
+#[test]
+fn needs_gpu_steep_tops_and_a_missing_map_take_no_splash() {
+    let Some(renderer) = skip_or_renderer("steep_tops_and_a_missing_map_take_no_splash") else {
+        return;
+    };
+    let plate = |tilt: f32| {
+        let mut m = roof(Vec3::ZERO, Vec3::new(8.0, 0.2, 8.0), true);
+        m.model = Mat4::from_translation(Vec3::new(0.0, 0.5, -6.0))
+            * Mat4::from_rotation_x(tilt.to_radians())
+            * Mat4::from_scale(Vec3::new(8.0, 0.2, 8.0));
+        m
+    };
+    let render = |rain: RainData, mesh: MeshInstance| {
+        renderer
+            .render(&splash_scene(rain, head_camera(PX, PX), vec![mesh]), size())
+            .expect("render")
+    };
+    let (off, on) = (
+        render(splashing(0.0, 0.0), plate(60.0)),
+        render(splashing(2.0, 0.0), plate(60.0)),
+    );
+    assert!(off.rgba == on.rgba, "a 60 degree ramp takes no splash");
+    let (flat_off, flat_on) = (
+        render(splashing(0.0, 0.0), plate(0.0)),
+        render(splashing(2.0, 0.0), plate(0.0)),
+    );
+    assert_ne!(flat_off.rgba, flat_on.rgba, "a flat plate there does");
+    let blind = |rate| {
+        render(
+            RainData {
+                occlusion: false,
+                ..splashing(rate, 0.0)
+            },
+            plate(0.0),
+        )
+    };
+    assert!(
+        blind(0.0).rgba == blind(2.0).rgba,
+        "no occlusion map, no splash"
+    );
 }

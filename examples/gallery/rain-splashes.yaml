@@ -1,0 +1,191 @@
+# Feature: Rain splashes - a low camera over open voxel ground at night under one sodium spot. Splashes ring and spray
+# wherever the rain's overhead map finds a top: the open ground, the top of a 1 m crate and a small roof. None land on
+# the 60 degree ramp (steeper than 45 degrees) or on the dry floor under the roof, which the map reads as the roof's
+# top. Rain.splashes is 2 (the most) and ripples are off (ripples: 0.0), so the golden shows only splashes; it is the
+# frame at tick 12. ludion docs weather.
+format: 1
+name: "rain-splashes - Rain splashes: rings and droplets on open tops, none on a steep ramp or under a roof"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.7
+          - 7.0
+        rotation:
+          - -20.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.015
+          - 0.03
+        sky_horizon:
+          - 0.03
+          - 0.04
+          - 0.06
+        sky_ground:
+          - 0.005
+          - 0.006
+          - 0.01
+        ibl_intensity: 0.4
+      PostProcess:
+        bloom_threshold: 0.8
+        bloom_strength: 0.1
+        exposure: 1.0
+        tonemap: aces
+        fog_density: 0.02
+        fog_color:
+          - 0.03
+          - 0.04
+          - 0.06
+        fog_start: 4.0
+        ssr: 1.0
+        vignette: 0.4
+        vignette_radius: 0.9
+  - name: moon
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.8
+          - -0.5
+        color:
+          - 0.4
+          - 0.5
+          - 0.8
+        intensity: 0.15
+  - name: lamp
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.6
+          - 4.5
+      SpotLight:
+        color:
+          - 1.0
+          - 0.7
+          - 0.35
+        intensity: 9.0
+        range: 14.0
+        direction:
+          - 0.0
+          - -0.68
+          - -0.73
+        inner_angle: 26.0
+        outer_angle: 50.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.25
+          - 0.0
+        scale:
+          - 0.125
+          - 0.125
+          - 0.125
+      Mesh:
+        shape:
+          voxel: voxels/rain-ground.voxel.yaml
+  - name: wall-back
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.4
+          - -3.5
+        scale:
+          - 9.0
+          - 2.8
+          - 0.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.3
+          - 0.33
+          - 1.0
+        roughness: 0.85
+  - name: roof
+    components:
+      Transform:
+        translation:
+          - 2.6
+          - 1.2
+          - -1.0
+        scale:
+          - 2.6
+          - 0.12
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.2
+          - 0.22
+          - 1.0
+        roughness: 0.85
+  - name: crate
+    components:
+      Transform:
+        translation:
+          - -1.4
+          - 0.5
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.22
+          - 0.15
+          - 1.0
+        roughness: 0.7
+  - name: ramp
+    components:
+      Transform:
+        translation:
+          - -3.8
+          - 1.0
+          - -1.5
+        rotation:
+          - 60.0
+          - 0.0
+          - 0.0
+        scale:
+          - 2.2
+          - 0.1
+          - 2.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.3
+          - 0.33
+          - 1.0
+        roughness: 0.7
+  - name: weather
+    presentation: true
+    components:
+      Rain:
+        ripples: 0.0
+        splashes: 2.0
+        wind:
+          - 0.6
+          - 0.0
+          - 0.2
+        color:
+          - 0.75
+          - 0.8
+          - 0.9
+          - 0.6

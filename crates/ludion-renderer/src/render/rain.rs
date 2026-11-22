@@ -7,7 +7,9 @@ use super::{
     init_buffer, module, premultiplied_blend, shader_gen, skin_bind_group,
 };
 use crate::graph::FrameSize;
-use crate::rain::{RainData, occlusion_view, rain_draw_per_tile, rain_layout};
+use crate::rain::{
+    RainData, occlusion_view, rain_draw_per_tile, rain_layout, splash_layout, splash_probability,
+};
 use crate::scene::RenderScene;
 use ludion_core::math::glam::Vec3;
 
@@ -20,7 +22,9 @@ pub(super) struct RainDraw {
     params: wgpu::Buffer,
     occlusion_view: [[f32; 4]; 4],
     occlusion: bool,
+    /// Streak instances; the splash instances follow them.
     instances: u32,
+    splash_instances: u32,
 }
 
 /// What the scene pass needs to wet its surfaces: the occlusion view, the authored wetness and the
@@ -98,7 +102,9 @@ impl Renderer {
             ..*rain
         };
         let layout = rain_layout(&thinned, scene.camera.position);
-        if layout.instances == 0 && rain.wetness <= 0.0 {
+        let density = self.quality_params.rain_density;
+        let splashes = splash_layout(rain, scene.camera.position, density);
+        if layout.instances == 0 && splashes.instances == 0 && rain.wetness <= 0.0 {
             return None;
         }
         let occlusion_view = occlusion_view(rain, scene.camera.position).to_cols_array_2d();
@@ -123,6 +129,13 @@ impl Renderer {
             look: [rain.drop_width, rain.streak / 60.0, pixel, rain.medium],
             color: rain.color,
             occ_view: occlusion_view,
+            splash_grid: [
+                splashes.base.x,
+                splashes.base.y,
+                splashes.n as i32,
+                layout.instances as i32,
+            ],
+            splash: [splash_probability(rain, density), 0.0, 0.0, 0.0],
         };
         let buffer = init_buffer(
             device,
@@ -134,6 +147,7 @@ impl Renderer {
             occlusion_view,
             occlusion: rain.occlusion,
             instances: layout.instances,
+            splash_instances: splashes.instances,
         })
     }
 }
@@ -235,6 +249,10 @@ impl FrameRecorder<'_> {
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
         rp.set_bind_group(RAIN_GROUP, &params_bg, &[]);
         rp.draw(0..6, 0..draw.instances);
+        if draw.splash_instances > 0 {
+            let first = draw.instances;
+            rp.draw(0..6, first..first + draw.splash_instances);
+        }
     }
 }
 

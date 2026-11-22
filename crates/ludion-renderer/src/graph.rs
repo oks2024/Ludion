@@ -3775,6 +3775,7 @@ mod tests {
             occlusion: true,
             wetness: 1.0,
             ripples: 0.0,
+            splash_rate: 0.0,
             seed: 0,
             time_s: 0.0,
             per_tile: 8,

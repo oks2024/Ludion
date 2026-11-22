@@ -3,7 +3,7 @@
 # awning ends, and the coat puddle in front of the hut catches the open rain. The roof and awning cast shadows, which
 # is what occludes the rain (Rain.occlusion). A presentation entity holds the rain, so it never enters the world
 # hash. The camera sits at head height facing the hut. ludion docs weather.
-# Ripples off (ripples: 0.0), so this golden shows the scene still.
+# Ripples and splashes off (ripples: 0.0, splashes: 0.0), so this golden shows the scene still.
 format: 1
 name: "rain-awning - Rain: no streaks under the awning or in the doorway"
 entities:
@@ -275,6 +275,7 @@ entities:
     components:
       Rain:
         ripples: 0.0
+        splashes: 0.0
         wind:
           - 1.2
           - 0.0

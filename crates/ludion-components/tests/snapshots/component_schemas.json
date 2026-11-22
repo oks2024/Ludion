@@ -8596,6 +8596,18 @@
           2.0
         ]
       },
+      "splashes": {
+        "description": "How often splashes appear on exposed tops, in `[0, 2]`: 0 draws none (default 1).",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 2.0,
+        "default": 1.0,
+        "x-ui-range": [
+          0.0,
+          2.0
+        ]
+      },
       "seed": {
         "description": "Varies the lattice hash (default 0).",
         "type": "integer",

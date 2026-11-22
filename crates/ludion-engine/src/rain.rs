@@ -131,6 +131,7 @@ pub(crate) fn extract_rain(
         occlusion: rain.occlusion,
         wetness: rain.wetness,
         ripples: rain.ripples,
+        splash_rate: rain.intensity * rain.splashes,
         seed: rain.seed,
         time_s: (now.seconds() % RAIN_TIME_WRAP_S) as f32,
         per_tile,

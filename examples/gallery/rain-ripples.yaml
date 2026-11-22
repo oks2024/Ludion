@@ -1,7 +1,8 @@
 # Feature: Rain ripples - a low camera over wet voxel ground at night under one sodium spot. Two 2 x 1.5 m coat puddles:
 # the one in the open rings with expanding ripples (so does the open ground, faintly), and the one under the small roof
 # stays still and mirror-like, because ripples read the rain's occlusion map at the decal's box top and never ring
-# covered water. Rain.ripples is left at its default of 1; the golden is the frame at tick 12. ludion docs weather.
+# covered water. Rain.ripples is left at its default of 1 and splashes are off (splashes: 0.0); the golden is the frame at tick 12.
+# ludion docs weather.
 format: 1
 name: "rain-ripples - Rain ripples: rings on open water, none under a roof"
 entities:
@@ -177,6 +178,7 @@ entities:
     presentation: true
     components:
       Rain:
+        splashes: 0.0
         wind:
           - 0.6
           - 0.0

@@ -152,6 +152,7 @@ fn fixtures(name: &str) -> Vec<Value> {
             json!({ "intensity": 0.5, "wind": [1.0, 0.0, 2.0], "seed": 3 }),
             json!({ "wetness": 0.25 }),
             json!({ "ripples": 0.5 }),
+            json!({ "splashes": 0.5 }),
         ],
         "Decal" => vec![json!({}), json!({ "blend": "coat", "ripples": 0.5 })],
         "RainOccluder" => vec![json!({}), json!({ "occludes": false })],

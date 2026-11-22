@@ -32,6 +32,7 @@ entities:
         occlusion: true      # hide streaks under roofs; false keeps the pass but draws no casters
         wetness: 1.0         # how wet exposed surfaces look, [0, 1]; 0 leaves every surface dry
         ripples: 1.0         # rings on wet ground and coat decals, [0, 2]; 0 keeps the water still
+        splashes: 1.0        # rings and droplets where rain lands on exposed tops, [0, 2]; 0 draws none
         seed: 0              # varies the lattice
 ```
 Every field is optional. `Rain` is a singleton: the lowest entity id wins and each further one is `L2381`.
@@ -128,9 +129,24 @@ and the reflection, not as geometry.
 | A character under a roof | Wet per pixel from the map, so it dries the instant it steps under cover |
 | A `coat` decal | The authored puddle: wetness leaves decals and blended meshes (glass, holograms) untouched |
 | A coat decal over wet ground | Both ripple: the ground at 0.3 and the decal at its own weight |
+| A floor that is not a shadow caster | No splashes: it writes no map, so give it `RainOccluder: {}` |
 | Ripples on `alpha` decals, blended meshes, walls | None: up-facing opaque meshes and `coat` decals only |
 | Viewmodel | Never wetted |
 | Time past 4096 s | Wraps; every drop jumps once |
+
+## Splashes
+**Splashes are on by default** (`splashes: 1`); `splashes: 0` draws none and renders the frame as one without them,
+byte for byte. Where rain lands on an exposed top it leaves a ring that spreads and four droplets that arc off it. The
+world's xz is tiled in 0.5 m cells over the camera's xz out to `min(radius, 12)` metres; each cell holds one hashed
+splash per 0.16 s slot, present when a hash falls under `intensity x splashes x 0.5` (`1` is half the cells), so a
+lower rate draws a subset of the same splashes. They are a function of the world position, the rain's game time and
+`seed` alone: nothing swims with the camera, a held clock holds them and two renders at one tick are byte-identical.
+- **They land on the `rain_occlusion` map's top** (`## Roofs`): the topmost caster over the splash's column, so a roof's
+  top splashes and the floor under it never does. A surface that writes no map gets no splashes, and with
+  `occlusion: false` the map is empty and none are drawn.
+- **Flat tops only.** A top whose slope passes 45 degrees (one map texel of height over one texel of run) takes none.
+- **Lit like the streaks**, unshadowed, and faded out over the last 15 % of the reach.
+- `--quality low` thins them with `rain_density`, a subset of the same splashes.
 
 ## Diagnostics
 - `L2380` (error): a field is non-finite or out of range, at its JSON Pointer.
@@ -140,8 +156,10 @@ and the reflection, not as geometry.
 
 `ludion explain L2380` gives the fix. The gallery scenes are `examples/gallery/rain-open.yaml`, `rain-awning.yaml`,
 `rain-wet.yaml` (wet voxel ground and figures, a dry awning), `rain-porosity.yaml`, `rain-occluder.yaml` (a net that lets
-rain through beside a shadowless canopy that stops it) and `rain-ripples.yaml` (rings on an open puddle and the ground,
-a still one under a roof). The first five author `ripples: 0.0`, so their goldens show the scene still.
+rain through beside a shadowless canopy that stops it), `rain-ripples.yaml` (rings on an open puddle and the ground,
+a still one under a roof) and `rain-splashes.yaml` (splashes on open ground, a crate and a roof, none on a steep ramp or
+under the roof). The first five author `ripples: 0.0` and all but `rain-splashes` author `splashes: 0.0`, so their goldens
+show the scene without them.
 
 `--quality low` draws 0.4 of the streaks (`rain_density`, a prefix of the same drops); wetness and the map are unchanged.
 

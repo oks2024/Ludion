@@ -80,6 +80,11 @@ pub struct Rain {
     #[schemars(range(min = 0.0, max = 2.0))]
     #[schemars(extend("x-ui-range" = [0.0, 2.0]))]
     pub ripples: f32,
+    /// How often splashes appear on exposed tops, in `[0, 2]`: 0 draws none (default 1).
+    #[serde(default = "default_splashes")]
+    #[schemars(range(min = 0.0, max = 2.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 2.0]))]
+    pub splashes: f32,
     /// Varies the lattice hash (default 0).
     #[serde(default)]
     pub seed: u32,
@@ -104,6 +109,7 @@ impl Default for Rain {
             occlusion: true,
             wetness: default_wetness(),
             ripples: default_ripples(),
+            splashes: default_splashes(),
             seed: 0,
         }
     }
@@ -143,6 +149,9 @@ fn default_wetness() -> f32 {
     1.0
 }
 fn default_ripples() -> f32 {
+    1.0
+}
+fn default_splashes() -> f32 {
     1.0
 }
 fn default_true() -> bool {
@@ -280,6 +289,14 @@ pub fn rain_problems(rain: &Rain) -> Vec<(String, String)> {
         "/ripples".into(),
         format!("`ripples` is {}; it takes a value in [0, 2]", rain.ripples),
     );
+    check(
+        rain.splashes.is_finite() && (0.0..=2.0).contains(&rain.splashes),
+        "/splashes".into(),
+        format!(
+            "`splashes` is {}; it takes a value in [0, 2]",
+            rain.splashes
+        ),
+    );
     out
 }
 
@@ -377,6 +394,9 @@ mod tests {
         assert_eq!(paths(json!({ "ripples": 2.5 })), ["/ripples"]);
         assert_eq!(paths(json!({ "ripples": -0.1 })), ["/ripples"]);
         assert!(paths(json!({ "ripples": 2.0 })).is_empty());
+        assert_eq!(paths(json!({ "splashes": 2.5 })), ["/splashes"]);
+        assert_eq!(paths(json!({ "splashes": -0.1 })), ["/splashes"]);
+        assert!(paths(json!({ "splashes": 2.0 })).is_empty());
         assert!(paths(json!({ "height": [-6.0, 58.0], "cell": 8.0 })).is_empty());
     }
 }

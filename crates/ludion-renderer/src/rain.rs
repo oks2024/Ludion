@@ -4,7 +4,7 @@
 //! rounds, so a drop's position is a function of the tile and the time alone and never of the camera;
 //! `shaders/rain.wgsl` evaluates the same arithmetic and [`drop_position`] is its twin.
 
-use ludion_core::math::glam::{IVec3, Mat4, Vec2, Vec3};
+use ludion_core::math::glam::{IVec2, IVec3, Mat4, Vec2, Vec3};
 
 /// The most streaks one draw carries. A scene asking for more is clamped per tile.
 pub const MAX_RAIN_STREAKS: u32 = 65_536;
@@ -43,6 +43,8 @@ pub struct RainData {
     pub wetness: f32,
     /// How strongly wet ground and coat decals ripple, in `[0, 2]`.
     pub ripples: f32,
+    /// `intensity x splashes`: how often splashes appear on exposed tops; 0 draws none.
+    pub splash_rate: f32,
     /// Varies the lattice hash.
     pub seed: u32,
     /// Game seconds, wrapped at [`RAIN_TIME_WRAP_S`].
@@ -225,6 +227,82 @@ pub fn ripple_slope(xz: Vec2, time: f32, seed: u32) -> Vec2 {
     sum
 }
 
+/// Side of one splash cell, in metres.
+pub const SPLASH_CELL: f32 = 0.5;
+/// Seconds one cell's splash slot lasts.
+pub const SPLASH_SLOT: f32 = 0.16;
+/// Splash probability per slot at `intensity x splashes` of 1.
+pub const SPLASH_RATE: f32 = 0.5;
+/// The farthest splashes reach from the camera on x and z, in metres.
+pub const SPLASH_REACH: f32 = 12.0;
+/// Quads per splash: one ring and four droplets.
+pub const SPLASH_QUADS: u32 = 5;
+
+/// One splash of a cell's current slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Splash {
+    /// World xz of the splash's origin, inside its cell.
+    pub xz: Vec2,
+    /// Progress through the slot, in `[0, 1)`.
+    pub age: f32,
+    /// The droplets' angular offset, in turns.
+    pub spin: f32,
+}
+
+/// The splash of cell `cell` at game `time` under `seed` and probability `p`, `rain.wgsl`'s splash
+/// field. A lower `p` keeps a subset of the splashes a higher `p` draws, unchanged.
+pub fn splash_at(cell: IVec2, time: f32, seed: u32, p: f32) -> Option<Splash> {
+    let mut h = pcg(seed ^ 0x85eb_ca6b);
+    h = pcg(h ^ cell.x as u32);
+    h = pcg(h ^ cell.y as u32);
+    let phase = unit_hash(pcg(h.wrapping_add(1)));
+    let u = time / SPLASH_SLOT + phase;
+    let slot = u.floor() as i32;
+    let age = fract(u);
+    let hs = pcg(h ^ slot as u32);
+    if unit_hash(pcg(hs.wrapping_add(1))) >= p {
+        return None;
+    }
+    Some(Splash {
+        xz: Vec2::new(
+            (cell.x as f32 + unit_hash(pcg(hs.wrapping_add(2)))) * SPLASH_CELL,
+            (cell.y as f32 + unit_hash(pcg(hs.wrapping_add(3)))) * SPLASH_CELL,
+        ),
+        age,
+        spin: unit_hash(pcg(hs.wrapping_add(4))),
+    })
+}
+
+/// The splash lattice block one frame draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SplashLayout {
+    /// The lowest cell `(i, j)` of the block.
+    pub base: IVec2,
+    /// Cells per side.
+    pub n: u32,
+    /// Instances to draw: `n² x 5`, or 0 when no splash can appear.
+    pub instances: u32,
+}
+
+/// The splash probability per slot: `splash_rate x SPLASH_RATE x density`, clamped to `[0, 1]`.
+pub fn splash_probability(rain: &RainData, density: f32) -> f32 {
+    (rain.splash_rate * SPLASH_RATE * density).clamp(0.0, 1.0)
+}
+
+/// The cell block and instance count of the splashes of `rain` seen from `cam`; `density` is the
+/// quality's `rain_density`.
+pub fn splash_layout(rain: &RainData, cam: Vec3, density: f32) -> SplashLayout {
+    let reach = rain.radius.min(SPLASH_REACH);
+    let n = (2.0 * reach / SPLASH_CELL).ceil() as u32 + 1;
+    let from = ((Vec2::new(cam.x, cam.z) - Vec2::splat(reach)) / SPLASH_CELL).floor();
+    let drawn = splash_probability(rain, density) > 0.0;
+    SplashLayout {
+        base: IVec2::new(from.x as i32, from.y as i32),
+        n,
+        instances: if drawn { n * n * SPLASH_QUADS } else { 0 },
+    }
+}
+
 /// World position of drop `k` of `tile` at `rain.time_s`, the CPU twin of the shader. It never reads a
 /// camera: the drop wraps inside its own tile column.
 pub fn drop_position(rain: &RainData, tile: IVec3, k: u32) -> Vec3 {
@@ -276,6 +354,7 @@ mod tests {
             occlusion: true,
             wetness: 0.0,
             ripples: 0.0,
+            splash_rate: 0.0,
             seed: 0,
             time_s: 3.25,
             per_tile: 96,
@@ -403,6 +482,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn cells() -> impl Iterator<Item = IVec2> {
+        (0..64).flat_map(|j| (0..64).map(move |i| IVec2::new(i - 32, j - 32)))
+    }
+
+    #[test]
+    fn a_splash_is_deterministic_and_inside_its_cell() {
+        for cell in cells().take(500) {
+            let a = splash_at(cell, 1.37, 4, 1.0);
+            assert_eq!(a, splash_at(cell, 1.37, 4, 1.0));
+            let s = a.expect("p = 1 always splashes");
+            assert!((0.0..1.0).contains(&s.age) && (0.0..1.0).contains(&s.spin));
+            let local = s.xz / SPLASH_CELL - cell.as_vec2();
+            assert!(local.cmpge(Vec2::ZERO).all() && local.cmplt(Vec2::ONE).all());
+        }
+    }
+
+    #[test]
+    fn the_splash_fraction_follows_p_and_lower_p_draws_a_subset() {
+        let present = |p: f32| {
+            cells()
+                .filter_map(|c| splash_at(c, 2.5, 1, p).map(|s| (c, s)))
+                .collect::<Vec<_>>()
+        };
+        for p in [0.25, 0.5] {
+            let frac = present(p).len() as f32 / 4096.0;
+            assert!((frac - p).abs() < 0.03, "p {p}: {frac}");
+        }
+        let (low, high) = (present(0.25), present(0.5));
+        for (c, s) in &low {
+            assert!(high.iter().any(|(c2, s2)| c2 == c && s2 == s), "{c}");
+        }
+        assert!(present(0.0).is_empty());
+    }
+
+    #[test]
+    fn a_splash_slot_advances_and_age_wraps() {
+        let cell = IVec2::new(3, -2);
+        let a = splash_at(cell, 0.5, 0, 1.0).unwrap();
+        let b = splash_at(cell, 0.5 + SPLASH_SLOT, 0, 1.0).unwrap();
+        assert!((a.age - b.age).abs() < 2.0e-3 || (a.age - b.age).abs() > 0.998);
+        assert_ne!(a.xz, b.xz, "the next slot is a new splash");
+        let early = splash_at(cell, 0.5, 0, 1.0).unwrap();
+        let later = splash_at(cell, 0.5 + 0.9 * SPLASH_SLOT, 0, 1.0).unwrap();
+        assert!(
+            later.age < early.age || later.xz != early.xz,
+            "it ages or wraps"
+        );
+    }
+
+    #[test]
+    fn the_splash_layout_covers_the_reach_and_is_empty_at_zero() {
+        let mut r = rain();
+        r.splash_rate = 1.0;
+        let cam = Vec3::new(3.3, 1.2, -7.1);
+        let l = splash_layout(&r, cam, 1.0);
+        assert_eq!((l.n, l.instances), (49, 12_005));
+        let centre = (l.base.as_vec2() + Vec2::splat(l.n as f32 / 2.0)) * SPLASH_CELL;
+        assert!((centre - Vec2::new(cam.x, cam.z)).abs().max_element() < SPLASH_CELL);
+        assert_eq!(splash_layout(&r, cam, 0.0).instances, 0);
+        r.splash_rate = 0.0;
+        assert_eq!(splash_layout(&r, cam, 1.0).instances, 0);
     }
 
     /// The hash is pinned: it is the WGSL's, and a drift here moves every frame of rain.
