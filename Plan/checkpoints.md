@@ -232,3 +232,4 @@ scene text, and held slots refuse arming, `L4207`).
   `budgets/checkpoints-{windows,macos}.toml` with the fixed targets, the corpus-test exclusion; the pinned
   medians are owed to the RTX 3090 box and the M4; decisions W4b-1..4.
 - **W3, W5:** not started.
+- M4 (2026-11-22): the W4b medians are measured on the pinned Apple M4, recorded in `budgets/checkpoints-macos.toml`'s MEASURED line: capture 1.31 ms and restore 2.08 ms, against the 4 ms and 50 ms targets. The RTX 3090 box's medians are still owed.

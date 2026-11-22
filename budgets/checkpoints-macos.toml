@@ -9,7 +9,9 @@
 # Fixed targets from Neon Shroud request 0012 §6 (capture <= 4 ms, restore <= 50 ms), not 2x tripwires.
 # Own schema (`threads`, `capture_ms`, `restore_ms`), not a `Budget`. All values are milliseconds.
 #
-# MEASURED: owed (pinned Apple M4 mac mini, release, 8 threads)
+# MEASURED 2026-11-22 (pinned Apple M4 mac mini, release, 8 threads, quiet box, three runs of 40 cycles):
+# capture median 1.317 / 1.311 / 1.315 ms (max 3.2-3.4), restore median 2.079 / 2.093 / 2.064 ms
+# (max 4.5-5.0), a plain frame 0.26 ms.
 threads = 8
 capture_ms = 4.0
 restore_ms = 50.0

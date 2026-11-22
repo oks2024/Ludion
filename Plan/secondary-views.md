@@ -205,3 +205,4 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   `alpha >= 1` is still `next.clone()`. No `WorldHash`, replay, schema, `SnapshotDoc` or golden moved. API break: `BlendData` gains two
   pub fields (a struct literal needs `..Default::default()`; none found outside `crates/`). W4c is open.
 - M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twins of `render-view-unlit`, `render-view-portrait` and `render-view-radar` are blessed (r2451); the full macOS gallery re-renders byte-identically.
+- M4 (2026-11-22): the macOS budget twin `budgets/pinned-apple-m4-render-views.toml` is measured on the pinned Apple M4: `view:radar` 1.09-1.10 ms, ceiling 2.2. Its TeamCity budgets-macos step is owed with the re-provision.

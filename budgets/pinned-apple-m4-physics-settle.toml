@@ -1,0 +1,38 @@
+# Physics settle budget — pinned Apple M4 mac mini, release, 8 sim threads.
+#
+# Gates the load-time prime (the external game's settle request): a 2,000-body jointed town (50 walls of 32 glued
+# bricks and 8 two-part compound tiles, 1,200 fixed joints, `solver_iterations: 8`), primed at scene
+# commit, measured by `settle_bench.rs` over 60 frames from tick 1 (`warmup = 0`, so the tick-1 settle
+# frame is in the window):
+#
+#   cargo test -p ludion-engine --release --features physics-profiler --test it -- settle_bench --ignored --nocapture
+#
+# Regression tripwires on the primed arm, not performance goals. All values are milliseconds.
+# Re-calibrate deliberately (a re-bless event) — `ludion explain L4005`. The macOS twin of
+# `pinned-rtx3090-physics-settle.toml`.
+#
+# **The max ceilings are the request's targets**, as in the Windows twin: `[systems_max] physics_step =
+# 12.0` and `frame_total_max_ms = 16.667` (the tick-1 step under 12 ms, the whole tick-1 frame under one
+# 60 fps frame), not 2x tripwires. The M4 clears them by about 3x. The median ceilings below are the usual ~2x.
+#
+# MEASURED 2026-11-22 over three bench runs on a quiet box (primed arm, tick 1 = the worst frame of the window):
+#
+#                    t1 physics_step   t1 physics_write   t1 frame_total   cold t1 step / write / frame
+#   run 1            3.361             0.214              3.998            6.2 / 1.1 / 7.8
+#   run 2            3.376             0.214              3.977            6.3 / 1.2 / 7.8
+#   run 3            3.672             0.221              4.272            6.5 / 1.2 / 8.1
+#
+# 60-frame primed medians (three runs): physics_step 1.352-1.372, physics_write 0.469-0.477,
+# physics_mirror 0.144-0.147, frame_total 2.177-2.215. Prime cost at load: 4.2-4.4 ms of a 157 ms load (2.7-2.8%).
+
+threads = 8
+frame_total_ms = 4.4
+frame_total_max_ms = 16.667
+
+[systems]
+physics_write  = 0.95
+physics_step   = 2.7
+physics_mirror = 0.3
+
+[systems_max]
+physics_step = 12.0

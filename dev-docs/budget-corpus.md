@@ -67,7 +67,13 @@ vigil's E6 pair carry `threads = 8`; the rest state no worker count.
 - `budgets/pinned-rtx3090-render-views.toml` — the secondary-views arc's, calibrated on
   `examples/gallery/render-view-radar.yaml` (a 256x256 top-down `radar` view, `Plan/secondary-views.md` D32/D33), gating
   `[views] radar`, the view's GPU frame span (the report's `view:radar` row). Measured on the RTX 3090 2026-11-22:
-  0.2139 / 0.2092 / 0.2064 ms. The M4 twin is owed.
+  0.2139 / 0.2092 / 0.2064 ms. Its twin `pinned-apple-m4-render-views.toml` was measured on the M4 2026-11-22: 1.0991 / 1.0879 /
+  1.0996 ms (ceiling 2.2).
+- `budgets/pinned-rtx3090-physics-settle.toml` / `budgets/pinned-apple-m4-physics-settle.toml` — the physics
+  settle prime's, checked by `settle_bench.rs` (ignored; it reads the host's `pinned-<box>-physics-settle.toml`
+  through `platform_budget`) on a primed 2,000-body jointed town. `[systems_max] physics_step` 12.0 and
+  `frame_total_max_ms` 16.667 are the request's fixed targets; the medians are ~2x. Tick-1 step: RTX 3090 box 6.5-9.9 ms
+  (2026-11-14), M4 3.36-3.67 ms (2026-11-22).
 - `budgets/image-stats-windows.toml` / `budgets/image-stats-macos.toml` — a different instrument:
   not timing ceilings but per-golden defect ceilings (`banding_score`, `edge_aliasing`,
   `clipped_low`, `clipped_high`), checked with `ludion image-stats --check`. Per-OS because the two

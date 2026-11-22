@@ -1,0 +1,24 @@
+# Secondary-view budget — pinned Apple M4 mac mini, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. The ceiling is roughly twice the median measured by
+# `ludion profile --scene … --frames 120` in `--release` on the pinned Apple M4, so a failure means a
+# real, reproducible slowdown — never machine noise. All values are milliseconds. Re-calibrate
+# deliberately (a re-bless event) if a cost becomes intended and permanent — `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/render-view-radar.yaml`, the
+# secondary-views arc's scene (`Plan/secondary-views.md` D33): a 256x256 top-down orthographic `radar`
+# view of a lit room, drawn through the ordinary frame graph into a texture a `UiRect` shows. The
+# macOS twin of `pinned-rtx3090-render-views.toml`. Checked with:
+#
+#   ludion profile --scene examples/gallery/render-view-radar.yaml --frames 120 --check budgets/pinned-apple-m4-render-views.toml
+#
+# Measured 2026-11-22 over three runs on a quiet box (8 sim threads): the `view:radar` GPU frame span
+# 1.0991 / 1.0879 / 1.0996 ms; the main frame's own span read about 2.24. Five times the RTX 3090's
+# figure, in line with the other M4 files: every Metal pass row carries a floor of a few tenths of a ms.
+
+# The view's median GPU frame span, keyed by its `RenderView` name.
+[views]
+radar = 2.2   # 1.0879-1.0996 measured
+
+# Deliberately absent: `[passes]` (a `view:` row is never a `[passes]` key; the main frame's passes are
+# gated by the other budget files), `frame_total_ms` (the CLI links no game systems) and `[systems]`.
