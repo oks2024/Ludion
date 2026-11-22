@@ -31,7 +31,7 @@
 //! use schemars::JsonSchema;
 //! use serde::{Deserialize, Serialize};
 //!
-//! #[derive(Serialize, Deserialize, JsonSchema)]
+//! #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 //! struct Paddle { x: f32 }
 //!
 //! /// Move the paddle right while `D` is held.

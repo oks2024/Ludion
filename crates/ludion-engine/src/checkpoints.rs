@@ -1,7 +1,9 @@
 //! In-memory checkpoints: a game system captures the whole world into a named slot and later
 //! restores it, both at the frame boundary.
 //!
-//! A slot is the [`engine.snapshot`](crate::Engine) document plus a little metadata. A restore is a
+//! A slot is the engine's state plus a little metadata: in memory a [`StructuredSnapshot`] (a typed
+//! document and one cloned column per component, with no JSON), on disk the
+//! [`engine.snapshot`](crate::Engine) document in a JSON envelope. A restore is a
 //! sim event inside the session: the world rolls back to the slot, while the sim frame, held input,
 //! the live profile, `carry_resource` resources and an open [`RunRecording`](crate::RunRecording)
 //! continue, and the [`GameClock`](ludion_core::time::GameClock) is rebased so every `started` stamp
@@ -22,6 +24,7 @@ use serde_json::Value;
 
 use crate::engine::{Engine, PreparedWorld, Rebuild, RestoredWorld};
 use crate::run_save::BuildStamp;
+use crate::snapshot::StructuredSnapshot;
 
 /// The disk slot's path under the save root.
 pub(crate) const CHECKPOINT_PATH: &str = "save/checkpoint.json";
@@ -103,11 +106,20 @@ pub enum RestoreOutcome {
     },
 }
 
-/// One held slot. The document is shared so a restore does not copy it.
+/// What a slot holds. Either body is shared, so a restore does not copy it.
+#[derive(Clone, Debug)]
+pub(crate) enum SlotBody {
+    /// A capture in this session: typed and column-copied, rendered as a document only to persist.
+    Structured(Arc<StructuredSnapshot>),
+    /// A slot read from the disk file: the snapshot document as written.
+    Document(Arc<Value>),
+}
+
+/// One held slot.
 #[derive(Clone, Debug)]
 pub(crate) struct Slot {
     pub(crate) info: CheckpointInfo,
-    pub(crate) doc: Arc<Value>,
+    pub(crate) body: SlotBody,
     pub(crate) clock: GameClock,
     pub(crate) scene_path: Option<String>,
     pub(crate) authored_names: StableSet<String>,
@@ -287,8 +299,8 @@ struct CheckpointFile<S> {
     slot: S,
 }
 
-/// The envelope text for `slot` (trailing newline).
-pub(crate) fn encode(slot: &Slot, build: &BuildStamp) -> String {
+/// The envelope text for `slot`, whose snapshot document is `doc` (trailing newline).
+pub(crate) fn encode(slot: &Slot, doc: &Value, build: &BuildStamp) -> String {
     let file = CheckpointFile {
         format: CHECKPOINT_FORMAT,
         build: build.clone(),
@@ -298,7 +310,7 @@ pub(crate) fn encode(slot: &Slot, build: &BuildStamp) -> String {
         scene: slot.info.scene.clone(),
         scene_path: slot.scene_path.clone(),
         authored_names: slot.authored_names.iter().cloned().collect(),
-        slot: &*slot.doc,
+        slot: doc,
     };
     let mut text = serde_json::to_string(&file).expect("a JSON value always serializes");
     text.push('\n');
@@ -306,8 +318,13 @@ pub(crate) fn encode(slot: &Slot, build: &BuildStamp) -> String {
 }
 
 /// Writes the envelope crash-durably; the error is the `L4208` message.
-pub(crate) fn write(path: &Path, slot: &Slot, build: &BuildStamp) -> Result<(), String> {
-    ludion_core::atomic::write_durable(path, encode(slot, build)).map_err(|e| {
+pub(crate) fn write(
+    path: &Path,
+    slot: &Slot,
+    doc: &Value,
+    build: &BuildStamp,
+) -> Result<(), String> {
+    ludion_core::atomic::write_durable(path, encode(slot, doc, build)).map_err(|e| {
         format!(
             "checkpoint `{}` could not be written to `{}`: {e}",
             slot.info.name,
@@ -374,7 +391,7 @@ pub(crate) fn read_slot(path: &Path, current: &BuildStamp) -> Result<Option<Slot
             game_frame: clock.game_frame(frame),
             scene: file.scene,
         },
-        doc: Arc::new(file.slot),
+        body: SlotBody::Document(Arc::new(file.slot)),
         clock,
         scene_path: file.scene_path,
         authored_names: file.authored_names.into_iter().collect(),
@@ -569,11 +586,21 @@ impl Engine {
             return;
         };
         let stamp = state.stamp.clone();
-        if self.persisting()
-            && let Err(message) = write(&self.checkpoint_path(), &slot, &stamp)
-        {
-            self.disk_write_failed(message);
-            return;
+        if self.persisting() {
+            let doc = match self.slot_document(&slot) {
+                Ok(doc) => doc,
+                Err(error) => {
+                    self.disk_write_failed(format!(
+                        "checkpoint `{name}` could not be written ({}): {}",
+                        error.code, error.message
+                    ));
+                    return;
+                }
+            };
+            if let Err(message) = write(&self.checkpoint_path(), &slot, &doc, &stamp) {
+                self.disk_write_failed(message);
+                return;
+            }
         }
         if let Some(state) = self.checkpoints.as_mut() {
             state.disk = Some(slot.info);
@@ -630,8 +657,20 @@ impl Engine {
         }
     }
 
+    /// The snapshot document of `slot`: a disk slot's own, a structured slot rendered from its
+    /// columns (byte-identical to `snapshot::capture` at the capture frame).
+    ///
+    /// # Errors
+    /// `L0007` for a component holding a non-finite float, which JSON cannot store.
+    pub(crate) fn slot_document(&self, slot: &Slot) -> Result<Arc<Value>, Diagnostic> {
+        match &slot.body {
+            SlotBody::Document(doc) => Ok(Arc::clone(doc)),
+            SlotBody::Structured(s) => crate::snapshot::structured_document(self, s).map(Arc::new),
+        }
+    }
+
     fn build_slot(&self, name: &str) -> Result<Slot, Diagnostic> {
-        let doc = crate::snapshot::capture(self)?;
+        let snapshot = crate::snapshot::capture_structured(self)?;
         let frame = self.frame();
         let clock = self
             .world()
@@ -645,7 +684,7 @@ impl Engine {
                 game_frame: clock.game_frame(frame),
                 scene: self.scene_name().map(str::to_string),
             },
-            doc: Arc::new(doc),
+            body: SlotBody::Structured(Arc::new(snapshot)),
             clock,
             scene_path: self.current_scene_path().map(str::to_string),
             authored_names: self.authored_names().into_owned(),
@@ -965,10 +1004,19 @@ mod tests {
                 game_frame: clock.game_frame(frame),
                 scene: Some("hub".to_string()),
             },
-            doc: Arc::new(serde_json::json!({ "frame": 40, "rng": 3, "game_clock": clock })),
+            body: SlotBody::Document(Arc::new(
+                serde_json::json!({ "frame": 40, "rng": 3, "game_clock": clock }),
+            )),
             clock,
             scene_path: Some("scenes/hub.yaml".to_string()),
             authored_names: ["b".to_string(), "a".to_string()].into_iter().collect(),
+        }
+    }
+
+    fn document(slot: &Slot) -> Value {
+        match &slot.body {
+            SlotBody::Document(doc) => (**doc).clone(),
+            SlotBody::Structured(_) => panic!("a fixture slot holds a document"),
         }
     }
 
@@ -984,11 +1032,11 @@ mod tests {
     fn the_envelope_round_trips() {
         let path = temp_file("round");
         let held = slot();
-        write(&path, &held, &stamp("0.1.0")).unwrap();
+        write(&path, &held, &document(&held), &stamp("0.1.0")).unwrap();
         assert_eq!(read_info(&path), Some(held.info.clone()));
         let read = read_slot(&path, &stamp("0.1.0")).unwrap().unwrap();
         assert_eq!(read.info, held.info);
-        assert_eq!(read.doc, held.doc);
+        assert_eq!(document(&read), document(&held));
         assert_eq!(read.scene_path, held.scene_path);
         assert_eq!(read.authored_names, held.authored_names);
         // Written sorted, so the file is canonical.
@@ -1019,7 +1067,7 @@ mod tests {
     #[test]
     fn a_strict_read_refuses_a_newer_format_and_a_foreign_build() {
         let path = temp_file("strict");
-        let text = encode(&slot(), &stamp("0.1.0"));
+        let text = encode(&slot(), &document(&slot()), &stamp("0.1.0"));
         let newer = text.replacen("\"format\":1", "\"format\":2", 1);
         std::fs::write(&path, newer).unwrap();
         assert!(read_info(&path).is_none());
@@ -1029,6 +1077,102 @@ mod tests {
         std::fs::write(&path, text).unwrap();
         let err = read_slot(&path, &stamp("0.2.0")).unwrap_err();
         assert!(err.contains("saved by engine"), "{err}");
+    }
+
+    const PHYSICS_SCENE: &str = "\
+format: 1
+name: unit
+seed: 9
+physics:
+  space: free
+entities:
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 6.0
+              - 0.5
+              - 6.0
+        body: static
+  - name: crate
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 0.5
+              - 0.5
+        body:
+          rigid:
+            mass: 1.0
+            friction: 0.5
+            restitution: 0.25
+  - name: spare
+    components:
+      Transform:
+        translation:
+          - 1.0
+          - 1.0
+          - 1.0
+";
+
+    /// The structured slot renders exactly the document `snapshot::capture` takes, and so the same
+    /// persisted bytes: physics bodies, a recycled slot and presentation entities included.
+    #[test]
+    fn a_structured_slot_renders_the_document_capture_takes() {
+        let mut engine = Engine::builder().build().expect("boots");
+        engine.load_inline_scene(PHYSICS_SCENE).unwrap();
+        let spare = engine.world().entities().last().unwrap();
+        engine.world_mut().despawn(spare).unwrap();
+        for _ in 0..25 {
+            engine.advance_live();
+        }
+        let a = engine.world_mut().spawn();
+        engine
+            .world_mut()
+            .insert(a, ludion_components::Transform::default())
+            .unwrap();
+        for _ in 0..2 {
+            let p = engine.world_mut().spawn_presentation();
+            engine
+                .world_mut()
+                .insert(p, ludion_components::Transform::default())
+                .unwrap();
+        }
+
+        let structured = crate::snapshot::capture_structured(&engine).unwrap();
+        let rendered = crate::snapshot::structured_document(&engine, &structured).unwrap();
+        let captured = crate::snapshot::capture(&engine).unwrap();
+        assert_eq!(rendered, captured);
+        assert_eq!(rendered.to_string(), captured.to_string());
+        assert!(
+            captured["physics"].is_string() && captured["presentation"].is_array(),
+            "the fixture exercises the solver and the presentation range"
+        );
+
+        let slot = Slot {
+            body: SlotBody::Structured(Arc::new(structured)),
+            ..slot()
+        };
+        let doc = engine.slot_document(&slot).unwrap();
+        assert_eq!(
+            encode(&slot, &doc, &stamp("0.1.0")),
+            encode(&slot, &captured, &stamp("0.1.0")),
+            "the persisted envelope is byte-identical"
+        );
     }
 
     #[test]

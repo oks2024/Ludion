@@ -5,7 +5,7 @@ use ludion::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Leash {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<EntityRefSchema>")]

@@ -236,7 +236,7 @@ fn presentation_entities_spawn_in_their_own_range_with_refs_remapped() {
 fn a_sanctioned_ref_list_remaps_every_element() {
     use ludion_ecs::{EntityRefCollection, EntityRefSchema};
 
-    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone)]
     struct Squad {
         #[schemars(with = "EntityRefCollection<Vec<EntityRefSchema>>")]
         members: Vec<ludion_core::ids::EntityId>,

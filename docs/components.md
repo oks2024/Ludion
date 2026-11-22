@@ -6,9 +6,10 @@ description: Declaring and registering components, drift safety, and the core sc
 
 **Scope:** Declaring your own components, registering them, and keeping them safe across a `ludion dev` reload — plus the built-in components that place, light, and frame a scene. The UI and effect/content components are split into `ludion docs components-ui` and `ludion docs components-fx`; systems that read any of these are systems, the file syntax is scene-format.
 
-A component is a plain struct deriving `Serialize`, `Deserialize`, and `schemars::JsonSchema` (those
-three are *your* dependencies — the facade does not re-export the derive macros). No `impl Component`:
-any such struct qualifies via a blanket impl.
+A component is a plain struct deriving `Serialize`, `Deserialize`, `schemars::JsonSchema` and `Clone`
+(the first three are *your* dependencies — the facade does not re-export the derive macros).
+Registering requires `Clone`: a checkpoint copies each component column. No `impl Component`: any such
+struct qualifies via a blanket impl.
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -128,7 +129,7 @@ A field that names another entity, or a file under the content root, needs a mar
 see. Both are in `ludion::prelude`:
 
 ```rust
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Leash {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<EntityRefSchema>")]

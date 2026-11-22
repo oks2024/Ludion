@@ -125,7 +125,7 @@ pub fn non_finite_count(component: &dyn erased_serde::Serialize) -> Result<u64, 
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Position { x: f32, y: f32 }
 ///
 /// let mut registry = Registry::new();
@@ -173,7 +173,7 @@ impl WorldHash {
     /// use schemars::JsonSchema;
     /// use serde::{Deserialize, Serialize};
     ///
-    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     /// struct Speed(f32);
     ///
     /// let mut registry = Registry::new();
@@ -658,9 +658,9 @@ mod tests {
         use schemars::JsonSchema;
         use serde::Deserialize;
 
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct Maybe(Option<f32>);
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct Level(f32);
 
         let mut registry = Registry::new();
@@ -710,9 +710,9 @@ mod tests {
         use schemars::JsonSchema;
         use serde::Deserialize;
 
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct Pos([f32; 3]);
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct Level(f32);
 
         let mut registry = Registry::new();
@@ -787,25 +787,25 @@ mod tests {
         use schemars::JsonSchema;
         use serde::Deserialize;
 
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct Transform {
             translation: [f32; 3],
             rotation: [f32; 4],
             scale: [f32; 3],
         }
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct Label {
             text: String,
             tags: Vec<String>,
         }
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct Flag(bool);
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         enum Mode {
             Idle,
             Chasing { speed: f32 },
         }
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct Brain {
             mode: Mode,
             memory: std::collections::BTreeMap<String, i64>,
@@ -893,13 +893,13 @@ mod tests {
         use schemars::JsonSchema;
         use serde::Deserialize;
 
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct A(u32);
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct B(u32);
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct C(u32);
-        #[derive(Serialize, Deserialize, JsonSchema)]
+        #[derive(Serialize, Deserialize, JsonSchema, Clone)]
         struct Never(u32);
 
         let mut registry = Registry::new();
@@ -975,7 +975,7 @@ mod tests {
 
         /// A 128-bit integer past `u64`/`i64` is the one value JSON cannot hold, so both paths must
         /// refuse it.
-        #[derive(Deserialize, JsonSchema)]
+        #[derive(Deserialize, JsonSchema, Clone)]
         struct Huge(i128);
 
         impl Serialize for Huge {

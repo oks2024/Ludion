@@ -39,6 +39,8 @@ pub fn move_player(world: &mut World, ctx: &SystemCtx) {
 }
 ```
 
+A registered component derives `Clone` (checkpoints copy its column), as `Player` does.
+
 `src/lib.rs` — the wiring root: re-export the modules, list the components, order the systems:
 
 ```rust

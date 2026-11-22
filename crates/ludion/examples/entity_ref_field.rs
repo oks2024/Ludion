@@ -20,7 +20,7 @@ use std::process::ExitCode;
 // --- The game (copyable) -------------------------------------------------------------------------
 
 /// A tether to the entity holding it; absent when the leash is loose.
-#[derive(Serialize, Deserialize, JsonSchema, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 struct Leash {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<EntityRefSchema>")]

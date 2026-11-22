@@ -75,7 +75,7 @@
 //! use schemars::JsonSchema;
 //! use serde::{Deserialize, Serialize};
 //!
-//! #[derive(Serialize, Deserialize, JsonSchema)]
+//! #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 //! struct Transform { x: f32, y: f32 }
 //!
 //! let mut registry = Registry::new();
@@ -337,7 +337,7 @@ pub fn parse(source: &str) -> Result<Scene, Vec<Diagnostic>> {
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Health { hp: u32 }
 ///
 /// let mut registry = Registry::new();
@@ -370,7 +370,7 @@ pub fn validate(scene: &Scene, registry: &Registry) -> Vec<Diagnostic> {
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Health { hp: u32 }
 ///
 /// let mut registry = Registry::new();
@@ -407,7 +407,7 @@ pub fn check_component(
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Leash {
 ///     #[schemars(with = "EntityRefSchema")]
 ///     holder: EntityId,
@@ -511,7 +511,7 @@ pub fn check(source: &str, registry: &Registry) -> Result<Scene, Vec<Diagnostic>
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema, PartialEq, Debug)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Debug)]
 /// struct Transform { x: f32, y: f32 }
 ///
 /// let mut registry = Registry::new();
@@ -555,7 +555,7 @@ pub fn instantiate(scene: &Scene, registry: &Registry) -> Result<World, Vec<Diag
 /// use serde::{Deserialize, Serialize};
 /// use ludion_scene::{InstantiateOptions, InstanceHooks};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema, PartialEq, Debug)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Debug)]
 /// struct Leash {
 ///     #[schemars(with = "ludion_ecs::EntityRefSchema")]
 ///     to: ludion_core::ids::EntityId,

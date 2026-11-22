@@ -651,7 +651,7 @@ fn parent_is_a_plain_registrable_component() {
 
 #[test]
 fn parent_is_the_only_hierarchy_entity_ref() {
-    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema, Clone)]
     struct Leash {
         #[schemars(with = "ludion_ecs::EntityRefSchema")]
         holder: EntityId,
@@ -677,22 +677,22 @@ fn a_marked_entity_reference_in_a_list_map_or_tuple_is_refused_at_registration()
 
     use ludion_ecs::EntityRefSchema;
 
-    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema, Clone)]
     struct Pack {
         #[schemars(with = "Vec<EntityRefSchema>")]
         members: Vec<EntityId>,
     }
-    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema, Clone)]
     struct Named {
         #[schemars(with = "BTreeMap<String, EntityRefSchema>")]
         by_name: BTreeMap<String, EntityId>,
     }
-    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema, Clone)]
     struct Pair {
         #[schemars(with = "(EntityRefSchema, EntityRefSchema)")]
         both: (EntityId, EntityId),
     }
-    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema, Clone)]
     struct Fine {
         #[schemars(with = "EntityRefSchema")]
         holder: EntityId,
@@ -718,21 +718,21 @@ fn a_sanctioned_collection_registers_with_a_pattern_field_and_an_unsanctioned_on
 {
     use ludion_ecs::{EntityRefCollection, EntityRefSchema};
 
-    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema, Clone)]
     struct Event {
         #[schemars(with = "Option<EntityRefSchema>")]
         from: Option<EntityId>,
     }
-    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema, Clone)]
     struct Inbox {
         #[schemars(with = "EntityRefCollection<Vec<Event>>")]
         inbox: Vec<Event>,
     }
-    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema, Clone)]
     struct Bare {
         inbox: Vec<Event>,
     }
-    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema, Clone)]
     struct Plain {
         #[schemars(with = "Vec<EntityRefSchema>")]
         members: Vec<EntityId>,

@@ -1452,19 +1452,19 @@ mod tests {
 
     use super::*;
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Hold {
         #[schemars(with = "Option<EntityRefSchema>")]
         holder: Option<EntityId>,
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Inner {
         #[schemars(with = "EntityRefSchema")]
         holder: EntityId,
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Wrapped {
         inner: Option<Inner>,
     }

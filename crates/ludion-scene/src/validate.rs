@@ -1069,10 +1069,10 @@ mod tests {
     /// Stand-ins for the real `ludion-spatial`/`ludion-ecs` `Joint`/`Parent` shapes — this crate
     /// never names either concrete type (the boundary rule); the reference fields are whatever the
     /// registry derived from the `ludion_ecs` schema proxies.
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct TestParent(#[schemars(with = "ludion_ecs::EntityRefSchema")] EntityId);
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct TestJoint {
         #[schemars(with = "ludion_ecs::EntityRefSelfSchema")]
         a: EntityId,
@@ -1081,14 +1081,14 @@ mod tests {
     }
 
     /// A game component under an arbitrary name: its marked field is checked with no table entry.
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct TestTurret {
         #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
         target: Option<EntityId>,
     }
 
     /// A sanctioned list of element references: every element is checked at its own pointer.
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct TestSquad {
         #[schemars(with = "ludion_ecs::EntityRefCollection<Vec<ludion_ecs::EntityRefSchema>>")]
         refs: Vec<EntityId>,
@@ -1395,12 +1395,12 @@ mod tests {
         assert!(d.message.contains("itself"), "{}", d.message);
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct FlatInner {
         b: f32,
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct FlatOuter {
         a: f32,
         #[serde(flatten)]
@@ -1489,7 +1489,7 @@ mod tests {
         assert!(check_schema(&max, serde_json::json!(0.5)).is_empty());
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct TestSkin {
         #[schemars(with = "ludion_ecs::AssetPathSchema")]
         texture: String,

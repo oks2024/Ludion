@@ -37,7 +37,7 @@ fn import_textured_example_respells_nothing_on_save() {
 }
 
 /// Stands in for the template game's `Player` component (`templates/src/components.rs`).
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone)]
 struct Player {
     #[serde(default)]
     x: f32,

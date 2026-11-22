@@ -572,11 +572,11 @@ fn assert_refused(dir: &Path, reason_has: &str, mut b: Engine) {
 
 #[test]
 fn a_changed_component_schema_refuses_with_l1401_and_a_backup() {
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Gear {
         hp: u32,
     }
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct WiderGear {
         hp: u32,
         mana: u32,

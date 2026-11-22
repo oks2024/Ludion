@@ -1,6 +1,6 @@
 # In-memory checkpoints — capture and restore the world from a system
 
-> **Status:** Waves 1 and 2 mechanized (2026-11-18); Waves 3 and 4 not started. The Status section at the end
+> **Status:** Waves 1 and 2 mechanized (2026-11-18); W4a in progress; W3, W4b and W5 not started. The Status section at the end
 > records what shipped as each wave closes.
 >
 > Neon Shroud request 0012 (`engine-requests/0012-in-memory-checkpoints.md`, filed 2026-11-17, audited
@@ -157,8 +157,30 @@ scene text, and held slots refuse arming, `L4207`).
 - **W3 — the store rides the snapshot.** A `checkpoints` snapshot field lifts the keyframe skip and the arm
   refusal (re-records the replay corpus); the slot digest joins `WorldHash`;
   `SceneChangeKind::CheckpointRestore`.
-- **W4 — structured slots.** In-memory slots as erased column clones, the capture ≤ 4 ms / restore ≤ 50 ms
-  budgets, the `checkpoint_capture` / `checkpoint_restore` profiler keys, `checkpoint.*` wire commands.
+- **W4a — structured slots** (in progress; decisions W4-1..7). In-memory slots as erased column clones plus a
+  typed `SnapshotDoc`; disk slots keep the JSON envelope.
+- **W4b — budgets** (0012-04). The capture ≤ 4 ms / restore ≤ 50 ms budgets, measured by a bench or test that
+  reads no new wire field; a `ProfileReport` `checkpoints` section and the `checkpoint_capture` /
+  `checkpoint_restore` profiler keys would be R14 items.
+- **W5 — wire commands** (R14). `checkpoint.*`, designed in W4-6.
+
+## Wave 4 decisions — structured slots
+
+- **W4-1** Registration requires `Clone` [BREAK, under the 2026-11-19 blanket ruling]: `Registry::register`,
+  `register_validated`, `register_reserved` take `T: Clone`. The `Component` trait is unchanged.
+- **W4-2** The structured slot: a typed `SnapshotDoc` (resources, id-only entity lists) plus one column copy
+  per registered component, in registry order.
+- **W4-3** Disk slots stay documents. `persist` renders the document from the structured slot, byte-identical
+  to `snapshot::capture` at that frame. Both restores go through one decoded install path.
+- **W4-4** Non-finite values are reported at persist (`L4208`), not at capture: a capture inspects no value.
+- **W4-5** `serde(skip)` runtime fields (`Text::resolved`, `UiText::resolved`) ride the clone; they are pure
+  functions of hashed state.
+- **W4-6** Wire design (R14): `checkpoint.list` (read-only: slots, disk, last_restore);
+  `checkpoint.capture` / `checkpoint.restore` / `checkpoint.discard {name}`, mutating behind the existing write
+  guards and applied at the next boundary through the same `Checkpoints` requests; the reply carries the
+  outcome after that boundary. R14, because new `Command` variants move the protocol schema and
+  `replay_content_hash`.
+- **W4-7** Budgets in W4b, on the fixture "5 000 entities with physics".
 
 ## Owner rulings (2026-11-19)
 
@@ -191,4 +213,6 @@ scene text, and held slots refuse arming, `L4207`).
   `disk_error` in `crates/ludion-engine/src/checkpoints.rs`, the `save/checkpoint.json` envelope with a
   `BuildStamp`, strict refusal with a `.bak.<hash>` backup (`L4209`), `L4208` write failures; documented in
   `docs/checkpoints.md`.
-- **W3, W4:** not started.
+- **W4a in progress:** structured in-memory slots (`ColumnCopy`, `World::copy_column`/`install_column`,
+  `SlotBody`, `capture_structured`, `restore_decoded`); `Registry::register*` require `Clone`; decisions W4-1..7.
+- **W3, W4b, W5:** not started.

@@ -18,7 +18,7 @@ use ludion_scene::{
 
 /// A component with a defaulted, skip-when-default field that is not an `Option`: only absence
 /// can express "unset", so a `null` override must remove the key.
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone)]
 struct Glow {
     level: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -30,12 +30,12 @@ fn is_zero(value: &f32) -> bool {
 }
 
 /// A component with a nested asset path, shaped like the engine's `Mesh.shape.asset`.
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone)]
 struct Mesh {
     shape: MeshShape,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone)]
 struct MeshShape {
     #[schemars(with = "ludion_ecs::AssetPathSchema")]
     asset: String,

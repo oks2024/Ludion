@@ -29,6 +29,7 @@ use serde_json::Value;
 use crate::Component;
 use crate::EntityRefField;
 use crate::World;
+use crate::world::ColumnCopy;
 
 /// A component that carries **cross-field semantic invariants** JSON Schema cannot express — e.g. a
 /// tilemap whose row strings must all be the same length, or whose glyphs must appear in its legend.
@@ -58,7 +59,7 @@ use crate::World;
 /// use serde_json::{Value, json};
 ///
 /// // A range whose `min` must not exceed `max` — an invariant JSON Schema cannot express.
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Range {
 ///     min: i64,
 ///     max: i64,
@@ -131,6 +132,8 @@ pub struct ComponentInfo {
     /// Cross-field semantic validation ([`SemanticValidate`]) — the no-op for components registered
     /// without one.
     validate_fn: fn(&Value) -> Vec<Diagnostic>,
+    copy_column_fn: fn(&World) -> Option<ColumnCopy>,
+    install_column_fn: fn(&mut World, &ColumnCopy) -> Result<(), Diagnostic>,
 }
 
 impl ComponentInfo {
@@ -272,6 +275,21 @@ impl ComponentInfo {
         (self.validate_fn)(value)
     }
 
+    /// Clones this component's whole column, or `None` when no entity holds it (see
+    /// [`World::copy_column`]).
+    pub fn copy_column(&self, world: &World) -> Option<ColumnCopy> {
+        (self.copy_column_fn)(world)
+    }
+
+    /// Installs `column` as this component's column in an empty world column (see
+    /// [`World::install_column`]).
+    ///
+    /// # Errors
+    /// `L0025` as [`World::install_column`].
+    pub fn install_column(&self, world: &mut World, column: &ColumnCopy) -> Result<(), Diagnostic> {
+        (self.install_column_fn)(world, column).map_err(|d| self.tag(d))
+    }
+
     /// Prepends the registered component name to a diagnostic's message.
     fn tag(&self, mut diagnostic: Diagnostic) -> Diagnostic {
         diagnostic.message = format!("component `{}`: {}", self.name, diagnostic.message);
@@ -287,7 +305,7 @@ impl ComponentInfo {
 /// use serde::{Deserialize, Serialize};
 /// use schemars::JsonSchema;
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema, PartialEq, Debug)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone, PartialEq, Debug)]
 /// struct Health(u32);
 ///
 /// let mut registry = Registry::new();
@@ -384,7 +402,7 @@ impl Registry {
     /// `L0005` if `name` is already taken, or if `T` is already registered (under any name).
     /// `L1392` if a marked entity reference sits inside a list or map of `T` not marked
     /// `EntityRefCollection`.
-    pub fn register<T: Component>(&mut self, name: &str) -> Result<(), Diagnostic> {
+    pub fn register<T: Component + Clone>(&mut self, name: &str) -> Result<(), Diagnostic> {
         self.register_with::<T>(name, false, no_semantic_validation)
     }
 
@@ -396,7 +414,7 @@ impl Registry {
     /// `L0005` if `name` is already taken, or if `T` is already registered (under any name).
     /// `L1392` if a marked entity reference sits inside a list or map of `T` not marked
     /// `EntityRefCollection`.
-    pub fn register_validated<T: Component + SemanticValidate>(
+    pub fn register_validated<T: Component + Clone + SemanticValidate>(
         &mut self,
         name: &str,
     ) -> Result<(), Diagnostic> {
@@ -412,11 +430,14 @@ impl Registry {
     /// `L0005` if `name` is already taken, or if `T` is already registered (under any name).
     /// `L1392` if a marked entity reference sits inside a list or map of `T` not marked
     /// `EntityRefCollection`.
-    pub fn register_reserved<T: Component>(&mut self, name: &str) -> Result<(), Diagnostic> {
+    pub fn register_reserved<T: Component + Clone>(
+        &mut self,
+        name: &str,
+    ) -> Result<(), Diagnostic> {
         self.register_with::<T>(name, true, no_semantic_validation)
     }
 
-    fn register_with<T: Component>(
+    fn register_with<T: Component + Clone>(
         &mut self,
         name: &str,
         reserved: bool,
@@ -451,6 +472,8 @@ impl Registry {
             remove_fn: erased_remove::<T>,
             has_fn: erased_has::<T>,
             validate_fn,
+            copy_column_fn: World::copy_column::<T>,
+            install_column_fn: World::install_column::<T>,
         });
         self.by_name.insert(name.to_string(), index);
         self.by_type.insert(type_id, index);
@@ -470,7 +493,7 @@ impl Registry {
     /// use serde::{Deserialize, Serialize};
     /// use schemars::JsonSchema;
     ///
-    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     /// struct Body(u32);
     ///
     /// let mut registry = Registry::new();

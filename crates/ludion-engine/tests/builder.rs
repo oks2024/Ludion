@@ -63,7 +63,7 @@ fn game_components_register_on_top_of_the_builtins() {
 
 #[test]
 fn a_name_colliding_with_a_builtin_is_a_structured_error() {
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct NotATransform;
     let err = match Engine::builder()
         .components(|reg| reg.register::<NotATransform>("Transform"))

@@ -22,14 +22,14 @@ use std::process::ExitCode;
 // --- The game (copyable) -------------------------------------------------------------------------
 
 /// One squad slot; empty when its member is gone.
-#[derive(Serialize, Deserialize, JsonSchema, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 struct Member {
     #[schemars(with = "Option<EntityRefSchema>")]
     who: Option<EntityId>,
 }
 
 /// The entities a squad commands, in order.
-#[derive(Serialize, Deserialize, JsonSchema, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 struct Squad {
     #[schemars(with = "EntityRefCollection<Vec<Member>>")]
     members: Vec<Member>,

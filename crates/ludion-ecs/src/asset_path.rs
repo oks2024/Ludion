@@ -27,7 +27,7 @@ pub const ASSET_PATH_KEYWORD: &str = "x-asset-path";
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Banner {
 ///     #[schemars(with = "ludion_ecs::AssetPathSchema")]
 ///     texture: String,

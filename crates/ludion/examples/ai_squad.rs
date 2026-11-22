@@ -29,7 +29,7 @@ enum Guard {
     Return,
 }
 
-#[derive(Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Default, Serialize, Deserialize, JsonSchema, Clone)]
 struct Memory {
     timer: Timer,
     /// Who the squad lost, as the `Heard::Down` events named them.

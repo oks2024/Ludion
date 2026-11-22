@@ -87,7 +87,7 @@ impl PrefabDocument {
     /// use schemars::JsonSchema;
     /// use serde::{Deserialize, Serialize};
     ///
-    /// #[derive(Serialize, Deserialize, JsonSchema)]
+    /// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     /// struct Model {
     ///     #[schemars(with = "ludion_ecs::AssetPathSchema")]
     ///     mesh: String,

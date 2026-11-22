@@ -32,6 +32,38 @@ use crate::journal::WriteJournal;
 use crate::query::{FULL_WINDOW, KeyWindow, Query, QueryIds};
 use crate::storage::{AnyStorage, Storage};
 
+/// An opaque, typed copy of one component column (every row of one component type, sim and
+/// presentation), taken by [`World::copy_column`] and installed by [`World::install_column`].
+///
+/// A checkpoint holds one per registered component instead of serializing each entity; the type
+/// stays erased so a registry can hold a `Vec` of them. Immutable once taken: installing clones it.
+pub struct ColumnCopy {
+    type_id: TypeId,
+    rows: usize,
+    storage: Box<dyn Any + Send + Sync>,
+}
+
+impl ColumnCopy {
+    /// The number of rows (entities holding the component) the copy holds.
+    pub fn len(&self) -> usize {
+        self.rows
+    }
+
+    /// Whether the copy holds no rows. A copy is never empty: an empty column has no copy.
+    pub fn is_empty(&self) -> bool {
+        self.rows == 0
+    }
+}
+
+impl std::fmt::Debug for ColumnCopy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ColumnCopy")
+            .field("type_id", &self.type_id)
+            .field("rows", &self.rows)
+            .finish()
+    }
+}
+
 /// One observed query shape: the sorted set of `(component TypeId, exclusive?)` pairs a
 /// [`World::query`] touched — or, for a per-entity accessor, the single pair that accessor named. A
 /// `Vec` (kept sorted and deduped) rather than a set so it is cheap to compare and hashable-by-value
@@ -1678,6 +1710,73 @@ impl World {
         }
     }
 
+    /// Clones the whole `T` column (sim and presentation rows), or `None` when no entity holds a `T`.
+    ///
+    /// The cheap half of a checkpoint: no serialization, rows keep their order. Not recorded as a
+    /// component access and not subject to the phase guard, like the other whole-world readers.
+    pub fn copy_column<T: Component + Clone>(&self) -> Option<ColumnCopy> {
+        let storage = self
+            .storage_opt::<T>()
+            .filter(|s| !AnyStorage::is_empty(*s))?;
+        Some(ColumnCopy {
+            type_id: TypeId::of::<T>(),
+            rows: storage.as_slices().0.len(),
+            storage: Box::new(storage.clone()),
+        })
+    }
+
+    /// Installs a clone of `column` as the `T` column in one step, journaling every key as an insert.
+    ///
+    /// The world must hold no `T` yet and every key must be a live entity (sim or presentation), so
+    /// install after the allocators are rebuilt.
+    ///
+    /// # Errors
+    /// `L0025` if `column` was copied from another type, if the world already holds a `T`, or if a
+    /// key is not a live entity. The world is untouched on error.
+    pub fn install_column<T: Component + Clone>(
+        &mut self,
+        column: &ColumnCopy,
+    ) -> Result<(), Diagnostic> {
+        let invalid =
+            |message: String| Diagnostic::new(code::ENTITY_ALLOCATOR_STATE_INVALID, message);
+        let name = std::any::type_name::<T>();
+        let storage = (column.type_id == TypeId::of::<T>())
+            .then(|| column.storage.downcast_ref::<Storage<T>>())
+            .flatten()
+            .ok_or_else(|| {
+                invalid(format!(
+                    "a column copied from another type cannot install as `{name}`"
+                ))
+            })?;
+        if self
+            .storage_opt::<T>()
+            .is_some_and(|s| !AnyStorage::is_empty(s))
+        {
+            return Err(invalid(format!("the world already holds `{name}` rows")));
+        }
+        let keys = storage.as_slices().0;
+        for &key in keys {
+            let live = if key >= PRESENTATION_BASE {
+                self.presentation
+                    .live_id_at(key - PRESENTATION_BASE)
+                    .is_some()
+            } else {
+                self.entities.live_id_at(key).is_some()
+            };
+            if !live {
+                return Err(invalid(format!(
+                    "`{name}` column holds a row for entity slot {key}, which is not alive"
+                )));
+            }
+        }
+        for &key in keys {
+            self.journal.on_insert(TypeId::of::<T>(), key);
+        }
+        self.storages
+            .insert(TypeId::of::<T>(), Box::new(storage.clone()));
+        Ok(())
+    }
+
     /// Gets the storage for `T`, creating it if absent.
     fn storage_mut<T: Component>(&mut self) -> &mut Storage<T> {
         self.storages
@@ -1883,10 +1982,12 @@ mod tests {
         assert!(!world.is_alive(b));
     }
 
-    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Debug, PartialEq)]
+    #[derive(
+        serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug, PartialEq,
+    )]
     struct Probe(u64);
 
-    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone)]
     struct Never;
 
     fn as_ptr<T>(r: Option<&T>) -> Option<*const T> {
@@ -1950,4 +2051,69 @@ mod tests {
         let col = world.read_column::<Never>();
         assert!(col.get(e).is_none());
     }
+
+    #[test]
+    fn a_column_copy_installs_sim_and_presentation_rows_in_order() {
+        let mut world = World::new();
+        let (a, _b, c) = (world.spawn(), world.spawn(), world.spawn());
+        let p = world.spawn_presentation();
+        world.insert(c, Probe(3)).unwrap();
+        world.insert(a, Probe(1)).unwrap();
+        world.insert(p, Probe(9)).unwrap();
+        let copy = world.copy_column::<Probe>().expect("rows exist");
+        assert_eq!(copy.len(), 3);
+        assert!(world.copy_column::<Never>().is_none());
+
+        world.insert(a, Probe(100)).unwrap();
+        world.remove::<Probe>(c).unwrap();
+        assert_eq!(copy.len(), 3, "the copy does not alias the live column");
+
+        let mut twin = World::new();
+        let ids = [twin.spawn(), twin.spawn(), twin.spawn()];
+        let tp = twin.spawn_presentation();
+        twin.install_column::<Probe>(&copy).unwrap();
+        assert_eq!(twin.get::<Probe>(ids[0]).unwrap(), Some(&Probe(1)));
+        assert_eq!(twin.get::<Probe>(ids[1]).unwrap(), None);
+        assert_eq!(twin.get::<Probe>(ids[2]).unwrap(), Some(&Probe(3)));
+        assert_eq!(twin.get::<Probe>(tp).unwrap(), Some(&Probe(9)));
+        let order: Vec<u32> = twin.storage_opt::<Probe>().unwrap().as_slices().0.to_vec();
+        assert_eq!(order, [a.index, c.index, p.index]);
+    }
+
+    #[test]
+    fn an_install_refuses_a_dead_key_a_filled_target_and_a_wrong_type() {
+        let mut world = World::new();
+        let (a, b) = (world.spawn(), world.spawn());
+        world.insert(b, Probe(2)).unwrap();
+        let copy = world.copy_column::<Probe>().unwrap();
+        let code = |r: Result<(), Diagnostic>| r.unwrap_err().code;
+
+        let mut short = World::new();
+        short.spawn();
+        let dead = code(short.install_column::<Probe>(&copy));
+        assert_eq!(dead.as_str(), "L0025");
+        assert!(short.storage_opt::<Probe>().is_none(), "nothing installed");
+
+        let mut full = World::new();
+        let (x, y) = (full.spawn(), full.spawn());
+        full.insert(x, Probe(7)).unwrap();
+        assert_eq!(code(full.install_column::<Probe>(&copy)).as_str(), "L0025");
+        assert_eq!(full.get::<Probe>(x).unwrap(), Some(&Probe(7)));
+        let _ = (a, y);
+
+        world.insert(a, Other(5)).unwrap();
+        let other = world.copy_column::<Other>().unwrap();
+        let mut target = World::new();
+        target.spawn();
+        target.spawn();
+        assert_eq!(
+            code(target.install_column::<Probe>(&other)).as_str(),
+            "L0025"
+        );
+    }
+
+    #[derive(
+        serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug, PartialEq,
+    )]
+    struct Other(u8);
 }

@@ -16,7 +16,7 @@ use serde_json::Value;
 
 // --- (a) flat struct, declaration order != alphabetical ---------------------------------------
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Flat {
     zeta: f32,
     alpha: String,
@@ -31,7 +31,7 @@ struct Inner {
     x: i32,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Nested {
     second: Inner,
     first: Inner,
@@ -53,20 +53,20 @@ enum Kind {
     },
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Joint {
     kind: Kind,
 }
 
 // --- (d) enum mixing unit and struct variants -------------------------------------------------
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 enum Mode {
     Idle,
     Run { speed: f32, dir: String },
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Machine {
     previous: Mode,
     current: Mode,
@@ -74,67 +74,67 @@ struct Machine {
 
 // --- (e) internally tagged enum ---------------------------------------------------------------
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Tagged {
     A { zeta: i32, alpha: i32 },
     B { beta: i32, aleph: i32 },
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct TaggedHolder {
     tagged: Tagged,
 }
 
 // --- (f) untagged enum, two variants with distinct keys ---------------------------------------
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(untagged)]
 enum Either {
     Point { y: i32, x: i32 },
     Named { label: String, id: i32 },
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct EitherHolder {
     either: Either,
 }
 
 // --- (g) `Option<Struct>` and (h) `Option<Enum>` ----------------------------------------------
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct MaybeStruct {
     maybe: Option<Inner>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct MaybeEnum {
     maybe: Option<Kind>,
 }
 
 // --- (i) `BTreeMap<String, Struct>` -----------------------------------------------------------
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Entry {
     glyph: String,
     cost: i32,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Legend {
     legend: BTreeMap<String, Entry>,
 }
 
 // --- (j) `Vec<Enum>` --------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Chain {
     links: Vec<Kind>,
 }
 
 // --- (k) `#[serde(flatten)]` ------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Flattened {
     id: i32,
     #[serde(flatten)]
@@ -143,12 +143,12 @@ struct Flattened {
 
 // --- (l) every f32 position, and an f64 beside them -------------------------------------------
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Probe {
     v: f32,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 struct Floats {
     single: f32,
     maybe: Option<f32>,

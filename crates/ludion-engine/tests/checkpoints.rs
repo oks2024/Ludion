@@ -42,6 +42,10 @@ struct Tally {
     held: u32,
 }
 
+/// Holds a value JSON cannot store once a script poisons it.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+struct Wobble(f32);
+
 #[derive(Serialize, Deserialize, JsonSchema, Default, Clone, Debug, PartialEq)]
 struct Save {
     deaths: u32,
@@ -156,6 +160,10 @@ enum Act {
     Hold,
     Earn,
     Plant,
+    /// Spawns an entity, despawns the last one and rewrites a component: the live world moves on.
+    Churn,
+    /// Puts a NaN on the first entity.
+    Poison,
 }
 
 type Script = Arc<Vec<(u64, Act)>>;
@@ -215,6 +223,36 @@ fn director(script: Script) -> impl Fn(&mut World, &SystemCtx) + Send + Sync + '
                     world.insert_resource(Carried(7));
                     world.insert_resource(Fresh);
                 }
+                Act::Churn => {
+                    let fresh = world.spawn();
+                    world
+                        .insert(
+                            fresh,
+                            Tally {
+                                sum: 1,
+                                edges: 2,
+                                held: 3,
+                            },
+                        )
+                        .unwrap();
+                    let live: Vec<_> = world.entities().collect();
+                    world.despawn(live[live.len() - 2]).unwrap();
+                    let first = world.entities().next().unwrap();
+                    world
+                        .insert(
+                            first,
+                            Tally {
+                                sum: 9,
+                                edges: 9,
+                                held: 9,
+                            },
+                        )
+                        .unwrap();
+                }
+                Act::Poison => {
+                    let first = world.entities().next().unwrap();
+                    world.insert(first, Wobble(f32::NAN)).unwrap();
+                }
             }
         }
     }
@@ -232,6 +270,7 @@ fn game(dir: &Path, max_slots: u32, acts: Script) -> EngineBuilder {
         })
         .components(|registry| {
             registry.register::<Tally>("Tally")?;
+            registry.register::<Wobble>("Wobble")?;
             Ok(())
         })
         .system("tally", tally)
@@ -911,5 +950,97 @@ fn a_disk_load_keeps_the_live_profile() {
         profile.get().deaths,
         1,
         "the live profile survives a Continue"
+    );
+}
+
+/// The in-memory (structured) restore against the disk (document) restore of the same capture:
+/// the same world after the restore and the same future.
+#[test]
+fn a_structured_restore_matches_the_document_restore() {
+    let (mem_dir, disk_dir) = (fresh_dir("equiv-mem"), fresh_dir("equiv-disk"));
+    let mut mem = boot(persisting(
+        &mem_dir,
+        script(&[(10, Act::Capture("a")), (130, Act::Restore("a"))]),
+    ));
+    let mut disk = boot(persisting(
+        &disk_dir,
+        script(&[
+            (10, Act::Capture("a")),
+            (12, Act::Persist("a")),
+            (130, Act::LoadDisk),
+        ]),
+    ));
+    let from_memory = trace(&mut mem, 131 + 120);
+    let from_disk = trace(&mut disk, 131 + 120);
+    assert!(
+        checkpoint_file(&disk_dir).exists(),
+        "the disk twin persisted"
+    );
+    assert_eq!(
+        from_memory[130], from_memory[10],
+        "the restore is the capture"
+    );
+    assert_eq!(
+        from_memory[130], from_disk[130],
+        "same world after the restore"
+    );
+    assert_eq!(from_memory, from_disk, "same trace, before and after");
+}
+
+/// A restored slot is the world as captured, however the live world moved since, and restoring
+/// does not consume or alias it.
+#[test]
+fn a_slot_is_not_aliased_by_the_live_world() {
+    let dir = fresh_dir("alias");
+    let mut engine = boot(game(
+        &dir,
+        4,
+        script(&[
+            (10, Act::Capture("a")),
+            (30, Act::Churn),
+            (60, Act::Restore("a")),
+            (70, Act::Churn),
+            (90, Act::Restore("a")),
+        ]),
+    ));
+    let all = trace(&mut engine, 120);
+    assert_ne!(all[59], all[10], "the churn moved the live world");
+    assert_eq!(all[60], all[10], "first restore");
+    assert_ne!(all[89], all[10], "the second churn moved it again");
+    assert_eq!(all[90], all[10], "second restore: identical to the first");
+    assert_eq!(all[61..70], all[11..20], "and the same future");
+}
+
+/// A NaN no longer fails a capture; it fails the disk write, which reports `L4208`, writes nothing
+/// and leaves the slot restorable in memory.
+#[test]
+fn persisting_a_slot_with_a_non_finite_value_reports_l4208_and_the_slot_still_restores() {
+    let dir = fresh_dir("nan");
+    let mut engine = boot(persisting(
+        &dir,
+        script(&[
+            (2, Act::Poison),
+            (4, Act::Capture("a")),
+            (6, Act::Persist("a")),
+            (10, Act::Restore("a")),
+        ]),
+    ));
+    for _ in 0..12 {
+        engine.advance_live();
+    }
+    assert_eq!(reported(&engine, code::CHECKPOINT_CAPTURE_FAILED), 0);
+    assert!(checkpoints(&engine).slot("a").is_some(), "the capture held");
+    let error = checkpoints(&engine).disk_error().expect("the write failed");
+    assert_eq!(error.code, code::CHECKPOINT_DISK_WRITE_FAILED);
+    assert!(error.message.contains("non-finite"), "{}", error.message);
+    assert!(!checkpoint_file(&dir).exists(), "nothing was written");
+    assert!(checkpoints(&engine).disk().is_none());
+    assert_eq!(
+        checkpoints(&engine).last_restore(),
+        Some(&RestoreOutcome::Restored {
+            name: "a".to_string(),
+            frame: FrameIndex::new(5),
+        }),
+        "the slot restores in memory"
     );
 }

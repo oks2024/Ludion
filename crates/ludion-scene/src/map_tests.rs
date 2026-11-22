@@ -1274,7 +1274,7 @@ fn a_fragment_with_physics_or_seed_is_l1021_at_the_fragment() {
 }
 
 /// A stand-in for the engine `Transform`: three f32 arrays, so the writer is schema-aware.
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone)]
 struct TestTransform {
     translation: [f32; 3],
     rotation: [f32; 3],

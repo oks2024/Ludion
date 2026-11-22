@@ -98,6 +98,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_core::rng::DeterministicRng;
 use ludion_core::time::{FrameIndex, GameClock};
+use ludion_ecs::{ColumnCopy, Registry};
 use ludion_physics::PhysicsWorld;
 use ludion_protocol::command::RenderSizeParams;
 use ludion_protocol::replay::{ReplayExtent, SceneRef};
@@ -118,7 +119,7 @@ use crate::path_follow::{FollowerMotionEntry, FollowerMotions};
 const SNAPSHOT_FORMAT: u32 = 1;
 
 /// The full engine snapshot document (serde shape of the `snapshot` payload).
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct SnapshotDoc {
     /// Format version marker ([`SNAPSHOT_FORMAT`]).
     format: u32,
@@ -293,7 +294,7 @@ struct SnapshotDoc {
 }
 
 /// The snapshot's `projectiles` field: the pool's config and its bytes.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct ProjectilesDoc {
     config: crate::ProjectileConfig,
     /// Base64 of the pool's codec bytes followed by the last tick's events' bytes.
@@ -303,7 +304,7 @@ struct ProjectilesDoc {
 /// The snapshot's `scene_physics` field: the serde shape of a loaded scene's `physics:` block
 /// ([`ScenePhysics`]), which carries no serde derive of its own (`ludion-scene` boundary rule —
 /// see the crate docs).
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct ScenePhysicsDoc {
     space: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -325,7 +326,7 @@ struct ScenePhysicsDoc {
 }
 
 /// One `physics.layers` entry in the snapshot's `scene_physics` field.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct SceneLayerDoc {
     name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -393,7 +394,7 @@ impl TryFrom<ScenePhysicsDoc> for ScenePhysics {
 /// times it was reloaded. `applied` is omitted when 1, so a session with no repeated reload
 /// serializes as it always did; an older snapshot may repeat a document, which the read folds
 /// (summed counts, last text).
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct DocReloadDoc {
     kind: String,
     key: String,
@@ -412,7 +413,7 @@ fn is_one(n: &u64) -> bool {
 
 /// One scene's residue carried in a snapshot: the scene's `name:` key and the records captured the
 /// last time the session left it — the serde shape of one entry in the session's residue map.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct SceneResidueDoc {
     scene: String,
     /// The frame the session last left this scene on — the eviction key
@@ -434,7 +435,7 @@ fn is_frame_zero(frame: &u64) -> bool {
 /// One captured entity inside a [`SceneResidueDoc`]: its `Name` (the identity a return matches on) or
 /// none for an anonymous record, and its component bag as `(registered name, value)` minus `Name` —
 /// the same pair [`crate::transition`]'s `ResidueRecord` holds.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct ResidueRecordDoc {
     /// Absent for an anonymous record, so those serialize lean.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -461,7 +462,7 @@ fn is_false(flag: &bool) -> bool {
 }
 
 /// One live entity in a snapshot: its identity and its components (registry order).
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct EntityDoc {
     /// The entity's storage slot index.
     index: u32,
@@ -481,8 +482,28 @@ pub(crate) fn snapshot_schema() -> Value {
 /// # Errors
 /// Propagates a component serialization failure (`L0007`) or a missing RNG resource (`L3008`).
 pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
-    let entities = entity_docs(engine, engine.world().entities())?;
-    let presentation = entity_docs(engine, engine.world().presentation_entities())?;
+    snapshot_value(&capture_doc(engine, true)?)
+}
+
+/// The engine's state as a typed document. With `components` false each entity list holds only the
+/// ids (`index`, `generation`) and an empty component map: the component values ride a column copy
+/// instead ([`capture_structured`]).
+fn capture_doc(engine: &Engine, components: bool) -> Result<SnapshotDoc, Diagnostic> {
+    let (entities, presentation) = if components {
+        (
+            entity_docs(engine.registry(), engine.world(), engine.world().entities())?,
+            entity_docs(
+                engine.registry(),
+                engine.world(),
+                engine.world().presentation_entities(),
+            )?,
+        )
+    } else {
+        (
+            id_docs(engine.world().entities()),
+            id_docs(engine.world().presentation_entities()),
+        )
+    };
 
     let doc = SnapshotDoc {
         format: SNAPSHOT_FORMAT,
@@ -571,13 +592,92 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
             .is_some_and(crate::SceneSwitch::arrived_by_restart),
         unknown: BTreeMap::new(),
     };
+    Ok(doc)
+}
 
-    serde_json::to_value(&doc).map_err(|error| {
+fn snapshot_value(doc: &SnapshotDoc) -> Result<Value, Diagnostic> {
+    serde_json::to_value(doc).map_err(|error| {
         Diagnostic::new(
             code::PROTOCOL_SNAPSHOT_INVALID,
             format!("could not serialize the engine snapshot: {error}"),
         )
     })
+}
+
+/// An in-memory checkpoint body: the typed document with id-only entity lists, plus one column copy
+/// per registered component, aligned with `registry.iter()`. Nothing in it is JSON except the
+/// opaque solver and projectile bytes already inside the document.
+pub(crate) struct StructuredSnapshot {
+    doc: SnapshotDoc,
+    columns: Vec<Option<ColumnCopy>>,
+}
+
+impl std::fmt::Debug for StructuredSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StructuredSnapshot")
+            .field("frame", &self.doc.frame)
+            .field("columns", &self.columns.iter().flatten().count())
+            .finish()
+    }
+}
+
+/// Captures the engine's state as a [`StructuredSnapshot`]. No component is serialized, so no value
+/// is inspected: a non-finite float surfaces when the slot is rendered as a document.
+///
+/// # Errors
+/// A missing RNG resource (`L3008`) or a solver or projectile encode failure (`L3033`).
+pub(crate) fn capture_structured(engine: &Engine) -> Result<StructuredSnapshot, Diagnostic> {
+    let doc = capture_doc(engine, false)?;
+    let columns = engine
+        .registry()
+        .iter()
+        .map(|info| info.copy_column(engine.world()))
+        .collect();
+    Ok(StructuredSnapshot { doc, columns })
+}
+
+/// The snapshot document `snapshot.capture` would have produced at the moment `s` was captured,
+/// byte for byte: the ids rebuild a scratch world, the columns install into it, and the components
+/// are serialized from there.
+///
+/// # Errors
+/// As [`capture`], plus the `L0007` for a component holding a non-finite float, and the
+/// allocator errors of a restore.
+pub(crate) fn structured_document(
+    engine: &Engine,
+    s: &StructuredSnapshot,
+) -> Result<Value, Diagnostic> {
+    let registry = engine.registry();
+    let mut world = rebuild_ids(&s.doc)?;
+    install_columns(registry, &mut world, &s.columns)?;
+    let mut doc = s.doc.clone();
+    doc.entities = entity_docs(registry, &world, world.entities())?;
+    doc.presentation = entity_docs(registry, &world, world.presentation_entities())?;
+    snapshot_value(&doc)
+}
+
+/// Installs every present column into `world`, whose entities are already rebuilt.
+fn install_columns(
+    registry: &Registry,
+    world: &mut ludion_ecs::World,
+    columns: &[Option<ColumnCopy>],
+) -> Result<(), Diagnostic> {
+    if columns.len() != registry.len() {
+        return Err(Diagnostic::new(
+            code::PROTOCOL_SNAPSHOT_INVALID,
+            format!(
+                "a checkpoint holds {} component columns but the registry has {} components",
+                columns.len(),
+                registry.len()
+            ),
+        ));
+    }
+    for (info, column) in registry.iter().zip(columns) {
+        if let Some(column) = column {
+            info.install_column(world, column)?;
+        }
+    }
+    Ok(())
 }
 
 /// The per-entity component documents of `ids`, in the order given.
@@ -586,14 +686,15 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
 /// Propagates a component serialization failure (`L0007`), including a component holding a NaN or
 /// infinite float: JSON writes it as `null`, which restore would drop along with the whole component.
 fn entity_docs(
-    engine: &Engine,
+    registry: &Registry,
+    world: &ludion_ecs::World,
     ids: impl Iterator<Item = EntityId>,
 ) -> Result<Vec<EntityDoc>, Diagnostic> {
     let mut docs = Vec::new();
     for id in ids {
         let mut components = Map::new();
-        for info in engine.registry().iter() {
-            let Some(erased) = info.serialize_erased(engine.world(), id)? else {
+        for info in registry.iter() {
+            let Some(erased) = info.serialize_erased(world, id)? else {
                 continue;
             };
             let non_finite = ludion_sim::non_finite_count(erased)
@@ -611,7 +712,7 @@ fn entity_docs(
                     "find the system that wrote the NaN or infinity and fix it (`ludion explain L4024`)",
                 ));
             }
-            if let Some(value) = info.serialize(engine.world(), id)? {
+            if let Some(value) = info.serialize(world, id)? {
                 components.insert(info.name().to_string(), value);
             }
         }
@@ -622,6 +723,16 @@ fn entity_docs(
         });
     }
     Ok(docs)
+}
+
+/// The entity documents of `ids` with no components (see [`capture_doc`]).
+fn id_docs(ids: impl Iterator<Item = EntityId>) -> Vec<EntityDoc> {
+    ids.map(|id| EntityDoc {
+        index: id.index(),
+        generation: id.generation(),
+        components: Map::new(),
+    })
+    .collect()
 }
 
 /// Whether a filed entry survives a JSON round trip: a non-finite float serializes as `null`, which
@@ -818,188 +929,10 @@ pub(crate) enum DriftPolicy {
     Refuse,
 }
 
-/// Rebuilds the engine's sim state from a snapshot document, installing it into `engine`, and returns
-/// a [`RestoreReport`] of every component-schema drift the migration had to work around.
-///
-/// Restore is a **migration**, not a strict round-trip (architecture §8): the dev loop restores a
-/// snapshot taken from one build into a freshly recompiled binary, so component drift is normal.
-/// Rather than fail on it, this reconstructs the world as faithfully as it can, per entity per
-/// component:
-///
-/// - a component this build no longer registers is **dropped** (report entry `L3015`);
-/// - a value that no longer deserializes into its (still-registered) type is **dropped**, honestly —
-///   default-filling a whole undeserializable component would hand a system invented state (entry
-///   `L3016`, carrying the serde error);
-/// - added fields fill from serde defaults inside deserialization; the filled/removed *field paths*
-///   (dotted for nested fields) are computed by re-serializing the inserted value and diffing keys
-///   against the snapshot's stored value, and reported as an informational entry;
-/// - a value that deserializes but fails the component's schema (`L1014`) or semantic validator is
-///   **kept**, exactly as captured — Rust code may legitimately hold a value outside its authored
-///   range, and a restore must reproduce the live world — and each failure is reported into
-///   `Diagnostics` with a path under `/entities/<i>/components/<Name>` (or `/presentation/<i>/…`).
-///
-/// An empty report means a clean, lossless restore. Under [`DriftPolicy::Refuse`] any report entry
-/// is instead an `L1401` error, raised before the engine is touched.
-///
-/// # Errors
-/// `L3008` for a genuinely malformed snapshot document — a wrong envelope shape, an unparseable
-/// body, an unsupported `format`, an invalid speed, a `frame` past `MAX_RESTORE_FRAME`, or a
-/// `pending_input` event addressed to a frame before the snapshot's; `L0025` for an entity allocator state or a `spawn_order` that
-/// is inconsistent; `L3041` when the `allocator` field's live slots differ from the `entities`
-/// list. All are raised before the engine is touched. Per-component drift never errors; it lands in
-/// the returned report.
-pub(crate) fn restore_into(
-    engine: &mut Engine,
-    value: &Value,
-    policy: DriftPolicy,
-) -> Result<RestoreReport, Diagnostic> {
-    restore_with(engine, value, RestoreMode::Session(policy))
-}
-
-/// How [`restore_with`] installs the world it decoded.
-enum RestoreMode<'a> {
-    /// An exact continuation of a snapshotted session ([`restore_into`]).
-    Session(DriftPolicy),
-    /// A checkpoint slot inside the live session: the driver is built at the engine's own frame, run
-    /// state and speed, and the world goes in through [`Engine::install_checkpoint`]. The slot's
-    /// frame, input, profile and render extent are never read. Strict, like a run-save resume.
-    Checkpoint(&'a crate::checkpoints::Slot),
-}
-
-/// Restores a checkpoint `slot` into the live session; the engine is untouched on `Err`.
-///
-/// # Errors
-/// The same document errors as [`restore_into`], plus `L1401` for drift (a slot is this build's own
-/// capture, so none is expected).
-pub(crate) fn restore_checkpoint(
-    engine: &mut Engine,
-    slot: &crate::checkpoints::Slot,
-) -> Result<(), Diagnostic> {
-    restore_with(engine, &slot.doc, RestoreMode::Checkpoint(slot)).map(|_| ())
-}
-
-fn restore_with(
-    engine: &mut Engine,
-    value: &Value,
-    mode: RestoreMode<'_>,
-) -> Result<RestoreReport, Diagnostic> {
-    let policy = match &mode {
-        RestoreMode::Session(policy) => *policy,
-        RestoreMode::Checkpoint(_) => DriftPolicy::Refuse,
-    };
-    let mut doc: SnapshotDoc = serde_json::from_value(value.clone()).map_err(|error| {
-        Diagnostic::new(
-            code::PROTOCOL_SNAPSHOT_INVALID,
-            format!("snapshot document is not a valid engine snapshot: {error}"),
-        )
-        .with_help("restore only from a document produced by this engine build's engine.snapshot")
-    })?;
-
-    if doc.format != SNAPSHOT_FORMAT {
-        return Err(Diagnostic::new(
-            code::PROTOCOL_SNAPSHOT_INVALID,
-            format!(
-                "snapshot format version {} is not supported (this engine reads version {SNAPSHOT_FORMAT})",
-                doc.format
-            ),
-        ));
-    }
-
-    let speed = Speed::new(doc.speed).map_err(|_| {
-        Diagnostic::new(
-            code::PROTOCOL_SNAPSHOT_INVALID,
-            format!("snapshot speed {} is not a valid pacing factor", doc.speed),
-        )
-    })?;
-
-    let render_extent = doc
-        .render_extent
-        .map(|extent| {
-            crate::commands::render::requested_extent(&RenderSizeParams {
-                width: Some(extent.width),
-                height: Some(extent.height),
-            })
-            .map(|checked| checked.unwrap_or_default())
-            .map_err(|diagnostic| {
-                Diagnostic::new(
-                    code::PROTOCOL_SNAPSHOT_INVALID,
-                    format!(
-                        "snapshot render extent {}x{} is not a valid extent: {}",
-                        extent.width, extent.height, diagnostic.message
-                    ),
-                )
-                .with_path("/render_extent")
-                .with_help("re-take the snapshot from a real session")
-            })
-        })
-        .transpose()?;
-
-    if doc.frame > MAX_RESTORE_FRAME {
-        return Err(Diagnostic::new(
-            code::PROTOCOL_SNAPSHOT_INVALID,
-            format!(
-                "snapshot frame {} is past the highest restorable frame {MAX_RESTORE_FRAME}",
-                doc.frame
-            ),
-        )
-        .with_path("/frame")
-        .with_help("a run never reaches this frame; re-take the snapshot from a real session"));
-    }
-
-    if let Some((i, event)) = doc
-        .pending_input
-        .events()
-        .iter()
-        .enumerate()
-        .find(|(_, event)| event.frame.as_u64() < doc.frame)
-    {
-        return Err(Diagnostic::new(
-            code::PROTOCOL_SNAPSHOT_INVALID,
-            format!(
-                "snapshot input event {i} is addressed to frame {}, before the snapshot's frame {}",
-                event.frame.as_u64(),
-                doc.frame
-            ),
-        )
-        .with_path(format!("/pending_input/{i}/frame"))
-        .with_help(
-            "a pending input is addressed to a frame the snapshot has not run yet; re-take the snapshot",
-        ));
-    }
-
-    // Decoded before the schedule: the schedule needs it, and a malformed `space` is the same
-    // "genuinely malformed document" class as the rest of this function's up-front checks.
-    let scene_physics: Option<ScenePhysics> = doc
-        .scene_physics
-        .map(ScenePhysicsDoc::try_into)
-        .transpose()?;
-
-    // Re-runs the scene parser's own value checks (an out-of-range iteration count, a gravity
-    // component that does not fit f32) over the decoded struct: a hand-edited or foreign snapshot
-    // can carry a value the parser never validated, and restore must reject it before the schedule
-    // or the world is touched, exactly as a scene load would.
-    if let Some(physics) = &scene_physics
-        && let Some(diagnostic) = validate_physics(physics, "/scene_physics")
-            .into_iter()
-            .next()
-    {
-        return Err(diagnostic);
-    }
-
-    // Captured before `scene_physics` moves into `RestoredWorld` below: solver state with nothing
-    // to install the write/step/mirror triple from means physics silently stops stepping.
-    let missing_settings = doc.physics.is_some() && scene_physics.is_none();
-    if missing_settings && policy == DriftPolicy::Refuse {
-        return Err(Diagnostic::new(
-            code::RUN_SAVE_RESUME_REFUSED,
-            "restoring would lose physics: the snapshot carries solver state but no scene physics \
-             settings, so physics would not step",
-        ));
-    }
-
-    // Reconstruct the world's live entities exactly, then re-insert their components, migrating each
-    // rather than hard-failing. The registry borrow is disjoint from the fresh local `world`.
-    let registry = engine.registry();
+/// A fresh world holding exactly the entities `doc` lists, in both id ranges: the allocator state
+/// when the document carries it, the live-set fallback otherwise, then the spawn order and the
+/// presentation range. Holds no component.
+fn rebuild_ids(doc: &SnapshotDoc) -> Result<ludion_ecs::World, Diagnostic> {
     let live: Vec<EntityId> = doc
         .entities
         .iter()
@@ -1060,6 +993,217 @@ fn restore_with(
         "presentation",
         "presentation_allocator",
     )?;
+    Ok(world)
+}
+
+/// Rebuilds the engine's sim state from a snapshot document, installing it into `engine`, and returns
+/// a [`RestoreReport`] of every component-schema drift the migration had to work around.
+///
+/// Restore is a **migration**, not a strict round-trip (architecture §8): the dev loop restores a
+/// snapshot taken from one build into a freshly recompiled binary, so component drift is normal.
+/// Rather than fail on it, this reconstructs the world as faithfully as it can, per entity per
+/// component:
+///
+/// - a component this build no longer registers is **dropped** (report entry `L3015`);
+/// - a value that no longer deserializes into its (still-registered) type is **dropped**, honestly —
+///   default-filling a whole undeserializable component would hand a system invented state (entry
+///   `L3016`, carrying the serde error);
+/// - added fields fill from serde defaults inside deserialization; the filled/removed *field paths*
+///   (dotted for nested fields) are computed by re-serializing the inserted value and diffing keys
+///   against the snapshot's stored value, and reported as an informational entry;
+/// - a value that deserializes but fails the component's schema (`L1014`) or semantic validator is
+///   **kept**, exactly as captured — Rust code may legitimately hold a value outside its authored
+///   range, and a restore must reproduce the live world — and each failure is reported into
+///   `Diagnostics` with a path under `/entities/<i>/components/<Name>` (or `/presentation/<i>/…`).
+///
+/// An empty report means a clean, lossless restore. Under [`DriftPolicy::Refuse`] any report entry
+/// is instead an `L1401` error, raised before the engine is touched.
+///
+/// # Errors
+/// `L3008` for a genuinely malformed snapshot document — a wrong envelope shape, an unparseable
+/// body, an unsupported `format`, an invalid speed, a `frame` past `MAX_RESTORE_FRAME`, or a
+/// `pending_input` event addressed to a frame before the snapshot's; `L0025` for an entity allocator state or a `spawn_order` that
+/// is inconsistent; `L3041` when the `allocator` field's live slots differ from the `entities`
+/// list. All are raised before the engine is touched. Per-component drift never errors; it lands in
+/// the returned report.
+pub(crate) fn restore_into(
+    engine: &mut Engine,
+    value: &Value,
+    policy: DriftPolicy,
+) -> Result<RestoreReport, Diagnostic> {
+    restore_with(engine, value, RestoreMode::Session(policy))
+}
+
+/// How [`restore_with`] installs the world it decoded.
+enum RestoreMode<'a> {
+    /// An exact continuation of a snapshotted session ([`restore_into`]).
+    Session(DriftPolicy),
+    /// A checkpoint slot inside the live session: the driver is built at the engine's own frame, run
+    /// state and speed, and the world goes in through [`Engine::install_checkpoint`]. The slot's
+    /// frame, input, profile and render extent are never read. Strict, like a run-save resume.
+    Checkpoint(&'a crate::checkpoints::Slot),
+}
+
+/// Restores a checkpoint `slot` into the live session; the engine is untouched on `Err`.
+///
+/// # Errors
+/// The same document errors as [`restore_into`], plus `L1401` for drift (a slot is this build's own
+/// capture, so none is expected).
+pub(crate) fn restore_checkpoint(
+    engine: &mut Engine,
+    slot: &crate::checkpoints::Slot,
+) -> Result<(), Diagnostic> {
+    match &slot.body {
+        crate::checkpoints::SlotBody::Document(value) => {
+            restore_with(engine, value, RestoreMode::Checkpoint(slot)).map(|_| ())
+        }
+        crate::checkpoints::SlotBody::Structured(s) => restore_decoded(
+            engine,
+            s.doc.clone(),
+            Some(&s.columns),
+            RestoreMode::Checkpoint(slot),
+        )
+        .map(|_| ()),
+    }
+}
+
+fn restore_with(
+    engine: &mut Engine,
+    value: &Value,
+    mode: RestoreMode<'_>,
+) -> Result<RestoreReport, Diagnostic> {
+    let doc: SnapshotDoc = serde_json::from_value(value.clone()).map_err(|error| {
+        Diagnostic::new(
+            code::PROTOCOL_SNAPSHOT_INVALID,
+            format!("snapshot document is not a valid engine snapshot: {error}"),
+        )
+        .with_help("restore only from a document produced by this engine build's engine.snapshot")
+    })?;
+    restore_decoded(engine, doc, None, mode)
+}
+
+/// Installs a decoded snapshot. `columns` carries the component values of a structured slot
+/// (installed in bulk after the entities are rebuilt); `None` restores them from the document's
+/// per-entity maps. Everything is checked before the engine is touched.
+fn restore_decoded(
+    engine: &mut Engine,
+    mut doc: SnapshotDoc,
+    columns: Option<&[Option<ColumnCopy>]>,
+    mode: RestoreMode<'_>,
+) -> Result<RestoreReport, Diagnostic> {
+    let policy = match &mode {
+        RestoreMode::Session(policy) => *policy,
+        RestoreMode::Checkpoint(_) => DriftPolicy::Refuse,
+    };
+
+    if doc.format != SNAPSHOT_FORMAT {
+        return Err(Diagnostic::new(
+            code::PROTOCOL_SNAPSHOT_INVALID,
+            format!(
+                "snapshot format version {} is not supported (this engine reads version {SNAPSHOT_FORMAT})",
+                doc.format
+            ),
+        ));
+    }
+
+    let speed = Speed::new(doc.speed).map_err(|_| {
+        Diagnostic::new(
+            code::PROTOCOL_SNAPSHOT_INVALID,
+            format!("snapshot speed {} is not a valid pacing factor", doc.speed),
+        )
+    })?;
+
+    let render_extent = doc
+        .render_extent
+        .take()
+        .map(|extent| {
+            crate::commands::render::requested_extent(&RenderSizeParams {
+                width: Some(extent.width),
+                height: Some(extent.height),
+            })
+            .map(|checked| checked.unwrap_or_default())
+            .map_err(|diagnostic| {
+                Diagnostic::new(
+                    code::PROTOCOL_SNAPSHOT_INVALID,
+                    format!(
+                        "snapshot render extent {}x{} is not a valid extent: {}",
+                        extent.width, extent.height, diagnostic.message
+                    ),
+                )
+                .with_path("/render_extent")
+                .with_help("re-take the snapshot from a real session")
+            })
+        })
+        .transpose()?;
+
+    if doc.frame > MAX_RESTORE_FRAME {
+        return Err(Diagnostic::new(
+            code::PROTOCOL_SNAPSHOT_INVALID,
+            format!(
+                "snapshot frame {} is past the highest restorable frame {MAX_RESTORE_FRAME}",
+                doc.frame
+            ),
+        )
+        .with_path("/frame")
+        .with_help("a run never reaches this frame; re-take the snapshot from a real session"));
+    }
+
+    if let Some((i, event)) = doc
+        .pending_input
+        .events()
+        .iter()
+        .enumerate()
+        .find(|(_, event)| event.frame.as_u64() < doc.frame)
+    {
+        return Err(Diagnostic::new(
+            code::PROTOCOL_SNAPSHOT_INVALID,
+            format!(
+                "snapshot input event {i} is addressed to frame {}, before the snapshot's frame {}",
+                event.frame.as_u64(),
+                doc.frame
+            ),
+        )
+        .with_path(format!("/pending_input/{i}/frame"))
+        .with_help(
+            "a pending input is addressed to a frame the snapshot has not run yet; re-take the snapshot",
+        ));
+    }
+
+    // Decoded before the schedule: the schedule needs it, and a malformed `space` is the same
+    // "genuinely malformed document" class as the rest of this function's up-front checks.
+    let scene_physics: Option<ScenePhysics> = doc
+        .scene_physics
+        .take()
+        .map(ScenePhysicsDoc::try_into)
+        .transpose()?;
+
+    // Re-runs the scene parser's own value checks (an out-of-range iteration count, a gravity
+    // component that does not fit f32) over the decoded struct: a hand-edited or foreign snapshot
+    // can carry a value the parser never validated, and restore must reject it before the schedule
+    // or the world is touched, exactly as a scene load would.
+    if let Some(physics) = &scene_physics
+        && let Some(diagnostic) = validate_physics(physics, "/scene_physics")
+            .into_iter()
+            .next()
+    {
+        return Err(diagnostic);
+    }
+
+    // Captured before `scene_physics` moves into `RestoredWorld` below: solver state with nothing
+    // to install the write/step/mirror triple from means physics silently stops stepping.
+    let missing_settings = doc.physics.is_some() && scene_physics.is_none();
+    if missing_settings && policy == DriftPolicy::Refuse {
+        return Err(Diagnostic::new(
+            code::RUN_SAVE_RESUME_REFUSED,
+            "restoring would lose physics: the snapshot carries solver state but no scene physics \
+             settings, so physics would not step",
+        ));
+    }
+
+    // Reconstruct the world's live entities exactly, then re-insert their components, migrating each
+    // rather than hard-failing. The registry borrow is disjoint from the fresh local `world`.
+    let registry = engine.registry();
+    let mut world = rebuild_ids(&doc)?;
     // Document-level warnings come first: the restore goes ahead either way, but a snapshot from
     // another build or carrying fields this one does not read may not restore everything it held.
     let mut entries = Vec::new();
@@ -1100,6 +1244,9 @@ fn restore_with(
                 &mut invalid,
             );
         }
+    }
+    if let Some(columns) = columns {
+        install_columns(registry, &mut world, columns)?;
     }
     if policy == DriftPolicy::Refuse
         && let Some(first) = entries.first()

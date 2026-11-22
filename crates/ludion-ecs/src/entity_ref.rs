@@ -42,7 +42,7 @@ pub const ENTITY_REF_COLLECTION_KEYWORD: &str = "x-entity-ref-collection";
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Leash {
 ///     #[schemars(with = "ludion_ecs::EntityRefSchema")]
 ///     holder: EntityId,
@@ -133,13 +133,13 @@ impl JsonSchema for EntityRefSelfSchema {
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Slot {
 ///     #[schemars(with = "Option<EntityRefSchema>")]
 ///     who: Option<EntityId>,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Roster {
 ///     #[schemars(with = "EntityRefCollection<Vec<Slot>>")]
 ///     slots: Vec<Slot>,

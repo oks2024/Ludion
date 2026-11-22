@@ -90,7 +90,7 @@ use ludion::prelude::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 enum Guard { Root, Patrol, Investigate }
 
-#[derive(Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Default, Clone, Serialize, Deserialize, JsonSchema)]
 struct Memory { timer: Timer }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

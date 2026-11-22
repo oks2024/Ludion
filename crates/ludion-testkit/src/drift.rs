@@ -130,7 +130,7 @@ fn probe_seed(name: &str) -> Value {
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Health {
 ///     hp: u32, // no `#[serde(default)]` — cannot build from `{}`
 /// }
@@ -195,13 +195,13 @@ pub fn assert_components_drift_safe(registry: &Registry) {
 /// use schemars::JsonSchema;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Id {
 ///     index: u32,
 ///     generation: u32,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 /// struct Leash {
 ///     holder: Id, // not `#[schemars(with = "EntityRefSchema")]`
 /// }
@@ -252,14 +252,14 @@ mod tests {
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct DriftSafe {
         #[serde(default)]
         #[allow(dead_code)]
         hp: u32,
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct DriftUnsafe {
         #[allow(dead_code)]
         hp: u32,
@@ -290,13 +290,13 @@ mod tests {
         assert_entity_refs_marked(&ludion_engine::builtin_registry());
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Id {
         index: u32,
         generation: u32,
     }
 
-    fn unmarked_panics<T: ludion_ecs::Component>() -> String {
+    fn unmarked_panics<T: ludion_ecs::Component + Clone>() -> String {
         let mut registry = Registry::new();
         registry.register::<T>("Holder").unwrap();
         let caught = std::panic::catch_unwind(|| assert_entity_refs_marked(&registry))
@@ -307,19 +307,19 @@ mod tests {
             .expect("a formatted message")
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct InField {
         holder: Id,
     }
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct InVec {
         holders: Vec<Id>,
     }
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct InMap {
         holders: std::collections::BTreeMap<String, Id>,
     }
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct InTuple {
         pair: (u32, Id),
     }
@@ -334,7 +334,7 @@ mod tests {
         assert!(unmarked_panics::<InTuple>().contains("/pair/1"));
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Marked {
         #[schemars(with = "ludion_ecs::EntityRefSchema")]
         holder: ludion_core::ids::EntityId,
@@ -349,12 +349,12 @@ mod tests {
         assert_entity_refs_marked(&registry);
     }
 
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Slot {
         #[schemars(with = "Option<ludion_ecs::EntityRefSchema>")]
         who: Option<ludion_core::ids::EntityId>,
     }
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Roster {
         #[schemars(with = "ludion_ecs::EntityRefCollection<Vec<Slot>>")]
         slots: Vec<Slot>,

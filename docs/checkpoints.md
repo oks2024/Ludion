@@ -79,7 +79,7 @@ Every refusal is a warning on both sinks and leaves the world untouched.
 | `L4200` | restore of a name with no slot |
 | `L4201` | capture of a new name past `max_slots`; nothing is evicted, recapturing a held name is fine |
 | `L4202` | a name that is empty, over 64 characters or outside `[A-Za-z0-9_.-]` |
-| `L4203` | the capture failed (a NaN component, `L0007`); the old slot is kept |
+| `L4203` | the capture failed (the solver or projectile pool could not be encoded); the old slot is kept |
 | `L4204` | the slot could not be restored |
 | `L4208` | the disk slot could not be written or removed (an error; the previous file stays) |
 | `L4209` | a disk load was refused (see Disk slot) |
@@ -125,4 +125,10 @@ fn continue_logic(world: &mut World, _ctx: &SystemCtx) {
 | "Continue" after a quit, the last threshold | `Checkpoints::persist` / `load_disk` | `save/checkpoint.json`, kept on load | load is refused while recording |
 | a clean level, every change lost | `SceneSwitch::restart` | none | frame and RNG continue; only `Residue` and carried entities survive |
 
-A slot lives and dies with the process unless it was persisted. Cost: a capture and a restore each go through the JSON snapshot document, so budget them for a fade, not for a frame.
+A slot lives and dies with the process unless it was persisted.
+
+## How a slot is held
+
+A held slot is structured, not JSON: a capture clones each registered component's column plus a typed copy of the resources and entity ids, and a restore installs those columns in bulk. Every registered component must therefore derive `Clone` (`Registry::register` requires it). Only the disk slot is JSON: `persist` renders the slot as the snapshot document, byte-identical to `engine.snapshot` at the capture frame, and `load_disk` restores a document.
+
+Because a capture reads no component value, a NaN or infinite float does not fail it. It fails the `persist`: `L4208` carrying the `L0007` message, nothing written, the slot kept and restorable in memory. A restore still costs a world rebuild, so budget it for a fade, not for a frame.

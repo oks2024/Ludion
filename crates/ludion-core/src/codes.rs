@@ -395,8 +395,8 @@ pub mod code {
     /// `L4202` — a checkpoint name is empty, longer than 64 characters or outside `[A-Za-z0-9_.-]`;
     /// the request is ignored. A warning.
     pub const CHECKPOINT_NAME_INVALID: DiagnosticCode = DiagnosticCode::new("L4202");
-    /// `L4203` — a checkpoint capture failed (for example a non-finite value, `L0007`); the previous
-    /// slot of that name, if any, is kept. A warning.
+    /// `L4203` — a checkpoint capture failed (the solver or projectile pool could not be encoded, or
+    /// the RNG is missing); the previous slot of that name, if any, is kept. A warning.
     pub const CHECKPOINT_CAPTURE_FAILED: DiagnosticCode = DiagnosticCode::new("L4203");
     /// `L4204` — a checkpoint restore failed while decoding or validating the slot; the world is
     /// untouched. A warning.
@@ -6403,12 +6403,16 @@ Fix: use a short name such as `b_to_c`.",
         severity: Severity::Warning,
         title: "checkpoint capture failed",
         explanation: "\
-Capturing the world into a slot failed, for example because a component holds a non-finite number
-(`L0007`). The previous slot of that name, if any, is kept.
+Capturing the world into a slot failed: the physics solver or the projectile pool could not be
+encoded, or the RNG resource is missing. The previous slot of that name, if any, is kept.
+
+A capture copies component columns without reading their values, so a component holding a NaN or
+infinite number does not fail it; that surfaces when the slot is written to disk (`L4208`, carrying
+the `L0007` message).
 
 This is a **warning**; the message carries the underlying diagnostic.
 
-Fix: correct the value the underlying diagnostic names.",
+Fix: correct what the underlying diagnostic names.",
     },
     CodeEntry {
         code: code::CHECKPOINT_RESTORE_FAILED,
@@ -6465,6 +6469,10 @@ Fix: start the recording before the first capture, or `discard` every slot first
 `Checkpoints::persist` or `Checkpoints::discard_disk` could not write or delete
 `save/checkpoint.json`. The previous whole file stays in place (writes are atomic), the in-memory
 slots are unaffected, and the next request retries.
+
+`persist` also fails this way when the slot cannot be rendered to JSON: a component holding a NaN or
+infinite number. The message then carries the `L0007` text, nothing is written, and the in-memory
+slot still restores.
 
 This is an **error**; the sim keeps running.
 

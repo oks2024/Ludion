@@ -86,6 +86,7 @@ fn slot_mut(slots: &mut [Vec<u32>; 2], entity_index: u32) -> &mut u32 {
 /// - `keys` is strictly ascending and `keys.len() == values.len()`.
 /// - `slots[range][offset] == r` for every row `r` whose key splits into `(range, offset)`, and
 ///   every other entry is [`SENTINEL`].
+#[derive(Clone)]
 pub(crate) struct Storage<T> {
     keys: Vec<u32>,
     values: Vec<T>,

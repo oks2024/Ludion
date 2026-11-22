@@ -416,26 +416,26 @@ mod tests {
     }
 
     /// The baseline component.
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Plain {
         hp: u32,
     }
 
     /// Different prose on the type, and prose on the field.
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Prose {
         /// The field's own prose.
         hp: u32,
     }
 
     /// A field added.
-    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     struct Wider {
         hp: u32,
         mana: u32,
     }
 
-    fn hash_with<T: ludion_ecs::Component>() -> WireHash {
+    fn hash_with<T: ludion_ecs::Component + Clone>() -> WireHash {
         let mut registry = Registry::new();
         registry.register::<T>("Gear").unwrap();
         game_schema_hash(&registry, &[])

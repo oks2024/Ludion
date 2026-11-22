@@ -8,14 +8,14 @@ use ludion_ecs::Registry;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq, Clone)]
 pub struct Transform {
     pub x: f32,
     pub y: f32,
     pub z: f32,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq, Clone)]
 pub struct Sprite {
     #[schemars(with = "ludion_ecs::AssetPathSchema")]
     pub texture: String,
@@ -23,24 +23,24 @@ pub struct Sprite {
     pub visible: bool,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq, Clone)]
 pub struct Palette {
     pub colors: Vec<String>,
     pub emissive: Option<f64>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq, Clone)]
 pub enum Shape {
     Circle { radius: f64 },
     Rect { w: f64, h: f64 },
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq, Clone)]
 pub struct Health(pub u32);
 
 /// A reserved (field-backed) component, standing in for the engine's `Name`: authored through a
 /// dedicated scene field, never as a `components:` block.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq, Clone)]
 pub struct Label(pub String);
 
 /// A registry with all test components, in a fixed registration order (the canonical component
