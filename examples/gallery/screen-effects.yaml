@@ -12,7 +12,7 @@
 # - Together the two are the cost case of the plan: a 320x320 region plus a fullscreen `scan`, the
 #   `screen_fx` profile group.
 format: 1
-name: "screen-effects - a CRT radar region and a fullscreen scan over the HUD mock"
+name: screen-effects - a CRT radar region and a fullscreen scan over the HUD mock
 entities:
   - name: camera
     components:
@@ -239,5 +239,4 @@ entities:
   - name: screen-fx
     components:
       ScreenEffect:
-        order: 0
         preset: scan
