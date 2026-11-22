@@ -258,7 +258,7 @@ pub const TONEMAP_NONE: u32 = 3;
 
 /// `UNSHADOWED`, hoisted from WGSL `const UNSHADOWED: u32`.
 ///
-/// Declared in `decal_lit.wgsl`, `mesh.wgsl`.
+/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 pub const UNSHADOWED: u32 = 4294967295;
 
 /// `VIEWMODEL_CELL`, hoisted from WGSL `const VIEWMODEL_CELL: u32`.
@@ -806,7 +806,7 @@ const _: () = assert!(core::mem::offset_of!(LocalShadowDebug, cells) == 16);
 
 /// WGSL `struct LocalView`.
 ///
-/// Declared in `decal_lit.wgsl`, `medium_scatter.wgsl`, `mesh.wgsl`.
+/// Declared in `decal_lit.wgsl`, `medium_scatter.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct LocalView {
@@ -1033,8 +1033,9 @@ pub struct RainParams {
     pub occ_view: [[f32; 4]; 4],
     pub splash_grid: [i32; 4],
     pub splash: [f32; 4],
+    pub shade: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<RainParams>() == 208);
+const _: () = assert!(core::mem::size_of::<RainParams>() == 224);
 const _: () = assert!(core::mem::offset_of!(RainParams, base) == 0);
 const _: () = assert!(core::mem::offset_of!(RainParams, counts) == 16);
 const _: () = assert!(core::mem::offset_of!(RainParams, shape) == 32);
@@ -1045,6 +1046,7 @@ const _: () = assert!(core::mem::offset_of!(RainParams, color) == 96);
 const _: () = assert!(core::mem::offset_of!(RainParams, occ_view) == 112);
 const _: () = assert!(core::mem::offset_of!(RainParams, splash_grid) == 176);
 const _: () = assert!(core::mem::offset_of!(RainParams, splash) == 192);
+const _: () = assert!(core::mem::offset_of!(RainParams, shade) == 208);
 
 /// WGSL `struct RecvDraw`.
 ///
@@ -1505,7 +1507,7 @@ const _: () = assert!(core::mem::offset_of!(SsrTrace, view_forward) == 176);
 
 /// WGSL `struct Sun`.
 ///
-/// Declared in `decal_lit.wgsl`, `mesh.wgsl`.
+/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct Sun {
@@ -2461,23 +2463,15 @@ pub const RECV_INSTANCES_BINDING: u32 = 3;
 pub const SCATTER_GI_B_GROUP: u32 = 1;
 pub const SCATTER_GI_B_BINDING: u32 = 3;
 
-/// `rain` — `@group(2) @binding(0)`, in `rain.wgsl`.
-pub const RAIN_GROUP: u32 = 2;
-pub const RAIN_BINDING: u32 = 0;
-
 /// `sprite_tex` — `@group(2) @binding(0)`, in `sprite.wgsl`.
 pub const SPRITE_TEX_GROUP: u32 = 2;
 pub const SPRITE_TEX_BINDING: u32 = 0;
 
-/// `sun` — `@group(2) @binding(0)`, in `decal_lit.wgsl`, `mesh.wgsl`.
+/// `sun` — `@group(2) @binding(0)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 pub const SUN_GROUP: u32 = 2;
 pub const SUN_BINDING: u32 = 0;
 
-/// `rain_occlusion` — `@group(2) @binding(1)`, in `rain.wgsl`.
-pub const RAIN_OCCLUSION_GROUP: u32 = 2;
-pub const RAIN_OCCLUSION_BINDING: u32 = 1;
-
-/// `shadow_tex` — `@group(2) @binding(1)`, in `decal_lit.wgsl`, `mesh.wgsl`.
+/// `shadow_tex` — `@group(2) @binding(1)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 pub const SHADOW_TEX_GROUP: u32 = 2;
 pub const SHADOW_TEX_BINDING: u32 = 1;
 
@@ -2485,25 +2479,33 @@ pub const SHADOW_TEX_BINDING: u32 = 1;
 pub const SPRITE_SAMPLER_GROUP: u32 = 2;
 pub const SPRITE_SAMPLER_BINDING: u32 = 1;
 
-/// `shadow_samp` — `@group(2) @binding(2)`, in `decal_lit.wgsl`, `mesh.wgsl`.
+/// `shadow_samp` — `@group(2) @binding(2)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 pub const SHADOW_SAMP_GROUP: u32 = 2;
 pub const SHADOW_SAMP_BINDING: u32 = 2;
 
-/// `local_shadow_tex` — `@group(2) @binding(3)`, in `decal_lit.wgsl`, `mesh.wgsl`.
+/// `local_shadow_tex` — `@group(2) @binding(3)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 pub const LOCAL_SHADOW_TEX_GROUP: u32 = 2;
 pub const LOCAL_SHADOW_TEX_BINDING: u32 = 3;
 
-/// `local_views` — `@group(2) @binding(4)`, in `decal_lit.wgsl`, `mesh.wgsl`.
+/// `local_views` — `@group(2) @binding(4)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 pub const LOCAL_VIEWS_GROUP: u32 = 2;
 pub const LOCAL_VIEWS_BINDING: u32 = 4;
 
-/// `light_shadow` — `@group(2) @binding(5)`, in `decal_lit.wgsl`, `mesh.wgsl`.
+/// `light_shadow` — `@group(2) @binding(5)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 pub const LIGHT_SHADOW_GROUP: u32 = 2;
 pub const LIGHT_SHADOW_BINDING: u32 = 5;
 
 /// `irradiance_tex` — `@group(3) @binding(0)`, in `decal_lit.wgsl`, `mesh.wgsl`.
 pub const IRRADIANCE_TEX_GROUP: u32 = 3;
 pub const IRRADIANCE_TEX_BINDING: u32 = 0;
+
+/// `rain` — `@group(3) @binding(0)`, in `rain.wgsl`.
+pub const RAIN_GROUP: u32 = 3;
+pub const RAIN_BINDING: u32 = 0;
+
+/// `rain_occlusion` — `@group(3) @binding(1)`, in `rain.wgsl`.
+pub const RAIN_OCCLUSION_GROUP: u32 = 3;
+pub const RAIN_OCCLUSION_BINDING: u32 = 1;
 
 /// `env_brdf_lut` — `@group(3) @binding(2)`, in `decal_lit.wgsl`, `mesh.wgsl`.
 pub const ENV_BRDF_LUT_GROUP: u32 = 3;
@@ -4173,7 +4175,7 @@ pub fn create_proj_map_proj_map_samp_bgl(device: &wgpu::Device) -> wgpu::BindGro
     })
 }
 
-/// Bind group layout `rain_rain_occlusion` (@group 2), from `rain.wgsl`.
+/// Bind group layout `rain_rain_occlusion` (@group 3), from `rain.wgsl`.
 pub fn create_rain_rain_occlusion_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("rain_rain_occlusion"),
@@ -4184,7 +4186,7 @@ pub fn create_rain_rain_occlusion_bgl(device: &wgpu::Device) -> wgpu::BindGroupL
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(208),
+                    min_binding_size: wgpu::BufferSize::new(224),
                 },
                 count: None,
             },
@@ -5214,7 +5216,7 @@ pub fn create_ssr_src_ssr_samp_ssr_color_params_bgl(
     })
 }
 
-/// Bind group layout `sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow` (@group 2), from `decal_lit.wgsl`, `mesh.wgsl`.
+/// Bind group layout `sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow` (@group 2), from `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
 pub fn create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
@@ -5223,7 +5225,7 @@ pub fn create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shad
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: SUN_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -5233,7 +5235,7 @@ pub fn create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shad
             },
             wgpu::BindGroupLayoutEntry {
                 binding: SHADOW_TEX_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Depth,
                     view_dimension: wgpu::TextureViewDimension::D2,
@@ -5243,13 +5245,13 @@ pub fn create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shad
             },
             wgpu::BindGroupLayoutEntry {
                 binding: SHADOW_SAMP_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
                 binding: LOCAL_SHADOW_TEX_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Depth,
                     view_dimension: wgpu::TextureViewDimension::D2,
@@ -5259,7 +5261,7 @@ pub fn create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shad
             },
             wgpu::BindGroupLayoutEntry {
                 binding: LOCAL_VIEWS_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
@@ -5269,7 +5271,7 @@ pub fn create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shad
             },
             wgpu::BindGroupLayoutEntry {
                 binding: LIGHT_SHADOW_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,

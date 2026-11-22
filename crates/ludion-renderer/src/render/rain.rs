@@ -3,8 +3,8 @@
 
 use super::{
     CAMERA_GROUP, CasterPipeline, Casters, FrameRecorder, HDR_FORMAT, LIGHTS_GROUP, LayoutId,
-    RecordedPass, Renderer, SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, ShaderId, depth_state,
-    init_buffer, module, premultiplied_blend, shader_gen, skin_bind_group,
+    RecordedPass, Renderer, SHADOW_VIEW_BINDING, SHADOW_VIEW_GROUP, SUN_GROUP, ShaderId,
+    depth_state, init_buffer, module, premultiplied_blend, shader_gen, skin_bind_group,
 };
 use crate::graph::FrameSize;
 use crate::rain::{
@@ -136,6 +136,12 @@ impl Renderer {
                 layout.instances as i32,
             ],
             splash: [splash_probability(rain, density), 0.0, 0.0, 0.0],
+            shade: [
+                if rain.shadowed { 1.0 } else { 0.0 },
+                rain.backlight,
+                scene.post.unwrap_or_default().fog_anisotropy,
+                0.0,
+            ],
         };
         let buffer = init_buffer(
             device,
@@ -227,6 +233,13 @@ impl FrameRecorder<'_> {
         let occlusion = inputs
             .last()
             .expect("a rain frame schedules the occlusion map as its last read");
+        // The lighting tail the graph declares ahead of the map, counted as `record_blended` counts it; a rain
+        // frame that declares none (`rain_shadowed` unset, no blended meshes) binds the fallbacks.
+        let tail = (usize::from(self.has_shadow_map)
+            + usize::from(self.gi_inject.is_some())
+            + usize::from(self.local_shadow.is_some()))
+        .min(inputs.len() - 1);
+        let sun_bg = self.sun_group(device, &inputs[..tail]);
         let params_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("rain bind group"),
             layout: self.r.layouts.get(LayoutId::Rain),
@@ -247,6 +260,7 @@ impl FrameRecorder<'_> {
         });
         rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
+        rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);
         rp.set_bind_group(RAIN_GROUP, &params_bg, &[]);
         rp.draw(0..6, 0..draw.instances);
         if draw.splash_instances > 0 {

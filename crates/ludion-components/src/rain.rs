@@ -85,6 +85,15 @@ pub struct Rain {
     #[schemars(range(min = 0.0, max = 2.0))]
     #[schemars(extend("x-ui-range" = [0.0, 2.0]))]
     pub splashes: f32,
+    /// Whether a lit rain takes one shadow tap per light at each streak, so a roof or wall darkens the rain it
+    /// covers; lights without a shadow stay unshadowed (default true).
+    #[serde(default = "default_true")]
+    pub shadowed: bool,
+    /// How much light travelling toward the camera brightens the rain, in `[0, 1]`: 0 is no forward scatter (default 0.6).
+    #[serde(default = "default_backlight")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 1.0]))]
+    pub backlight: f32,
     /// Varies the lattice hash (default 0).
     #[serde(default)]
     pub seed: u32,
@@ -110,6 +119,8 @@ impl Default for Rain {
             wetness: default_wetness(),
             ripples: default_ripples(),
             splashes: default_splashes(),
+            shadowed: true,
+            backlight: default_backlight(),
             seed: 0,
         }
     }
@@ -153,6 +164,9 @@ fn default_ripples() -> f32 {
 }
 fn default_splashes() -> f32 {
     1.0
+}
+fn default_backlight() -> f32 {
+    0.6
 }
 fn default_true() -> bool {
     true
@@ -297,6 +311,14 @@ pub fn rain_problems(rain: &Rain) -> Vec<(String, String)> {
             rain.splashes
         ),
     );
+    check(
+        unit(rain.backlight),
+        "/backlight".into(),
+        format!(
+            "`backlight` is {}; it takes a value in [0, 1]",
+            rain.backlight
+        ),
+    );
     out
 }
 
@@ -397,6 +419,9 @@ mod tests {
         assert_eq!(paths(json!({ "splashes": 2.5 })), ["/splashes"]);
         assert_eq!(paths(json!({ "splashes": -0.1 })), ["/splashes"]);
         assert!(paths(json!({ "splashes": 2.0 })).is_empty());
+        assert_eq!(paths(json!({ "backlight": 1.5 })), ["/backlight"]);
+        assert_eq!(paths(json!({ "backlight": -0.1 })), ["/backlight"]);
+        assert!(paths(json!({ "backlight": 1.0 })).is_empty());
         assert!(paths(json!({ "height": [-6.0, 58.0], "cell": 8.0 })).is_empty());
     }
 }

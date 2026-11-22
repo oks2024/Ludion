@@ -27,12 +27,14 @@ entities:
         drop_width: 0.006    # metres, (0, 0.05]; widened to one output pixel, alpha scaled to match
         streak: 1.0          # length = speed * streak / 60 metres, [0, 8]
         color: [0.55, 0.6, 0.65, 0.25]   # display colour and base opacity, each [0, 1]
-        lit: true            # shade each streak from the scene's lights (unshadowed)
+        lit: true            # shade each streak from the scene's lights
         medium: 1.0          # how much fog reaches the streaks, [0, 1]
         occlusion: true      # hide streaks under roofs; false keeps the pass but draws no casters
         wetness: 1.0         # how wet exposed surfaces look, [0, 1]; 0 leaves every surface dry
         ripples: 1.0         # rings on wet ground and coat decals, [0, 2]; 0 keeps the water still
         splashes: 1.0        # rings and droplets where rain lands on exposed tops, [0, 2]; 0 draws none
+        shadowed: true       # a lit rain takes one shadow tap per light, so roofs and walls darken it
+        backlight: 0.6       # forward-scatter glow when light travels toward the camera, [0, 1]; 0 is off
         seed: 0              # varies the lattice
 ```
 Every field is optional. `Rain` is a singleton: the lowest entity id wins and each further one is `L2381`.
@@ -121,7 +123,7 @@ and the reflection, not as geometry.
 | Situation | What happens |
 |---|---|
 | A roof over the camera | No streaks under it, per pixel; `occlusion: false` draws through. A mesh with `cast_shadows: false` does not occlude unless it carries `RainOccluder: {}`; a net that should let rain through carries `occludes: false` |
-| Light | A lit streak takes the lit-sprite rule at its centre, so the sun and local lights are unshadowed |
+| Light | A lit streak takes the lit-sprite rule at its centre; with `shadowed` the sun and each light that holds a shadow grant are tapped once there (`## Shadows and backlight`) |
 | Fog | Streaks fog through the transparent layer; `medium: 0` keeps them out of the fog |
 | Streaks overlapping | Blended premultiplied, unsorted within the draw |
 | Probe captures | Drop the rain; secondary views keep it |
@@ -145,8 +147,23 @@ lower rate draws a subset of the same splashes. They are a function of the world
   top splashes and the floor under it never does. A surface that writes no map gets no splashes, and with
   `occlusion: false` the map is empty and none are drawn.
 - **Flat tops only.** A top whose slope passes 45 degrees (one map texel of height over one texel of run) takes none.
-- **Lit like the streaks**, unshadowed, and faded out over the last 15 % of the reach.
+- **Lit like the streaks** (shadow taps and backlight included), and faded out over the last 15 % of the reach.
 - `--quality low` thins them with `rain_density`, a subset of the same splashes.
+
+## Shadows and backlight
+**Both are on by default** (`shadowed: true`, `backlight: 0.6`); `shadowed: false` with `backlight: 0` renders the frame
+without them, byte for byte. A lit rain shades each streak (and each splash) once at its centre.
+- **`shadowed`** multiplies the sun's term and each light's term by **one shadow tap** at that point: one compare tap in the
+  sun's map (the cascade that covers the point, or the anchored map) and one in the local atlas for a light that holds a
+  shadow grant (`cast_shadows: true`). No PCF or PCSS. A light without a shadow stays unshadowed, as does the sun
+  without a shadow map. A floodlight's cone of rain stops at the hut wall that shadows it.
+- **`backlight`** scales each term by `mix(1, hg, backlight)`, a Henyey-Greenstein lobe of the angle between the
+  light's travel direction and the direction from the drop to the eye, with `g` the scene's `fog_anisotropy`
+  (`PostProcess`, default 0.7): rain between a light and the camera glows, rain lit from the camera's side dims, and with
+  `fog_anisotropy: 0` the lobe is 1 and `backlight` changes nothing.
+- **Cost.** A rain with `shadowed` and `lit` makes `transparents` and `transparent_depth` read the shadow map and the
+  local atlas, so a scene with shadow maps keeps them alive through those passes; a lit rain with `shadowed: false`
+  keeps the old graph. `lit: false` ignores both fields.
 
 ## Diagnostics
 - `L2380` (error): a field is non-finite or out of range, at its JSON Pointer.
@@ -158,8 +175,9 @@ lower rate draws a subset of the same splashes. They are a function of the world
 `rain-wet.yaml` (wet voxel ground and figures, a dry awning), `rain-porosity.yaml`, `rain-occluder.yaml` (a net that lets
 rain through beside a shadowless canopy that stops it), `rain-ripples.yaml` (rings on an open puddle and the ground,
 a still one under a roof) and `rain-splashes.yaml` (splashes on open ground, a crate and a roof, none on a steep ramp or
-under the roof). The first five author `ripples: 0.0` and all but `rain-splashes` author `splashes: 0.0`, so their goldens
-show the scene without them.
+under the roof) and `rain-shadows.yaml` (a backlit floodlight cone whose rain stops at a hut wall's shadow). The first five
+author `ripples: 0.0`, all but `rain-splashes` and `rain-shadows` author `splashes: 0.0`, and the seven earlier scenes author
+`shadowed: false` and `backlight: 0.0`, so their goldens show the scene without them.
 
 `--quality low` draws 0.4 of the streaks (`rain_density`, a prefix of the same drops); wetness and the map are unchanged.
 

@@ -8608,6 +8608,23 @@
           2.0
         ]
       },
+      "shadowed": {
+        "description": "Whether a lit rain takes one shadow tap per light at each streak, so a roof or wall darkens the rain it\ncovers; lights without a shadow stay unshadowed (default true).",
+        "type": "boolean",
+        "default": true
+      },
+      "backlight": {
+        "description": "How much light travelling toward the camera brightens the rain, in `[0, 1]`: 0 is no forward scatter (default 0.6).",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "default": 0.6000000238418579,
+        "x-ui-range": [
+          0.0,
+          1.0
+        ]
+      },
       "seed": {
         "description": "Varies the lattice hash (default 0).",
         "type": "integer",

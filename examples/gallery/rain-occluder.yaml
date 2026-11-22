@@ -4,6 +4,7 @@
 # no moon or spot shadow, yet it stops every streak, so the floor under it is dry. Without a RainOccluder the rule is
 # "what casts a shadow occludes". The camera sits at head height facing both. ludion docs weather.
 # Ripples and splashes off (ripples: 0.0, splashes: 0.0), so this golden shows the scene still.
+# Shadows and backlight off (shadowed: false, backlight: 0.0).
 format: 1
 name: "rain-occluder - RainOccluder: a net lets rain through, a shadowless canopy stops it"
 entities:
@@ -313,6 +314,8 @@ entities:
       Rain:
         ripples: 0.0
         splashes: 0.0
+        shadowed: false
+        backlight: 0.0
         wind:
           - 1.2
           - 0.0

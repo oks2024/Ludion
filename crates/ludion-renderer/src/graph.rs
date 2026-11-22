@@ -965,6 +965,10 @@ pub struct PostChain {
     /// Set only when the scene asked for it **and** has a `Rain` ([`rain`](PostChain::rain)): a view never
     /// conjures its subject. Rain is content, so `masked` keeps it.
     pub rain_view: bool,
+    /// The scene's rain is lit and `shadowed`: `transparents` and `transparent_depth` read the lighting tail
+    /// (shadow map, injected GI, local atlas, relight table) ahead of the rain map, as a blended mesh does, so the
+    /// rain takes its shadow taps. `false` keeps a rain frame's graph as it was. It is content, so `masked` keeps it.
+    pub rain_shadowed: bool,
     /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
     /// writing the `probe_live` transient (`MAX_PROBES`×6, `Rgba32Float`: one row per cube axis) that `reflections` reads
     /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
@@ -1180,6 +1184,7 @@ impl PostChain {
             rain: scene.rain.is_some(),
             rain_view: scene.debug_view == Some(crate::DebugView::RainOcclusion)
                 && scene.rain.is_some(),
+            rain_shadowed: scene.rain.is_some_and(|r| r.lit && r.shadowed),
         }
     }
 
@@ -1846,7 +1851,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // so means nothing behind a surface the opaque pass never drew: its two passes read the same tail
     // in the same order, then the probe relight table the blended mesh's own indirect specular reads.
     // A frame with none declares no reads there.
-    let blended_reads: Vec<ResourceId> = if chain.blended {
+    let blended_reads: Vec<ResourceId> = if chain.blended || chain.rain_shadowed {
         shadow_map
             .into_iter()
             .chain(gi_dynamic)
@@ -3009,6 +3014,8 @@ mod tests {
                 // Content too: no quality switch removes the rain.
                 rain: bits & 1 != 0,
                 rain_view: false,
+                // Content too: no quality switch removes the rain's shadow taps.
+                rain_shadowed: bits & 1 != 0,
                 // Content too: no quality switch removes a blended mesh.
                 blended: bits & 1 != 0,
                 blend_nearest: bits & 1 != 0,
@@ -3776,6 +3783,8 @@ mod tests {
             wetness: 1.0,
             ripples: 0.0,
             splash_rate: 0.0,
+            shadowed: false,
+            backlight: 0.0,
             seed: 0,
             time_s: 0.0,
             per_tile: 8,
@@ -5063,6 +5072,46 @@ mod tests {
                 .iter()
                 .any(|r| r == "probe_live")
         );
+    }
+
+    /// A lit, shadowed rain takes shadow taps, so `transparents` and `transparent_depth` read the shadow map
+    /// ahead of the rain map; an unshadowed rain keeps the graph it had.
+    #[test]
+    fn rain_passes_read_the_shadow_map_only_with_a_shadowed_rain() {
+        let size = FrameSize::native(1920, 1080);
+        let chain = PostChain {
+            shadow_map: Some(2048),
+            rain: true,
+            fog: true,
+            transparent_cover: true,
+            ..PostChain::default()
+        };
+        let reads = |graph: &RenderGraph, name: &str| {
+            graph_pass(graph, name)
+                .unwrap_or_else(|| panic!("{name} is declared"))
+                .0
+        };
+        let (plain, _) = build_frame_graph(size, chain);
+        let (shadowed, _) = build_frame_graph(
+            size,
+            PostChain {
+                rain_shadowed: true,
+                ..chain
+            },
+        );
+        for name in [pass::TRANSPARENTS, pass::TRANSPARENT_DEPTH] {
+            assert!(
+                !reads(&plain, name).iter().any(|r| r == "shadow_map"),
+                "{name} reads no shadow map from an unshadowed rain"
+            );
+            let read = reads(&shadowed, name);
+            let at = read.iter().position(|r| r == "shadow_map").unwrap();
+            assert_eq!(
+                read.get(at + 1).map(String::as_str),
+                Some(pass::RAIN_OCCLUSION),
+                "{name}"
+            );
+        }
     }
 
     /// `scene_depth` gains `CopySrc` only when a `nearest` blended mesh copies it; any other frame, blended

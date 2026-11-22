@@ -2,6 +2,7 @@
 # Mesh.porosity is 0.1, on the wet street of rain-wet under one sodium spot. The stripes darken in order and all three
 # gloss; the cube is a primitive, so its Mesh.porosity applies. ludion docs weather.
 # Ripples and splashes off (ripples: 0.0, splashes: 0.0), so this golden shows the scene still.
+# Shadows and backlight off (shadowed: false, backlight: 0.0).
 format: 1
 name: "rain-porosity - Authored porosity: three palette stripes and a low-porosity cube"
 entities:
@@ -134,6 +135,8 @@ entities:
         wetness: 1.0
         ripples: 0.0
         splashes: 0.0
+        shadowed: false
+        backlight: 0.0
         wind:
           - 1.2
           - 0.0

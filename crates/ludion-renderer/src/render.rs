@@ -5127,6 +5127,28 @@ impl FrameRecorder<'_> {
         );
     }
 
+    /// The sun group: the sun uniform, the shadow map and the local-light atlas, read from `tail`, the
+    /// lighting reads a pass declares (shadow map?, then whatever else, the local atlas last). With no
+    /// lighting reads it binds the fallbacks, which `build_sun` makes unreachable.
+    fn sun_group(&self, device: &wgpu::Device, tail: &[&wgpu::TextureView]) -> wgpu::BindGroup {
+        let shadow_view = if self.has_shadow_map && !tail.is_empty() {
+            tail[0]
+        } else {
+            &self.r.fallback_shadow.view
+        };
+        let local_atlas = if self.local_shadow.is_some() && !tail.is_empty() {
+            tail[tail.len() - 1]
+        } else {
+            &self.r.fallback_shadow.view
+        };
+        self.r.sun_bind_group(
+            device,
+            &self.sun_buf,
+            shadow_view,
+            (local_atlas, &self.local_views_buf, &self.light_shadow_buf),
+        )
+    }
+
     /// The mesh lighting's bind groups 2 and 3 — the sun with its shadows, and the environment with the
     /// AO factor and the GI volumes — built from `inputs`, the conditional tail of the scene pass's
     /// reads (shadow map?, AO?, dynamic GI?, local-light atlas?, in that order). The lit decal pass
@@ -5150,22 +5172,7 @@ impl FrameRecorder<'_> {
         // counted rather than fixed: shadow first when the frame has a map, then the blurred AO factor
         // when the scene enables occlusion, then the injected GI volume, and last the local-light
         // shadow atlas. A frame with no granted light (and every probe capture) binds the fallback.
-        let shadow_view = if self.has_shadow_map {
-            inputs[0]
-        } else {
-            &self.r.fallback_shadow.view
-        };
-        let local_atlas = if self.local_shadow.is_some() {
-            inputs[inputs.len() - 1]
-        } else {
-            &self.r.fallback_shadow.view
-        };
-        let sun_bg = self.r.sun_bind_group(
-            device,
-            &self.sun_buf,
-            shadow_view,
-            (local_atlas, &self.local_views_buf, &self.light_shadow_buf),
-        );
+        let sun_bg = self.sun_group(device, inputs);
 
         // Mesh group 3: the environment plus the AO factor it modulates. `ao` carries the flag, the
         // reciprocal of the render extent — what turns a fragment's framebuffer position into the AO
@@ -8268,6 +8275,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Math,
             Snippet::RainOcclusion,
             Snippet::RainRipple,
+            Snippet::ShadowBindings,
             Snippet::MeshShading,
             Snippet::MeshMaterial,
         ],
@@ -8723,6 +8731,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Math,
             Snippet::RainOcclusion,
             Snippet::RainRipple,
+            Snippet::ShadowBindings,
             Snippet::MeshShading,
             Snippet::Decal,
         ],
@@ -8788,10 +8797,13 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Quad,
             Snippet::RainOcclusion,
             Snippet::RainRipple,
+            Snippet::ShadowBindings,
+            Snippet::BillboardShadowed,
         ],
         layouts: &[
             Some(LayoutId::Camera),
             Some(LayoutId::Lights),
+            Some(LayoutId::Sun),
             Some(LayoutId::Rain),
         ],
     },
@@ -8881,6 +8893,8 @@ pub(crate) enum Snippet {
     /// `sh_l1` and `sky_visibility_at`, the one read of the sky-visibility probe volume,
     /// binding-free (mesh, reflections).
     GiProbe,
+    /// The sun and local-light shadow bindings, `@group(2)` (mesh, decal_lit).
+    ShadowBindings,
     /// The mesh lighting — groups 2–3 and `shade` (mesh).
     MeshShading,
     /// The per-draw material maps and flags — `@group(4)`, the cutout and back-face tests (mesh,
@@ -8910,6 +8924,9 @@ pub(crate) enum Snippet {
     /// `shade_two_sided`, the light rule of a flat camera-facing billboard (sprite, and a lit
     /// particle's centre); needs the `Camera` and `Lights` snippets ahead of it.
     BillboardLight,
+    /// `sun_tap`, `local_tap`, `hg4pi` and `shade_billboard_shadowed`: `shade_two_sided` with one shadow tap
+    /// per light and a forward-scatter lobe (rain); needs `Camera`, `Lights` and `ShadowBindings` ahead of it.
+    BillboardShadowed,
     /// `view_to_eye` and `view_from_eye`, which pick an orthographic camera's single view direction
     /// over the per-pixel vector to the eye, binding-free (mesh, decal_lit, sky, reflections,
     /// ssr_blend, ssr_trace).
@@ -8938,7 +8955,7 @@ pub(crate) enum Snippet {
 
 impl Snippet {
     /// Every snippet.
-    pub(crate) const ALL: [Snippet; 33] = [
+    pub(crate) const ALL: [Snippet; 35] = [
         Snippet::Camera,
         Snippet::ClusterGrid,
         Snippet::Probes,
@@ -8954,6 +8971,7 @@ impl Snippet {
         Snippet::Dfg,
         Snippet::SpecularIbl,
         Snippet::GiProbe,
+        Snippet::ShadowBindings,
         Snippet::MeshShading,
         Snippet::MeshMaterial,
         Snippet::Footprint,
@@ -8964,6 +8982,7 @@ impl Snippet {
         Snippet::RoundedBox,
         Snippet::Decal,
         Snippet::BillboardLight,
+        Snippet::BillboardShadowed,
         Snippet::ViewRay,
         Snippet::TransparentLayer,
         Snippet::Quad,
@@ -8992,6 +9011,7 @@ impl Snippet {
             Snippet::Dfg => "dfg.wgsl",
             Snippet::SpecularIbl => "specular_ibl.wgsl",
             Snippet::GiProbe => "gi_probe.wgsl",
+            Snippet::ShadowBindings => "shadow_bindings.wgsl",
             Snippet::MeshShading => "mesh_shading.wgsl",
             Snippet::MeshMaterial => "mesh_material.wgsl",
             Snippet::Footprint => "footprint.wgsl",
@@ -9002,6 +9022,7 @@ impl Snippet {
             Snippet::RoundedBox => "rounded_box.wgsl",
             Snippet::Decal => "decal.wgsl",
             Snippet::BillboardLight => "billboard_light.wgsl",
+            Snippet::BillboardShadowed => "billboard_shadowed.wgsl",
             Snippet::ViewRay => "view_ray.wgsl",
             Snippet::TransparentLayer => "transparent_layer.wgsl",
             Snippet::Quad => "quad.wgsl",
@@ -9031,6 +9052,7 @@ impl Snippet {
             Snippet::Dfg => include_str!("shaders/snippets/dfg.wgsl"),
             Snippet::SpecularIbl => include_str!("shaders/snippets/specular_ibl.wgsl"),
             Snippet::GiProbe => include_str!("shaders/snippets/gi_probe.wgsl"),
+            Snippet::ShadowBindings => include_str!("shaders/snippets/shadow_bindings.wgsl"),
             Snippet::MeshShading => include_str!("shaders/snippets/mesh_shading.wgsl"),
             Snippet::MeshMaterial => include_str!("shaders/snippets/mesh_material.wgsl"),
             Snippet::Footprint => include_str!("shaders/snippets/footprint.wgsl"),
@@ -9041,6 +9063,7 @@ impl Snippet {
             Snippet::RoundedBox => include_str!("shaders/snippets/rounded_box.wgsl"),
             Snippet::Decal => include_str!("shaders/snippets/decal.wgsl"),
             Snippet::BillboardLight => include_str!("shaders/snippets/billboard_light.wgsl"),
+            Snippet::BillboardShadowed => include_str!("shaders/snippets/billboard_shadowed.wgsl"),
             Snippet::ViewRay => include_str!("shaders/snippets/view_ray.wgsl"),
             Snippet::TransparentLayer => {
                 include_str!("shaders/snippets/transparent_layer.wgsl")

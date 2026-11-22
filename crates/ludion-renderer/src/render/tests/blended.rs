@@ -582,6 +582,8 @@ fn needs_gpu_rain_does_not_move_a_shadowed_blended_pane() {
                 wetness: 0.5,
                 ripples: 0.0,
                 splash_rate: 0.0,
+                shadowed: false,
+                backlight: 0.0,
                 seed: 0,
                 time_s: 1.0,
                 per_tile: 0,

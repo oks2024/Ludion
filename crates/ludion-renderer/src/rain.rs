@@ -45,6 +45,10 @@ pub struct RainData {
     pub ripples: f32,
     /// `intensity x splashes`: how often splashes appear on exposed tops; 0 draws none.
     pub splash_rate: f32,
+    /// Multiply each light's term by one shadow tap at the shade point (a lit rain only).
+    pub shadowed: bool,
+    /// How much light travelling toward the camera brightens the rain, in `[0, 1]`.
+    pub backlight: f32,
     /// Varies the lattice hash.
     pub seed: u32,
     /// Game seconds, wrapped at [`RAIN_TIME_WRAP_S`].
@@ -355,6 +359,8 @@ mod tests {
             wetness: 0.0,
             ripples: 0.0,
             splash_rate: 0.0,
+            shadowed: false,
+            backlight: 0.0,
             seed: 0,
             time_s: 3.25,
             per_tile: 96,

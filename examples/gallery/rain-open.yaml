@@ -2,6 +2,7 @@
 # streaks inside the lit cone catch the light and the rest fall dark, slanted by the wind. A presentation entity holds
 # the rain, so it never enters the world hash. The camera sits at head height facing the cone.
 # Ripples and splashes off (ripples: 0.0, splashes: 0.0), so this golden shows the scene still.
+# Shadows and backlight off (shadowed: false, backlight: 0.0).
 format: 1
 name: "rain-open - Rain: lit streaks in a sodium cone, wind-slanted"
 entities:
@@ -141,6 +142,8 @@ entities:
       Rain:
         ripples: 0.0
         splashes: 0.0
+        shadowed: false
+        backlight: 0.0
         wind:
           - 1.2
           - 0.0

@@ -3,6 +3,7 @@
 # the 60 degree ramp (steeper than 45 degrees) or on the dry floor under the roof, which the map reads as the roof's
 # top. Rain.splashes is 2 (the most) and ripples are off (ripples: 0.0), so the golden shows only splashes; it is the
 # frame at tick 12. ludion docs weather.
+# Shadows and backlight off (shadowed: false, backlight: 0.0).
 format: 1
 name: "rain-splashes - Rain splashes: rings and droplets on open tops, none on a steep ramp or under a roof"
 entities:
@@ -180,6 +181,8 @@ entities:
       Rain:
         ripples: 0.0
         splashes: 2.0
+        shadowed: false
+        backlight: 0.0
         wind:
           - 0.6
           - 0.0

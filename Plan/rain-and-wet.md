@@ -1,7 +1,7 @@
 # Plan: Rain and wet weather
 
-> Status: **W1a, W1b, W2a, W2b, W2c, W3a and W3b mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
-> roof occlusion, mesh wetness, authored porosity, `RainOccluder`, the `rain_occlusion` debug view, the `rain_density` quality lever, ripples on wet ground and coat decals, splashes on exposed tops (`rain-splashes`), and the `rain-open`, `rain-awning`, `rain-wet`, `rain-porosity` and `rain-occluder` goldens. Usage is `ludion docs weather`; the gallery scenes are
+> Status: **W1a, W1b, W2a, W2b, W2c, W3a and W3b mechanized; W4a (shadowed, backlit rain) mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
+> roof occlusion, mesh wetness, authored porosity, `RainOccluder`, the `rain_occlusion` debug view, the `rain_density` quality lever, ripples on wet ground and coat decals, splashes on exposed tops (`rain-splashes`), shadowed and backlit rain (`rain-shadows`), and the `rain-open`, `rain-awning`, `rain-wet`, `rain-porosity` and `rain-occluder` goldens. Usage is `ludion docs weather`; the gallery scenes are
 > `examples/gallery/rain-open.yaml`, `rain-awning.yaml`, `rain-wet.yaml`, `rain-porosity.yaml` and `rain-occluder.yaml`.
 
 ## Why
@@ -119,6 +119,26 @@ for the whole arc; W1a ships the streak field.
     `base = floor((cam.xz - R) / CELL)`, `instances = n^2 x 5` (0 when `p` is 0). `rain_density` multiplies `p`; wetness, ripples and
     streaks are untouched. `build_rain_draw` returns `None` only when streaks, splashes and wetness are all zero. With
     `occlusion: false` the map is empty, so no splashes draw. The six earlier rain scenes author `splashes: 0.0`.
+28. **Shadow bindings snippet** (W4a). The `Sun` struct, the `@group(2)` bindings 0-5, `LocalView`, `UNSHADOWED`,
+    `NORMAL_OFFSET_TEXELS` and `MAX_PENUMBRA_TEXELS` move verbatim from `mesh_shading.wgsl` into
+    `snippets/shadow_bindings.wgsl`; the PCF, PCSS and cascade functions stay. Every composition listing `mesh_shading.wgsl` gains
+    `shadow_bindings.wgsl` immediately before it, in both registries (`render.rs` and the bindgen `COMPOSITIONS`); the composed
+    text moves only by the relocation.
+29. **Rain at group 3.** `rain.wgsl` moves `rain`/`rain_occlusion` from `@group(2)` to `@group(3)` and binds the sun group at 2.
+    The `Rain` shader composes `shadow_bindings.wgsl` and `billboard_shadowed.wgsl`; its layouts are `[Camera, Lights, Sun, Rain]`.
+    The sun group's bindings reflect as `VERTEX_FRAGMENT`, since rain samples them at the vertex stage.
+30. **One tap** (`snippets/billboard_shadowed.wgsl`). `sun_tap(p)` takes one compare tap in the anchored map or the first
+    covering cascade (no seam band; 1 past the last cascade or outside the box); `local_tap(index, p, l, dist)` is
+    `local_shadow`'s view pick with `n = l`, one tap clamped in its tile, `UNSHADOWED` giving an exact 1; `hg4pi(c, g) =
+    (1 - g^2) / (1 + g^2 - 2gc)^1.5`; `shade_billboard_shadowed` copies `shade_two_sided`'s loop and multiplies each light's term by
+    `select(1, tap, shadowed) x mix(1, hg4pi(dot(travel, v), g), backlight)`, the sun's likewise with `sun.direction`. Unshadowed
+    lights stay unshadowed. `shade_two_sided` is untouched.
+31. **Lanes, graph and binding.** `Rain.shadowed` (default true) and `Rain.backlight` (`[0, 1]`, default 0.6, `L2380`). `RainParams`
+    gains `shade` after `splash` (x shadowed, y backlight, z `PostProcess.fog_anisotropy`); `rain.wgsl` shades through
+    `shade_billboard_shadowed` only when `shade.x > 0.5 || shade.y > 0`, else the old `shade_two_sided`, so `shadowed: false` with
+    `backlight: 0` keeps the W3b bytes. `PostChain.rain_shadowed = rain.lit && rain.shadowed` opens the lighting-tail reads in
+    `transparents`/`transparent_depth`; `record_rain` binds the sun group through the same `sun_group` factor `shading_groups` uses.
+    The seven earlier rain scenes author `shadowed: false` and `backlight: 0.0`.
 
 ## Waves
 
@@ -132,7 +152,9 @@ for the whole arc; W1a ships the streak field.
 - **W2c:** `RainOccluder`, `--debug-view rain_occlusion` and a `rain_density` quality lever.
 - **W3a, ripples:** `Rain.ripples` and `Decal.ripples`; a shading-normal perturbation on wet ground and on `coat` decals (D22-D24).
 - **W3b, splashes** (shipped): the instanced splash draw on exposed tops (D25-D27).
-- **W4:** sun and local shadow taps, `backlight`, `ParticleEmitter.shadowed` and `.stretch`.
+- **W4a, rain lighting** (shipped): sun and local shadow taps and `backlight` on the rain (D28-D31).
+- **W4b, particles:** `ParticleEmitter.shadowed` through `shade_billboard_shadowed`, and `.stretch`, a quad along the
+  screen-projected velocity of length `stretch x |v| / 60` (default 0 is byte-identical).
 - **W5:** `rain-camera-move`, budget files, and a tile cache if the measured cost asks for one.
 
 ## Out of scope / deferred
@@ -187,3 +209,4 @@ for the whole arc; W1a ships the streak field.
 - **W2c mechanized (2026-11-22):** `RainOccluder { occludes }` (D18; resolved per placed mesh at extract, nearest on the entity or a `Parent` ancestor, into the CPU-only `MeshInstance.rain_occluder`), `L2383` (D19), `ludion render --debug-view rain_occlusion` (D20; `PostChain.rain_view`, `EnvParams.wet.w`, no pass, CLI-only) and `QualityParams.rain_density` (D21; `low` 0.4, a prefix of the same drops). `rain-occluder` and `rain-occluder-view` are new Windows goldens blessed on the RTX 3090; the other 124 gallery goldens passed unblessed. No replay content hash, `WorldHash` or protocol schema moved; the component schema snapshot gained `RainOccluder`. Owed: the macOS twins of both goldens.
 - **W3a mechanized (2026-11-22):** `Rain.ripples` and `Decal.ripples` (both `[0, 2]`, default 1; the decal's is read for `coat` only), the stateless ripple field `rain_ripple.wgsl` with its CPU twin `ripple_slope` (D22), `EnvParams.ripple` (D23) and the decal exposure read at the box top from the `rain_occlusion` map through `decal_lit.wgsl`'s `@group(4) @binding(12)`, which `decals_lit` reads last only with rain (D24). A frame without rain, and `ripples: 0`, render the W2c bytes: the five earlier rain scenes now author `ripples: 0.0`, and every one of them and `decals` re-rendered byte-equal to its pre-edit PNG. `rain-ripples` is the new Windows golden blessed on the RTX 3090; nothing else was re-blessed. No replay content hash, `WorldHash` or protocol schema moved; the component schema snapshot gained the two fields. Owed: the macOS twin of `rain-ripples`, the editor TS types. W3b (splashes, D25) is next.
 - **W3b mechanized (2026-11-22):** `Rain.splashes` (`[0, 2]`, default 1; no new L-code), the stateless splash field in `rain.wgsl` with its CPU twin `splash_at` and `splash_layout` (D25), a second instanced draw after the streaks through the same pipeline and bind group with `RainParams.splash_grid`/`splash` and a flat `ring` varying (D26), and `RainData.splash_rate` with `rain_density` thinning (D27). Splashes land on the `rain_occlusion` map's top: roofs splash, floor under them and tops steeper than 45 degrees do not, and `occlusion: false` draws none. The six earlier rain scenes author `splashes: 0.0` and passed unblessed; the new `rain-splashes` golden is blessed on the RTX 3090. Nothing existing was re-blessed; no replay, `WorldHash` or protocol schema moved; the component schema snapshot moved. Owed: the macOS twin of `rain-splashes` (M4) and the `Rain.splashes` TS type. The ring-only splash on puddle decals stays Proposed, owner ruling owed.
+- **W4a mechanized (2026-11-22):** `Rain.shadowed` (default true) and `Rain.backlight` (`[0, 1]`, default 0.6; no new L-code). The shadow bindings moved verbatim out of `mesh_shading.wgsl` into `shadow_bindings.wgsl` (D28; the whole gallery re-rendered byte-identical before anything else changed). The rain moved to group 3 and binds the sun group at 2 (D29); `billboard_shadowed.wgsl` holds `sun_tap`, `local_tap`, `hg4pi` and `shade_billboard_shadowed` (D30); `RainParams.shade`, `RainData.shadowed`/`backlight`, `PostChain.rain_shadowed` and the `sun_group` factor `record_rain` shares with `shading_groups` (D31). `shadowed: false` with `backlight: 0` takes the old `shade_two_sided` branch and graph: `rain-open` and `rain-splashes` renders were byte-equal before and after. The seven earlier rain scenes author both off and passed unblessed; the new `rain-shadows` golden is blessed on the RTX 3090. Nothing existing was re-blessed; no replay, `WorldHash` or protocol schema moved; the component schema snapshot moved. Owed: the macOS twin of `rain-shadows` (M4), the `Rain.shadowed`/`backlight` TS types, and the probe-store code key, which moves with every mesh shader's composition. W4b (particles) is next.

@@ -1,0 +1,122 @@
+# Feature: Rain shadows and backlight - a head-high camera at night looking into a sodium floodlight that hangs beyond the
+# rain. The light travels toward the camera, so the streaks in its cone glow (Rain.backlight at its default of 0.6, the
+# medium's anisotropy 0.7), and a hut wall to its right casts a shadow wedge: the rain inside it falls dark, because a lit
+# rain takes one shadow tap per light (Rain.shadowed at its default of true). Splashes and ripples are off (splashes: 0.0,
+# ripples: 0.0), so the golden shows only the lighting; it is the frame at tick 12. ludion docs weather.
+format: 1
+name: "rain-shadows - Rain shadows: a backlit cone of streaks that stops at a hut wall's shadow"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - -1.0
+          - 1.7
+          - 6.0
+        rotation:
+          - -6.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.015
+          - 0.03
+        sky_horizon:
+          - 0.03
+          - 0.04
+          - 0.06
+        sky_ground:
+          - 0.005
+          - 0.006
+          - 0.01
+        ibl_intensity: 0.3
+      PostProcess:
+        bloom_threshold: 0.8
+        bloom_strength: 0.1
+        exposure: 1.0
+        tonemap: aces
+        fog_density: 0.02
+        fog_color:
+          - 0.03
+          - 0.04
+          - 0.06
+        fog_start: 4.0
+        vignette: 0.4
+        vignette_radius: 0.9
+  - name: floodlight
+    components:
+      Transform:
+        translation:
+          - 0.5
+          - 4.0
+          - -2.5
+      SpotLight:
+        color:
+          - 1.0
+          - 0.7
+          - 0.35
+        intensity: 16.0
+        range: 16.0
+        direction:
+          - 0.0
+          - -0.3
+          - 1.0
+        inner_angle: 30.0
+        outer_angle: 55.0
+        cast_shadows: true
+  - name: ground
+    components:
+      Transform:
+        scale:
+          - 30.0
+          - 1.0
+          - 30.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.12
+          - 0.12
+          - 0.14
+          - 1.0
+        roughness: 0.6
+  - name: hut-wall
+    components:
+      Transform:
+        translation:
+          - 1.2
+          - 2.25
+          - -0.5
+        scale:
+          - 0.2
+          - 4.5
+          - 3.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.28
+          - 0.26
+          - 1.0
+        roughness: 0.85
+  - name: weather
+    presentation: true
+    components:
+      Rain:
+        ripples: 0.0
+        splashes: 0.0
+        wind:
+          - 0.3
+          - 0.0
+          - 0.0
+        color:
+          - 0.75
+          - 0.8
+          - 0.9
+          - 0.7

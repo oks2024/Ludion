@@ -3,6 +3,7 @@
 # stays still and mirror-like, because ripples read the rain's occlusion map at the decal's box top and never ring
 # covered water. Rain.ripples is left at its default of 1 and splashes are off (splashes: 0.0); the golden is the frame at tick 12.
 # ludion docs weather.
+# Shadows and backlight off (shadowed: false, backlight: 0.0).
 format: 1
 name: "rain-ripples - Rain ripples: rings on open water, none under a roof"
 entities:
@@ -179,6 +180,8 @@ entities:
     components:
       Rain:
         splashes: 0.0
+        shadowed: false
+        backlight: 0.0
         wind:
           - 0.6
           - 0.0

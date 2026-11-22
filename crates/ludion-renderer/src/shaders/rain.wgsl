@@ -10,7 +10,9 @@
 //
 // The streak is a quad along the drop's world velocity (camera motion is never added), at least one
 // output pixel wide with its alpha scaled by the width it was widened from. Blending is premultiplied.
-// A lit rain shades each streak centre once through the lit-sprite rule (`shade_two_sided`), unshadowed.
+// A lit rain shades each streak centre once through the lit-sprite rule (`shade_two_sided`); with
+// `shadowed` or `backlight` it takes `shade_billboard_shadowed`: one shadow tap per light and a forward-
+// scatter lobe.
 //
 // After the streaks the same draw carries the splash instances (`splash_vertex`): rings and droplets on
 // the tops the occlusion map finds, through the same fragment stages.
@@ -18,7 +20,7 @@
 // A fragment under a roof is hidden: it reads the `rain_occlusion` depth map (every shadow caster seen
 // straight down) and fades out below the caster's top at its column (`rain_open_sky`).
 //
-// The `Camera` uniform (@group 0), the clustered light set (@group 1), the map's `occluder_top` and the
+// The `Camera` uniform (@group 0), the clustered light set (@group 1), the sun group (@group 2), the map's `occluder_top` and the
 // `pcg`/`unit_hash` rounds (`rain_ripple.wgsl`) are shared snippets composed ahead of this file.
 
 struct RainParams {
@@ -45,11 +47,13 @@ struct RainParams {
     splash_grid: vec4<i32>,
     // x = the splash probability per slot, the rest unused.
     splash: vec4<f32>,
+    // x = the shadowed flag (0 or 1), y = backlight, z = the medium's anisotropy `g`, w unused.
+    shade: vec4<f32>,
 };
 
-@group(2) @binding(0) var<uniform> rain: RainParams;
+@group(3) @binding(0) var<uniform> rain: RainParams;
 // The `rain_occlusion` map: the nearest shadow caster's depth over each texel, 1.0 where there is none.
-@group(2) @binding(1) var rain_occlusion: texture_depth_2d;
+@group(3) @binding(1) var rain_occlusion: texture_depth_2d;
 
 struct RainVert {
     clip: vec4<f32>,
@@ -59,6 +63,15 @@ struct RainVert {
     // 1 for a splash's ring quad, 0 for streaks and droplets.
     ring: f32,
 };
+
+// The light at a shade point: the sprite rule, or the shadowed and backlit one when either is authored.
+fn rain_shade(p: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
+    let cam = camera.cam_pos.xyz;
+    if (rain.shade.x > 0.5 || rain.shade.y > 0.0) {
+        return shade_billboard_shadowed(p, cam - p, frag, rain.shade.x > 0.5, rain.shade.y, rain.shade.z);
+    }
+    return shade_two_sided(p, cam - p, frag);
+}
 
 fn rain_vertex(vi: u32, ii: u32) -> RainVert {
     let per_tile = rain.counts.z;
@@ -135,7 +148,7 @@ fn rain_vertex(vi: u32, ii: u32) -> RainVert {
         let c = camera.view_proj * vec4<f32>(pos, 1.0);
         let ndc = c.xy / max(abs(c.w), 1e-4);
         let frag = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) / lights.grid.xy;
-        rgb = rgb * shade_two_sided(pos, cam - pos, frag);
+        rgb = rgb * rain_shade(pos, frag);
     }
     out.color = vec4<f32>(rgb, rain.color.a * fade * (rain.look.x / width));
     out.world = world;
@@ -227,7 +240,7 @@ fn splash_vertex(vi: u32, si: u32) -> RainVert {
         let c = camera.view_proj * vec4<f32>(base, 1.0);
         let ndc = c.xy / max(abs(c.w), 1e-4);
         let frag = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) / lights.grid.xy;
-        rgb = rgb * shade_two_sided(base, cam - base, frag);
+        rgb = rgb * rain_shade(base, frag);
     }
     out.color = vec4<f32>(rgb, alpha);
     out.world = world;

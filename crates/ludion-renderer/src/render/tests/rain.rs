@@ -26,6 +26,8 @@ fn rain(time_s: f32) -> RainData {
         wetness: 0.0,
         ripples: 0.0,
         splash_rate: 0.0,
+        shadowed: false,
+        backlight: 0.0,
         seed: 0,
         time_s,
         per_tile: 96,
@@ -1049,6 +1051,8 @@ fn splashing(rate: f32, time_s: f32) -> RainData {
     RainData {
         per_tile: 0,
         splash_rate: rate,
+        shadowed: false,
+        backlight: 0.0,
         time_s,
         ..rain(0.0)
     }
@@ -1211,4 +1215,177 @@ fn needs_gpu_steep_tops_and_a_missing_map_take_no_splash() {
         blind(0.0).rgba == blind(2.0).rgba,
         "no occlusion map, no splash"
     );
+}
+
+/// Summed rgb of columns `x` over every row.
+fn column_sum(frame: &RenderedImage, x: std::ops::Range<u32>) -> u64 {
+    (0..frame.height)
+        .flat_map(|y| x.clone().map(move |x| (x, y)))
+        .map(|(x, y)| {
+            px(frame, x, y)[..3]
+                .iter()
+                .map(|&c| u64::from(c))
+                .sum::<u64>()
+        })
+        .sum()
+}
+
+/// A thin casting wall in the plane x = 0.5 from z = -16 to -1; it hides no rain.
+fn shadow_wall() -> MeshInstance {
+    let mut wall = slab(Vec3::ZERO, 1.0, [0.4; 3]);
+    wall.model = Mat4::from_translation(Vec3::new(0.5, 4.0, -8.5))
+        * Mat4::from_scale(Vec3::new(0.1, 20.0, 15.0));
+    wall.rain_occluder = false;
+    wall
+}
+
+/// A shadow-granted point or spot light to the right of the wall, shining across it.
+fn walled_light(spot: bool) -> RenderScene {
+    let shadow = Some(crate::scene::LocalShadowData {
+        bias: 0.05,
+        near: 0.1,
+        distance: None,
+        fade: 0.0,
+    });
+    let mut scene = floor(None);
+    scene.meshes.push(shadow_wall());
+    let at = Vec3::new(2.0, 1.0, -4.0);
+    if spot {
+        let mut light = spot_light(at, Vec3::NEG_X, 60.0, 30.0, 60.0, 80.0);
+        light.shadow = shadow;
+        scene.spot_lights = vec![light];
+    } else {
+        let mut light = point_light(at, 60.0, 30.0);
+        light.shadow = shadow;
+        scene.lights = vec![light];
+    }
+    scene
+}
+
+/// The rain behind a casting wall darkens with `shadowed`, and the lit side takes the same bytes.
+/// Covers a point and a spot light. Skips with no GPU.
+#[test]
+fn needs_gpu_a_wall_shadows_the_rain_for_a_local_light() {
+    let Some(renderer) = skip_or_renderer("a_wall_shadows_the_rain_for_a_local_light") else {
+        return;
+    };
+    for spot in [false, true] {
+        let render = |shadowed: bool| {
+            let mut scene = walled_light(spot);
+            scene.rain = Some(RainData {
+                shadowed,
+                ..rain(1.0)
+            });
+            renderer.render(&scene, size()).expect("render")
+        };
+        let (open, taken) = (render(false), render(true));
+        assert!(
+            column_sum(&taken, 0..120) < column_sum(&open, 0..120),
+            "spot {spot}: the rain past the wall darkens"
+        );
+        assert!(
+            column_differs(&open, &taken, 0..PX),
+            "spot {spot}: the tap changes the frame"
+        );
+        assert!(
+            !column_differs(&open, &taken, 245..PX),
+            "spot {spot}: the lit side is untouched"
+        );
+    }
+}
+
+/// A sun with a shadow map: the streaks under a casting roof darken with `shadowed`. Skips with no GPU.
+#[test]
+fn needs_gpu_a_roof_shadows_the_rain_for_the_sun() {
+    let Some(renderer) = skip_or_renderer("a_roof_shadows_the_rain_for_the_sun") else {
+        return;
+    };
+    let render = |shadowed: bool| {
+        let mut roof = roof(Vec3::new(0.0, 3.0, 0.0), Vec3::new(60.0, 0.2, 60.0), true);
+        roof.rain_occluder = false;
+        let mut scene = under_roof(
+            Some(RainData {
+                shadowed,
+                ..rain(1.0)
+            }),
+            Some(roof),
+        );
+        scene.sun = Some(test_sun(Vec3::new(0.0, -1.0, 0.0), Vec3::splat(2.0), 0.002));
+        renderer.render(&scene, size()).expect("render")
+    };
+    let (open, taken) = (render(false), render(true));
+    // Rows below the horizon see only streaks beneath the roof.
+    let lower = |frame: &RenderedImage| {
+        (PX / 2..PX)
+            .flat_map(|y| (0..PX).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                px(frame, x, y)[..3]
+                    .iter()
+                    .map(|&c| u64::from(c))
+                    .sum::<u64>()
+            })
+            .sum::<u64>()
+    };
+    assert!(
+        lower(&taken) < lower(&open),
+        "the roof shades the rain under it"
+    );
+}
+
+/// A light beyond the rain, shining at the camera, brightens it with `backlight`; with an isotropic
+/// medium (`fog_anisotropy: 0`) the lobe is 1, so any `backlight` stays within one output level of 0. Skips with no GPU.
+#[test]
+fn needs_gpu_backlight_brightens_rain_that_faces_the_light() {
+    let Some(renderer) = skip_or_renderer("backlight_brightens_rain_that_faces_the_light") else {
+        return;
+    };
+    let render = |backlight: f32, anisotropy: f32| {
+        let mut scene = floor(Some(RainData {
+            backlight,
+            ..rain(1.0)
+        }));
+        scene.post = Some(PostData {
+            fog_anisotropy: anisotropy,
+            ..exact_post()
+        });
+        scene.lights = vec![point_light(Vec3::new(0.0, 1.0, -9.0), 1.0, 30.0)];
+        renderer.render(&scene, size()).expect("render")
+    };
+    let (flat, glowing) = (render(0.0, 0.7), render(1.0, 0.7));
+    assert!(
+        column_sum(&glowing, 100..170) > column_sum(&flat, 100..170),
+        "forward scatter brightens the rain"
+    );
+    // The lobe is exactly 1, but the lit path is a different shader body, whose multiply-adds the
+    // driver may fuse differently: an output level is the most it can move.
+    let (a, b) = (render(0.0, 0.0), render(1.0, 0.0));
+    let worst = a
+        .rgba
+        .iter()
+        .zip(&b.rgba)
+        .map(|(x, y)| x.abs_diff(*y))
+        .max();
+    assert!(
+        worst <= Some(1),
+        "g = 0 makes the lobe 1: worst difference {worst:?}"
+    );
+}
+
+/// An unlit rain ignores both fields. Skips with no GPU.
+#[test]
+fn needs_gpu_an_unlit_rain_ignores_shadowed_and_backlight() {
+    let Some(renderer) = skip_or_renderer("an_unlit_rain_ignores_shadowed_and_backlight") else {
+        return;
+    };
+    let render = |shadowed: bool, backlight: f32| {
+        let mut scene = walled_light(false);
+        scene.rain = Some(RainData {
+            lit: false,
+            shadowed,
+            backlight,
+            ..rain(1.0)
+        });
+        renderer.render(&scene, size()).expect("render")
+    };
+    assert_eq!(render(false, 0.0).rgba, render(true, 1.0).rgba);
 }
