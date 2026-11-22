@@ -147,7 +147,7 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
 - **Portals.** Trigger: a game needs a view through a doorway.
 - **Per-view shadow maps.** Trigger: a view looks at a region the main cascades do not cover.
 - **The late latch for a view camera.** Trigger: a game shows a view driven by the main camera's look (a helmet cam): the
-  view then trails the main view by up to one tick. **Proposed — owner ruling owed.**
+  view then trails the main view by up to one tick. Owner ruling 2026-11-21: accepted.
 - **Interpolating an orthographic view's height.** Trigger: a game animates a radar zoom that must be smooth live.
 
 ## Owner rulings (2026-11-19)
@@ -161,6 +161,8 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
 - Accepted. Request differences: a disabled or over-budget view draws nothing where the request draws the clear colour; W1 has no
   `background` field.
 - Accepted. The `Plan/engine-gap-map.md` cameras line.
+- Accepted (2026-11-21). The late latch stays main-camera only (D34–D36); a view driven by the main camera's look trails it
+  by up to one tick until the trigger in Out of scope.
 
 ## Status — request 0017
 
