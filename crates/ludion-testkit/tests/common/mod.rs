@@ -31,11 +31,16 @@
 //! plays it, so a tick `T` of the driven run and `--at T` of `ludion render --sequence` agree until the
 //! dialogue key (the preview has no dialogue). [`SEQUENCE_GOLDEN_TICKS`] are the previewed goldens
 //! (`ludion docs sequences`).
+//!
+//! **debug-shapes** — [`debug_shapes_builder`] registers [`draw_shapes`], which draws every `DebugPen`
+//! primitive each tick under the `shapes` category on a 5 x 3 grid of [`SHAPE_CELL`] metre cells, one
+//! cell left empty (`ludion docs debug-draw`). [`SHAPE_SEGMENTS`] is the segment count it produces.
 
 #![allow(dead_code)]
 
 use ludion::prelude::{
     Body, Collider, Joint, JointKind, JointMotor, JointPoses, PhysicsWorld, PoseBlend, Velocity,
+    debug_draw,
 };
 use ludion_core::ids::EntityId;
 use ludion_ecs::{SystemCtx, World};
@@ -965,4 +970,91 @@ pub fn play_beat(world: &mut World) -> ludion_engine::sequences::SequenceHandle 
         ("drone", named("drone")),
     ];
     ludion_engine::sequences::play(world, SEQUENCE_DOC, &bindings).expect("the beat plays")
+}
+
+/// **debug-shapes** — metres between cell centres on the grid [`draw_shapes`] lays the primitives on.
+pub const SHAPE_CELL: f32 = 2.5;
+/// Segments the 14 primitive calls of [`draw_shapes`] push under `shapes` each tick.
+pub const SHAPE_SEGMENTS: usize = 216;
+
+const SHAPE_UP: [f32; 3] = [0.0, 1.0, 0.0];
+const SHAPE_FORWARD: [f32; 3] = [1.0, 0.0, 0.0];
+pub const SHAPE_COLORS: [[f32; 4]; 14] = [
+    [1.0, 0.25, 0.25, 1.0],
+    [1.0, 0.6, 0.1, 1.0],
+    [1.0, 0.9, 0.1, 1.0],
+    [0.6, 1.0, 0.2, 1.0],
+    [0.1, 1.0, 0.4, 1.0],
+    [0.1, 1.0, 0.85, 1.0],
+    [0.2, 0.7, 1.0, 1.0],
+    [0.35, 0.4, 1.0, 1.0],
+    [0.7, 0.35, 1.0, 1.0],
+    [1.0, 0.3, 0.9, 1.0],
+    [1.0, 0.4, 0.6, 1.0],
+    [1.0, 1.0, 1.0, 1.0],
+    [0.8, 0.8, 0.4, 1.0],
+    [0.5, 1.0, 0.7, 1.0],
+];
+
+/// The centre of grid cell (`col`, `row`) on the floor: five columns along x, three rows along z.
+fn shape_cell(col: usize, row: usize, y: f32) -> [f32; 3] {
+    [
+        (col as f32 - 2.0) * SHAPE_CELL,
+        y,
+        (row as f32 - 1.0) * SHAPE_CELL,
+    ]
+}
+
+/// Draws every `DebugPen` primitive under `shapes`, row-major: line, ray, path, cross, axes /
+/// aabb, sphere, capsule, circle, arc / wedge, ring_sector, cone, frustum_wedge, (empty).
+pub fn draw_shapes(world: &mut World, _ctx: &SystemCtx) {
+    let c = SHAPE_COLORS;
+    let at = |i: usize, dx: f32, y: f32, dz: f32| {
+        let p = shape_cell(i % 5, i / 5, y);
+        [p[0] + dx, p[1], p[2] + dz]
+    };
+    let floor = |i: usize| at(i, 0.0, 0.02, 0.0);
+    let mut pen = debug_draw(world, "shapes");
+    pen.line(at(0, -1.0, 0.02, -0.8), at(0, 1.0, 0.8, 0.8), c[0])
+        .ray(at(1, -1.0, 0.02, 0.0), [2.0, 1.0, 0.0], c[1])
+        .path(
+            &[
+                at(2, -1.0, 0.02, 0.8),
+                at(2, -0.4, 0.8, -0.8),
+                at(2, 0.4, 0.2, 0.8),
+                at(2, 1.0, 0.9, -0.8),
+            ],
+            c[2],
+        )
+        .cross(at(3, 0.0, 0.8, 0.0), 0.8, c[3])
+        .axes(at(4, -0.5, 0.02, 0.5), [0.0, 0.0, 0.0, 1.0], 1.2)
+        .aabb(at(5, -0.8, 0.02, -0.8), at(5, 0.8, 1.6, 0.8), c[5])
+        .sphere(at(6, 0.0, 1.0, 0.0), 1.0, c[6])
+        .capsule(at(7, 0.0, 0.5, 0.0), at(7, 0.0, 1.5, 0.0), 0.5, c[7])
+        .circle(floor(8), SHAPE_UP, 1.0, c[8])
+        .arc(floor(9), SHAPE_UP, SHAPE_FORWARD, 1.0, 240.0, c[9])
+        .wedge(
+            at(10, -1.0, 0.02, 0.0),
+            SHAPE_UP,
+            SHAPE_FORWARD,
+            40.0,
+            2.0,
+            c[10],
+        )
+        .ring_sector(floor(11), SHAPE_UP, SHAPE_FORWARD, 60.0, 0.5, 1.1, c[11])
+        .cone(at(12, 0.0, 1.8, 0.0), [0.0, -1.0, 0.0], 25.0, 1.8, c[12])
+        .frustum_wedge(
+            at(13, -1.0, 0.8, 0.0),
+            SHAPE_FORWARD,
+            SHAPE_UP,
+            30.0,
+            20.0,
+            2.0,
+            c[13],
+        );
+}
+
+/// The debug-shapes scene's engine: one system drawing every primitive.
+pub fn debug_shapes_builder() -> EngineBuilder {
+    Engine::builder().system("draw_shapes", draw_shapes)
 }

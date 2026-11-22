@@ -1,6 +1,6 @@
 # Plan: Debug-draw shapes and the `nav` view
 
-> Status: **Wave 1 mechanized.** Driven by Neon Shroud request 0005 (debug-draw shapes and a nav
+> Status: **Waves 1, 2, 3 and 4 mechanized; pinned goldens owed.** Driven by Neon Shroud request 0005 (debug-draw shapes and a nav
 > view). Game-facing doc: `ludion docs debug-draw`. The base feature is `Plan/character-controller.md`
 > decision 17.
 
@@ -49,6 +49,13 @@ hearing circles and a nav overlay while it tunes AI, and drew them from `line` l
    keep `L4032` re-rooted under `/nav`; a `nav:` without `physics:` is `L2331` (the grid samples static
    colliders). Absent `nav:` is byte-identical everywhere.
 
+9. **The primitives golden is a driven golden through a game-free pen host (W4b).** The pen is a system-side
+   API, so `common::debug_shapes_builder` (the testkit's shared gallery module, no game crate, the pattern of
+   `camera-rig` and `camera-chase`) registers one system, `draw_shapes`, that draws every primitive each tick under
+   `shapes` on a 5 x 3 grid of 2.5 m cells; the `debug-shapes` scene is the floor and camera, and the golden
+   renders it for one frame with `debug_draw: ["shapes"]`. No engine API, component or scene key: a scene-authored
+   pen would be a second way to draw debug lines. Trigger to revisit: a designer needs debug shapes with no Rust.
+
 ## Waves
 
 - **W1 — shapes and the nav view.** The six primitives, `nav`, `nav:grid`, `nav:routes`, `nav:flow`;
@@ -58,8 +65,8 @@ hearing circles and a nav overlay while it tunes AI, and drew them from `line` l
 - **W4a — scene `nav:` and the nav golden (0005-03).** Decision 8: the scene-level `nav:` config, so the
   built-in render host installs `Nav` and refreshes the grid before drawing; a `nav` gallery scene with two
   classes, a link and three blockers, rendered with `--debug-draw nav`. **Mechanized.**
-- **W4b — primitives golden (0005-04).** A primitives golden through a game-free pen host (designed there).
-  Pinned bless on the RTX 3090 and the M4.
+- **W4b — primitives golden (0005-04).** Decision 9: the `debug-shapes` gallery scene and a game-free pen host
+  (`common::debug_shapes_builder`) drawing every primitive. **Mechanized.** Pinned bless on the RTX 3090 and the M4.
 - **W3 — `perception`.** Shipped in `Plan/perception.md` W5. **Mechanized.**
 
 ## Status
@@ -75,6 +82,8 @@ hearing circles and a nav overlay while it tunes AI, and drew them from `line` l
 - **W4a (2026-11-22).** `nav:` in `ludion-scene` (`nav_block.rs`, parse, overrides, emit) and `scene_nav.rs` in
   `ludion-engine` (`install`, diagnostics); `nav::refresh`; the `nav` gallery scene. No schema, replay or hash
   moved; goldens owed on the pinned boxes.
+- **W4b (2026-11-22).** No engine change; goldens owed on the pinned boxes: `debug-shapes.png` (bare) and
+  `debug-shapes-driven.png` on the RTX 3090 and the M4.
 
 ## Out of scope
 

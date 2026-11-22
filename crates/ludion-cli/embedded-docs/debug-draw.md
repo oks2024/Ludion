@@ -103,7 +103,7 @@ so an agent that enables `motor` gets the lines in its screenshot. There is no p
 `view` (`"ssr_confidence"`, `"ssr_footprint"`, `"probe_index"`, `"local_shadow_atlas"`, `"sun_cascades"` (tints each surface by its sun cascade), or `null` to clear) shows a debug view in place of
 the composite; a view never turns SSR on (`ludion docs wire-render`). The CLI also takes `irradiance` (the diffuse
 light each mesh fragment receives, `ludion docs light-exposure`), which is not a `view` value: `render.debug` reports `null` for it.
-Runnable: `cargo run -p ludion-engine --example render_debug`.
+Runnable: `cargo run -p ludion-engine --example render_debug`. Reference renders: `examples/gallery/debug-shapes.yaml` (every pen primitive, drawn by a game-free system) and `nav.yaml`.
 
 ## Gotchas
 

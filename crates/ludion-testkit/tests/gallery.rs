@@ -998,6 +998,66 @@ fn needs_gpu_camera_rig_driven_matches_committed_golden_at_exactly_one() {
     }
 }
 
+/// The `debug-shapes` scene driven by `common::debug_shapes_builder` for one tick, with the `shapes`
+/// debug category on: every `DebugPen` primitive on the floor grid. The bare discovered
+/// `debug-shapes.png` is the floor alone.
+fn debug_shapes_driven_test() -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery.join("debug-shapes.yaml"),
+        os_goldens().join("debug-shapes-driven.png"),
+    )
+    .with_builder(common::debug_shapes_builder)
+    .with_frames(1)
+    .with_debug_draw(ludion_engine::DebugCategories::parse("shapes"));
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// The driven `debug-shapes` render compares clean against its committed golden at exactly SSIM 1.0.
+/// Under `LUDION_BLESS`, (re)writes the golden instead. Skips gracefully with no GPU adapter.
+#[test]
+fn needs_gpu_debug_shapes_driven_matches_committed_golden_at_exactly_one() {
+    let test = debug_shapes_driven_test();
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!(
+                    "SKIPPED debug_shapes_driven_matches_committed_golden_at_exactly_one (bless): {}",
+                    skip_note(&diagnostics)
+                );
+            }
+            Err(diagnostics) => {
+                panic!("blessing the debug-shapes golden failed: {diagnostics:?}")
+            }
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir("debug_shapes_driven_out");
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => assert_eq!(
+            report.ssim,
+            Some(1.0),
+            "the driven debug-shapes render must be byte-identical to its freshly-blessed golden"
+        ),
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!("the driven debug-shapes golden failed: {}", report.summary)
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!(
+                "SKIPPED debug_shapes_driven_matches_committed_golden_at_exactly_one: {}",
+                skip_note(&diagnostics)
+            );
+        }
+        Err(diagnostics) => panic!("the driven debug-shapes render failed: {diagnostics:?}"),
+    }
+}
+
 /// The `camera-chase` scene driven by `common::chase_builder` to the hero under the room's ceiling:
 /// the boom is pulled in, with the `camera` debug category on (the red pull-in cross, the pivot, the
 /// boom and the active zone). The bare discovered `camera-chase.png` is the authored pose at frame 0.
