@@ -18,5 +18,7 @@
   "rain-ripples": { "frames": 12 },
   "rain-splashes": { "frames": 12 },
   "rain-shadows": { "frames": 12 },
+  "rain-camera-move": { "frames": 12 },
+  "rain-heavy": { "frames": 12 },
   "particles-shadowed": { "frames": 12 }
 }

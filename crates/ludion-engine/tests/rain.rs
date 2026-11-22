@@ -4,14 +4,16 @@
 
 use std::path::Path;
 
+use ludion_assets::AssetRoot;
 use ludion_core::codes::code;
 use ludion_core::diagnostics::DiagnosticCode;
-use ludion_core::time::GameClock;
+use ludion_core::math::glam::{IVec3, Vec3};
+use ludion_core::time::{GameClock, SimTime, TickRate};
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Diagnostics, Engine, Rain};
+use ludion_engine::{Diagnostics, Engine, FrameSize, Name, QualityParams, Rain, Transform};
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
-use ludion_renderer::RenderScene;
+use ludion_renderer::{RenderScene, Renderer, drop_position, rain_layout};
 
 fn document(entities: &str) -> String {
     format!(
@@ -298,4 +300,190 @@ fn a_rain_occluder_on_a_blended_mesh_reports_l2383() {
     let scene = extract(&mut engine);
     assert!(scene.meshes.is_empty(), "both are blended");
     assert_eq!(reported(&engine, code::RAIN_OCCLUDER_BLENDED), 1);
+}
+
+/// What the camera-move proof needs from one render: the rain, the camera, and the pixels.
+struct Frame {
+    scene: RenderScene,
+    rgba: Vec<u8>,
+}
+
+const FRAME: (u32, u32) = (960, 540);
+
+/// The committed gallery scene loaded into an engine rooted at its own directory.
+fn gallery_engine(stem: &str) -> Engine {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+    let source = std::fs::read_to_string(dir.join(format!("{stem}.yaml")))
+        .expect("the committed gallery scene reads");
+    let mut engine = Engine::with_project_root(&dir);
+    engine
+        .load_inline_scene(&source)
+        .expect("the committed gallery scene validates");
+    engine
+}
+
+/// Extracts at a fixed tick, never ticking the sim, so two calls see the same game time.
+fn extract_at_tick_12(engine: &Engine) -> RenderScene {
+    ludion_engine::extract_at(
+        engine.world(),
+        FRAME,
+        AssetRoot::content(engine.project_root()),
+        SimTime::from_ticks(12, TickRate::DEFAULT),
+        QualityParams::FULL.particle_density,
+    )
+    .expect("the scene extracts")
+}
+
+/// A drop's pixel in `frame`, or `None` when it is behind the camera.
+fn project(scene: &RenderScene, world: Vec3) -> Option<(f32, f32)> {
+    let clip = scene.camera.projection * scene.camera.view * world.extend(1.0);
+    if clip.w <= 0.0 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    Some((
+        (ndc.x * 0.5 + 0.5) * FRAME.0 as f32,
+        (0.5 - ndc.y * 0.5) * FRAME.1 as f32,
+    ))
+}
+
+/// Every drop well inside the rain's fade, in front of the camera and at least 6 px inside the frame:
+/// `(tile, k, world position, pixel)`.
+fn kept_drops(scene: &RenderScene) -> Vec<(IVec3, u32, Vec3, (f32, f32))> {
+    let rain = scene.rain.expect("the scene has rain");
+    let cam = scene.camera.position;
+    let layout = rain_layout(&rain, cam);
+    let mut kept = Vec::new();
+    for ix in 0..layout.n_xz as i32 {
+        for iy in 0..layout.n_y as i32 {
+            for iz in 0..layout.n_xz as i32 {
+                let tile = layout.base + IVec3::new(ix, iy, iz);
+                for k in 0..layout.per_tile {
+                    let pos = drop_position(&rain, tile, k);
+                    let dxz = ludion_core::math::hypot(pos.x - cam.x, pos.z - cam.z);
+                    let rel_y =
+                        (pos.y - cam.y - rain.height[0]) / (rain.height[1] - rain.height[0]);
+                    if dxz >= 0.8 * rain.radius || !(0.15..=0.85).contains(&rel_y) {
+                        continue;
+                    }
+                    let Some(pixel) = project(scene, pos) else {
+                        continue;
+                    };
+                    let inside = |v: f32, extent: u32| v >= 6.0 && v <= extent as f32 - 6.0;
+                    if inside(pixel.0, FRAME.0) && inside(pixel.1, FRAME.1) {
+                        kept.push((tile, k, pos, pixel));
+                    }
+                }
+            }
+        }
+    }
+    kept
+}
+
+/// The brightest channel anywhere in the 5x5 block around `pixel`.
+fn max_near(frame: &Frame, pixel: (f32, f32)) -> u8 {
+    let (cx, cy) = (pixel.0.round() as i32, pixel.1.round() as i32);
+    let mut best = 0u8;
+    for y in cy - 2..=cy + 2 {
+        for x in cx - 2..=cx + 2 {
+            if x < 0 || y < 0 || x >= FRAME.0 as i32 || y >= FRAME.1 as i32 {
+                continue;
+            }
+            let at = ((y as u32 * FRAME.0 + x as u32) * 4) as usize;
+            best = best.max(
+                frame.rgba[at]
+                    .max(frame.rgba[at + 1])
+                    .max(frame.rgba[at + 2]),
+            );
+        }
+    }
+    best
+}
+
+/// Two renders at one tick from cameras 2 m apart put every drop at the pixel its fixed world position
+/// projects to: the field is world-anchored, not carried by the camera (`Plan/rain-and-wet.md` D35).
+#[test]
+fn needs_gpu_drops_stay_world_anchored_when_the_camera_moves() {
+    let renderer = match Renderer::new() {
+        Ok(renderer) => renderer,
+        Err(d) if ludion_core::require_gpu::is_no_adapter(std::slice::from_ref(&d)) => {
+            eprintln!("[rain] SKIPPED: no GPU adapter");
+            return;
+        }
+        Err(d) => panic!("renderer init failed: {d:?}"),
+    };
+    let mut engine = gallery_engine("rain-camera-move");
+    let render = |scene: RenderScene| {
+        let image = renderer
+            .render(&scene, FrameSize::native(FRAME.0, FRAME.1))
+            .expect("the frame renders");
+        Frame {
+            scene,
+            rgba: image.rgba,
+        }
+    };
+
+    let a = render(extract_at_tick_12(&engine));
+    let camera = {
+        let world = engine.world();
+        world
+            .entities()
+            .find(|&id| {
+                world
+                    .get::<Name>(id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|name| name.0 == "camera")
+            })
+            .expect("the scene has a camera")
+    };
+    engine
+        .world_mut()
+        .get_mut::<Transform>(camera)
+        .expect("the camera is alive")
+        .expect("the camera has a Transform")
+        .translation[0] += 2.0;
+    let b = render(extract_at_tick_12(&engine));
+    assert_eq!(a.scene.rain, b.scene.rain, "the same rain at the same tick");
+
+    let kept_a = kept_drops(&a.scene);
+    let kept_b = kept_drops(&b.scene);
+    assert!(kept_a.len() >= 6, "frame A keeps {} drops", kept_a.len());
+    assert!(kept_b.len() >= 6, "frame B keeps {} drops", kept_b.len());
+    for (name, frame, kept) in [("A", &a, &kept_a), ("B", &b, &kept_b)] {
+        for &(tile, k, pos, pixel) in kept {
+            let seen = max_near(frame, pixel);
+            assert!(
+                seen > 64,
+                "frame {name}: drop {tile:?}/{k} at {pos:?} projects to {pixel:?} but the brightest nearby channel is {seen}"
+            );
+        }
+    }
+
+    let shared: Vec<_> = kept_a
+        .iter()
+        .filter(|(tile, k, ..)| kept_b.iter().any(|(t, j, ..)| t == tile && j == k))
+        .collect();
+    assert!(
+        shared.len() >= 3,
+        "only {} drops kept in both",
+        shared.len()
+    );
+
+    // Swim control: a camera-carried field would light the pixel a drop had in A even where B's drops are not.
+    let mut checked = 0;
+    for &&(_, _, _, pixel) in &shared {
+        let far_from_b = kept_b
+            .iter()
+            .all(|&(.., (bx, by))| ludion_core::math::hypot(bx - pixel.0, by - pixel.1) >= 8.0);
+        if far_from_b {
+            checked += 1;
+            let seen = max_near(&b, pixel);
+            assert!(
+                seen <= 64,
+                "B is lit at {pixel:?} where only A has a drop: {seen}"
+            );
+        }
+    }
+    eprintln!("[rain] swim control checked {checked} pixels");
 }

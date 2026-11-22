@@ -50,12 +50,24 @@ arithmetic, with a bit-identical hash.
 The rain reads game time (`GameClock`): a game that holds the clock holds the rain, and a replay or a screenshot at a
 tick shows the same drops. The time wraps at 4096 s to keep `f32` precision, so a drop jumps once every 68 minutes.
 
-## Budget
+## Cost and budget
 Per tile the draw holds `round(density * intensity * cell^3)` streaks, over the tiles meeting the radius and the height
 band: `(ceil(2 * radius / cell) + 1)^2 * (ceil(span / cell) + 1)`. The default is 96 per tile over 486 tiles, 46,656
 streaks. One draw carries at most **65,536**; past that the per-tile count is clamped and extract warns `L2382` once
-per load. Streaks fade over the last 15 % of the radius and of the height band. The `transparents` pass time with and
-without rain is measured with `cargo test -p ludion-renderer --release -- --ignored --nocapture needs_gpu_bench_rain_gpu_ms`.
+per load. Streaks fade over the last 15 % of the radius and of the height band.
+
+Where the time goes, on `rain-heavy` (every default, 24 casters, a shadowed spot, SSR, fog) at 1080p on the pinned RTX 3090:
+the occlusion map is its own pass, `rain_occlusion`, 0.002 ms (0.01 ms over 500 voxel meshes); streaks and splashes draw
+inside `transparents` (0.049 ms against 0.009 without rain); wetness and ripples are inside `scene` (0.253 ms against
+0.179). The whole rain is about 0.25 ms of a 1.32 ms frame. There is no `rain` post group. The budget file is
+`budgets/pinned-rtx3090-rain-heavy.toml` (`ludion profile --scene examples/gallery/rain-heavy.yaml --frames 120 --check
+budgets/pinned-rtx3090-rain-heavy.toml`), gating `rain_occlusion`, `scene`, `transparents` and `gpu_frame_ms`. A static
+cache of the occlusion map is not built: it waits for `rain_occlusion` above 0.15 ms (`Plan/rain-and-wet.md` D37). The
+`transparents` time with and without rain is also measured with `cargo test -p ludion-renderer --release -- --ignored
+--nocapture needs_gpu_bench_rain_gpu_ms`.
+
+Drops stay world-anchored: `rain-camera-move.yaml` is rendered from two cameras 2 m apart at one tick, and a test checks
+each drop lands where its fixed world position projects.
 
 ## Roofs
 A `rain_occlusion` pass draws every shadow caster over the rain volume straight down into a 512x512 depth map around
@@ -175,8 +187,10 @@ without them, byte for byte. A lit rain shades each streak (and each splash) onc
 `rain-wet.yaml` (wet voxel ground and figures, a dry awning), `rain-porosity.yaml`, `rain-occluder.yaml` (a net that lets
 rain through beside a shadowless canopy that stops it), `rain-ripples.yaml` (rings on an open puddle and the ground,
 a still one under a roof) and `rain-splashes.yaml` (splashes on open ground, a crate and a roof, none on a steep ramp or
-under the roof) and `rain-shadows.yaml` (a backlit floodlight cone whose rain stops at a hut wall's shadow). The first five
-author `ripples: 0.0`, all but `rain-splashes` and `rain-shadows` author `splashes: 0.0`, and the seven earlier scenes author
+under the roof), `rain-shadows.yaml` (a backlit floodlight cone whose rain stops at a hut wall's shadow),
+`rain-camera-move.yaml` (sparse white drops, the world-anchoring proof) and `rain-heavy.yaml` (every default over casters, a
+shadowed spot and SSR; the budget's calibration scene). The first five
+author `ripples: 0.0`, all but `rain-splashes`, `rain-shadows` and `rain-heavy` author `splashes: 0.0`, and the eight earlier scenes (with `rain-camera-move`) author
 `shadowed: false` and `backlight: 0.0`, so their goldens show the scene without them.
 
 `--quality low` draws 0.4 of the streaks (`rain_density`, a prefix of the same drops); wetness and the map are unchanged.

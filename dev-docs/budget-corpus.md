@@ -69,6 +69,11 @@ vigil's E6 pair carry `threads = 8`; the rest state no worker count.
   `[views] radar`, the view's GPU frame span (the report's `view:radar` row). Measured on the RTX 3090 2026-11-22:
   0.2139 / 0.2092 / 0.2064 ms. Its twin `pinned-apple-m4-render-views.toml` was measured on the M4 2026-11-22: 1.0991 / 1.0879 /
   1.0996 ms (ceiling 2.2).
+- `budgets/pinned-rtx3090-rain-heavy.toml` — the rain arc's, calibrated on `examples/gallery/rain-heavy.yaml` (a hut and yard with 24
+  casters, a shadowed spot, SSR and fog under a `Rain` at every default, `Plan/rain-and-wet.md` D36), gating `[passes]`
+  `rain_occlusion`, `scene` and `transparents` plus `gpu_frame_ms`. Measured on the RTX 3090 2026-11-22: `rain_occlusion` 0.002
+  (flat 0.05 ceiling), `scene` 0.2529, `transparents` 0.0492, `gpu_frame_ms` 1.3222 (ceiling 2.65); `extract_ms` (~0.027) is
+  deliberately absent. The macOS twin is owed.
 - `budgets/pinned-rtx3090-physics-settle.toml` / `budgets/pinned-apple-m4-physics-settle.toml` — the physics
   settle prime's, checked by `settle_bench.rs` (ignored; it reads the host's `pinned-<box>-physics-settle.toml`
   through `platform_budget`) on a primed 2,000-body jointed town. `[systems_max] physics_step` 12.0 and

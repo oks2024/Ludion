@@ -1,6 +1,6 @@
 # Plan: Rain and wet weather
 
-> Status: **W1a, W1b, W2a, W2b, W2c, W3a and W3b mechanized; W4a (shadowed, backlit rain) and W4b (shadowed, stretched particles) mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
+> Status: **W1a-W5 mechanized (W4a shadowed, backlit rain; W4b shadowed, stretched particles; W5 the `rain-camera-move` proof, the `rain-heavy` budget and the deferred tile cache)** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
 > roof occlusion, mesh wetness, authored porosity, `RainOccluder`, the `rain_occlusion` debug view, the `rain_density` quality lever, ripples on wet ground and coat decals, splashes on exposed tops (`rain-splashes`), shadowed and backlit rain (`rain-shadows`), and the `rain-open`, `rain-awning`, `rain-wet`, `rain-porosity` and `rain-occluder` goldens. Usage is `ludion docs weather`; the gallery scenes are
 > `examples/gallery/rain-open.yaml`, `rain-awning.yaml`, `rain-wet.yaml`, `rain-porosity.yaml` and `rain-occluder.yaml`.
 
@@ -155,24 +155,36 @@ for the whole arc; W1a ships the streak field.
     softness falloff around both ends (a flat `core` varying; 0 is the old disc path). `PostChain.particles_shadowed` joins
     `blended` and `rain_shadowed` in opening the lighting-tail reads; one `transparent_sun_group` helper builds the sun group
     for rain and particles, binding fallbacks when the chain declared no tail.
+35. **Camera-move proof** (W5). `needs_gpu_drops_stay_world_anchored_when_the_camera_moves` (`ludion-engine/tests/rain.rs`)
+    extracts `rain-camera-move` at one tick from two cameras 2 m apart, checks the two `RainData` are equal, renders both, and
+    checks the CPU twin's (`rain_layout`, `drop_position`) projection of each fixed world drop against the GPU pixels,
+    with a swim control: a pixel lit in A and not predicted in B stays dark in B.
+36. **The calibration scene** (W5). `rain-heavy` keeps every `Rain` default over a yard with casters, a shadowed spot, a
+    puddle decal, SSR and fog. The gated keys are `[passes] rain_occlusion`, `scene` and `transparents`, plus
+    `gpu_frame_ms` (`budgets/pinned-rtx3090-rain-heavy.toml`). There is no `rain` post group: streaks and splashes share
+    `transparents`.
+37. **The static occlusion-tile cache is deferred** (W5). Measured 2026-11-22 on the RTX 3090 at 1080p, 120-frame release runs:
+    `rain_occlusion` 0.002 ms on `rain-heavy` (four runs, ~35 casters) and 0.0102 / 0.0092 ms on `voxel-horde` with a default
+    `Rain` (~500 voxel meshes), against the 0.15 ms gate (about a fifth of the request's 0.8 ms rain target). The whole rain
+    costs ~0.25 ms of a 1.32 ms frame. Trigger: a `rain_occlusion` median above 0.15 ms at 1080p on the pinned RTX 3090,
+    on a calibration scene or a game's scene.
 
 ## Waves
 
 - **W1a** (shipped): the component, `L2380`–`L2382`, the GPU-evaluated field in the transparents pass and the
   transparent layer, `docs/weather.md`, the `rain-open` golden. A rain-free scene keeps the identical graph and bytes.
 - **W1b** (shipped): the overhead occlusion pass, per-fragment roof clipping and the `rain-awning` golden.
-- **W2a, mesh wetness:** per-pixel `w = wetness × exposure × facing` in `mesh.wgsl` from the occlusion map, with a
+- **W2a, mesh wetness** (shipped): per-pixel `w = wetness × exposure × facing` in `mesh.wgsl` from the occlusion map, with a
   fixed porosity of 0.5, so every voxel palette (16 and 64 cells/m, assemblies), sculpt, primitive and asset mesh gets
   wet without authoring. Characters are wet per pixel. `Rain.wetness` defaults to 1.
-- **W2b, porosity:** the `porosity` field on palettes, sculpt, `Mesh` and mesh documents (D15–D17).
-- **W2c:** `RainOccluder`, `--debug-view rain_occlusion` and a `rain_density` quality lever.
-- **W3a, ripples:** `Rain.ripples` and `Decal.ripples`; a shading-normal perturbation on wet ground and on `coat` decals (D22-D24).
+- **W2b, porosity** (shipped): the `porosity` field on palettes, sculpt, `Mesh` and mesh documents (D15–D17).
+- **W2c** (shipped): `RainOccluder`, `--debug-view rain_occlusion` and a `rain_density` quality lever.
+- **W3a, ripples** (shipped): `Rain.ripples` and `Decal.ripples`; a shading-normal perturbation on wet ground and on `coat` decals (D22-D24).
 - **W3b, splashes** (shipped): the instanced splash draw on exposed tops (D25-D27).
 - **W4a, rain lighting** (shipped): sun and local shadow taps and `backlight` on the rain (D28-D31).
-  **W4b status:** `ParticleEmitter.shadowed` and `.stretch` ship (Neon Shroud request 0018): `velocity_at` in `particles.rs`, the `streak`/`shadowed` instance lanes, `particle.wgsl` on the sun group, `PostChain.particles_shadowed`, one `transparent_sun_group` helper shared with the rain. An unauthored emitter keeps its bytes (the 18 guard renders of the particle scenes at ticks 0 and 12 are byte-equal; no replay, `WorldHash` or protocol schema moved); the disc distance is a `select`, since an `if` there moved three pixels of `particles-stress` by one level. New golden `particles-shadowed` (Windows blessed on the RTX 3090; macOS twin owed). Docs: `docs/particles.md`.
 - **W4b, particles** (shipped, D32-D34): `ParticleEmitter.shadowed` through `shade_billboard_shadowed`, and `.stretch`, a quad along the
   screen-projected velocity of length `stretch x |v| / 60` (default 0 is byte-identical).
-- **W5:** `rain-camera-move`, budget files, and a tile cache if the measured cost asks for one.
+- **W5** (shipped, D35-D37): `rain-camera-move`, the `rain-heavy` budget, and the tile-cache measurement (deferred).
 
 ## Out of scope / deferred
 
@@ -180,6 +192,7 @@ for the whole arc; W1a ships the streak field.
 - **Snow mode.** Trigger: a game asks for snow; the lattice already carries the shape of it.
 - **Gameplay rain zones.** Separate sim data, never read from the picture's rain.
 - **Invisible rain-occluder volumes.** Trigger: a game asks.
+- **The static occlusion-tile cache** (D37). Trigger: `rain_occlusion` median above 0.15 ms at 1080p on the pinned RTX 3090, on a calibration scene or a game's scene.
 
 ## Owner rulings (2026-11-19)
 
@@ -227,3 +240,5 @@ for the whole arc; W1a ships the streak field.
 - **W3a mechanized (2026-11-22):** `Rain.ripples` and `Decal.ripples` (both `[0, 2]`, default 1; the decal's is read for `coat` only), the stateless ripple field `rain_ripple.wgsl` with its CPU twin `ripple_slope` (D22), `EnvParams.ripple` (D23) and the decal exposure read at the box top from the `rain_occlusion` map through `decal_lit.wgsl`'s `@group(4) @binding(12)`, which `decals_lit` reads last only with rain (D24). A frame without rain, and `ripples: 0`, render the W2c bytes: the five earlier rain scenes now author `ripples: 0.0`, and every one of them and `decals` re-rendered byte-equal to its pre-edit PNG. `rain-ripples` is the new Windows golden blessed on the RTX 3090; nothing else was re-blessed. No replay content hash, `WorldHash` or protocol schema moved; the component schema snapshot gained the two fields. Owed: the macOS twin of `rain-ripples`, the editor TS types. W3b (splashes, D25) is next.
 - **W3b mechanized (2026-11-22):** `Rain.splashes` (`[0, 2]`, default 1; no new L-code), the stateless splash field in `rain.wgsl` with its CPU twin `splash_at` and `splash_layout` (D25), a second instanced draw after the streaks through the same pipeline and bind group with `RainParams.splash_grid`/`splash` and a flat `ring` varying (D26), and `RainData.splash_rate` with `rain_density` thinning (D27). Splashes land on the `rain_occlusion` map's top: roofs splash, floor under them and tops steeper than 45 degrees do not, and `occlusion: false` draws none. The six earlier rain scenes author `splashes: 0.0` and passed unblessed; the new `rain-splashes` golden is blessed on the RTX 3090. Nothing existing was re-blessed; no replay, `WorldHash` or protocol schema moved; the component schema snapshot moved. Owed: the macOS twin of `rain-splashes` (M4) and the `Rain.splashes` TS type. The ring-only splash on puddle decals stays Proposed, owner ruling owed.
 - **W4a mechanized (2026-11-22):** `Rain.shadowed` (default true) and `Rain.backlight` (`[0, 1]`, default 0.6; no new L-code). The shadow bindings moved verbatim out of `mesh_shading.wgsl` into `shadow_bindings.wgsl` (D28; the whole gallery re-rendered byte-identical before anything else changed). The rain moved to group 3 and binds the sun group at 2 (D29); `billboard_shadowed.wgsl` holds `sun_tap`, `local_tap`, `hg4pi` and `shade_billboard_shadowed` (D30); `RainParams.shade`, `RainData.shadowed`/`backlight`, `PostChain.rain_shadowed` and the `sun_group` factor `record_rain` shares with `shading_groups` (D31). `shadowed: false` with `backlight: 0` takes the old `shade_two_sided` branch and graph: `rain-open` and `rain-splashes` renders were byte-equal before and after. The seven earlier rain scenes author both off and passed unblessed; the new `rain-shadows` golden is blessed on the RTX 3090. Nothing existing was re-blessed; no replay, `WorldHash` or protocol schema moved; the component schema snapshot moved. Owed: the macOS twin of `rain-shadows` (M4), the `Rain.shadowed`/`backlight` TS types, and the probe-store code key, which moves with every mesh shader's composition. W4b (particles) is next.
+- **W4b mechanized (2026-11-22):** `ParticleEmitter.shadowed` and `.stretch` ship (D32-D34): `velocity_at` in `particles.rs`, the `streak`/`shadowed` instance lanes, `particle.wgsl` on the sun group, `PostChain.particles_shadowed`, one `transparent_sun_group` helper shared with the rain. An unauthored emitter keeps its bytes (the 18 guard renders of the particle scenes at ticks 0 and 12 are byte-equal; no replay, `WorldHash` or protocol schema moved); the disc distance is a `select`, since an `if` there moved three pixels of `particles-stress` by one level. New golden `particles-shadowed` (Windows blessed on the RTX 3090; macOS twin owed). Docs: `docs/particles.md`.
+- **W5 mechanized (2026-11-22):** the `rain-camera-move` golden and its GPU test `needs_gpu_drops_stay_world_anchored_when_the_camera_moves` (D35; density 0.15 where the plan guessed 0.05, since 0.05 kept only 3 drops in frame; with 10 per tile it keeps enough in both frames and the swim control checks 6 pixels), the `rain-heavy` golden (D36), both blessed on the RTX 3090, `rain_occlusion` in `KNOWN_PASS_NAMES` (66 to 67), and `budgets/pinned-rtx3090-rain-heavy.toml` (`rain_occlusion` 0.002 flat 0.05, `scene` 0.2529 to 0.51, `transparents` 0.0492 to 0.10, `gpu_frame_ms` 1.3222 to 2.65; `extract` ~0.027 ms left ungated). The rain's share from `intensity: 0` runs: `scene` +0.074, `transparents` +0.040, frame +0.25 ms against the request's 0.8 ms. D37: the tile cache is deferred (`rain_occlusion` 0.002 ms on `rain-heavy`, 0.0097 ms over 500 voxel meshes, against the 0.15 ms gate). The private TeamCity Windows budget step is wired (config paused). Nothing existing was re-blessed; no replay, `WorldHash`, component or protocol schema moved. Owed: the macOS twins of both goldens and of the budget file (M4).

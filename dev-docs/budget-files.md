@@ -14,7 +14,7 @@ reads them.
 
 ## Layout
 
-The per-file catalogue (one entry per calibration scene and per-OS twin, with measured values) is `ludion devdocs budget-corpus`. Families: engine tripwire (`pinned-*.toml`), `-post-full`, `-lights-stress`, `-particles-stress`, `-shmup-stress`, `-sprite-stress`, `-physics-stress`, `-gi-inject-stress`, `image-stats-*`, `checkpoints-*`, vigil's E6 files, and the frozen `stress-*.json` recordings.
+The per-file catalogue (one entry per calibration scene and per-OS twin, with measured values) is `ludion devdocs budget-corpus`. Families: engine tripwire (`pinned-*.toml`), `-post-full`, `-lights-stress`, `-particles-stress`, `-shmup-stress`, `-sprite-stress`, `-physics-stress`, `-rain-heavy`, `-gi-inject-stress`, `image-stats-*`, `checkpoints-*`, vigil's E6 files, and the frozen `stress-*.json` recordings.
 
 ## Dataflow
 

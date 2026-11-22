@@ -1,0 +1,42 @@
+# Rain budget — pinned RTX 3090, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each ceiling below is roughly twice the median
+# measured by `ludion profile --scene … --frames 120` in `--release` on the pinned RTX 3090, so a
+# failure means a real, reproducible slowdown — never machine noise. All values are milliseconds.
+# Re-calibrate deliberately (a re-bless event) if a cost becomes intended and permanent —
+# `ludion explain L4005`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/rain-heavy.yaml`
+# (`Plan/rain-and-wet.md` D36): a hut and yard with 24 casting cubes, a shadowed sodium spot, a coat
+# puddle, SSR and light fog, under a `Rain` at every default (density 1.5, radius 16, lit, shadowed,
+# backlight 0.6, splashes 1, ripples 1, wetness 1). Checked with:
+#
+#   ludion profile --scene examples/gallery/rain-heavy.yaml --frames 120 --check budgets/pinned-rtx3090-rain-heavy.toml
+#
+# Measured 2026-11-22 over four 120-frame runs at 1920x1080, sim.threads 8. There is no `rain` post
+# group: the streaks and splashes draw inside `transparents`, the wetness and ripples inside `scene`,
+# and only the occlusion map is a pass of its own (`rain_occlusion`).
+#
+# The rain's share, from two runs of the same scene with `intensity: 0` (no rain at all):
+# `scene` 0.1792 (so wetness and ripples cost ~0.074), `transparents` 0.0092 (so streaks and splashes
+# ~0.040), `gpu_frame_ms` 1.0707 against 1.3222 (so the whole rain ~0.25 ms). The request's target is
+# 0.8 ms for the rain at 1080p; the measured total is 0.25 ms, about a third of it.
+
+# `gpu_frame_ms` over four runs: 1.4009 / 1.3210 / 1.3234 / 1.3200, median 1.3222, ceiling 2.65.
+gpu_frame_ms = 2.65   # 1.3222 measured (median of four)
+
+# `rain_occlusion` medians 0.002048 on all four runs (a 512x512 depth map of ~30 casters), under the
+# 0.02 ms floor, so it gets the flat 0.05 ceiling. On a dense caster scene (`voxel-horde` with a default
+# `Rain`, ~500 voxel meshes) it reads 0.0102 / 0.0092: far below the 0.15 ms line at which
+# `Plan/rain-and-wet.md` D37 would build the static tile cache.
+# `scene` 0.2529 / 0.2529 / 0.2529 / 0.2524, median 0.2529, ceiling 0.51.
+# `transparents` 0.0492 on all four runs, ceiling 0.10.
+[passes]
+rain_occlusion = 0.05   # 0.002 measured (median of four), flat floor
+scene = 0.51            # 0.2529 measured (median of four)
+transparents = 0.10     # 0.0492 measured (median of four)
+
+# Deliberately absent: `extract_ms` (and `threads`): extract measures ~0.027 ms here (the phases sum
+# to 0.021 plus 0.0063 outside them), under the 0.05 ms line, and the rain adds no extract phase;
+# the other passes, which are pure functions of the output extent or other scenes' budgets; and
+# `[systems]` (the CLI links no game systems).

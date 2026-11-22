@@ -1500,14 +1500,15 @@ pub fn load_budget(path: &Path) -> Result<Budget, Diagnostic> {
 /// shadow or a `multiply`/`add` decal, `decals_lit` only for an `alpha` or `coat` decal, `decal_receivers`
 /// only for a decal that lists receiver meshes, `transparent_depth` only for a scene with a
 /// sprite, particle or world text under fog or depth of field, `cull` only for a scene with a world
-/// mesh and culling on, `lens_down_1..5` and `lens_up_0..4` only for a scene with anamorphic streaks).
+/// mesh and culling on, `rain_occlusion` only for a scene with a `Rain`, `lens_down_1..5` and `lens_up_0..4` only for a scene with anamorphic streaks).
 /// Static and scene-independent, unlike
 /// [`SimProfile::systems`]: a report's own `gpu.passes` list is *not* the producible set, because a
 /// missing adapter or a UI-free scene leaves it incomplete without that being a budget-key mistake.
-const KNOWN_PASS_NAMES: [&str; 66] = [
+const KNOWN_PASS_NAMES: [&str; 67] = [
     ludion_renderer::graph::pass::CULL,
     ludion_renderer::graph::pass::SHADOW,
     ludion_renderer::graph::pass::LOCAL_SHADOW,
+    ludion_renderer::graph::pass::RAIN_OCCLUSION,
     ludion_renderer::graph::pass::PREPASS,
     ludion_renderer::graph::pass::SSAO,
     ludion_renderer::graph::pass::SSAO_BLUR,
@@ -3878,6 +3879,8 @@ entities:
                     median_ms: Some(1e-9),
                 })
                 .collect();
+            // `gpu_frame_ms` needs a measured frame span, which a real run carries beside its passes.
+            report.gpu.frame_median_ms = Some(1e-9);
             // A `[views]` key names a scene's own view, so the run is given a row for each.
             report
                 .gpu
