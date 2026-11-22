@@ -1549,6 +1549,25 @@ fn skip_or_renderer(name: &str) -> Option<Renderer> {
     }
 }
 
+/// The byte-exact value `table` pins for `renderer`'s adapter, keyed by a pinned reference adapter
+/// substring, or `None` (a loud skip) on any other adapter: GPU bytes differ across GPUs.
+fn pinned_for_adapter<'a, T>(
+    renderer: &Renderer,
+    name: &str,
+    table: &'a [(&str, T)],
+) -> Option<&'a T> {
+    let adapter = renderer.adapter_name();
+    let found = table
+        .iter()
+        .find(|(reference, _)| adapter.contains(reference));
+    if found.is_none() {
+        eprintln!(
+            "SKIPPED {name}: {adapter} is not a pinned reference adapter, and the values are byte-exact"
+        );
+    }
+    found.map(|(_, value)| value)
+}
+
 fn luma(img: &RenderedImage, x: u32, y: u32) -> u32 {
     let i = ((y * img.width + x) * 4) as usize;
     img.rgba[i] as u32 + img.rgba[i + 1] as u32 + img.rgba[i + 2] as u32

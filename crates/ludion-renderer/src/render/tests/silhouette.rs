@@ -436,15 +436,39 @@ fn needs_gpu_frozen_frames_keep_their_bytes_in_every_grain_owner() {
     else {
         return;
     };
-    // Captured before the film weight existed.
-    let expected = [
-        ("composite", 0xbe6f_267a_ad86_8b28),
-        ("smaa_blend", 0xd212_fe3b_5a8f_e175),
-        ("resolve", 0xd212_fe3b_5a8f_e175),
-        ("upscale", 0xd212_fe3b_5a8f_e175),
-    ];
-    assert_eq!(frozen_hashes(&mut renderer), expected);
+    let Some(expected) = pinned_for_adapter(
+        &renderer,
+        "frozen_frames_keep_their_bytes_in_every_grain_owner",
+        &FROZEN_HASHES,
+    ) else {
+        return;
+    };
+    assert_eq!(frozen_hashes(&mut renderer), expected.to_vec());
 }
+
+/// The frozen-path hashes per pinned reference adapter (bytes differ across GPUs). The RTX 3090's
+/// were captured before the film weight existed; the Apple M4's were captured after it, on a tree
+/// whose committed macOS goldens all re-rendered byte-identically.
+const FROZEN_HASHES: [(&str, [(&str, u64); 4]); 2] = [
+    (
+        "RTX 3090",
+        [
+            ("composite", 0xbe6f_267a_ad86_8b28),
+            ("smaa_blend", 0xd212_fe3b_5a8f_e175),
+            ("resolve", 0xd212_fe3b_5a8f_e175),
+            ("upscale", 0xd212_fe3b_5a8f_e175),
+        ],
+    ),
+    (
+        "Apple M4",
+        [
+            ("composite", 0x864c_2c6d_8eef_d9d7),
+            ("smaa_blend", 0xcffa_b07d_9558_ff60),
+            ("resolve", 0xcffa_b07d_9558_ff60),
+            ("upscale", 0xcffa_b07d_9558_ff60),
+        ],
+    ),
+];
 
 /// Opaque white fill over a hidden figure, grain 0.05 and vignette 0.8, `film` as given, through the
 /// pass that owns the grain.
