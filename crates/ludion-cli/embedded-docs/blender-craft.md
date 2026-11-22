@@ -130,7 +130,8 @@ source as PNG, so the script asserts every `bpy.data.images` entry is PNG before
 - **Cutout holes:** the image's `Alpha` output feeds the Principled `Alpha` input through a threshold
   (`LESS_THAN` against the cutoff, then `1 −` that), which the exporter reads as glTF `MASK` with that
   `alphaCutoff`; pick a cutoff exact in f32 (`0.25`) so the document writes it unchanged. Plain alpha
-  blend is `BLEND`, which is `L1202`. `examples/import-cutout/make-fixture.py` is the working script.
+  blend is `BLEND`, which imports as `alpha_mode: blend` (glass; `Principled` alpha below 1).
+  `examples/import-cutout/make-fixture.py` is the working script.
 - **Emissive:** any Emission Color works. A glTF `emissiveFactor` equal to `k × baseColorFactor` maps
   straight to the scalar `Mesh.emissive`; any other factor is baked into an emissive map by the
   import (needs UVs; every base channel the glow uses must be ≥ 1/255 — a black base channel under a
@@ -146,7 +147,7 @@ source as PNG, so the script asserts every `bpy.data.images` entry is PNG before
 - **Backface culling is off by default in Blender**, so a closed mesh exports `doubleSided` and draws
   unculled unless you turn it on. A thin surface (a wing membrane, a leaf) keeps it off and needs no
   thickened shell.
-- **`BLEND` is `L1202`.** Use `MASK` for holes.
+- **`BLEND` imports as `alpha_mode: blend`.** Use `MASK` for holes, `BLEND` for glass.
 - **A material with no metallic factor imports fully metallic** (the glTF default is 1.0).
 - **A referenced JPEG image is `L1202`.**
 - **`bmesh.ops.create_uvsphere` and `bmesh.ops.solidify` break the headless replay.** Their face order

@@ -26,12 +26,32 @@ entities:
         outline:             # optional; absent means no outline
           px: 2.0            # width in 1080p pixels, in (0, 8]; scales with the render height
           alpha: 1.0
+        pattern:             # optional; a screen-space line pattern on the fill only
+          kind: scanlines    # scanlines | hatch
+          period: 4.0        # line spacing in 1080p pixels, in [2, 64]
+          duty: 0.5          # lit fraction of each period, in (0, 1)
+        inner_outline:       # optional; a band just inside the edge of the fill
+          px: 2.0            # width in 1080p pixels, in (0, 8]
+          alpha: 1.0
+        film: true           # false keeps the vignette and grain off the silhouette
         when: hidden         # hidden (default) | always: also tint visible pixels, an ally highlight
         bias: 0.05           # how far behind the occluder a pixel must be, in view-space units
 ```
 `{}` takes every default. A mesh without its own takes its nearest ancestor's through `Parent`, as `Fade` does, so
 one component on a root covers its children and every part of a voxel assembly. `outline` is an *outer* outline:
 only a pixel outside every silhouetted mesh takes it, so a visible body pixel is never outlined.
+
+## Patterns and inner outline
+`pattern` turns the fill into lines. It is anchored to the *screen*, in render pixels, so the lines do not follow the
+body: a figure moving behind cover slides through a fixed grating, the classic x-ray read. `period` is in 1080p
+pixels and scales with the render height (at least 2 px). `scanlines` is lit where `fract(y / period) < duty`;
+`hatch` where `fract((x + y) / period) < duty`, which gives 45° lines. An unlit pixel draws nothing, and outlines
+stay solid.
+
+`inner_outline` draws `color` at the band's own `alpha` on every filled pixel within `px` of a pixel that is not
+filled with the same style. It beats the pattern, so a patterned fill keeps a solid rim. The frame border is not an
+edge: pixels outside the frame never count. The band traces the *seam* too, wherever the body leaves cover, not only
+its silhouette against the background. Pair it with `outline` for a rim on both sides of the edge.
 
 ## The hidden test
 A pixel is hidden when the silhouetted mesh drew there and the scene's own surface is nearer along the view axis
@@ -48,7 +68,7 @@ arm in front of its own torso, draws nothing. Works for perspective and orthogra
 | `alpha_mode: mask` occluder | The cut holes write no depth: the body shows through the grating and is tinted behind the bars |
 | Alpha-blended meshes, sprites, particles, ground markers, text | Never occlude: they write no scene depth |
 | Fog, depth of field, bloom | The silhouette is not fogged, defocused or bloomed |
-| Vignette, grain | Apply: the tint is drawn into the graded image before them |
+| Vignette, grain | Apply: the tint is drawn into the graded image before them; `film: false` opts out |
 | SSAO, SSR, GI, probes, shadows | Unaffected: the mask is not a scene surface |
 
 ## Position in the chain
@@ -58,9 +78,16 @@ the grade produced (the target's sRGB store is the only thing after it), so whit
 only on a frame with at least one. It appears under that name in `ludion profile` pass timings, so its cost is
 measured, not guessed. A frame holds at most **8 distinct styles**: entities with an identical component share a slot.
 
+`film: false` fades the vignette and the grain under the silhouette, in proportion to its opacity at each pixel: with
+`a` the effective alpha there (fill times pattern, or the outline alpha), the vignette mixes by `1 - a` and the grain
+amplitude scales by `1 - a`, so an opaque fill is exactly its tint. The dither is never scaled. It holds whichever
+pass owns the grain: under SMAA or a render-scale resample the composite carries the weight to that pass in the LDR
+alpha, and the pass reads it from the nearest source texel. A style left at `film: true` changes no byte.
+
 ## Diagnostics
 - `L2350` (error): a field out of range — a colour channel outside `[0, 1]`, `outline.px` outside `(0, 8]`,
-  `outline.alpha` outside `[0, 1]`, a negative or non-finite `bias`.
+  `outline.alpha` outside `[0, 1]`, `inner_outline` fields outside the same ranges, `pattern.period` outside
+  `[2, 64]`, `pattern.duty` outside `(0, 1)`, a negative or non-finite `bias`.
 - `L2351` (warning): the component resolves onto a `Viewmodel` mesh.
 - `L2352` (warning): a frame resolves a ninth distinct style; it is not drawn.
 

@@ -88,7 +88,7 @@ instead of re-hashing the grid's contents every frame.
 
 - **Thin cards still fill, and `mask` meshes are skipped (reason `cutout`).** A single-sided leaf card or a plane
   fills the cells its surface overlaps even at a `cell_size` far coarser than the card is thick, and
-  an `alpha_mode: mask` mesh is skipped whole, so light passes through a grating. An asset mesh's albedo
+  an `alpha_mode: mask` or `blend` mesh is skipped whole, so light passes through a grating or a pane. An asset mesh's albedo
   uses `MeshData::base_color_mean` (the base-colour map's mean, white without one), not the texture.
 
 - **The voxelizer, not the bake, is the cost centre.** On a `post-full`-scale scene at

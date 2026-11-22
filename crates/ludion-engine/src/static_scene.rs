@@ -527,6 +527,13 @@ fn classify(frame: &mut Frame<'_>, inherit: &mut MeshInherit, id: EntityId) -> C
                         "static",
                     );
                 }
+                if data.blend {
+                    return rejected(
+                        key,
+                        ineligible_diagnostic(&subject, &StaticIneligible::Blended),
+                        "static",
+                    );
+                }
                 (Some((kind, rel.to_string(), data)), MeshShape::Asset(0))
             }
         };

@@ -365,6 +365,7 @@ mod tests {
             outline_alpha: 0.0,
             bias: 0.0,
             always: false,
+            ..Default::default()
         }
     }
 

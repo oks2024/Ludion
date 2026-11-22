@@ -91,22 +91,6 @@ pub(crate) fn unsupported(what: &str, offender: &str) -> Diagnostic {
     )
 }
 
-/// `L1202` — a `BLEND` alpha mode has no mapping; `MASK` is the mapped alternative. `offender`
-/// names the primitive it appears on.
-pub(crate) fn blend_unsupported(offender: &str) -> Diagnostic {
-    Diagnostic::new(
-        code::IMPORT_UNSUPPORTED_FEATURE,
-        format!(
-            "a `BLEND` alpha mode on {offender} has no Ludion mapping (meshes draw opaque or \
-             alpha-cutout)"
-        ),
-    )
-    .with_help(
-        "switch the material to alpha clip (`MASK`), which maps onto `alpha_mode: mask`, or pass \
-         `--allow-lossy` to import it opaque",
-    )
-}
-
 /// `L1202` — a glTF camera cannot ride a prefab (`Camera` is a singleton, `L1229`).
 pub(crate) fn camera_unsupported(offender: &str) -> Diagnostic {
     Diagnostic::new(

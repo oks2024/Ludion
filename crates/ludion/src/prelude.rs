@@ -342,7 +342,9 @@ pub use ludion_engine::{
     GroundMarkerClip, ProfileQuery, VisibilityProfile, ground_marker_profile, visibility_profile,
 };
 pub use ludion_engine::{LimitsFrom, RagdollSwitch, switch_to_ragdoll_with};
-pub use ludion_engine::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
+pub use ludion_engine::{
+    OccludedSilhouette, SilhouetteOutline, SilhouettePattern, SilhouettePatternKind, SilhouetteWhen,
+};
 pub use ludion_engine::{
     PairedAction, PairedFit, PairedMotion, PairedRoleFit, Warp, abort_paired, paired_fit,
     paired_motion, paired_update, start_paired,

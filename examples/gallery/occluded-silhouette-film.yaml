@@ -1,0 +1,169 @@
+# Feature: OccludedSilhouette `film` - `film: false` keeps the vignette and grain off the silhouette, in proportion to its opacity.
+# Two identical figures half behind cover near the left frame edge, where the vignette is strongest, under the game's slice
+# post with the vignette raised to 0.6 and a heavy grain 0.08: (1) the outermost is `film: false`, a clean flat tint; (2)
+# its twin is the default `film: true`, darkened by the vignette and grained like the rest of the image. Fill alpha is 0.85.
+# ludion docs occluded-silhouette.
+format: 1
+name: occluded-silhouette-film - film false keeps vignette and grain off an OccludedSilhouette
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.7
+          - 14.5
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+      PostProcess:
+        exposure: 0.9
+        vignette: 0.6
+        vignette_radius: 0.6
+        grain: 0.08
+        grain_size: 0.0015
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - 10.0
+      DirectionalLight:
+        direction:
+          - -0.3
+          - -0.6
+          - -0.8
+        color:
+          - 1.0
+          - 0.95
+          - 0.9
+        intensity: 1.6
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 18.0
+          - 1.0
+          - 9.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.16
+          - 0.17
+          - 0.2
+          - 1.0
+        roughness: 0.9
+  - name: back-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - -4.0
+        scale:
+          - 18.0
+          - 6.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 0.11
+          - 0.14
+          - 1.0
+        roughness: 0.9
+  - name: film-off-figure
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 0.0
+          - -0.5
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.45
+          - 0.5
+          - 0.6
+          - 1.0
+      OccludedSilhouette:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.85
+        film: false
+  - name: film-off-wall
+    components:
+      Transform:
+        translation:
+          - -7.0
+          - 1.5
+          - 1.2
+        scale:
+          - 1.3
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9
+  - name: film-on-figure
+    components:
+      Transform:
+        translation:
+          - -3.5
+          - 0.0
+          - -0.5
+        scale:
+          - 0.25
+          - 0.25
+          - 0.25
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.45
+          - 0.5
+          - 0.6
+          - 1.0
+      OccludedSilhouette:
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.85
+  - name: film-on-wall
+    components:
+      Transform:
+        translation:
+          - -2.5
+          - 1.5
+          - 1.2
+        scale:
+          - 1.3
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.35
+          - 0.3
+          - 0.28
+          - 1.0
+        roughness: 0.9

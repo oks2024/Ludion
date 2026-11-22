@@ -264,7 +264,9 @@ pub use ludion_components::MeshBlend;
 pub use ludion_components::Rain;
 pub use ludion_components::RenderLayers;
 pub use ludion_components::RenderView;
-pub use ludion_components::{OccludedSilhouette, SilhouetteOutline, SilhouetteWhen};
+pub use ludion_components::{
+    OccludedSilhouette, SilhouetteOutline, SilhouettePattern, SilhouettePatternKind, SilhouetteWhen,
+};
 pub use ludion_components::{PostProfile, ViewBackground, ViewShading};
 pub use ludion_components::{ScreenEffect, ScreenEffectPreset, ScreenEffectTarget, ScreenMaskKind};
 pub use ludion_nav::PathStatus;

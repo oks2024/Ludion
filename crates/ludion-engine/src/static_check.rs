@@ -39,7 +39,9 @@ impl StaticIneligible {
             StaticIneligible::Component(name) => format!("it carries a `{name}`"),
             StaticIneligible::Shape(shape) => format!("its mesh shape is `{shape}`"),
             StaticIneligible::SkinnedAsset => "its mesh asset is skinned".to_string(),
-            StaticIneligible::Blended => "its `Mesh` is blended (`blend`)".to_string(),
+            StaticIneligible::Blended => {
+                "its `Mesh` is blended (`blend`, or its document's `alpha_mode: blend`)".to_string()
+            }
             StaticIneligible::Posed { ancestor, by } => {
                 let source = match *by {
                     "Animation" => "its prefab root's `Animation`".to_string(),
@@ -235,7 +237,19 @@ pub fn scene_static_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagn
         }
         let shapes: Vec<&MeshSource> = meshes.iter().map(|m| &m.shape).collect();
         let has = |name: &str| find(name).is_some();
-        let blended = meshes.iter().any(|m| m.blend.is_some());
+        // A read error is ignored here: the mesh validator reports it.
+        let blended = meshes.iter().any(|m| {
+            m.blend.is_some()
+                || matches!(&m.shape, MeshSource::Asset(path)
+                if matches!(
+                    crate::mesh_asset::with_mesh_source(
+                        root,
+                        path,
+                        ludion_scene::read_mesh_alpha_mode,
+                    ),
+                    Ok((ludion_scene::AlphaMode::Blend, _))
+                ))
+        });
         let ineligible = static_ineligibility(&has, &shapes, blended).or_else(|| {
             meshes
                 .iter()
@@ -361,6 +375,33 @@ mod tests {
                 "{body}"
             );
         }
+    }
+
+    #[test]
+    fn a_static_asset_whose_document_is_blended_is_l1341() {
+        let dir = std::env::temp_dir().join(format!("ludion-static-blend-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("meshes")).unwrap();
+        let tri = "format: 1\nkind: mesh\npositions:\n  - 0.0\n  - 0.0\n  - 0.0\n  - 1.0\n  - 0.0\n  \
+                   - 0.0\n  - 0.0\n  - 1.0\n  - 0.0\nindices:\n  - 0\n  - 1\n  - 2\n";
+        std::fs::write(dir.join("meshes/opaque.mesh.yaml"), tri).unwrap();
+        std::fs::write(
+            dir.join("meshes/glass.mesh.yaml"),
+            format!("{tri}alpha_mode: blend\n"),
+        )
+        .unwrap();
+        let check = |rel: &str| {
+            let text = format!(
+                "  - components:\n      Static: {{}}\n      Mesh:\n        shape:\n          asset: {rel}\n"
+            );
+            scene_static_diagnostics(&dir, &scene(&text))
+                .iter()
+                .map(|d| d.code.as_str().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(check("meshes/opaque.mesh.yaml").is_empty());
+        assert_eq!(check("meshes/glass.mesh.yaml"), ["L1341"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1082,6 +1082,7 @@ mod tests {
             authored_material: false,
             base_color_mean: [1.0; 4],
             rim: None,
+            blend: false,
             double_sided: false,
             indices: Vec::new(),
             hash: 0,

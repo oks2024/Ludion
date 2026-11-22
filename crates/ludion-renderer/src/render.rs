@@ -4469,7 +4469,7 @@ impl PassRecorder for FrameRecorder<'_> {
                     metered: u32::from(self.exposure_meter.is_some()),
                     grain_animated: u32::from(self.post.grain_tick.is_some()),
                     grain_tick: self.post.grain_tick.unwrap_or(0),
-                    metered_pad2: 0,
+                    film_carry: u32::from(self.has_smaa || self.resample_owns_output),
                 };
                 // The composite's three optional inputs, each at the binding the WGSL itself declares,
                 // so neither can move the other and turning one off cannot shift the one behind it.
@@ -6923,7 +6923,7 @@ impl FrameRecorder<'_> {
             dither: u32::from(self.post.dither && !self.resample_owns_output),
             grain_animated: u32::from(self.post.grain_tick.is_some()),
             grain_tick: self.post.grain_tick.unwrap_or(0),
-            pad0: 0,
+            film_pass: u32::from(self.resample_owns_output),
             pad1: 0,
             pad2: 0,
         };

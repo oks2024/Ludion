@@ -119,9 +119,10 @@ so it draws through the base's pipeline and bone palette. A bad chain is `L1395`
 An asset mesh document carries three optional keys after its maps, none written at its default, so a
 document that authors none keeps its bytes:
 
-- **`alpha_mode`** — `opaque` (default) or `mask`; any other value is `L1110`. On `opaque` alpha is ignored.
+- **`alpha_mode`** — `opaque` (default), `mask` or `blend` (drawn see-through, see §Blended meshes); any
+  other value is `L1110`. On `opaque` alpha is ignored.
 - **`alpha_cutoff`** — `[0, 1]`, `mask` only, default `0.5`. Non-finite, outside `[0, 1]`, or set
-  without `mask` is `L1111`.
+  without `mask` (the mode is `opaque`, `blend` or absent) is `L1111`.
 - **`double_sided`** — default `false`; the mesh draws unculled.
 
 ```yaml
@@ -149,9 +150,8 @@ distance. It holds under `textures: source` and `cooked` alike; every other map 
 
 **Render-only:** a collider built from a cutout mesh stays solid, so a grating stays walkable. The GI
 voxelizer skips `mask` meshes, so light passes through a grating (`ludion docs global-illumination`).
-Voxel, sculpt and primitive meshes carry no UVs and cannot be cutout. glTF `BLEND` is refused with `L1202`
-by default, and under `--allow-lossy` it imports **opaque** with a warning; for a see-through mesh set
-`Mesh.blend` (below). glTF `MASK` and `doubleSided` map onto these keys. `examples/gallery/cutout-double-sided.yaml` shows it all; the Blender set-up is
+Voxel, sculpt and primitive meshes carry no UVs and cannot be cutout. glTF `BLEND` imports as
+`alpha_mode: blend`; `MASK` and `doubleSided` map onto these keys too. `examples/gallery/cutout-double-sided.yaml` shows it all; the Blender set-up is
 `ludion docs blender-craft`.
 
 ## A roughness × metallic sweep (copyable)
@@ -336,6 +336,11 @@ or a black `color` renders the same bytes as a scene without it.
 asset, voxel, sculpt, assembly, character. `color`'s alpha is the opacity; `Fade` multiplies it instead of
 dithering. It is not inherited down `Parent`, and an assembly is one entity, so all its parts blend.
 
+An asset mesh document may say `alpha_mode: blend` instead: the mesh draws as `blend: alpha` with no
+`Mesh.blend` on the entity. `Mesh.blend` overrides the document (`additive` wins over the document's alpha);
+no value forces a blend document opaque. On an assembly each part takes its own document's mode and
+shares the entity's sort group, so one glass part among opaque ones blends alone.
+
 ```yaml
 Mesh:
   shape: cube
@@ -355,6 +360,7 @@ light shafts and depth of field read it at its own distance.
 | Depth pre-pass, ambient occlusion, SSR, decals | No: it writes no opaque depth, so they read what is behind it |
 | Sun and local shadows | No: it never casts a shadow, whatever `Visibility.cast_shadows` says |
 | GI voxelization, probe captures, `OccludedSilhouette` mask | No |
+| Asset `alpha_mode: blend` | Blended exactly as `Mesh.blend: alpha`: every row here holds for it, including `Static` and `Viewmodel` |
 | Sun and local-light shadows *on* it, sun, point and spot light | Yes: it is shaded like an opaque mesh |
 | Fog, shafts, depth of field, `Mesh.medium` | Yes, at its own distance |
 | Sprites, particles, text | Draw after it, in their own order: a sprite behind glass is painted over it |

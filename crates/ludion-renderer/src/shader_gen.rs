@@ -354,7 +354,7 @@ pub struct Composite {
     pub medium_gi: [u32; 4],
     pub silhouette: [u32; 4],
     pub silhouette_forward: [f32; 4],
-    pub silhouette_styles: [[f32; 4]; 16],
+    pub silhouette_styles: [[f32; 4]; 32],
     pub anamorphic_gain: [f32; 3],
     pub anamorphic: u32,
     pub halation_custom_gain: [f32; 3],
@@ -366,9 +366,9 @@ pub struct Composite {
     pub metered: u32,
     pub grain_animated: u32,
     pub grain_tick: u32,
-    pub metered_pad2: u32,
+    pub film_carry: u32,
 }
-const _: () = assert!(core::mem::size_of::<Composite>() == 672);
+const _: () = assert!(core::mem::size_of::<Composite>() == 928);
 const _: () = assert!(core::mem::offset_of!(Composite, strength) == 0);
 const _: () = assert!(core::mem::offset_of!(Composite, exposure) == 4);
 const _: () = assert!(core::mem::offset_of!(Composite, tonemap) == 8);
@@ -409,18 +409,18 @@ const _: () = assert!(core::mem::offset_of!(Composite, medium_gi) == 288);
 const _: () = assert!(core::mem::offset_of!(Composite, silhouette) == 304);
 const _: () = assert!(core::mem::offset_of!(Composite, silhouette_forward) == 320);
 const _: () = assert!(core::mem::offset_of!(Composite, silhouette_styles) == 336);
-const _: () = assert!(core::mem::offset_of!(Composite, anamorphic_gain) == 592);
-const _: () = assert!(core::mem::offset_of!(Composite, anamorphic) == 604);
-const _: () = assert!(core::mem::offset_of!(Composite, halation_custom_gain) == 608);
-const _: () = assert!(core::mem::offset_of!(Composite, halation_custom) == 620);
-const _: () = assert!(core::mem::offset_of!(Composite, lut_min) == 624);
-const _: () = assert!(core::mem::offset_of!(Composite, lut) == 636);
-const _: () = assert!(core::mem::offset_of!(Composite, lut_scale) == 640);
-const _: () = assert!(core::mem::offset_of!(Composite, lut_strength) == 652);
-const _: () = assert!(core::mem::offset_of!(Composite, metered) == 656);
-const _: () = assert!(core::mem::offset_of!(Composite, grain_animated) == 660);
-const _: () = assert!(core::mem::offset_of!(Composite, grain_tick) == 664);
-const _: () = assert!(core::mem::offset_of!(Composite, metered_pad2) == 668);
+const _: () = assert!(core::mem::offset_of!(Composite, anamorphic_gain) == 848);
+const _: () = assert!(core::mem::offset_of!(Composite, anamorphic) == 860);
+const _: () = assert!(core::mem::offset_of!(Composite, halation_custom_gain) == 864);
+const _: () = assert!(core::mem::offset_of!(Composite, halation_custom) == 876);
+const _: () = assert!(core::mem::offset_of!(Composite, lut_min) == 880);
+const _: () = assert!(core::mem::offset_of!(Composite, lut) == 892);
+const _: () = assert!(core::mem::offset_of!(Composite, lut_scale) == 896);
+const _: () = assert!(core::mem::offset_of!(Composite, lut_strength) == 908);
+const _: () = assert!(core::mem::offset_of!(Composite, metered) == 912);
+const _: () = assert!(core::mem::offset_of!(Composite, grain_animated) == 916);
+const _: () = assert!(core::mem::offset_of!(Composite, grain_tick) == 920);
+const _: () = assert!(core::mem::offset_of!(Composite, film_carry) == 924);
 
 /// WGSL `struct CullBox`.
 ///
@@ -1371,7 +1371,7 @@ pub struct SmaaBlendParams {
     pub dither: u32,
     pub grain_animated: u32,
     pub grain_tick: u32,
-    pub pad0: u32,
+    pub film_pass: u32,
     pub pad1: u32,
     pub pad2: u32,
 }
@@ -1382,7 +1382,7 @@ const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, grain_size) == 20);
 const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, dither) == 24);
 const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, grain_animated) == 28);
 const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, grain_tick) == 32);
-const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, pad0) == 36);
+const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, film_pass) == 36);
 const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, pad1) == 40);
 const _: () = assert!(core::mem::offset_of!(SmaaBlendParams, pad2) == 44);
 
@@ -4652,7 +4652,7 @@ pub fn create_scene_tex_bloom_tex_scene_depth_tex_shafts_tex_dof_tex_transparent
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(672),
+                    min_binding_size: wgpu::BufferSize::new(928),
                 },
                 count: None,
             },

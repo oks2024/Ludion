@@ -67,11 +67,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let top = mix(c00, c10, frac.x);
     let bottom = mix(c01, c11, frac.x);
     var color = mix(top, bottom, frac.y);
+    // The composite's film weight, from the nearest source texel (never filtered).
+    let film = textureLoad(upscale_src, clamp(vec2<i32>(floor(src + vec2<f32>(0.5))), vec2<i32>(0), last), 0).a;
     if (upscale_params.grain != 0.0 || upscale_params.dither != 0u) {
         color = encoded_output(
             color,
             in.pos.xy,
-            upscale_params.grain,
+            upscale_params.grain * film,
             upscale_params.grain_size,
             upscale_params.dither,
             upscale_params.output_height,

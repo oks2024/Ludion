@@ -263,3 +263,35 @@ fn a_presentation_silhouette_does_not_move_the_world_hash() {
         );
     }
 }
+
+#[test]
+fn a_pattern_and_inner_outline_reach_the_style() {
+    let own = "      OccludedSilhouette:\n        pattern:\n          kind: hatch\n          period: 6.0\n          duty: 0.25\n        inner_outline:\n          px: 3.0\n          alpha: 0.5\n";
+    let mut engine = engine_for(&document(&cube("a", own)));
+    let style = extract(&mut engine).silhouettes.styles[0];
+    assert_eq!(style.pattern, ludion_renderer::SilhouettePattern::Hatch);
+    assert_eq!((style.pattern_period, style.pattern_duty), (6.0, 0.25));
+    assert_eq!((style.inner_px, style.inner_alpha), (3.0, 0.5));
+}
+
+#[test]
+fn entities_differing_only_in_pattern_get_two_styles() {
+    let scanlines = "      OccludedSilhouette:\n        pattern:\n          kind: scanlines\n";
+    let hatch = "      OccludedSilhouette:\n        pattern:\n          kind: hatch\n";
+    let entities = cube("a", scanlines) + &cube("b", hatch) + &cube("c", scanlines);
+    let mut engine = engine_for(&document(&entities));
+    let scene = extract(&mut engine);
+    assert_eq!(scene.silhouettes.styles.len(), 2);
+    let slots: Vec<u8> = scene.silhouettes.meshes.iter().map(|m| m.style).collect();
+    assert_eq!(slots, [1, 2, 1]);
+}
+
+#[test]
+fn entities_differing_only_in_film_get_two_styles() {
+    let off = "      OccludedSilhouette:\n        film: false\n";
+    let entities = cube("a", off) + &cube("b", "      OccludedSilhouette: {}\n");
+    let mut engine = engine_for(&document(&entities));
+    let scene = extract(&mut engine);
+    assert_eq!(scene.silhouettes.styles.len(), 2);
+    assert!(!scene.silhouettes.styles[0].film && scene.silhouettes.styles[1].film);
+}

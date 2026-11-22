@@ -1303,6 +1303,9 @@ pub struct MeshData {
     /// `None` when the document authors none. Extract input only, like `authored_material`: it wins
     /// over the entity's own and inherited `Mesh.rim`.
     pub rim: Option<[f32; 4]>,
+    /// The source document's `alpha_mode: blend`. Extract input only, like `rim`: the renderer never
+    /// reads it.
+    pub blend: bool,
     /// Draws unculled, back faces shaded with a flipped normal — per-draw pipeline state.
     pub double_sided: bool,
     /// Triangle list: flat vertex indices, 3 per triangle.
@@ -1785,6 +1788,48 @@ pub struct SilhouetteStyle {
     pub bias: f32,
     /// Tint every pixel of the mesh, not only the hidden ones.
     pub always: bool,
+    /// Inner-outline width in 1080p pixels; 0 means none.
+    pub inner_px: f32,
+    /// Inner-outline opacity.
+    pub inner_alpha: f32,
+    /// The fill's line pattern.
+    pub pattern: SilhouettePattern,
+    /// Pattern period in 1080p pixels.
+    pub pattern_period: f32,
+    /// Pattern lit fraction, in `(0, 1)`.
+    pub pattern_duty: f32,
+    /// `false` fades the vignette and grain under the style's pixels.
+    pub film: bool,
+}
+
+impl Default for SilhouetteStyle {
+    fn default() -> Self {
+        Self {
+            color: [0.0; 4],
+            outline_px: 0.0,
+            outline_alpha: 0.0,
+            bias: 0.0,
+            always: false,
+            inner_px: 0.0,
+            inner_alpha: 0.0,
+            pattern: SilhouettePattern::None,
+            pattern_period: 0.0,
+            pattern_duty: 0.0,
+            film: true,
+        }
+    }
+}
+
+/// The line pattern of a [`SilhouetteStyle`] fill, anchored to the screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SilhouettePattern {
+    /// A solid fill.
+    #[default]
+    None,
+    /// Horizontal lines.
+    Scanlines,
+    /// 45° lines.
+    Hatch,
 }
 
 /// One mesh drawn into the silhouette mask.

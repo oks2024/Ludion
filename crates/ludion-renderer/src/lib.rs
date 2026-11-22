@@ -144,10 +144,10 @@ pub use scene::{
     LodSettings, LutData, MAX_GI_TEXTURE_AXIS, MAX_RENDER_VIEWS, MAX_SILHOUETTE_STYLES, MapImage,
     MeshData, MeshInstance, MeshLod, MeshShape, MeshTexture, MeshTextures, MeterData,
     MeterWeighting, ParticleInstance, PointLightData, PostData, ProbeWorld, RenderCamera,
-    RenderScene, RenderViewData, SilhouetteMesh, SilhouetteStyle, Silhouettes, SkinJoint,
-    SpotLightData, SpriteInstance, StaticRange, SunCascadeConfig, SunData, TextRun, TextureImage,
-    TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance, UiRotation, UiShapeGeometry,
-    UiShapeStroke, ViewPost, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
+    RenderScene, RenderViewData, SilhouetteMesh, SilhouettePattern, SilhouetteStyle, Silhouettes,
+    SkinJoint, SpotLightData, SpriteInstance, StaticRange, SunCascadeConfig, SunData, TextRun,
+    TextureImage, TextureWrap, TonemapOperator, UiClip, UiClipBox, UiInstance, UiRotation,
+    UiShapeGeometry, UiShapeStroke, ViewPost, WorldVoxelGrid, aspect_ratio, drop_shadow_fade,
 };
 pub use scene::{UiPathJoin, UiPathStroke};
 pub use screen_effect::{MAX_SCREEN_EFFECTS, ScreenEffectData, ScreenMask};

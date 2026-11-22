@@ -136,8 +136,8 @@ pub(crate) struct SkipReport {
     /// Sources the voxelizer does not rasterize: sculpts, assemblies and assembly parts, and an
     /// asset mesh with no triangles.
     pub unsupported: SkipCount,
-    /// Asset meshes whose material is `alpha_mode: mask`: light passes through their holes, which a
-    /// solid shell would block.
+    /// Asset meshes whose material is `alpha_mode: mask` or `blend`: light passes through them, which
+    /// a solid shell would block.
     pub cutout: SkipCount,
 }
 
@@ -512,10 +512,11 @@ fn resolve(
                     skipped.skinned.note(mesh.index);
                     continue;
                 }
-                if data
-                    .textures
-                    .as_ref()
-                    .is_some_and(|t| t.alpha_cutoff.is_some())
+                if data.blend
+                    || data
+                        .textures
+                        .as_ref()
+                        .is_some_and(|t| t.alpha_cutoff.is_some())
                 {
                     skipped.cutout.note(mesh.index);
                     continue;
@@ -1714,6 +1715,7 @@ mod tests {
             authored_material: false,
             base_color_mean: [1.0; 4],
             rim: None,
+            blend: false,
             double_sided: false,
             indices: vec![0, 1, 2],
             hash: 1,

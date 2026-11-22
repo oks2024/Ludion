@@ -42,22 +42,13 @@ fn default_mode_fails_on_the_blend_material_naming_it() {
         ExternalFiles::Beside(&fixture_dir()),
         &ImportOptions::lossy(false),
     )
-    .expect_err("the fixture's `stone` is alpha-blended, so a non-lossy import must fail");
-    assert_eq!(
-        errors.len(),
-        2,
-        "the blend material (a shared mesh reports once) and the camera node"
-    );
+    .expect_err("the fixture's camera node has no mapping, so a non-lossy import must fail");
+    assert_eq!(errors.len(), 1, "the camera node");
     assert!(errors.iter().all(|e| e.code.as_str() == "L1202"));
     assert!(
-        errors[0].message.contains("BLEND") && errors[0].message.contains("pedestal-mesh"),
+        errors[0].message.contains("a camera"),
         "the L1202 must name the offender: {}",
         errors[0].message
-    );
-    assert!(
-        errors[1].message.contains("a camera"),
-        "{}",
-        errors[1].message
     );
 }
 
@@ -75,11 +66,7 @@ fn allow_lossy_compiles_the_supported_subset_with_a_warning() {
         import.textures[0].rel_path, "textures/38e03d43f345ff3e.png",
         "a texture is named by the content hash of its canonical PNG bytes"
     );
-    assert_eq!(
-        import.warnings.len(),
-        2,
-        "the blend material and the camera"
-    );
+    assert_eq!(import.warnings.len(), 1, "the camera");
     assert!(import.warnings.iter().all(|w| w.code.as_str() == "L1202"));
 }
 
@@ -885,25 +872,13 @@ fn a_double_sided_material_maps_to_double_sided() {
 }
 
 #[test]
-fn a_blend_material_is_l1202_naming_blend_and_pointing_at_mask() {
+fn a_blend_material_imports_strictly_as_alpha_mode_blend() {
     let json = mesh_gltf(r#"{"name":"m","alphaMode":"BLEND"}"#, false);
-    let errors = import(
-        json.as_bytes(),
-        ExternalFiles::Beside(Path::new(".")),
-        &ImportOptions::lossy(false),
-    )
-    .expect_err("BLEND has no mapping");
-    let blend = errors
-        .iter()
-        .find(|d| d.message.contains("BLEND"))
-        .expect("the BLEND material is named");
-    assert_eq!(blend.code.as_str(), "L1202");
-    assert!(blend.message.contains("tri-mesh"), "{}", blend.message);
-    assert!(
-        blend.help.as_deref().is_some_and(|h| h.contains("MASK")),
-        "{:?}",
-        blend.help
-    );
+    let import = import_clean(&json);
+    let doc = only_mesh(&import);
+    assert_eq!(doc.alpha_mode, ludion_scene::AlphaMode::Blend);
+    let text = ludion_scene::emit_mesh(doc);
+    assert!(text.contains("alpha_mode: blend\n"), "{text}");
 }
 
 #[test]

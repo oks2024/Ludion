@@ -76,16 +76,29 @@ numbering above.
    occlusion is off for a blended mesh (AO is a screen-space read of opaque depth).
 9. **Static, viewmodel.** A `Static` blended entity takes the dynamic path and reports `L1341`. A blend
    on a `Viewmodel` mesh is ignored with `L2360`; it draws opaque.
+10. `alpha_mode: blend` on a mesh document draws the mesh on the blended path with mode `alpha`;
+    `Mesh.blend` overrides it; there is no value that forces a blend document opaque.
+11. Per instance: an assembly's parts each take their own document's mode, and share the entity's sort
+    group.
+12. glTF `BLEND` imports as `alpha_mode: blend`; it is no longer an `L1202`.
 
 Waves:
 
 - **W1:** `Mesh.blend`, the side list, the sort, the pipelines, `transparent_depth` integration, the
   `glass-and-holograms` gallery scene, docs.
-- **W2:** asset `alpha_mode: blend` (`L1110`/`L1111` extended; `Mesh.blend` overrides the document);
-  glTF `BLEND` imports as blend (`L1202` narrowed, the lossy fallback goes); indirect specular (sky
-  IBL and probes) on lit blended meshes; `lit: false`.
+- **W2a:** asset `alpha_mode: blend` (`L1110`/`L1111` extended; `Mesh.blend` overrides the document);
+  glTF `BLEND` imports as blend (`L1202` narrowed, the lossy fallback goes). Data path only: no shader,
+  pipeline or graph change.
+- **W2b:** indirect specular (sky IBL and probes) on lit blended meshes; `Mesh.lit: false` with `L2361`.
+  Design: the reflection resources join `mesh.wgsl`'s group 3 at new bindings, read only by `fs_blend`/
+  `fs_blend_layer`, a binding-free twin of `reflections.wgsl` `reflection_fill` that leaves
+  `reflections.wgsl` untouched (§A fragility); the mesh layout sits at the WebGPU floor of 16 sampled
+  textures per stage, so `engine_limits` raises `max_sampled_textures_per_shader_stage` to 20 with its
+  comment and test; `transparents`/`transparent_depth` read `probe_live` when blended and relit; an unlit
+  `BLEND_UNLIT` twin; a parity test of an alpha-1 blended pane against its opaque twin.
 - **W3:** `blend_depth: nearest`, a per-entity depth pre-pass in which an assembly is one figure, and
-  the ghost demo.
+  the ghost demo. The pre-pass must take the resolved per-instance mode (`Mesh.blend` or the document's
+  `alpha_mode: blend`), not `Mesh.blend` alone.
 - **Open, with trigger:** a merged distance sort with sprites and particles, if smoke behind office
   glass reads wrong.
 
@@ -157,4 +170,4 @@ tried on Metal, in the orthographic shaft tests, or on the reference game, and w
 - Mesh path (0016) W1 mechanized (r2386, 2026-11-18): `Mesh.blend` (`alpha` or `additive`) draws in the
   `transparents` pass and joins `transparent_depth`; the `glass-and-holograms` gallery golden is blessed on the
   RTX 3090. Opaque scenes keep the same pixels, and no replay content hash, `WorldHash`, existing golden or
-  protocol schema moved. W2 and W3 are not started.
+  protocol schema moved. W2a in progress; W2b and W3 are not started.

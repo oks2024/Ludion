@@ -25,8 +25,8 @@ beside it.
 What it voxelizes: cubes, planes, spheres, voxel models, and **asset meshes** (`shape: asset`) —
 each asset-mesh triangle fills the cells its surface overlaps, so a hollow building stays hollow and a
 wall casts a shell, not a solid. Skinned meshes, characters, sculpts, assemblies and `GiDynamic`
-instances contribute nothing, and so do asset meshes with `alpha_mode: mask`, so light passes through a
-grating (`ludion docs materials`). An asset mesh's albedo is its vertex colours times `Mesh.color` times
+instances contribute nothing, and so do asset meshes with `alpha_mode: mask` or `blend`, so light passes through a
+grating or a pane (`ludion docs materials`). An asset mesh's albedo is its vertex colours times `Mesh.color` times
 the base-colour map's mean in linear light (white when the mesh has no base-colour map); its
 emissive is the document's when it authors a material and `Mesh.emissive` otherwise. Texture maps
 themselves are not sampled.

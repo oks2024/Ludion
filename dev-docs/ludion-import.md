@@ -44,7 +44,7 @@ before touching the glTF→component mapping, the `L1202` unsupported-feature su
   nothing, `--allow-lossy` reproduces a committed fixture tree byte-for-byte, the imported tree
   passes `check-scene`, and the **round-trip gate** (the committed `expected/scene.yaml` is a hand-authored wrapper: an instance entry of `model.prefab.yaml` plus the camera a prefab cannot carry; `ludion docs prefabs`): import → check → golden render → re-export →
   re-import, asserting byte identity end to end.
-- `examples/import/scene.gltf` — the lossy-path fixture (a `BLEND` material, a base-color texture, several meshes) both test suites import; `examples/import-cutout/scene.gltf` is the strict `MASK`/`doubleSided` one (Blender 5.2 script, imported strict, tree byte-gated); `examples/import-textured/scene.gltf` is the clean-path one (five maps on two cubes, the normal map tilted in both axes, one cube with an exporter-convention authored `TANGENT`).
+- `examples/import/scene.gltf` — the lossy-path fixture (a camera node, a base-color texture, several meshes) both test suites import; `examples/import-cutout/scene.gltf` is the strict `MASK`/`doubleSided` one (Blender 5.2 script, imported strict, tree byte-gated); `examples/import-textured/scene.gltf` is the clean-path one (five maps on two cubes, the normal map tilted in both axes, one cube with an exporter-convention authored `TANGENT`).
 
 ## Rules
 - **Same input, byte-identical plan — always.** Every walk is glTF **document order** (nodes,
@@ -55,7 +55,7 @@ before touching the glTF→component mapping, the `L1202` unsupported-feature su
 - **Unsupported features are structured `L1202` errors, never silent drops.** Every glTF construct
   with no Ludion mapping — a texture on a second UV set or with per-axis wrap modes that disagree (a
   reference holds one mode for both), a textured material on a primitive without `TEXCOORD_0`, a
-  `BLEND` `alphaMode` (`MASK` and `doubleSided` map), a camera (a prefab carries none), a directional light, an
+  camera (a prefab carries none), a directional light, an
   animation channel of morph weights or on a node with no part (or one mixing skin joints and parts), a morph target, a sparse or
   non-triangle primitive, a *referenced* JPEG image, an unrecognized required extension — is named (node/mesh/primitive/material index and, if present,
   its glTF name) in an `L1202`. By default any `L1202` **aborts the import: nothing is written.** The

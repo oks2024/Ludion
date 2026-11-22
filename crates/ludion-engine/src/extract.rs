@@ -1511,12 +1511,11 @@ fn extract_inner(
     let mut skin_jobs: Vec<SkinJob> = Vec::new();
     let mut skin_joints = 0usize;
     let mut inherit = MeshInherit::default();
-    // Blended instances, outside `meshes`; `blend_group` numbers their owning entities consecutively.
+    // Blended instances, outside `meshes`; `blend_route` numbers their owning entities consecutively.
     let mut blended: Vec<BlendedMesh> = Vec::new();
     // The owning entity of each `blended` entry, parallel to it (layer masks).
     let mut blended_owners: Vec<EntityId> = Vec::new();
-    let mut blend_group: Option<(EntityId, u32)> = None;
-    let mut blend_viewmodel_reported: Vec<EntityId> = Vec::new();
+    let mut blend_route = BlendRoute::default();
     for mesh in &placed.meshes {
         // Hidden meshes stay in `placed` for the voxelizer (the static GI bake ignores `Visibility`)
         // but are never resolved, skinned or drawn.
@@ -1525,36 +1524,6 @@ fn extract_inner(
         }
         let (fade, rim, medium) = inherit.resolve(world, mesh);
         let cast_shadows = visibility.casts(mesh.id);
-        let blend = match mesh.blend {
-            Some(_) if viewmodel_frame.contains(mesh.id) => {
-                if !blend_viewmodel_reported.contains(&mesh.id) {
-                    blend_viewmodel_reported.push(mesh.id);
-                    let at = crate::diagnostics::offender_key(world, mesh.id);
-                    degraded.push((
-                        format!("{at}/blend-on-viewmodel"),
-                        Diagnostic::new(
-                            code::MESH_BLEND_ON_VIEWMODEL,
-                            format!(
-                                "{} has a `Mesh.blend` on a `Viewmodel` mesh; the mesh draws opaque",
-                                mesh.id
-                            ),
-                        )
-                        .with_help("remove `blend` from the viewmodel's mesh"),
-                    ));
-                }
-                None
-            }
-            other => other,
-        };
-        let group = match (blend, blend_group) {
-            (None, _) => 0,
-            (Some(_), Some((id, group))) if id == mesh.id => group,
-            (Some(_), last) => {
-                let group = last.map_or(0, |(_, g)| g + 1);
-                blend_group = Some((mesh.id, group));
-                group
-            }
-        };
         let mut character: Option<Arc<CharacterData>> = None;
         let shape = match mesh.source {
             PlacedMeshSource::Primitive(shape) => Some(shape),
@@ -1660,9 +1629,17 @@ fn extract_inner(
                         medium,
                         porosity: mesh.porosity.unwrap_or(DEFAULT_POROSITY),
                     };
-                    match blend {
+                    let mode = blend_route.mode(
+                        world,
+                        mesh.id,
+                        mesh.blend,
+                        mesh_assets[index].blend,
+                        viewmodel_frame.contains(mesh.id),
+                        degraded,
+                    );
+                    match mode {
                         Some(mode) => {
-                            blended.push(blended_mesh(instance, mode, group));
+                            blended.push(blended_mesh(instance, mode, blend_route.group(mesh.id)));
                             blended_owners.push(mesh.id);
                         }
                         None => {
@@ -1714,9 +1691,17 @@ fn extract_inner(
                 cast_shadows,
                 bone_offset,
             );
-            match blend {
+            let document_blend = matches!(shape, MeshShape::Asset(idx) if mesh_assets[idx].blend);
+            match blend_route.mode(
+                world,
+                mesh.id,
+                mesh.blend,
+                document_blend,
+                viewmodel_frame.contains(mesh.id),
+                degraded,
+            ) {
                 Some(mode) => {
-                    blended.push(blended_mesh(instance, mode, group));
+                    blended.push(blended_mesh(instance, mode, blend_route.group(mesh.id)));
                     blended_owners.push(mesh.id);
                 }
                 None => {
@@ -5791,6 +5776,61 @@ fn blended_mesh(instance: MeshInstance, mode: MeshBlend, group: u32) -> BlendedM
     }
 }
 
+/// Resolves which instances draw blended and numbers their owning entities' sort groups.
+#[derive(Default)]
+struct BlendRoute {
+    /// The last entity that pushed a blended instance, and its group.
+    group: Option<(EntityId, u32)>,
+    viewmodel_reported: Vec<EntityId>,
+}
+
+impl BlendRoute {
+    /// The mode an instance draws with: the entity's `Mesh.blend`, else `Alpha` when its document
+    /// says `alpha_mode: blend`. A blended `Viewmodel` mesh draws opaque, with `L2360` once per entity.
+    fn mode(
+        &mut self,
+        world: &World,
+        id: EntityId,
+        own: Option<MeshBlend>,
+        document_blend: bool,
+        viewmodel: bool,
+        degraded: &mut Vec<(String, Diagnostic)>,
+    ) -> Option<MeshBlend> {
+        let mode = own.or(document_blend.then_some(MeshBlend::Alpha))?;
+        if !viewmodel {
+            return Some(mode);
+        }
+        if !self.viewmodel_reported.contains(&id) {
+            self.viewmodel_reported.push(id);
+            let at = crate::diagnostics::offender_key(world, id);
+            degraded.push((
+                format!("{at}/blend-on-viewmodel"),
+                Diagnostic::new(
+                    code::MESH_BLEND_ON_VIEWMODEL,
+                    format!(
+                        "{id} is blended (`Mesh.blend` or its document's `alpha_mode: blend`) on a \
+                         `Viewmodel` mesh; the mesh draws opaque"
+                    ),
+                )
+                .with_help("remove `blend`, or give the viewmodel an opaque mesh document"),
+            ));
+        }
+        None
+    }
+
+    /// The sort group of `id`'s blended instances: consecutive per entity in extract order.
+    fn group(&mut self, id: EntityId) -> u32 {
+        match self.group {
+            Some((last, group)) if last == id => group,
+            last => {
+                let group = last.map_or(0, |(_, g)| g + 1);
+                self.group = Some((id, group));
+                group
+            }
+        }
+    }
+}
+
 /// The normal matrix for a mesh: the transform that carries object-space normals to world space.
 ///
 /// - **Uniform scale** (`sx == sy == sz`): the model's own upper-3×3. A similarity transform already
@@ -9741,6 +9781,7 @@ mod tests {
                 authored_material: false,
                 base_color_mean: [1.0; 4],
                 rim: None,
+                blend: false,
                 double_sided: false,
                 indices: Vec::new(),
                 hash: 0,
@@ -9895,6 +9936,7 @@ mod tests {
                 authored_material: false,
                 base_color_mean: [1.0; 4],
                 rim: None,
+                blend: false,
                 double_sided: false,
                 indices: Vec::new(),
                 hash: 0,
@@ -10865,7 +10907,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
         }
 
-        /// The skip report counts each reason: dynamic, skinned, cutout and unsupported sources, with
+        /// The skip report counts each reason: dynamic, skinned, cutout (`mask` or `blend`) and unsupported sources, with
         /// the entity index of the first; asset meshes it rasterizes are not counted.
         /// The camera's LOD knobs reach `RenderScene.lod`, and `Camera.lod_bias: 2` turns a chained
         /// instance's mid-distance pick coarser; a world without the knobs gets the defaults.
@@ -10937,6 +10979,16 @@ mod tests {
                 MeshSource::Asset("meshes/mask.mesh.yaml".into()),
                 false,
             );
+            std::fs::write(
+                dir.join("meshes/blend.mesh.yaml"),
+                format!("{prop}alpha_mode: blend\n"),
+            )
+            .unwrap();
+            place_mesh(
+                &mut world,
+                MeshSource::Asset("meshes/blend.mesh.yaml".into()),
+                false,
+            );
 
             let ids: Vec<_> = world.entities().collect();
             let camera = single_camera(&world, &ids).unwrap().unwrap();
@@ -10962,7 +11014,11 @@ mod tests {
             assert_eq!((report.skinned.count, report.skinned.first), (1, Some(2)));
             assert_eq!(report.non_finite.count, 0);
             assert_eq!(report.unsupported.count, 0);
-            assert_eq!((report.cutout.count, report.cutout.first), (1, Some(5)));
+            assert_eq!(
+                (report.cutout.count, report.cutout.first),
+                (2, Some(5)),
+                "a mask and a blend document are both skipped"
+            );
             let _ = std::fs::remove_dir_all(&dir);
         }
 

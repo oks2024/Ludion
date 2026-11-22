@@ -136,6 +136,7 @@ fn mesh_doc() -> impl Strategy<Value = MeshDocument> {
         let generated_from = proptest::option::of(any::<String>());
         let alpha_mode = prop_oneof![
             Just(AlphaMode::Opaque),
+            Just(AlphaMode::Blend),
             (0.0f64..=1.0).prop_map(|cutoff| AlphaMode::Mask { cutoff }),
         ];
         (

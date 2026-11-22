@@ -1,38 +1,66 @@
 //! The occluded-silhouette extract: which meshes draw into the `silhouette_mask` pass and with what
 //! style. `ludion docs occluded-silhouette` is the guide; `Plan/occluded-silhouette.md` the design.
 
-use ludion_components::{OccludedSilhouette, SilhouetteWhen};
+use ludion_components::{OccludedSilhouette, SilhouettePatternKind, SilhouetteWhen};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::ids::EntityId;
 use ludion_ecs::World;
 use ludion_renderer::{
-    MAX_SILHOUETTE_STYLES, MeshInstance, SilhouetteMesh, SilhouetteStyle, Silhouettes,
+    MAX_SILHOUETTE_STYLES, MeshInstance, SilhouetteMesh, SilhouettePattern, SilhouetteStyle,
+    Silhouettes,
 };
 
 /// The exact bits of a style: two entities share a table slot only when every field is identical.
-type StyleKey = ([u32; 4], u32, u32, u32, bool);
+type StyleKey = ([u32; 4], [u32; 7], [bool; 2], SilhouettePattern);
 
 fn style_of(silhouette: &OccludedSilhouette) -> SilhouetteStyle {
     let (outline_px, outline_alpha) = silhouette
         .outline
         .map_or((0.0, 1.0), |outline| (outline.px, outline.alpha));
+    let (inner_px, inner_alpha) = silhouette
+        .inner_outline
+        .map_or((0.0, 1.0), |outline| (outline.px, outline.alpha));
+    let (pattern, pattern_period, pattern_duty) =
+        silhouette
+            .pattern
+            .map_or((SilhouettePattern::None, 0.0, 0.0), |pattern| {
+                let kind = match pattern.kind {
+                    SilhouettePatternKind::Scanlines => SilhouettePattern::Scanlines,
+                    SilhouettePatternKind::Hatch => SilhouettePattern::Hatch,
+                };
+                (kind, pattern.period, pattern.duty)
+            });
     SilhouetteStyle {
         color: silhouette.color,
         outline_px,
         outline_alpha,
         bias: silhouette.bias,
         always: silhouette.when == SilhouetteWhen::Always,
+        inner_px,
+        inner_alpha,
+        pattern,
+        pattern_period,
+        pattern_duty,
+        film: silhouette.film,
     }
 }
 
 fn key_of(style: &SilhouetteStyle) -> StyleKey {
     (
         style.color.map(f32::to_bits),
-        style.outline_px.to_bits(),
-        style.outline_alpha.to_bits(),
-        style.bias.to_bits(),
-        style.always,
+        [
+            style.outline_px,
+            style.outline_alpha,
+            style.bias,
+            style.inner_px,
+            style.inner_alpha,
+            style.pattern_period,
+            style.pattern_duty,
+        ]
+        .map(f32::to_bits),
+        [style.always, style.film],
+        style.pattern,
     )
 }
 

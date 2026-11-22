@@ -61,12 +61,13 @@
 //! absent otherwise.
 //!
 //! A material's `MASK` alpha mode with its `alphaCutoff` (default 0.5), and `doubleSided`, map onto
-//! the mesh document's `alpha_mode: mask` / `alpha_cutoff` and `double_sided: true`. A material's
+//! the mesh document's `alpha_mode: mask` / `alpha_cutoff` and `double_sided: true`; its `BLEND`
+//! alpha mode maps onto `alpha_mode: blend` (`alphaCutoff` is ignored, as glTF says). A material's
 //! `extras.ludion_wrap` / `extras.ludion_scatter_color` map onto `Mesh.wrap` / `Mesh.scatter_color`.
 //! A material's `extras.ludion_surface` tags its mesh document's triangles with that surface name.
 //!
 //! Everything else — a texture on a second UV set or with per-axis wrap modes that disagree (a mesh
-//! document holds one mode for both), a `BLEND` alpha mode (`MASK` is the mapped alternative), a camera (a prefab carries none), a directional light, a morph target, an
+//! document holds one mode for both), a camera (a prefab carries none), a directional light, a morph target, an
 //! animation channel of morph weights, on a node under a skin joint, or mixing skin joints and prefab parts, a node `matrix` that shears, a sparse or non-triangle primitive, a
 //! JPEG image, any other required extension — is an `L1202`, naming the offender. By default any `L1202` aborts the import (nothing is written);
 //! `--allow-lossy` downgrades them to warnings and compiles the supported subset. Any other
@@ -122,10 +123,9 @@ use convert::{
     spot_light_value, transform_value,
 };
 use diagnostics::{
-    blend_unsupported, camera_unsupported, compiled_mesh_problem, emissive_without_uvs,
-    emissive_zero_base_channel, extension_ignored, invalid_gltf, malformed,
-    node_inside_joint_chain, node_matrix_shears, node_under_joint, output_io, png_encode_failed,
-    unsupported, unweighted_vertices,
+    camera_unsupported, compiled_mesh_problem, emissive_without_uvs, emissive_zero_base_channel,
+    extension_ignored, invalid_gltf, malformed, node_inside_joint_chain, node_matrix_shears,
+    node_under_joint, output_io, png_encode_failed, unsupported, unweighted_vertices,
 };
 use document::check_structure;
 pub use lod::simplify_level;
@@ -142,7 +142,6 @@ pub const UNSUPPORTED_FEATURES: &[&str] = &[
     "a texture on a second UV set",
     "a camera",
     "a directional light",
-    "a BLEND alpha mode",
     "a morph target",
     "a JPEG image",
     "any other required extension",
@@ -899,10 +898,7 @@ fn resolve_primitive(
     };
     let alpha_mode = match material.alpha_mode() {
         gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
-        gltf::material::AlphaMode::Blend => {
-            state.lossy(blend_unsupported(&label));
-            AlphaMode::Opaque
-        }
+        gltf::material::AlphaMode::Blend => AlphaMode::Blend,
         gltf::material::AlphaMode::Mask => {
             let cutoff = material.alpha_cutoff().unwrap_or(0.5);
             finite(&[cutoff], "alphaCutoff")?;

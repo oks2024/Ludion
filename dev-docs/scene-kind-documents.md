@@ -30,14 +30,14 @@ floats/vertex: `xyz` + handedness `w` ∈ {−1, 1}), optional per-vertex `emiss
 `roughness`, up to five optional texture references in canonical order —
 `base_color_texture`/`metallic_roughness_texture`/`normal_texture`/`occlusion_texture`/
 `emissive_texture`, each `{ path, wrap?, scale?/strength? }` with `path` relative to the document's
-own directory — then optional `alpha_mode` (`opaque`/`mask`), `alpha_cutoff` and `double_sided`, each
+own directory — then optional `alpha_mode` (`opaque`/`mask`/`blend`), `alpha_cutoff` and `double_sided`, each
 omitted at its default (`opaque`, `0.5`, `false`) — optional `rim` (`{ color, strength, power }`, shared with voxel and sculpt via `ludion-scene`'s `rim` module; `L1111` on a bad value) — optional skin keys `joints` (each `name`, `parent?`, `rest: { t, r, s }`,
 `inverse_bind` — 16 floats, column-major; parent-first order, at most 256), `weights` and
 `bone_indices` (4 per vertex each), all three or none — optional surface tags `surfaces` (local names, block list, at most 256) and `triangle_surfaces` (run-length `[count, local index]` pairs in triangle order; both or neither, counts summing to the triangle count, `L1696`), which are the `MeshDocument.surfaces` field (`MeshSurfaces`; `check_mesh`, `parse_mesh` and `emit_mesh` carry them, so a rewrite cannot drop the tags) — and a required `indices` triangle list. It mirrors the scene pipeline (`parse` →
 `validate` → `check` → canonical `emit`) and takes **no** registry, because a mesh document is
 self-describing rather than component-bearing.
 
-The split: `L1110` is *structure* (missing or wrong-typed keys, an `alpha_mode` other than `opaque`/`mask`, an unrecognized `kind`, a malformed
+The split: `L1110` is *structure* (missing or wrong-typed keys, an `alpha_mode` other than `opaque`/`mask`/`blend`, an unrecognized `kind`, a malformed
 list, an unknown key with a nearest match), `L1111` is *data consistency* (every float list finite;
 `positions` a multiple of 3; `normals` and each authored material list matching the vertex count
 one-for-one; `uvs` a multiple of 2 matching the vertex count; `tangents` exactly 4 floats per vertex

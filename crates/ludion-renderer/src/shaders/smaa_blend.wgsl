@@ -31,7 +31,8 @@ struct SmaaBlendParams {
     // Nonzero folds `grain_tick` (the game tick) into the grain hash.
     grain_animated: u32,
     grain_tick: u32,
-    pad0: u32,
+    // Nonzero when a resample follows and owns the grain: the film weight passes through in alpha.
+    film_pass: u32,
     pad1: u32,
     pad2: u32,
 };
@@ -95,11 +96,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             + blending_weight.y * color_shifted(uv, -blending_offset.zw, rt.xy);
     }
 
+    // The composite's film weight rides the source alpha (1 unless an `OccludedSilhouette` opted out).
+    let film = textureLoad(smaa_blend_src, vec2<i32>(in.pos.xy), 0).a;
     if (smaa_blend_params.grain != 0.0 || smaa_blend_params.dither != 0u) {
         color = encoded_output(
             color,
             in.pos.xy,
-            smaa_blend_params.grain,
+            smaa_blend_params.grain * film,
             smaa_blend_params.grain_size,
             smaa_blend_params.dither,
             f32(textureDimensions(smaa_blend_src).y),
@@ -107,5 +110,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             smaa_blend_params.grain_tick,
         );
     }
-    return vec4<f32>(color, 1.0);
+    return vec4<f32>(color, select(1.0, film, smaa_blend_params.film_pass != 0u));
 }

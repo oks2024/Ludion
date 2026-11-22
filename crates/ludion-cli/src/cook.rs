@@ -131,7 +131,7 @@ struct Unit {
 /// Only the base-colour map carries the mesh's mask cutoff, as `f32::to_bits`.
 fn roles(textures: &MeshTextures, alpha_mode: AlphaMode) -> Vec<(ColorSpace, &str, Option<u32>)> {
     let cutoff = match alpha_mode {
-        AlphaMode::Opaque => None,
+        AlphaMode::Opaque | AlphaMode::Blend => None,
         AlphaMode::Mask { cutoff } => Some((cutoff as f32).to_bits()),
     };
     [

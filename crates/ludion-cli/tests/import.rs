@@ -561,8 +561,7 @@ fn cutout_import_reproduces_committed_tree_in_default_mode() {
     }
 }
 
-/// Default (non-lossy) mode fails on the fixture's alpha-blended material, naming it, and writes
-/// nothing.
+/// Default (non-lossy) mode fails on the fixture's camera node, naming it, and writes nothing.
 #[test]
 fn default_mode_fails_with_l1202_and_writes_nothing() {
     let out = scratch("import_default");
@@ -574,12 +573,12 @@ fn default_mode_fails_with_l1202_and_writes_nothing() {
     ]);
     assert!(
         !output.status.success(),
-        "an alpha-blended material must fail a non-lossy import"
+        "a camera node must fail a non-lossy import"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("error[L1202]"), "expected L1202: {stderr}");
     assert!(
-        stderr.contains("pedestal-mesh"),
+        stderr.contains("camera"),
         "L1202 must name the offender: {stderr}"
     );
     assert!(

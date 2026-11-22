@@ -168,6 +168,7 @@ fn mesh_data(mesh: SculptMesh, rim: Option<&ludion_scene::DocRim>, hash: u64) ->
         authored_material: true,
         base_color_mean: [1.0; 4],
         rim: rim.map(crate::extract::doc_rim_lane),
+        blend: false,
         double_sided: false,
         indices: mesh.indices,
         hash,

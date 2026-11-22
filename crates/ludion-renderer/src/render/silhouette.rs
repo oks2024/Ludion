@@ -5,7 +5,7 @@
 use super::mesh_batch::{MeshAssetDraw, MeshDraw, MeshInstanceRaw, instance_raw, is_mirrored};
 use super::{MeshAssetGpu, init_buffer};
 use crate::cull::AssetBounds;
-use crate::scene::{MAX_SILHOUETTE_STYLES, MeshShape, RenderScene};
+use crate::scene::{MAX_SILHOUETTE_STYLES, MeshShape, RenderScene, SilhouettePattern};
 use ludion_core::math::glam::Vec3;
 
 /// The mask's primitive and asset draws over one shared instance buffer; both empty when no mesh
@@ -125,14 +125,22 @@ pub(super) fn build_silhouette_draws(
 }
 
 /// The composite's silhouette uniform lanes: header `(on, any outline, widest radius px, style count)`,
-/// the camera's forward axis, and two vec4 per style `(color)` then
-/// `(outline radius in render pixels, outline alpha, bias, always)`. All zero when the frame has no
-/// silhouette, which is the composite's frozen path.
+/// the camera's forward axis, and four vec4 per style: `(color)`,
+/// `(outline radius in render pixels, outline alpha, bias, always)`,
+/// `(inner radius in render pixels, inner alpha, pattern period in render pixels, pattern duty)` and
+/// `(pattern kind 0/1/2, film 1, 0, 0)`. All zero when the frame has no silhouette, which is the
+/// composite's frozen path.
 #[derive(Clone, Copy, Default)]
 pub(super) struct CompositeLanes {
     pub(super) header: [u32; 4],
     pub(super) forward: [f32; 4],
-    pub(super) styles: [[f32; 4]; 2 * MAX_SILHOUETTE_STYLES],
+    pub(super) styles: [[f32; 4]; 4 * MAX_SILHOUETTE_STYLES],
+}
+
+/// The pattern period in render pixels: `period` is in 1080p pixels and scales with the render
+/// height, at least 2.
+pub(super) fn pattern_period(period: f32, render_height: u32) -> f32 {
+    (period * render_height as f32 / 1080.0).round().max(2.0)
 }
 
 /// The outline radius in render pixels: `px` is in 1080p pixels and scales with the render height,
@@ -157,12 +165,33 @@ pub(super) fn composite_lanes(scene: &RenderScene, render_height: u32, on: bool)
     for (i, style) in scene.silhouettes.styles[..count].iter().enumerate() {
         let radius = outline_radius(style.outline_px, render_height);
         widest = widest.max(radius);
-        lanes.styles[i * 2] = style.color;
-        lanes.styles[i * 2 + 1] = [
+        lanes.styles[i * 4] = style.color;
+        lanes.styles[i * 4 + 1] = [
             radius,
             style.outline_alpha,
             style.bias,
             f32::from(u8::from(style.always)),
+        ];
+        let patterned = style.pattern != SilhouettePattern::None;
+        lanes.styles[i * 4 + 2] = [
+            outline_radius(style.inner_px, render_height),
+            style.inner_alpha,
+            if patterned {
+                pattern_period(style.pattern_period, render_height)
+            } else {
+                0.0
+            },
+            if patterned { style.pattern_duty } else { 0.0 },
+        ];
+        lanes.styles[i * 4 + 3] = [
+            match style.pattern {
+                SilhouettePattern::None => 0.0,
+                SilhouettePattern::Scanlines => 1.0,
+                SilhouettePattern::Hatch => 2.0,
+            },
+            f32::from(u8::from(style.film)),
+            0.0,
+            0.0,
         ];
     }
     lanes.header = [1, u32::from(widest > 0.0), widest as u32, count as u32];

@@ -87,7 +87,8 @@ pub use nav_blocker::{NavBlocker, NavBlockerMode, NavBlockerShape};
 pub use nav_link::NavLink;
 pub use nav_route::{NavGoal, NavReplan, NavRoute, NavRouteStatus};
 pub use occluded_silhouette::{
-    MAX_OUTLINE_PX, OccludedSilhouette, SilhouetteOutline, SilhouetteWhen,
+    MAX_OUTLINE_PX, MAX_PATTERN_PERIOD, MIN_PATTERN_PERIOD, OccludedSilhouette, SilhouetteOutline,
+    SilhouettePattern, SilhouettePatternKind, SilhouetteWhen,
 };
 pub use paired_action::PairedAction;
 pub use path_follow::{PathFollower, PathMode, PathOrient};

@@ -67,11 +67,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
     var color = acc / total;
+    // The composite's film weight, from the nearest source texel (never filtered).
+    let film = textureLoad(resolve_src, clamp(vec2<i32>(floor((dst + vec2<f32>(0.5)) * r)), vec2<i32>(0), last), 0).a;
     if (resolve_params.grain != 0.0 || resolve_params.dither != 0u) {
         color = encoded_output(
             color,
             in.pos.xy,
-            resolve_params.grain,
+            resolve_params.grain * film,
             resolve_params.grain_size,
             resolve_params.dither,
             resolve_params.output_height,

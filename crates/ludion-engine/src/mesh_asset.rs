@@ -319,7 +319,7 @@ fn texture_slots(
 fn mask_cutoff(doc: &MeshDocument) -> Option<f32> {
     match doc.alpha_mode {
         AlphaMode::Mask { cutoff } => Some(cutoff as f32),
-        AlphaMode::Opaque => None,
+        AlphaMode::Opaque | AlphaMode::Blend => None,
     }
 }
 
@@ -520,6 +520,7 @@ pub(crate) fn decode(doc: &MeshDocument, hash: u64) -> MeshData {
         authored_material,
         base_color_mean: [1.0; 4],
         rim: doc.rim.as_ref().map(crate::extract::doc_rim_lane),
+        blend: doc.alpha_mode == AlphaMode::Blend,
         double_sided: doc.double_sided,
         indices,
         hash,

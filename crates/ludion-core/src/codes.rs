@@ -1452,7 +1452,7 @@ pub mod code {
     pub const IMPORT_INVALID_GLTF: DiagnosticCode = DiagnosticCode::new("L1201");
 
     /// `L1202` — a glTF document uses a feature the importer does not map onto a Ludion component
-    /// (a texture on a second UV set, a `BLEND` alpha mode, any camera — a prefab carries no `Camera`, a directional light, a morph target,
+    /// (a texture on a second UV set, any camera — a prefab carries no `Camera`, a directional light, a morph target,
     /// a morph-weights channel, an animation channel on a node under a skin joint, or one mixing skin
     /// joints and prefab parts, a sparse or non-triangle primitive, a JPEG image, any other extension). A hard error by default — the offending node/mesh/accessor is named — downgraded
     /// to a printed warning by `--allow-lossy`. Raised by `ludion-import`.
@@ -2309,7 +2309,9 @@ pub mod code {
     pub const GROUND_MARKER_CLIP_NO_PHYSICS: DiagnosticCode = DiagnosticCode::new("L2343");
 
     /// `L2350` — an `OccludedSilhouette` field is out of range: a colour channel outside `[0, 1]`,
-    /// `outline.px` outside `(0, 8]`, `outline.alpha` outside `[0, 1]`, or a negative or non-finite `bias`.
+    /// `outline.px` or `inner_outline.px` outside `(0, 8]`, `outline.alpha` or `inner_outline.alpha` outside
+    /// `[0, 1]`, `pattern.period` outside `[2, 64]`, `pattern.duty` outside `(0, 1)`, or a negative or
+    /// non-finite `bias`.
     pub const OCCLUDED_SILHOUETTE_INVALID: DiagnosticCode = DiagnosticCode::new("L2350");
 
     /// `L2351` — an `OccludedSilhouette` resolves onto a `Viewmodel` mesh, which is never silhouetted.
@@ -4756,8 +4758,8 @@ A mesh document is a strict-subset YAML mapping with a fixed top-level shape:
     - 0
 
 The optional skin keys `joints`, `weights` and `bone_indices` come together and their inner shape
-is `L1190`. Three optional material keys sit before them: `alpha_mode` (`opaque`, the default, or
-`mask`), `alpha_cutoff` (a number, `mask` only) and `double_sided` (`true` or `false`, default
+is `L1190`. Three optional material keys sit before them: `alpha_mode` (`opaque`, the default,
+`mask` or `blend`), `alpha_cutoff` (a number, `mask` only) and `double_sided` (`true` or `false`, default
 `false`).
 
 `format` must be `1`; `kind` must be exactly `mesh` (a document with no `kind` key at all is a
@@ -4792,7 +4794,8 @@ Specifically, one of:
     some index names a vertex position that does not exist (must be less than the vertex count
     derived from `positions`);
   - some float in `positions`, `normals`, or `uvs` is not finite (`NaN` or `±Infinity`);
-  - `alpha_cutoff` is not a finite value in `[0, 1]`, or is set without `alpha_mode: mask`.
+  - `alpha_cutoff` is not a finite value in `[0, 1]`, or is set without `alpha_mode: mask` (the mode
+    is `opaque`, `blend` or absent).
 
 The JSON Pointer names the offending list or element.
 
@@ -8148,8 +8151,8 @@ re-encoded through the deterministic encoder and named by its content hash; `TAN
 frame where a normal map needs one, onto the document's `tangents`; a `KHR_lights_punctual` point light onto `PointLight`; and a skin — `JOINTS_0`/`WEIGHTS_0`
 and inverse bind matrices — onto the mesh document's `joints`/`weights`/`bone_indices`, its joint
 nodes folded in rather than emitted as entities; and a material's `MASK` alpha mode with its
-`alphaCutoff`, and `doubleSided`, onto the mesh document's `alpha_mode`/`alpha_cutoff` and
-`double_sided` keys.
+`alphaCutoff`, a `BLEND` alpha mode, and `doubleSided`, onto the mesh document's
+`alpha_mode`/`alpha_cutoff` and `double_sided` keys.
 
 `emissiveFactor` maps onto `Mesh.emissive` as a scalar when it equals some `k` times
 `baseColorFactor`'s RGB exactly on the f32 values (`[0, 0, 0]` maps to `0.0`). Any other factor is
@@ -8160,8 +8163,7 @@ without `TEXCOORD_0`; `--allow-lossy` skips just the emissive and warns.
 
 Everything else is reported here rather than silently discarded — a texture on a second UV set or
 with per-axis wrap modes that disagree (a reference holds one mode for both axes), a textured
-material on a primitive without `TEXCOORD_0`, a `BLEND` alpha mode (sorted alpha-blend has no
-mapping; `MASK` maps onto `alpha_mode: mask`), a node whose `matrix` shears (a skew, or a non-uniform scale
+material on a primitive without `TEXCOORD_0`, a node whose `matrix` shears (a skew, or a non-uniform scale
 above a rotation, which a `Transform` cannot hold), a camera (of any kind; a prefab carries no `Camera`, which a
 scene has one of: the node stays as a `Transform`-only part when `--allow-lossy`), a directional light (point and
 spot lights map onto `PointLight`/`SpotLight`), a morph target, an animation channel of morph weights, on a node that has no part (it hangs under
@@ -11347,14 +11349,18 @@ Fix: declare a `physics:` block (with the layers the clip names) in the scene, o
         severity: Severity::Error,
         title: "OccludedSilhouette is not valid",
         explanation: "An `OccludedSilhouette` field is out of range: a `color` channel is outside `[0, 1]`,
-`outline.px` is outside `(0, 8]`, `outline.alpha` is outside `[0, 1]`, or `bias` is negative or not
-finite (JSON Pointer `/color/<i>`, `/outline/px`, `/outline/alpha`, `/bias`).
+`outline.px` or `inner_outline.px` is outside `(0, 8]`, `outline.alpha` or `inner_outline.alpha` is
+outside `[0, 1]`, `pattern.period` is outside `[2, 64]`, `pattern.duty` is outside `(0, 1)`, or `bias`
+is negative or not finite (JSON Pointer `/color/<i>`, `/outline/px`, `/outline/alpha`,
+`/inner_outline/px`, `/inner_outline/alpha`, `/pattern/period`, `/pattern/duty`, `/bias`).
 
 Fix: give each field a value in its range.
 
     OccludedSilhouette:
       color: [1, 1, 1, 0.55]
-      outline: { px: 2, alpha: 1 }",
+      outline: { px: 2, alpha: 1 }
+      pattern: { kind: scanlines, period: 4, duty: 0.5 }
+      inner_outline: { px: 2 }",
     },
     CodeEntry {
         code: code::OCCLUDED_SILHOUETTE_ON_VIEWMODEL,
@@ -11380,13 +11386,13 @@ Fix: share styles between entities, for example one on a common `Parent`, so tha
     CodeEntry {
         code: code::MESH_BLEND_ON_VIEWMODEL,
         severity: Severity::Warning,
-        title: "Mesh.blend on a Viewmodel mesh is ignored",
-        explanation: "A `Mesh` with `blend` is also a `Viewmodel` (directly or by inheritance). A viewmodel is
-drawn on its own near depth slice and is never blended, so the mesh draws opaque. Raised once per entity
-by extract.
+        title: "A blended mesh on a Viewmodel is ignored",
+        explanation: "A `Mesh` with `blend`, or whose asset document says `alpha_mode: blend`, is also a
+`Viewmodel` (directly or by inheritance). A viewmodel is drawn on its own near depth slice and is never
+blended, so the mesh draws opaque. Raised once per entity by extract.
 
-Fix: remove `blend` from the viewmodel's mesh, or move the blended mesh onto an entity that is not a
-viewmodel.",
+Fix: remove `blend` from the viewmodel's mesh, give the viewmodel an opaque mesh document, or move the
+blended mesh onto an entity that is not a viewmodel.",
     },
     CodeEntry {
         code: code::RENDER_VIEW_INVALID,

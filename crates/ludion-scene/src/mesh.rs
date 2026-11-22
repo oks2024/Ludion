@@ -64,12 +64,13 @@ const REST_ROTATION_TOLERANCE: f64 = 1e-3;
 const JOINT_KEYS: [&str; 4] = ["name", "parent", "rest", "inverse_bind"];
 const REST_KEYS: [&str; 3] = ["t", "r", "s"];
 
-const ALPHA_MODE_NAMES: [&str; 2] = ["opaque", "mask"];
+const ALPHA_MODE_NAMES: [&str; 3] = ["opaque", "mask", "blend"];
 
 /// The default `alpha_cutoff` of a `mask` mesh (glTF's `alphaCutoff` default).
 pub const DEFAULT_ALPHA_CUTOFF: f64 = 0.5;
 
-/// How a mesh's coverage is resolved: drawn whole, or cut out where its alpha falls under a cutoff.
+/// How a mesh's coverage is resolved: drawn whole, cut out where its alpha falls under a cutoff, or
+/// drawn see-through.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum AlphaMode {
     /// Every fragment is drawn.
@@ -81,6 +82,8 @@ pub enum AlphaMode {
         /// The coverage threshold.
         cutoff: f64,
     },
+    /// Drawn see-through on the blended path; coverage is the opacity.
+    Blend,
 }
 
 const MESH_KEYS: [&str; 29] = [
@@ -479,7 +482,7 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
     let mut bone_indices: Option<Vec<u32>> = None;
     let mut lods: Vec<MeshLodRef> = Vec::new();
     let mut alpha_mode_seen = false;
-    let mut alpha_mask = false;
+    let mut alpha_kind = AlphaKind::Opaque;
     let mut alpha_cutoff: Option<f64> = None;
     let mut alpha_cutoff_line = 0;
     let mut surface_names: Option<Vec<String>> = None;
@@ -646,8 +649,8 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
             }
             "alpha_mode" => {
                 alpha_mode_seen = true;
-                if let Some(mask) = expect_alpha_mode(&entry.node, &mut diagnostics) {
-                    alpha_mask = mask;
+                if let Some(kind) = expect_alpha_mode(&entry.node, &mut diagnostics) {
+                    alpha_kind = kind;
                 }
             }
             "alpha_cutoff" => {
@@ -767,15 +770,18 @@ pub(crate) fn parse(source: &str) -> Result<MeshDocument, Vec<Diagnostic>> {
         ));
     }
 
-    if alpha_mask {
+    if alpha_kind == AlphaKind::Blend {
+        doc.alpha_mode = AlphaMode::Blend;
+    }
+    if alpha_kind == AlphaKind::Mask {
         doc.alpha_mode = AlphaMode::Mask {
             cutoff: alpha_cutoff.unwrap_or(DEFAULT_ALPHA_CUTOFF),
         };
     } else if alpha_cutoff.is_some() {
-        let how = if alpha_mode_seen {
-            "is `opaque`"
-        } else {
-            "is absent"
+        let how = match (alpha_mode_seen, alpha_kind) {
+            (_, AlphaKind::Blend) => "is `blend`",
+            (true, _) => "is `opaque`",
+            (false, _) => "is absent",
         };
         diagnostics.push(
             Diagnostic::new(
@@ -1045,6 +1051,15 @@ pub fn read_mesh_joints(source: &str) -> Result<Option<Vec<MeshJoint>>, Vec<Diag
         return Ok(Some(joints));
     }
     crate::check_mesh(source).map(|doc| doc.skin.map(|skin| skin.joints))
+}
+
+/// Reads a mesh document's `alpha_mode` — what a scene check needs to know whether an asset draws
+/// blended, without keeping the parse.
+///
+/// # Errors
+/// Everything `check_mesh` reports.
+pub fn read_mesh_alpha_mode(source: &str) -> Result<AlphaMode, Vec<Diagnostic>> {
+    crate::check_mesh(source).map(|doc| doc.alpha_mode)
 }
 
 fn fast_joints(source: &str) -> Option<Vec<MeshJoint>> {
@@ -1545,8 +1560,16 @@ fn expect_wrap(
     }
 }
 
-/// Parses `alpha_mode` from its closed set of spellings; `Some(true)` for `mask`.
-fn expect_alpha_mode(node: &Node, diagnostics: &mut Vec<Diagnostic>) -> Option<bool> {
+/// The spelling of `alpha_mode`, before `alpha_cutoff` joins `mask`.
+#[derive(Clone, Copy, PartialEq)]
+enum AlphaKind {
+    Opaque,
+    Mask,
+    Blend,
+}
+
+/// Parses `alpha_mode` from its closed set of spellings.
+fn expect_alpha_mode(node: &Node, diagnostics: &mut Vec<Diagnostic>) -> Option<AlphaKind> {
     let NodeValue::Scalar(Value::String(name)) = &node.value else {
         diagnostics.push(
             Diagnostic::new(
@@ -1566,17 +1589,13 @@ fn expect_alpha_mode(node: &Node, diagnostics: &mut Vec<Diagnostic>) -> Option<b
         return None;
     };
     match name.as_str() {
-        "opaque" => Some(false),
-        "mask" => Some(true),
+        "opaque" => Some(AlphaKind::Opaque),
+        "mask" => Some(AlphaKind::Mask),
+        "blend" => Some(AlphaKind::Blend),
         unknown => {
-            let help = if unknown == "blend" {
-                "sorted alpha-blend is unsupported; use `mask` to cut the mesh out by alpha"
-                    .to_string()
-            } else {
-                match suggest::nearest(unknown, ALPHA_MODE_NAMES) {
-                    Some(candidate) => format!("nearest match is `{candidate}`"),
-                    None => format!("`alpha_mode` is one of: {}", ALPHA_MODE_NAMES.join(", ")),
-                }
+            let help = match suggest::nearest(unknown, ALPHA_MODE_NAMES) {
+                Some(candidate) => format!("nearest match is `{candidate}`"),
+                None => format!("`alpha_mode` is one of: {}", ALPHA_MODE_NAMES.join(", ")),
             };
             diagnostics.push(
                 Diagnostic::new(
@@ -2539,13 +2558,17 @@ pub(crate) fn emit(doc: &MeshDocument) -> String {
             write_texture_ref(&mut out, &slot, reference);
         }
     }
-    if let AlphaMode::Mask { cutoff } = doc.alpha_mode {
-        out.push_str("alpha_mode: mask\n");
-        if cutoff != DEFAULT_ALPHA_CUTOFF {
-            out.push_str("alpha_cutoff: ");
-            out.push_str(&format_float(cutoff));
-            out.push('\n');
+    match doc.alpha_mode {
+        AlphaMode::Opaque => {}
+        AlphaMode::Mask { cutoff } => {
+            out.push_str("alpha_mode: mask\n");
+            if cutoff != DEFAULT_ALPHA_CUTOFF {
+                out.push_str("alpha_cutoff: ");
+                out.push_str(&format_float(cutoff));
+                out.push('\n');
+            }
         }
+        AlphaMode::Blend => out.push_str("alpha_mode: blend\n"),
     }
     if doc.double_sided {
         out.push_str("double_sided: true\n");
@@ -3010,12 +3033,33 @@ indices:
                 .as_deref()
                 .is_some_and(|h| h.contains("nearest match"))
         );
-        let blend = parse(&with_keys("alpha_mode: blend\n")).unwrap_err();
+        let typo = parse(&with_keys("alpha_mode: blnd\n")).unwrap_err();
         assert!(
-            blend
-                .iter()
-                .any(|d| d.help.as_deref().is_some_and(|h| h.contains("`mask`")))
+            typo.iter()
+                .any(|d| d.help.as_deref() == Some("nearest match is `blend`"))
         );
+    }
+
+    #[test]
+    fn a_blend_mode_parses_and_writes_back_byte_identically() {
+        let source = with_keys("alpha_mode: blend\n");
+        let doc = parse(&source).expect("blend parses");
+        assert_eq!(doc.alpha_mode, AlphaMode::Blend);
+        assert!(validate(&doc).is_empty());
+        assert_eq!(emit(&doc), source);
+        assert_eq!(read_mesh_alpha_mode(&source), Ok(AlphaMode::Blend));
+        assert_eq!(read_mesh_alpha_mode(CUBE_TRI), Ok(AlphaMode::Opaque));
+    }
+
+    #[test]
+    fn an_alpha_cutoff_on_a_blend_mesh_is_l1111() {
+        let diagnostics = parse(&with_keys("alpha_mode: blend\nalpha_cutoff: 0.3\n")).unwrap_err();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.path.as_deref() == Some("/alpha_cutoff"))
+            .expect("the cutoff is reported");
+        assert_eq!(d.code, code::MESH_DATA_CONSISTENCY);
+        assert!(d.message.contains("is `blend`"), "{}", d.message);
     }
 
     #[test]
@@ -3447,6 +3491,8 @@ lods:
         };
         let mut masked = level.clone();
         masked.alpha_mode = AlphaMode::Mask { cutoff: 0.5 };
+        let mut blended = level.clone();
+        blended.alpha_mode = AlphaMode::Blend;
         let mut double = level.clone();
         double.double_sided = true;
         let mut rimmed = level.clone();
@@ -3466,6 +3512,7 @@ lods:
 
         let cases = [
             ("alpha_mode", &base, masked),
+            ("alpha_mode", &base, blended),
             ("double_sided", &base, double),
             ("rim", &base, rimmed),
             ("base_color_texture", &base, textured),

@@ -18,7 +18,7 @@ caller asks for: strict by default, `--allow-lossy` for the subset that maps, ex
 `doubleSided: true` on every material, so `gen accept` clears `double_sided` on each accepted
 mesh and keeps the culled result** — a closed remeshed surface wants culling, and the flag says nothing
 about the candidate. A strict accept therefore succeeds on such a candidate. `--allow-lossy` stays for
-a candidate carrying a feature with no mapping (a `BLEND` material, say): strict refuses it with
+a candidate carrying a feature with no mapping (a camera, say): strict refuses it with
 `L1202` and the flag's warning says what was left out. `--out` names a
 **directory** instead of a file: it must be absent or already empty, else `L1172`. The import writes
 `model.prefab.yaml` + `meshes/*.mesh.yaml` + `textures/<content-hash>.png` exactly as `ludion import` would,

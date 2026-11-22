@@ -21,7 +21,8 @@
 //   7a. LUT                         — display-referred, indexed by the sRGB-encoded colour (decision 13)
 //   7b. silhouette                  — display-referred: an `OccludedSilhouette`'s tint and outline, so
 //                                     it is not fogged, defocused or bloomed, yet is still vignetted
-//                                     and grained like the image it is drawn into
+//                                     and grained like the image it is drawn into; `film: false`
+//                                     fades 8 and 9 under it
 //   8. vignette                     — display-referred: a lens darkening of the finished image
 //   9. grain                        — the emulsion: light passes the lens, *then* it is recorded
 //  10. dither                       — strictly last; it hides the *output* quantization
@@ -152,7 +153,7 @@
 // The occluded-silhouette mask (R8Unorm style index, `silhouette_mask.wgsl`) and its own depth, at the
 // render extent — the sixth and seventh **optional** inputs, behind `scene_medium_tex`. They exist when
 // a mesh resolves an `OccludedSilhouette`; otherwise the recorder binds 1x1 stand-ins and
-// `composite.silhouette.x` is zero, so `apply_silhouette` below never reads them.
+// `composite.silhouette.x` is zero, so `silhouette_hit` below never reads them.
 @group(0) @binding(8) var silhouette_mask_tex: texture_2d<f32>;
 @group(0) @binding(9) var silhouette_depth_tex: texture_depth_2d;
 // The anamorphic streak field (`lens_up_0`, the `lens_down`/`lens_up` chain), at the bloom pyramid's
@@ -302,9 +303,11 @@ struct Composite {
     // The camera's forward axis (`.w` unused). `view_forward` is zero for a perspective camera, and the
     // hidden test measures both depths along this one axis, so it works for either projection.
     silhouette_forward: vec4<f32>,
-    // Per style, two lanes: `color`, then `(outline radius in render pixels (0 = none), outline alpha,
-    // bias, always)`. The `OccludedSilhouette`'s style index is 1-based into this table.
-    silhouette_styles: array<vec4<f32>, 16>,
+    // Per style, four lanes: `color`; `(outline radius in render pixels (0 = none), outline alpha, bias,
+    // always)`; `(inner radius in render pixels (0 = none), inner alpha, pattern period in render pixels,
+    // pattern duty)`; `(pattern kind: 0 none, 1 scanlines, 2 hatch, film, 0, 0)`. The
+    // `OccludedSilhouette`'s style index is 1-based into this table.
+    silhouette_styles: array<vec4<f32>, 32>,
     // The streak's gain: strength times the tint normalized by Rec.709 luma (zero when off); `anamorphic` is
     // nonzero when `lens_tex` is real.
     anamorphic_gain: vec3<f32>,
@@ -324,7 +327,8 @@ struct Composite {
     metered: u32,
     grain_animated: u32,
     grain_tick: u32,
-    metered_pad2: u32,
+    // Nonzero when a later pass owns the grain: the film weight rides the LDR alpha to it.
+    film_carry: u32,
 };
 @group(0) @binding(14) var<uniform> composite: Composite;
 
@@ -691,7 +695,7 @@ fn silhouette_style_at(p: vec2<i32>) -> u32 {
 fn silhouette_filled(p: vec2<i32>, dims: vec2<f32>) -> u32 {
     let k = silhouette_style_at(p);
     if (k == 0u || k > composite.silhouette.w) { return 0u; }
-    let params = composite.silhouette_styles[(k - 1u) * 2u + 1u];
+    let params = composite.silhouette_styles[(k - 1u) * 4u + 1u];
     if (params.w != 0.0) { return k; }
     let uv = (vec2<f32>(p) + 0.5) / dims;
     let mask_z = silhouette_view_z(uv, textureLoad(silhouette_depth_tex, p, 0));
@@ -700,16 +704,58 @@ fn silhouette_filled(p: vec2<i32>, dims: vec2<f32>) -> u32 {
     return 0u;
 }
 
-fn apply_silhouette(color: vec3<f32>, p: vec2<i32>) -> vec3<f32> {
+struct SilhouetteHit {
+    rgb: vec3<f32>,
+    // Blend weight over the graded colour; zero is a miss.
+    a: f32,
+    // Weight of the vignette and grain here: 1 unless the style opts out of film.
+    film: f32,
+}
+
+// True when some in-bounds pixel within `reach` steps in 8 directions is not filled with style `k`.
+fn silhouette_near_edge(p: vec2<i32>, k: u32, reach: i32, dims: vec2<f32>) -> bool {
+    var dirs = array<vec2<i32>, 8>(
+        vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1),
+        vec2<i32>(1, 1), vec2<i32>(-1, 1), vec2<i32>(1, -1), vec2<i32>(-1, -1),
+    );
+    let size = vec2<i32>(dims);
+    for (var step = 1; step <= reach; step = step + 1) {
+        for (var d = 0; d < 8; d = d + 1) {
+            let q = p + dirs[d] * step;
+            if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) { continue; }
+            if (silhouette_filled(q, dims) != k) { return true; }
+        }
+    }
+    return false;
+}
+
+// What the silhouette does at `p`. Precedence: the inner outline, then the (patterned) fill, then the
+// outer outline. A style without a pattern or an inner outline runs the plain fill and outline arithmetic.
+fn silhouette_blend(style: u32, rgb: vec3<f32>, a: f32) -> SilhouetteHit {
+    let film_on = composite.silhouette_styles[style * 4u + 3u].y != 0.0;
+    return SilhouetteHit(rgb, a, select(1.0 - a, 1.0, film_on));
+}
+
+fn silhouette_hit(p: vec2<i32>) -> SilhouetteHit {
     let dims = vec2<f32>(textureDimensions(silhouette_mask_tex));
     let k = silhouette_filled(p, dims);
     if (k != 0u) {
-        let tint = composite.silhouette_styles[(k - 1u) * 2u];
-        return mix(color, tint.rgb, tint.a);
+        let base = (k - 1u) * 4u;
+        let tint = composite.silhouette_styles[base];
+        let inner = composite.silhouette_styles[base + 2u];
+        if (inner.x > 0.0 && silhouette_near_edge(p, k, i32(inner.x), dims)) {
+            return silhouette_blend(k - 1u, tint.rgb, inner.y);
+        }
+        let kind = composite.silhouette_styles[base + 3u].x;
+        if (kind != 0.0) {
+            let along = select(u32(p.y), u32(p.x + p.y), kind == 2.0);
+            if (f32(along % u32(inner.z)) >= inner.w * inner.z) { return SilhouetteHit(tint.rgb, 0.0, 1.0); }
+        }
+        return silhouette_blend(k - 1u, tint.rgb, tint.a);
     }
     // The outline is an outer dilation: only a pixel outside every mask takes it, so a visible body
     // pixel is never outlined.
-    if (composite.silhouette.y == 0u || silhouette_style_at(p) != 0u) { return color; }
+    if (composite.silhouette.y == 0u || silhouette_style_at(p) != 0u) { return SilhouetteHit(vec3<f32>(0.0), 0.0, 1.0); }
     var dirs = array<vec2<i32>, 8>(
         vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1),
         vec2<i32>(1, 1), vec2<i32>(-1, 1), vec2<i32>(1, -1), vec2<i32>(-1, -1),
@@ -722,14 +768,14 @@ fn apply_silhouette(color: vec3<f32>, p: vec2<i32>) -> vec3<f32> {
             if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) { continue; }
             let hit = silhouette_filled(q, dims);
             if (hit == 0u) { continue; }
-            let params = composite.silhouette_styles[(hit - 1u) * 2u + 1u];
+            let params = composite.silhouette_styles[(hit - 1u) * 4u + 1u];
             if (params.x > 0.0 && f32(step) <= params.x) {
-                let tint = composite.silhouette_styles[(hit - 1u) * 2u];
-                return mix(color, tint.rgb, params.y);
+                let tint = composite.silhouette_styles[(hit - 1u) * 4u];
+                return silhouette_blend(hit - 1u, tint.rgb, params.y);
             }
         }
     }
-    return color;
+    return SilhouetteHit(vec3<f32>(0.0), 0.0, 1.0);
 }
 
 fn apply_vignette(color: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
@@ -1002,11 +1048,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     var color = grade(apply_tonemap(composite.tonemap, hdr));
     if (composite.lut != 0u) { color = apply_lut(color); }
+    var film = 1.0;
     if (composite.silhouette.x != 0u) {
-        color = apply_silhouette(color, vec2<i32>(in.pos.xy));
+        let hit = silhouette_hit(vec2<i32>(in.pos.xy));
+        if (hit.a > 0.0) {
+            color = mix(color, hit.rgb, hit.a);
+            film = hit.film;
+        }
     }
     if (composite.vignette != 0.0) {
-        color = apply_vignette(color, in.uv);
+        if (film == 1.0) {
+            color = apply_vignette(color, in.uv);
+        } else {
+            color = mix(color, apply_vignette(color, in.uv), film);
+        }
     }
     // Grain then dither, in one encode/decode trip (zeroed when a later pass owns them). Dither stays strictly last within it: it exists
     // to hide the *output* quantization, so anything after it would re-quantize what it just spread.
@@ -1014,7 +1069,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         color = encoded_output(
             color,
             in.pos.xy,
-            composite.grain,
+            composite.grain * film,
             composite.grain_size,
             composite.dither,
             f32(textureDimensions(scene_tex).y),
@@ -1022,5 +1077,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             composite.grain_tick,
         );
     }
-    return vec4<f32>(color, 1.0);
+    return vec4<f32>(color, select(1.0, film, composite.film_carry != 0u));
 }

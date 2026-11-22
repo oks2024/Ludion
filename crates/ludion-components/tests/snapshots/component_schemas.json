@@ -6358,7 +6358,7 @@
   "OccludedSilhouette": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "OccludedSilhouette",
-    "description": "Draws the entity's meshes in `color` wherever a nearer surface hides them, with an optional outline\naround the hidden region. A mesh without its own takes its nearest ancestor's, like `Fade`. The tint\nis blended after the tonemap, so it is not fogged, blurred or bloomed; vignette and grain still apply.\nAt most 8 distinct styles are drawn per frame.\n\n```\nuse ludion_components::{OccludedSilhouette, SilhouetteWhen};\n\nlet silhouette: OccludedSilhouette = serde_json::from_value(serde_json::json!({\n    \"outline\": { \"px\": 2.0 },\n}))\n.unwrap();\nassert_eq!(silhouette.color, [1.0, 1.0, 1.0, 0.55]);\nassert_eq!(silhouette.when, SilhouetteWhen::Hidden);\nassert_eq!(silhouette.outline.unwrap().alpha, 1.0);\n```",
+    "description": "Draws the entity's meshes in `color` wherever a nearer surface hides them, with an optional outline\naround the hidden region. A mesh without its own takes its nearest ancestor's, like `Fade`. The tint\nis blended after the tonemap, so it is not fogged, blurred or bloomed; vignette and grain still apply.\nThe fill can carry a screen-space line `pattern`, and an `inner_outline` draws a band just inside the\nedge of the filled region. `film: false` fades the vignette and grain under the silhouette. At most 8 distinct styles are drawn per frame.\n\n```\nuse ludion_components::{OccludedSilhouette, SilhouettePatternKind, SilhouetteWhen};\n\nlet silhouette: OccludedSilhouette = serde_json::from_value(serde_json::json!({\n    \"outline\": { \"px\": 2.0 },\n    \"pattern\": { \"kind\": \"scanlines\" },\n    \"inner_outline\": {},\n}))\n.unwrap();\nassert_eq!(silhouette.color, [1.0, 1.0, 1.0, 0.55]);\nassert_eq!(silhouette.when, SilhouetteWhen::Hidden);\nassert_eq!(silhouette.outline.unwrap().alpha, 1.0);\nlet pattern = silhouette.pattern.unwrap();\nassert_eq!((pattern.kind, pattern.period), (SilhouettePatternKind::Scanlines, 4.0));\nassert_eq!(silhouette.inner_outline.unwrap().px, 2.0);\n```",
     "type": "object",
     "properties": {
       "color": {
@@ -6397,6 +6397,32 @@
         "type": "number",
         "format": "float",
         "default": 0.05000000074505806
+      },
+      "pattern": {
+        "description": "A screen-space line pattern on the fill only; absent means a solid fill.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SilhouettePattern"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "inner_outline": {
+        "description": "A band just inside the edge of the filled region; absent means none.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SilhouetteOutline"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "film": {
+        "description": "`false` keeps the vignette and the grain off the silhouette, in proportion to its opacity at each pixel.",
+        "type": "boolean"
       }
     },
     "$defs": {
@@ -6430,6 +6456,46 @@
             "description": "Everywhere the mesh is drawn.",
             "type": "string",
             "const": "always"
+          }
+        ]
+      },
+      "SilhouettePattern": {
+        "description": "The line pattern of an [`OccludedSilhouette`] fill, anchored to the screen.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "Horizontal lines or 45° lines.",
+            "$ref": "#/$defs/SilhouettePatternKind"
+          },
+          "period": {
+            "description": "Line spacing in pixels at 1080p, in `[2, 64]`; scales with the render height (default 4).",
+            "type": "number",
+            "format": "float",
+            "default": 4.0
+          },
+          "duty": {
+            "description": "The lit fraction of each period, in `(0, 1)` (default 0.5).",
+            "type": "number",
+            "format": "float",
+            "default": 0.5
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "SilhouettePatternKind": {
+        "description": "The shape of a [`SilhouettePattern`].",
+        "oneOf": [
+          {
+            "description": "Horizontal lines.",
+            "type": "string",
+            "const": "scanlines"
+          },
+          {
+            "description": "Diagonal lines at 45°.",
+            "type": "string",
+            "const": "hatch"
           }
         ]
       }
