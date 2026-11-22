@@ -57,6 +57,8 @@ pub(crate) struct GroupXf {
     pub depth: usize,
     /// The clip this group and its ancestors give a descendant, innermost box first.
     pub clip: UiClip,
+    /// The outermost group's entity when its world anchor placed this chain.
+    pub anchor: Option<EntityId>,
 }
 
 /// One extract's memo of resolved groups (`None`: not a live, acyclic `UiGroup` chain within the
@@ -148,6 +150,7 @@ fn compose(
     let mut visible = group.visible;
     let mut anchor_scale = 1.0;
     let mut anchor_turn_deg = 0.0;
+    let mut anchored = None;
     if let Some(anchor) = frame.world.get::<UiWorldAnchor>(id).ok().flatten() {
         if parent.is_some() {
             let key = crate::diagnostics::offender_key(frame.world, id);
@@ -165,6 +168,7 @@ fn compose(
             match world_anchor_delta(frame, poses, id, anchor, group.anchor, degraded) {
                 None => visible = false,
                 Some(place) => {
+                    anchored = Some(id);
                     box_px[0] += place.delta[0];
                     box_px[1] += place.delta[1];
                     opacity *= place.alpha;
@@ -193,6 +197,7 @@ fn compose(
         visible: true,
         depth: 0,
         clip: UiClip::NONE,
+        anchor: None,
     });
     let scale = if anchor_scale != 1.0 {
         motion.scale * anchor_scale
@@ -250,6 +255,7 @@ fn compose(
         visible: outer.visible && visible,
         depth: outer.depth + 1,
         clip,
+        anchor: anchored.or(outer.anchor),
     }
 }
 
@@ -490,6 +496,7 @@ mod tests {
             game_frame: 0,
             rate: TickRate::DEFAULT,
             anchor_views: Default::default(),
+            anchor_record: None,
         }
     }
 

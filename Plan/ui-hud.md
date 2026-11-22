@@ -18,9 +18,9 @@
 > `UiRect.uv_rect` and `UiRect.slice` (nine-slice as nine emitted rects, `ui::nine_slice`; only the
 > component schema snapshot moved); W3c-1: filled `polygon` (decisions 67–73, `L2305`, `ui_polygon.wgsl`; the `ui-polygons`
 > golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455); W3c-2: polygon strokes and `polyline` (decisions 74–80, `UiLineJoin`,
-> `push_ui_stroke_verts` on the polygon pipeline; the `ui-strokes` golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455). W3c-3: `dash` (decisions 81–87; the `ui-dashes` golden is owed on the RTX 3090 and its macOS twin on the M4). W5b: `shadow` on `UiText`/`UiList` (decisions 88–94; the `ui-text-shadow` golden is owed on the RTX 3090 and its macOS twin on the M4). Wave 7 is recorded below and not started. Owed: the
+> `push_ui_stroke_verts` on the polygon pipeline; the `ui-strokes` golden is blessed on the RTX 3090 and its macOS twin on the M4, r2455). W3c-3: `dash` (decisions 81–87; the `ui-dashes` golden is owed on the RTX 3090 and its macOS twin on the M4). W5b: `shadow` on `UiText`/`UiList` (decisions 88–94; the `ui-text-shadow` golden is owed on the RTX 3090 and its macOS twin on the M4). W7a (`rotate_toward`, `distance_scale`, `camera`; decisions 95–101) and W7b (anchor blend keys; decisions 102–106) are mechanized. Owed: the
 > `ui-nine-slice` gallery golden on a pinned box. Human look owed: a live sitting on a world-anchored
-> marker (jitter under `present_interpolation`, decision 8).
+> marker (lead or jitter under `present_interpolation`, decisions 8 and 102–106).
 
 Neon Shroud request 0020 asks for rotation, shapes, clipping, tweens and world-anchored HUD
 elements. This plan is the design of record. The fired triggers it answers: UI animation
@@ -63,9 +63,9 @@ elements. This plan is the design of record. The fired triggers it answers: UI a
    the same way. `distance = sqrt(v . v)` through `ludion_core::math::sqrt`.
 8. **Resolved against the camera as drawn** (after pixel-snap) and the target's world pose plus
    `world_offset`. A dead target or one with no `Transform` draws nothing, silently. **Known gap:** UI
-   is never keyed in `BlendData`, so under `present_interpolation` an anchor follows the newest tick
-   while the 3D scene is blended and can lead by up to one tick. **Accepted by the owner 2026-11-19**; blend keys in W7, trigger: visible
-   jitter at a live sitting.
+   was never keyed in `BlendData`, so under `present_interpolation` an anchor followed the newest tick
+   while the 3D scene was blended and led by up to one tick. **Accepted by the owner 2026-11-19**; closed by W7b (decisions 102–106),
+   except under `late_latch` (decision 106).
 9. **`UiWorldAnchor` fields:** `target` (required entity ref; presentation to sim is allowed, the
    reverse is `L1036`), `world_offset`, `show: always | on_screen | off_screen`,
    `behind: clamp | hide`, `margin` (canvas units, default 48), `fade: [near, far]` metres (alpha 1 at
@@ -449,7 +449,8 @@ outlines; the 1024-dash cap with a solid fallback; facets under scale; gaps not 
     with `[0, 0, w, h]` generalized to a box; `place_world_anchor` delegates with the full viewport and `margin * pixel_scale` and
     stays bit-identical. `anchor_distance_scale(distance, [f32; 4])` is the decision-98 formula. Both `pub` in
     `ludion_engine::ui`; `place_world_anchor_in` is re-exported in `ludion::math`.
-101. **Under `present_interpolation`** every anchor (main or view camera) still follows the newest tick until W7b.
+101. **Under `present_interpolation`** every anchor (main or view camera) still follows the newest tick until W7b —
+    superseded by decisions 102–106.
 
 **Proposed — owner ruling owed (W7a):** flat field names (`distance_scale` rather than `distance.scale`, `rotate_toward` rather
 than `edge.rotate_toward`); the turn added to authored rotation; `distance_scale` pivoting on the projected point and scaling
@@ -458,8 +459,32 @@ rather than falling back to the main camera. **BREAK**: `UiWorldAnchor` gains pu
 compiling (`..UiWorldAnchor::new(target)` fixes it).
 
 **Status (W7a):** shipped, CPU-only and extract-side; an anchor without the new fields extracts byte-identically and only the
-component schema snapshot moves. The `ui-world-anchor` gallery scene's golden is owed on the RTX 3090, macOS twin on the M4. Wave
-7b is recorded below and not started.
+component schema snapshot moves. The `ui-world-anchor` gallery scene's golden is owed on the RTX 3090, macOS twin on the M4.
+
+### W7b — anchor blend keys
+
+102. **Keys.** `BlendData.ui: Vec<Option<EntityId>>` is parallel to `RenderScene::ui` (or empty) and names, per row, the entity
+    whose `UiWorldAnchor` placed it: the element itself, or the outermost `UiGroup` whose anchor moved its chain.
+    `BlendData.ui_anchors: Vec<UiAnchorBlend>`, ascending by `anchor`, holds per placed anchor `anchor`, `target`, `point` (target
+    world point + `world_offset`, this tick, as drawn), `view` (`None` = main camera, `Some(i)` = `RenderScene::views[i]`),
+    `box_px` and `inset_px` (the exact arguments the tick's placement used). Collected only when extract fills a `BlendData`;
+    `RenderScene` is never changed, so with interpolation off output is byte-identical.
+103. **Blend.** Per anchor of the newer tick: the point lerps toward the previous tick's when the previous tick holds the same
+    `anchor` with the same `target` and the target is not in `snaps` (a `NoInterpolate` target is added to the snap set);
+    otherwise the newer point. The camera is the blended one (`out.camera`, or `out.views[i].camera`).
+    `Δ = place(blended camera, point) − place(newer camera, newer point)` on the same box and inset; every row keyed to that
+    anchor translates by `Δ` (rect, quads, origins, rotation pivots, clip boxes). An unmoved camera and point skip the anchor.
+104. **Newer tick wins** for `show`, `behind: hide`, `fade`, `distance_scale` and the `rotate_toward` turn: an element the
+    newer tick hides stays hidden, one it draws stays drawn (re-clamped to the edge by the blended placement if need be).
+105. **One placement function.** `place_world_anchor_in`, `WorldAnchorPlacement` and the clock-angle helper live in
+    `ludion-renderer` (`ui_anchor.rs`); `ludion_engine::ui` re-exports both, so `ludion::math` and every path keep working and
+    extract and blend share one arithmetic. `place_world_anchor` (viewport + canvas margin) stays in the engine and delegates.
+106. **Not blended:** the late-latched camera (`late_latch`): an anchor follows the blended, not the latched, rotation.
+    Trigger: visible anchor drift at a live sitting with `late_latch` on.
+
+**Status (W7b):** mechanized (renderer unit tests in `ui_anchor.rs`, engine tests in `tests/ui_anchor_blend.rs`). No schema, hash,
+golden or replay moved. Live look owed: a windowed `present_interpolation(true)` run at a low tick rate, a marker on a moving
+target under a panning camera and an edge-clamped `rotate_toward` arrow, no lead or jitter against the 3D scene.
 
 **Proposed — owner ruling owed (W5b):** the shadow turning and scaling with the text (decision 90); `softness` as a 0–1 fraction of
 the field band, ignored with `L2307` on bitmap faces; the shadow as the union of fill and outline; the cross-run overlap
@@ -500,9 +525,7 @@ meaning open.
 - **W6b — wedge fills and strokes** on W3b's shape pipeline (decisions 62–66): `fill`, `selected_fill`, `stroke` fields and the
   `ui-radial` gallery golden. CPU only, no renderer change. A rotated wheel is a rotated `UiGroup` (W3a).
 - **W7a — `rotate_toward`, `distance_scale`, `camera`** (decisions 95–101, `L2308`, the `ui-world-anchor` golden).
-- **W7b — anchor blend keys:** `BlendData` keys each anchored UI instance by its anchor entity with the target point and camera;
-  `blend` re-places the instance with the blended camera and point (the clamp math moves to `ludion-renderer`); fade, show,
-  scale and turn take the newer tick. Not started.
+- **W7b — anchor blend keys** (decisions 102–106): `BlendData.ui`/`ui_anchors`, placement in `ludion-renderer`; live look owed.
 
 ## Owner rulings (2026-11-19)
 
@@ -526,6 +549,6 @@ and adds `icon_size`, `selected_color`, `visible` and `outline`.
 
 a dash phase/offset, dashes on `UiRadial` strokes (trigger: a request), a `sweep_deg` tween, rotation as a field on lists and radials, nine-slice edge tiling (trigger: frame art that visibly breaks
 when stretched), slicing `UiList`/`UiText`, a shadow on `UiRadial`, `SubtitleView` or world `Text` (trigger: a request), a wedge `disabled_fill` or per-item colour, sub-wheels, item-level `ui_hit`,
-anchor blending (W7b), gallery
+the late-latched camera for anchors (decision 106), gallery
 goldens (a pinned box owes them), world `Text` outline (trigger: a request for it; see
 `Plan/font-assets.md` for the SDF outline path).

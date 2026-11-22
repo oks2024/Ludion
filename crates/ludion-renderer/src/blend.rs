@@ -13,6 +13,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat3, Mat4, Quat};
 
 use crate::scene::{RenderCamera, RenderScene, SpotLightData};
+use crate::ui_anchor::blend_ui_anchors;
 use crate::viewmodel::compose_viewmodel;
 
 /// The poses and per-item keys one extracted tick records for [`blend`].
@@ -63,6 +64,30 @@ pub struct BlendData {
     /// Keys parallel to the lists of [`RenderScene::layered`]'s unfiltered scene. Only its item
     /// keys are read: the outer `poses`, `snaps` and `epoch` serve, and the pose table covers both.
     pub layered: Option<Box<BlendData>>,
+    /// Keys parallel to [`RenderScene::ui`]: the entity whose `UiWorldAnchor` placed the row (the
+    /// element itself, or the outermost group whose anchor moved its chain). Empty when no row is
+    /// anchored; `ui_anchors` resolves each key.
+    pub ui: Vec<Option<EntityId>>,
+    /// Every placed world anchor of the tick, ascending by `anchor`.
+    pub ui_anchors: Vec<UiAnchorBlend>,
+}
+
+/// One placed `UiWorldAnchor`, as the tick drew it: what [`blend`] needs to re-place its rows
+/// against the blended camera and target point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UiAnchorBlend {
+    /// The entity carrying the anchor (the key in [`BlendData::ui`]).
+    pub anchor: EntityId,
+    /// The anchor's target entity.
+    pub target: EntityId,
+    /// The target's world point plus the anchor's `world_offset`, this tick.
+    pub point: [f32; 3],
+    /// `None` projects through the main camera; `Some(i)` through `RenderScene::views[i]`.
+    pub view: Option<u32>,
+    /// The pixel box `[x, y, w, h]` the placement used.
+    pub box_px: [f32; 4],
+    /// The edge inset in pixels the placement used.
+    pub inset_px: f32,
 }
 
 /// The scene item that draws one pool projectile.
@@ -151,6 +176,7 @@ pub fn blend(
             && prev.particles.is_empty()
             && prev.bullets.is_empty()
             && prev.projectiles.is_empty()
+            && prev.ui_anchors.is_empty()
             && prev.views.iter().all(Option::is_none))
     {
         return next.clone();
@@ -206,6 +232,7 @@ pub fn blend(
     if let Some(model) = camera_model {
         compose_viewmodel(&mut out, model);
     }
+    blend_ui_anchors(prev, next, next_data, alpha, &mut out);
     out
 }
 
@@ -622,7 +649,10 @@ fn blend_projectiles(
 }
 
 /// The keys for a list of `len` items: the parallel list when it matches, otherwise all unkeyed.
-fn keys(list: &[Option<EntityId>], len: usize) -> impl Iterator<Item = Option<EntityId>> + '_ {
+pub(crate) fn keys(
+    list: &[Option<EntityId>],
+    len: usize,
+) -> impl Iterator<Item = Option<EntityId>> + '_ {
     let keyed = list.len() == len;
     (0..len).map(move |i| if keyed { list[i] } else { None })
 }

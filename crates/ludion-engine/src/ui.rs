@@ -56,7 +56,7 @@ use ludion_components::ui::{
 };
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
-use ludion_core::math::glam::{Mat4, Vec3};
+use ludion_core::math::glam::Mat4;
 use ludion_core::time::TickRate;
 pub use ludion_font::FontFace;
 use ludion_font::{GlyphQuad, TextLayout, YAxis, fold_line_breaks, layout};
@@ -1062,23 +1062,7 @@ pub fn ui_tween_sample(
     out
 }
 
-/// Where a world point lands on screen, from [`place_world_anchor`].
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WorldAnchorPlacement {
-    /// Render-target pixel, top-left origin, +Y down: the projected point, or its clamp onto the edge
-    /// inset.
-    pub pixel: [f32; 2],
-    /// The point is in front of the camera and inside the inset rectangle. Always `false` when the
-    /// inset is degenerate.
-    pub on_screen: bool,
-    /// The point is at or behind the camera plane (perspective only).
-    pub behind: bool,
-    /// Distance from the camera to the point, in world units.
-    pub distance: f32,
-    /// Clockwise degrees from 12 o'clock, in `[0, 360)`, of the direction from the box centre toward
-    /// the point (behind the camera: the clamp direction); 0 when there is none.
-    pub angle_deg: f32,
-}
+pub use ludion_renderer::{WorldAnchorPlacement, place_world_anchor_in};
 
 /// Projects `point` through `view` and `projection` and clamps it to the viewport inset by `margin`
 /// canvas units. `None` for a non-finite projection or a zero-sized viewport.
@@ -1121,107 +1105,6 @@ pub fn place_world_anchor(
     )
 }
 
-/// [`place_world_anchor`] into a pixel box `[x, y, width, height]` inset by `inset_px` pixels: the box
-/// stands where the viewport stood (a view's rect, a radar). `None` for a non-finite projection or a
-/// box with no area.
-///
-/// # Example
-///
-/// ```
-/// use ludion_core::math::glam::{Mat4, Vec3};
-/// use ludion_engine::ui::place_world_anchor_in;
-///
-/// let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
-/// let projection = Mat4::perspective_rh(1.0, 2.0, 0.1, 100.0);
-/// let hit = place_world_anchor_in(view, projection, [0.0; 3], [100.0, 50.0, 200.0, 100.0], 4.0).unwrap();
-/// assert!((hit.pixel[0] - 200.0).abs() < 1e-3 && (hit.pixel[1] - 100.0).abs() < 1e-3);
-/// ```
-pub fn place_world_anchor_in(
-    view: Mat4,
-    projection: Mat4,
-    point: [f32; 3],
-    box_px: [f32; 4],
-    inset_px: f32,
-) -> Option<WorldAnchorPlacement> {
-    let [x, y, width, height] = box_px;
-    if !(width > 0.0 && height > 0.0) {
-        return None;
-    }
-    let v = view * Vec3::from_array(point).extend(1.0);
-    let clip = projection * v;
-    if !clip.is_finite() {
-        return None;
-    }
-    let distance = ludion_core::math::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-    let half = [width * 0.5 - inset_px, height * 0.5 - inset_px];
-    let centre = [x + width * 0.5, y + height * 0.5];
-    let behind = clip.w <= 1e-6;
-    let px = [
-        (clip.x / clip.w * 0.5 + 0.5) * width + x,
-        (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * height + y,
-    ];
-    let mut dir = if behind {
-        [v.x, -v.y]
-    } else {
-        [px[0] - centre[0], px[1] - centre[1]]
-    };
-    if behind && dir[0].abs() < 1e-6 && dir[1].abs() < 1e-6 {
-        dir = [0.0, 1.0];
-    }
-    let angle_deg = clock_angle_deg(dir);
-    if half[0] <= 0.0 || half[1] <= 0.0 {
-        return Some(WorldAnchorPlacement {
-            pixel: centre,
-            on_screen: false,
-            behind,
-            distance,
-            angle_deg,
-        });
-    }
-    let clamp = |dir: [f32; 2]| {
-        let sx = half[0] / dir[0].abs();
-        let sy = half[1] / dir[1].abs();
-        let s = sx.min(sy);
-        [centre[0] + dir[0] * s, centre[1] + dir[1] * s]
-    };
-    if behind {
-        return Some(WorldAnchorPlacement {
-            pixel: clamp(dir),
-            on_screen: false,
-            behind: true,
-            distance,
-            angle_deg,
-        });
-    }
-    let on_screen = dir[0].abs() <= half[0] && dir[1].abs() <= half[1];
-    let pixel = if on_screen { px } else { clamp(dir) };
-    pixel
-        .iter()
-        .all(|c| c.is_finite())
-        .then_some(WorldAnchorPlacement {
-            pixel,
-            on_screen,
-            behind: false,
-            distance,
-            angle_deg,
-        })
-}
-
-/// Clockwise degrees from 12 o'clock of a +Y-down direction, in `[0, 360)`; 0 for none.
-fn clock_angle_deg(dir: [f32; 2]) -> f32 {
-    if !(dir[0].is_finite() && dir[1].is_finite()) || (dir[0] == 0.0 && dir[1] == 0.0) {
-        return 0.0;
-    }
-    let degrees = ludion_core::math::atan2(dir[0], -dir[1]).to_degrees();
-    if degrees < 0.0 {
-        degrees + 360.0
-    } else if degrees >= 360.0 {
-        degrees - 360.0
-    } else {
-        degrees
-    }
-}
-
 /// The scale an anchor's `distance_scale` `[near, far, scale_near, scale_far]` gives at `distance`
 /// metres: linear between the two scales, held beyond either end.
 ///
@@ -1241,6 +1124,7 @@ pub fn anchor_distance_scale(distance: f32, scale: [f32; 4]) -> f32 {
 mod motion_tests {
     use super::*;
     use ludion_components::ui::{UiEase, UiTweenTrack};
+    use ludion_core::math::glam::Vec3;
 
     const RATE: TickRate = TickRate::DEFAULT;
 

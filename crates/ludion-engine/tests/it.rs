@@ -204,6 +204,7 @@ mod transition_residue;
 mod transition_restart;
 mod transition_snapshot;
 mod trigger_edges;
+mod ui_anchor_blend;
 mod ui_clip_draw;
 mod ui_group;
 mod ui_hud;

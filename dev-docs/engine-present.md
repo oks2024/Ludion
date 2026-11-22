@@ -35,6 +35,7 @@ the crate at large is `ludion devdocs ludion-engine`.
   blends only toward the directly preceding frame's data: a skipped frame index, a `rebased` stamp or missing data
   snaps to the newer scene (a skipped packet lost its `PresentCuts`). `Instant::now` stays inside `run_loop`.
 - **Particles and bullets blend by instance key, not re-evaluation.** Extract tags each with an `InstanceKey` (owner, `started`, stream, index) only when blend data is collected; `blend` merges the two sorted key lists, so the cost is linear and paid flag-on only. An unsorted or mismatched list, or a snapped owner, takes the newer tick.
+- **World-anchored UI blends by anchor, not by pose.** With blend data, extract records `BlendData.ui` (each row keyed to the entity whose `UiWorldAnchor` placed it, a group's anchor for its chain) and `ui_anchors` (target point, view, box, inset). `blend` re-places each anchor at the blended camera and point through the one `place_world_anchor_in` (in `ludion-renderer`, shared with extract) and translates its rows by the screen delta; `late_latch` is not folded in.
 - **The pose table holds stored transforms**, so clip offsets (prefab parts, assembly parts, skins) take the newer tick while root and stored motion blend.
 - **Blended re-renders reuse the frame index**, so per-render renderer state (GI inject) advances per refresh, not
   per tick. Accepted because it is render-only; the sim-side renderer, which feeds every verification path, never blends.

@@ -85,6 +85,7 @@ mod shader_reload;
 mod ssr_pyramid;
 mod ssr_trace;
 mod sun_cascade;
+mod ui_anchor;
 mod ui_dash;
 mod viewmodel;
 mod voxel_bake;
@@ -93,7 +94,9 @@ mod voxel_bake;
 mod shader_gen;
 mod smaa_lut;
 
-pub use blend::{BlendData, CameraBlend, InstanceKey, ProjectileItem, blend, latch_camera};
+pub use blend::{
+    BlendData, CameraBlend, InstanceKey, ProjectileItem, UiAnchorBlend, blend, latch_camera,
+};
 pub use camera_latch::CameraLatch;
 pub use cluster::{ClusterStats, cluster_stats};
 pub use compressed::{CompressedUploadError, check_compressed};
@@ -160,6 +163,7 @@ pub use sun_cascade::{
     SunCascadeStats, SunCascades, fit_sun_cascades, sun_atlas_grid, sun_atlas_tile,
     sun_cascade_stats,
 };
+pub use ui_anchor::{WorldAnchorPlacement, place_world_anchor_in};
 pub use ui_dash::ui_dash_runs;
 pub use viewmodel::{ViewmodelData, ViewmodelLocal, ViewmodelParticle, compose_viewmodel};
 // Re-exported so callers can write PNGs / hold rendered pixels, own a live-streaming readback or

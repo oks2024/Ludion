@@ -19,7 +19,7 @@ use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::time::TickRate;
 use ludion_ecs::World;
-use ludion_renderer::{UiClip, UiInstance, UiRotation};
+use ludion_renderer::{UiAnchorBlend, UiClip, UiInstance, UiRotation};
 
 use super::shape::scale_geometry;
 
@@ -49,6 +49,24 @@ pub(crate) struct HudFrame<'w> {
     pub rate: TickRate,
     /// The views a `UiWorldAnchor.camera` can name, empty unless some anchor names one.
     pub anchor_views: BTreeMap<EntityId, AnchorView>,
+    /// Filled while resolving anchors when the extract collects blend data; `None` otherwise.
+    pub anchor_record: Option<std::cell::RefCell<AnchorRecord>>,
+}
+
+/// The side table [`BlendData::ui`](ludion_renderer::BlendData::ui) and `ui_anchors` come from: which
+/// anchor moved each element's rows, and where each placed anchor drew.
+#[derive(Default)]
+pub(crate) struct AnchorRecord {
+    pub by_element: BTreeMap<EntityId, EntityId>,
+    pub anchors: BTreeMap<EntityId, UiAnchorBlend>,
+}
+
+impl HudFrame<'_> {
+    fn record_element(&self, element: EntityId, anchor: EntityId) {
+        if let Some(record) = &self.anchor_record {
+            record.borrow_mut().by_element.insert(element, anchor);
+        }
+    }
 }
 
 /// A `RenderView` camera as an anchor sees it: its matrices and the pixel box of the rect that shows it.
@@ -58,6 +76,8 @@ pub(crate) struct AnchorView {
     pub projection: Mat4,
     /// `[x, y, w, h]` in render-target pixels.
     pub box_px: [f32; 4],
+    /// The view's index in `RenderScene::views`.
+    pub slot: u32,
 }
 
 /// The views the frame's `UiWorldAnchor.camera` fields can name: each rendered view's camera and the box
@@ -116,6 +136,7 @@ pub(crate) fn anchor_views(
                 view: camera.view,
                 projection: camera.projection,
                 box_px,
+                slot: slot as u32,
             },
         );
     }
@@ -650,6 +671,9 @@ pub(crate) fn post(
         }
     }
     let group_xf = group_xf.map(|(xf, _)| xf);
+    if let Some(anchor) = group_xf.and_then(|xf| xf.anchor) {
+        frame.record_element(id, anchor);
+    }
     let tween_at = |field: UiTweenField| match world.get::<UiTween>(id).ok().flatten() {
         Some(tween) if element.supports(field) => {
             ui_tween_sample(tween, field, frame.real_frame, frame.game_frame, frame.rate)
@@ -685,6 +709,7 @@ pub(crate) fn post(
         match world_anchor_delta(frame, poses, id, a, anchor, grouping.degraded) {
             None => return entries.truncate(start),
             Some(place) => {
+                frame.record_element(id, id);
                 delta = place.delta;
                 opacity = place.alpha;
                 distance_scale = place.scale;
@@ -924,13 +949,16 @@ pub(crate) fn world_anchor_delta(
     anchor: Anchor,
     degraded: &mut Vec<(String, Diagnostic)>,
 ) -> Option<AnchorPlace> {
-    let (p, alpha) = placement(frame, poses, id, a, degraded)?;
+    let (p, alpha, record) = placement(frame, poses, id, a, degraded)?;
     let hidden = (p.behind && a.behind == UiAnchorBehind::Hide)
         || (a.show == UiAnchorShow::OnScreen && !p.on_screen)
         || (a.show == UiAnchorShow::OffScreen && p.on_screen)
         || alpha <= 0.0;
     if hidden {
         return None;
+    }
+    if let Some(table) = &frame.anchor_record {
+        table.borrow_mut().anchors.insert(id, record);
     }
     let pivot = canvas_anchor_px(anchor, frame.viewport);
     Some(AnchorPlace {
@@ -954,15 +982,20 @@ fn placement(
     id: EntityId,
     a: &UiWorldAnchor,
     degraded: &mut Vec<(String, Diagnostic)>,
-) -> Option<(super::WorldAnchorPlacement, f32)> {
+) -> Option<(super::WorldAnchorPlacement, f32, UiAnchorBlend)> {
     let world = frame.world;
     if !world.is_alive(a.target) || !world.has::<crate::components::Transform>(a.target) {
         return None;
     }
     let (model, _) = crate::extract::render_model(world, poses, a.target);
     let at = (model.w_axis.truncate() + Vec3::from_array(a.world_offset)).to_array();
-    let placed = match a.camera {
-        None => place_world_anchor(frame.view, frame.projection, at, frame.viewport, a.margin)?,
+    let inset_px = a.margin * pixel_scale(frame.viewport);
+    let (placed, view, box_px) = match a.camera {
+        None => (
+            place_world_anchor(frame.view, frame.projection, at, frame.viewport, a.margin)?,
+            None,
+            [0.0, 0.0, frame.viewport.0 as f32, frame.viewport.1 as f32],
+        ),
         Some(camera) => {
             let Some(view) = frame.anchor_views.get(&camera) else {
                 let key = crate::diagnostics::offender_key(world, id);
@@ -976,20 +1009,24 @@ fn placement(
                 ));
                 return None;
             };
-            place_world_anchor_in(
-                view.view,
-                view.projection,
-                at,
-                view.box_px,
-                a.margin * pixel_scale(frame.viewport),
-            )?
+            let placed =
+                place_world_anchor_in(view.view, view.projection, at, view.box_px, inset_px)?;
+            (placed, Some(view.slot), view.box_px)
         }
     };
     let alpha = match a.fade {
         Some([near, far]) => ((far - placed.distance) / (far - near)).clamp(0.0, 1.0),
         None => 1.0,
     };
-    Some((placed, alpha))
+    let record = UiAnchorBlend {
+        anchor: id,
+        target: a.target,
+        point: at,
+        view,
+        box_px,
+        inset_px,
+    };
+    Some((placed, alpha, record))
 }
 
 /// The pixel box a rect resolves to, before `post`: its canvas rect, or the group's box for a
@@ -1202,6 +1239,7 @@ mod tests {
             visible: true,
             depth: 1,
             clip: UiClip::NONE,
+            anchor: None,
         }
     }
 
@@ -1279,6 +1317,7 @@ mod tests {
             game_frame: 0,
             rate: TickRate::DEFAULT,
             anchor_views: Default::default(),
+            anchor_record: None,
         };
         let mut rows = vec![rect(100.0, 100.0, 40.0, 20.0)];
         let (mut groups, mut degraded) = (UiGroups::default(), Vec::new());
@@ -1453,6 +1492,7 @@ mod tests {
             game_frame: 0,
             rate: TickRate::DEFAULT,
             anchor_views: Default::default(),
+            anchor_record: None,
         };
         let mut rows = vec![shape_row([300.0, 200.0])];
         let (mut groups, mut degraded) = (UiGroups::default(), Vec::new());
@@ -1510,6 +1550,7 @@ mod tests {
             game_frame: 0,
             rate: TickRate::DEFAULT,
             anchor_views: Default::default(),
+            anchor_record: None,
         };
         let (mut entries, mut degraded) = (Vec::new(), Vec::new());
         emit_rect(

@@ -1025,6 +1025,7 @@ fn extract_inner(
         game_frame: now.ticks_floor(),
         rate: sim_now.rate(),
         anchor_views: Default::default(),
+        anchor_record: blend.is_some().then(Default::default),
     };
     let mut groups = ui::group::UiGroups::default();
     let mut view_table = crate::secondary_view::extract_views(
@@ -1490,6 +1491,17 @@ fn extract_inner(
     // `RenderScene.ui` (mirrors the extract-determinism guarantee every other field already has).
     ui_entries.sort_by_key(|(order, id, _)| (*order, *id));
     let ui_orders: Vec<i32> = ui_entries.iter().map(|e| e.0).collect();
+    // Keys for the world-anchored rows, parallel to `ui`; empty when no row is anchored.
+    let (ui_keys, ui_anchors) = match hud.anchor_record.take().map(|r| r.into_inner()) {
+        Some(record) if !record.by_element.is_empty() => (
+            ui_entries
+                .iter()
+                .map(|(_, id, _)| record.by_element.get(id).copied())
+                .collect(),
+            record.anchors.into_values().collect(),
+        ),
+        _ => (Vec::new(), Vec::new()),
+    };
     let ui: Vec<UiInstance> = ui_entries
         .into_iter()
         .map(|(_, _, instance)| instance)
@@ -2109,6 +2121,8 @@ fn extract_inner(
         } else {
             None
         };
+        blend.ui = ui_keys;
+        blend.ui_anchors = ui_anchors;
         fill_blend(
             blend,
             world,
@@ -2291,7 +2305,8 @@ fn fill_blend(
             .copied()
             .chain(instance_owners)
             .chain(camera_key)
-            .chain(views.iter().map(|&(entity, _)| entity)),
+            .chain(views.iter().map(|&(entity, _)| entity))
+            .chain(blend.ui_anchors.iter().map(|a| a.target)),
     );
     let offset = camera_key.and_then(|_| crate::camera_offset::active_entity(world, ids));
     // A `NoInterpolate` on the offset entity cuts the camera for the tick, as one on the camera does.

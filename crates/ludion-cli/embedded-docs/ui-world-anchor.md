@@ -52,7 +52,7 @@ Bad numbers are `L1611`. Code that builds the component writes `UiWorldAnchor { 
 - **`rotate_toward`** applies only while the element is clamped (not `on_screen`) and adds to its rotation (authored and tween) about the same pivot a `rotation` uses; draw the art pointing up. A `UiList` takes no rotation (`L2300`). The angle is clockwise degrees from 12 o'clock, `WorldAnchorPlacement.angle_deg`.
 - **`distance_scale`** multiplies the tween scale and pivots on the projected point, so a `bottom_center` meter stays on the head; `offset` scales with it. The distance is camera to point, in metres.
 - **`camera`** projects through the named view into the first visible `UiRect` (entity order) whose `view` names it; `margin` insets that box. The box follows the rect's position and size, not its tween, rotation or a group's scale, and the element is not clipped to it. A camera that is dead, has no `RenderView`, is disabled or over budget, or is shown by no rect draws nothing: `L2308`, never a fallback to the main camera. `ui_hit` does not follow a `camera` anchor.
-- Under `present_interpolation` the anchor follows the newest tick while the 3D scene is blended, so it can lead by up to one tick.
+- Under `present_interpolation` a world-anchored element moves with the blended camera and target point, so it does not lead the 3D scene (`show`, `behind`, `fade`, `distance_scale` and the `rotate_toward` turn take the newer tick). Under `late_latch` it follows the blended, not the latched, camera.
 - Sim code and tests call the same placement: `ludion::math::world_anchor` (camera arguments as `world_to_pixel`, plus `margin`) returns the pixel, `on_screen`, `behind`, `distance` and `angle_deg`; `ludion::math::place_world_anchor_in` takes a pixel box.
 
 ## Next
