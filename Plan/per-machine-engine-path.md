@@ -66,7 +66,19 @@ The external game's tree (its migration recipe is in `ludion docs project-anatom
 crates.io flows. The `ludion dev` shader watch through the link. A guard against a link-shaped engine
 root in `L0011`. Editor changes.
 
+## Owner rulings
+
+- None required: the request's options (a) git/`[patch]` and (b) env var / path file were rejected
+  under the autonomous-process ruling (decisions 1, 2, 5); the open question is answered by
+  decision 8.
+- **Proposed — owner ruling owed:** `ludion new` also writes a `.loreignore` beside `.gitignore`
+  (both naming `.ludion/`), since Lore reads only `.loreignore` and a Lore-hosted project would
+  otherwise see the engine link. Not built.
+
 ## Status
 
 W1 shipped: codes `L4390`–`L4393`, the template changes, `ludion new` linking, `link-engine`, tests
 in `crates/ludion-cli/tests/new.rs`, the docs section.
+
+W1 verified on macOS (2026-11-22). Voxel generators in a scaffolded project import `grid.mjs`
+through the link (`docs/voxel-generation.md`, `docs/project-anatomy.md`); no env var.

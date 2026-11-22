@@ -57,7 +57,7 @@ node scripts/ludion.mjs link-engine <engine checkout>
 
 It refuses a path that is not an engine checkout (`L4391`) and a real directory at `.ludion/engine` (`L4392`, never deleted). A missing or dangling link makes the wrapper fail with `L4390`; cargo itself reports an error naming `.ludion/engine/…/Cargo.toml`. `ludion new` reports `L4393` if it could not run the link step (Node missing); the files stay.
 
-**Projects scaffolded before the link** carry absolute engine paths. To migrate: replace the three engine deps in `Cargo.toml` with `{ path = ".ludion/engine/crates/<crate>" }` (keep each dep's other keys), add `exclude = [".ludion"]` under `[workspace]`, replace `scripts/ludion.mjs` with a fresh `ludion new` copy, run `node scripts/ludion.mjs link-engine <engine checkout>`, and make sure `.ludion/` is in every ignore file the project's version control reads.
+**Projects scaffolded before the link** carry absolute engine paths. To migrate: replace the three engine deps in `Cargo.toml` with `{ path = ".ludion/engine/crates/<crate>" }` (keep each dep's other keys), add `exclude = [".ludion"]` under `[workspace]`, replace `scripts/ludion.mjs` with a fresh `ludion new` copy, run `node scripts/ludion.mjs link-engine <engine checkout>`, and make sure `.ludion/` is in every ignore file the project's version control reads. Voxel generators import `grid.mjs` through `.ludion/engine/scripts/voxel/` (see `voxel-generation`); replace any absolute or env-var import.
 
 A game is a binary depending on the `ludion` facade crate. It brings two things — components and
 systems — and gets everything else (scene load/validation, the deterministic sim, `WorldHash`,

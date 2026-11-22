@@ -44,7 +44,7 @@ rhythm that is otherwise a hand-indexed loop) and `emit()`.
 `scripts/voxel/README.md` is the reference; `examples/voxel-gen/brazier.voxel.gen.mjs` is the
 runnable worked example, its committed output the drift gate's standing proof. Both live in the
 **engine checkout** (the library is build tooling, not a shipped crate), so a script's `import` is
-relative to its own location — count the `../` from wherever it sits. Call **`assertConnected(grid)`**
+relative to its own location: inside the engine checkout, count the `../`; in a scaffolded project, go through the engine link — from `scenes/voxels/x.mjs`, `import { Grid } from '../../.ludion/engine/scripts/voxel/grid.mjs';`. Call **`assertConnected(grid)`**
 right before `emit()`: it runs the same 6-connectivity check as `L1129` and throws the same per-piece
 report, so a disconnected grid fails the generator instead of round-tripping through `--validate` to
 find out.
