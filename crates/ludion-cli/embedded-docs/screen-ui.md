@@ -1,10 +1,10 @@
 ---
-description: UiRect and UiText: the reference canvas, anchors, draw order, and text wrapping
+description: UiRect and UiText: the reference canvas, anchors, draw order, and driving a HUD from state
 ---
 
 # Screen-space UI
 
-**Scope:** HUDs and overlays — the virtual canvas, the nine anchors, draw order, and driving an element from game state. World-space `Text` is in components; the mouse itself is systems; the selectable-menu widget is `ludion docs ui-list`.
+**Scope:** HUDs and overlays — the virtual canvas, the nine anchors, draw order, and driving an element from game state. Text wrapping, outline, shadow and rotation are `ludion docs ui-text-styles`. World-space `Text` is in components; the mouse itself is systems; the selectable-menu widget is `ludion docs ui-list`.
 
 Screen-space UI is for HUDs, menus, and overlays: elements that never move with the camera, never
 get depth-clipped, and read the same size at every output resolution. Two builtin components carry
@@ -116,16 +116,7 @@ measured block for free, and an empty `text: ""` is legal and draws nothing (a c
 label's text between `""` and a message rather than adding or removing the entity). `visible: false`
 (default `true`) is the same off switch `UiRect` offers, orthogonal to an empty `text`.
 
-`UiText.wrap_width` (canvas units, default `0.0`) is off by default — every authored scene keeps
-identical geometry until it's set. Above `0.0`, the text wraps to `wrap_width` measured in the face's advance
-widths (a line holds at least one glyph); each authored `\n`, `\r\n` or `\r` is still a paragraph break, wrapped independently, and a tab counts as a space; a word is
-a run of non-space characters, which may also break after a `-` or `—` (never at a non-breaking space) (runs of spaces collapse to one, leading/trailing spaces drop); a
-greedy fill moves a word to the next line when it would not fit, and a word longer than the column
-line is hard-broken into line-sized chunks. The block a wrapped `UiText` occupies is
-`math::resolve_ui_text(face, &ui_text, viewport)`, wrapped and anchored from the same layout extract
-draws, in render-target pixels as `[x, y, w, h]`; the pure helper doing the wrapping is
-`math::wrap_ui_text(face, text, size, wrap_width) -> Cow<str>`, still the wrapped string, re-exported
-beside `math::measure_ui_text`. It's meant for prose — recaps, flavour text — not for `UiList` items.
+`UiText.wrap_width`, outline, shadow and `rotation` are `ludion docs ui-text-styles`.
 
 **Order.** Every `UiRect`/`UiText` in a scene draws in one pass, sorted by `(order, EntityId)` —
 higher `order` draws later, i.e. on top; a tie breaks on ascending `EntityId` (pinned, reproducible).
@@ -203,36 +194,6 @@ above post-processing, unaffected. `examples/gallery/ui-atlas-icons.yaml` is the
 of life icons and a jewel drawn from regions of the sprites gallery's committed atlas, proving a
 `UiRect` samples an atlas region exactly as a world `Sprite` does.
 
-## Outline
-
-`outline: { width, color }` on `UiText` and `UiList` draws ink under the glyphs in the same draw. `width` is canvas units
-(`0`, or a `color` alpha of `0`, draws nothing); `color` is linear straight RGBA. It is ink, not layout: measuring, wrapping and
-hit tests ignore it, and a group's opacity fades it with the text. A negative or non-finite value is `L1618`.
-
-- **SDF faces** take it from the distance field, up to the baked `spread_px` less one screen pixel.
-- **Bitmap faces** (the embedded 8x8 among them) dilate by `round(width)` whole source pixels, `1..=4`, as a square.
-- Wider than that clamps and warns `L2304` once per element, naming the face and the widest width.
-
-`examples/gallery/ui-text-outline.yaml` shows each case over bright bands; `cargo run -p ludion --example font_text` builds one.
-
-## Shadow
-
-`shadow: { offset, color, softness }` on `UiText` and `UiList` draws a copy of the ink (the glyphs, plus the outline when there is one) in `color`, moved by `offset` canvas units (+Y down), under the text. `softness` (`0`..`1`, default `0`) blurs it. A `color` alpha of `0` draws nothing. It is ink, not layout: measuring, wrapping, the rotation pivot and `ui_hit` ignore it, and a group's opacity fades it and its scale scales `offset`. A non-finite `offset` or `color`, or a `softness` outside `[0, 1]`, is `L1622`.
-
-- **The shadow is the text's silhouette**, so it turns and scales with the text (a rotated text's shadow turns about the same pivot), and an outlined text casts one flat shape in the shadow colour.
-- **SDF faces** blur it by `softness`, a fraction of the face's field band (`1` is the widest the field allows).
-- **Bitmap faces** (the embedded 8x8 among them) draw it hard; a `softness` above `0` there is ignored and warns `L2307` once per element, naming the face. The offset is not rounded to source pixels.
-- **Order.** A run draws every shadow glyph before its fills, so a later glyph's shadow never covers an earlier glyph. Across runs (a `UiList` line, or a fallback-face run) a later run's shadow can reach an earlier run's fill when the offset spans the line gap.
-- **Not on** `UiRadial`, `SubtitleView` or world `Text`.
-
-`examples/gallery/ui-text-shadow.yaml` shows each case over bright bands; `cargo run -p ludion --example font_text` builds one.
-
-## Rotation
-
-`rotation: <degrees>` on `UiRect`, `UiText` and `UiGroup` turns the element **clockwise on screen** (`0`, the default, draws as before; a non-finite value is `L1620`). The pivot is the centre of what the element draws: a rect's box (a nine-slice's nine pieces share one), a text run's glyph bounds, a group's box. A `UiTween` `rotation` track adds to the authored value. `UiList` and `UiRadial` have no field; rotate them through a group. A `UiShape` has its own `rotation`, about its origin (`ludion docs ui-shapes`).
-
-Hit-test a rotated rect with `ludion::math::ui_point_in(&rect, viewport, cursor)`; `ui_rect_corners(&rect, viewport)` gives its drawn corners (top-left, top-right, bottom-right, bottom-left). Both are ungrouped and untweened; `ui_hit` answers for a grouped or animated element. `examples/gallery/ui-rotation.yaml` is the golden.
-
 ## Moving elements
 
 `UiTween` animates opacity, offset, scale, rotation, size and colour closed-form (`ludion docs ui-tweens`); `UiWorldAnchor` pins an element to a 3D target and clamps it to the screen edge (`ludion docs ui-world-anchor`). Both resolve in `extract`: nothing is written per tick. A textured rect can sample a sub-rect (`uv_rect`) or draw as a nine-slice frame (`slice`): `ludion docs ui-nine-slice`. A `UiGroup` is a box other elements anchor, scale, fade and hide inside (`group: <ref>`): `ludion docs ui-groups`.
@@ -248,6 +209,7 @@ Hit-test a rotated rect with `ludion::math::ui_point_in(&rect, viewport, cursor)
 - `ludion docs ui-world-anchor` — HUD elements that follow 3D targets.
 - `ludion docs ui-groups` — a box that scales, fades and hides the UI inside it.
 - `ludion docs sprites` — the sprite layer's hub; a `UiRect` spends the same committed atlas.
+- `ludion docs ui-text-styles` — text wrapping, outline, shadow, rotation.
 - `ludion docs ui-list` — the selectable-menu widget: format, cursor/activation, windowing.
 - `ludion docs fonts` — TrueType faces for `UiText`/`UiList`/`Text`.
 - `ludion docs systems` — the system contract and the determinism rules.
