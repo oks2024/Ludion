@@ -137,7 +137,8 @@ fn find_entity(world: &mut World, name: &str) -> Result<EntityId, Vec<Diagnostic
 /// # Errors
 /// `L4355` for a document outside `root`, unreadable or of another kind (a document that fails its own
 /// checks returns those diagnostics), `L4356` for a bind name that matches no entity or several, `L4351`
-/// for an undeclared role.
+/// for an undeclared role. `L1733` is not an error here: the preview has no dialogue, so every dialogue
+/// key would trip it, and the runtime degrades the key with `L4353` instead.
 pub(crate) fn install(
     world: &mut World,
     root: &Path,
@@ -159,7 +160,7 @@ pub(crate) fn install(
     }
     let errors: Vec<Diagnostic> = validate_sequence_docs(world)
         .into_iter()
-        .filter(|d| d.severity == Severity::Error)
+        .filter(|d| d.severity == Severity::Error && d.code != code::SEQUENCE_UNKNOWN_LINE)
         .collect();
     if !errors.is_empty() {
         return Err(errors);
@@ -280,6 +281,31 @@ tracks:
         for (at, x) in [(0, 0.0), (5, 2.0), (10, 4.0)] {
             assert_eq!(x_at(&scene, &preview(doc_path.clone(), "crate", at)), x);
         }
+    }
+
+    #[test]
+    fn a_dialogue_key_degrades_and_sets_no_wait() {
+        let dialogue = "  dialogue:
+    - at: 5
+      line: hello
+      wait: line_end
+";
+        let (scene, doc_path) = project("dialogue", &doc(dialogue));
+        let run = sequence_preview_world(
+            &builtin_registry(),
+            &scene,
+            &[],
+            &preview(doc_path, "crate", 25),
+        )
+        .unwrap_or_else(|d| panic!("{d:?}"));
+        assert_eq!(run.ended, Some(SequenceEnd::Completed));
+        assert!(
+            run.warnings
+                .iter()
+                .any(|w| w.code == code::SEQUENCE_KEY_DEGRADED),
+            "{:?}",
+            run.warnings
+        );
     }
 
     #[test]

@@ -132,6 +132,13 @@ pub struct GoldenTest {
     /// from. A scene golden, on the built-in path or through a game builder: a replay or a model
     /// document refuses it, and a name no enabled, in-budget view carries is `L2379`.
     pub view: Option<String>,
+    /// A golden of a sequence beat, exactly `ludion render --sequence --bind --at`: the scene with
+    /// the beat played over the built-in schedule (no game systems, no dialogue), rendered right
+    /// after the update whose playhead is `at`. `None` (the default) is the scene as it loads. A
+    /// plain scene golden: a replay, a game builder, a model document, `view`, `debug_view`,
+    /// `debug_draw` and `frames` refuse it. Pass the document as an absolute path — it is resolved
+    /// against the working directory, which is the crate directory under `cargo test`.
+    pub sequence: Option<ludion_engine::SequencePreview>,
     /// The registry the scene is validated against — built-in by default, a game's own via
     /// [`with_registry`](GoldenTest::with_registry).
     registry: fn() -> Registry,
@@ -175,6 +182,7 @@ impl std::fmt::Debug for GoldenTest {
             .field("debug_view", &self.debug_view)
             .field("anti_aliasing", &self.anti_aliasing)
             .field("view", &self.view)
+            .field("sequence", &self.sequence)
             .field("registry", &"<fn>")
             .field("builder", &self.builder.as_ref().map(|_| "<fn>"))
             .field(
@@ -245,6 +253,7 @@ impl GoldenTest {
             debug_view: None,
             anti_aliasing: ludion_engine::AntiAliasing::Off,
             view: None,
+            sequence: None,
             registry: ludion_engine::builtin_registry,
             builder: None,
             replay: None,
@@ -306,6 +315,13 @@ impl GoldenTest {
     #[must_use]
     pub fn with_view(mut self, name: impl Into<String>) -> Self {
         self.view = Some(name.into());
+        self
+    }
+
+    /// A golden of the beat `preview` plays over the scene. See [`sequence`](GoldenTest::sequence).
+    #[must_use]
+    pub fn with_sequence(mut self, preview: ludion_engine::SequencePreview) -> Self {
+        self.sequence = Some(preview);
         self
     }
 
@@ -491,6 +507,9 @@ impl GoldenTest {
         if let Some(replay) = &self.replay {
             return self.render_replay(replay);
         }
+        if let Some(preview) = &self.sequence {
+            return self.render_sequence(preview);
+        }
         let kind = std::fs::read_to_string(&self.scene)
             .ok()
             .and_then(|source| ludion_scene::peek_kind(&source));
@@ -631,6 +650,63 @@ impl GoldenTest {
         ))
     }
 
+    /// The scene with a beat played over it, `ludion render --sequence`'s render. The outcome's
+    /// warnings are dropped: a dialogue key's `L4353` is the expected one.
+    fn render_sequence(
+        &self,
+        preview: &ludion_engine::SequencePreview,
+    ) -> Result<(DecodedImage, String), Vec<Diagnostic>> {
+        if let Some(what) = self.sequence_conflict() {
+            return Err(vec![sequence_refused(what)]);
+        }
+        let outcome = ludion_engine::render_sequence_preview(
+            &(self.registry)(),
+            &self.scene,
+            ludion_engine::FrameSize::native(self.width, self.height),
+            &ludion_engine::QualitySetting::full(),
+            &[],
+            preview,
+            self.anti_aliasing,
+            self.locale.as_deref(),
+        )?;
+        let image = outcome.image;
+        Ok((
+            DecodedImage {
+                width: image.width,
+                height: image.height,
+                rgba: image.rgba,
+            },
+            outcome.adapter,
+        ))
+    }
+
+    /// What a sequence golden is combined with that it does not render under, if anything.
+    fn sequence_conflict(&self) -> Option<&'static str> {
+        let model_sheet = std::fs::read_to_string(&self.scene)
+            .ok()
+            .and_then(|source| ludion_scene::peek_kind(&source))
+            .as_deref()
+            .and_then(ludion_scene::kind_entry)
+            .is_some_and(|entry| entry.model_sheet);
+        if self.replay.is_some() {
+            Some("a replay golden")
+        } else if self.builder.is_some() {
+            Some("a game builder")
+        } else if self.view.is_some() {
+            Some("`view`")
+        } else if self.debug_view.is_some() {
+            Some("`debug_view`")
+        } else if self.debug_draw != ludion_engine::DebugCategories::None {
+            Some("`debug_draw`")
+        } else if self.frames != 0 {
+            Some("`frames`")
+        } else if model_sheet {
+            Some("a model document")
+        } else {
+            None
+        }
+    }
+
     /// Drives `replay` to its frame and renders the engine there, [`check_engine_golden`]'s render.
     fn render_replay(
         &self,
@@ -678,6 +754,15 @@ fn view_refused(what: &str) -> Diagnostic {
         format!("`GoldenTest.view` does not apply to {what}: only a scene has secondary views"),
     )
     .with_help("drop `view`, or golden a scene with `RenderView`s")
+}
+
+/// The refusal of [`GoldenTest::sequence`] combined with something that does not render under a beat.
+fn sequence_refused(what: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::SCENE_OVERRIDE_INVALID,
+        format!("`GoldenTest.sequence` does not combine with {what}: a beat plays over a scene"),
+    )
+    .with_help("drop `sequence`, or drop the other setting")
 }
 
 /// `goldens_root/<os>/<stem>.png`: the golden every recipe form resolves. Off the pinned tier the
@@ -1317,6 +1402,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn a_sequence_golden_refuses_what_it_cannot_render_under() {
+        let preview = ludion_engine::SequencePreview {
+            doc: PathBuf::from("sequences/beat.yaml"),
+            bindings: Vec::new(),
+            at: 0,
+        };
+        let golden = GoldenTest::new("scene.yaml", "scene.png").with_sequence(preview);
+        let err = golden
+            .clone()
+            .with_view("minimap")
+            .render()
+            .expect_err("a view and a beat do not combine");
+        assert_eq!(err[0].code, code::SCENE_OVERRIDE_INVALID);
+        assert!(err[0].message.contains("`view`"), "{}", err[0].message);
+        let err = golden
+            .with_frames(3)
+            .render()
+            .expect_err("frames and a beat do not combine");
+        assert_eq!(err[0].code, code::SCENE_OVERRIDE_INVALID);
     }
 
     #[test]

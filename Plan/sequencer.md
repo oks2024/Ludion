@@ -1,6 +1,6 @@
 # Plan: Sequencer — `kind: sequence`, keyed tracks, skip
 
-> **Waves 1–3b and W4a mechanized — the document, `sequences::play`, seven tracks (transform and the audio voices, `music_crossfade` and `duck` keys included), skip, `holds_gameplay`, `wait: line_end`/`release`, the per-entity clock domain (`SequenceBound`), the camera-zone override, the built-in schedule seat and `ludion render --sequence` ship; the trace, gallery goldens and wire are laid out below.**
+> **Waves 1–3b, W4a and W4b mechanized — the document, `sequences::play`, seven tracks (transform and the audio voices, `music_crossfade` and `duck` keys included), skip, `holds_gameplay`, `wait: line_end`/`release`, the per-entity clock domain (`SequenceBound`), the camera-zone override, the built-in schedule seat, `ludion render --sequence`, `sequence_trace` and the `sequence-beat` gallery scene ship (its goldens owed on the pinned boxes); the wire is laid out below.**
 > Driven by Neon Shroud request 0025 (sequencer / timeline). Game-facing doc: `ludion docs sequences`.
 
 ## Design decisions
@@ -154,13 +154,32 @@
 39. **What a preview does not run.** No dialogue (a dialogue key degrades with `L4353` and sets no wait, decision 15)
     and no game systems. With no game to release them, every `wait: release` clears the tick it is reached
     (`sequences::release` before each tick). `GameClock` is installed so holds act. `L4352`/`L4353` warnings are
-    printed to stderr.
+    printed to stderr. W4b: the preview's install skips `L1733`, which the bare host's missing dialogue store raises
+    for every dialogue key, so the key degrades with `L4353` as this decision says rather than refusing the doc.
 40. **Codes.** `L4355` (`SEQUENCE_PREVIEW_DOC`): the doc is not under the scene's folder, unreadable or not
     `kind: sequence`. `L4356` (`SEQUENCE_PREVIEW_BIND`): a `--bind` entity name matches no entity, or several.
 41. **The wire design (R14).** `sequence.play { sequence, bindings: {role: entity ref} } -> { player }`;
     `sequence.skip { player }`; `sequence.seek { player, tick }`, which restores the snapshot captured at play and
     steps `tick + 1` ticks with the preview's auto-release, so a seek frame equals the CLI frame. Each is a
     ≤10-line `dispatch.rs` arm into `sequences`; it moves the protocol schema hash, so it ships in R14.
+
+42. **`sequence_trace` (testkit).** `ludion_testkit::sequence::sequence_trace(&mut Engine, ticks) -> Vec<String>`
+    steps the engine and logs, per tick, every `SequenceEvents` entry in order and then the wait transitions by
+    ascending player id: `0050 e7v0 key dialogue at 50`, `fire <name>`, `end completed|skipped|cancelled`,
+    `wait line_end|release at A`, `resume at A`. A wait is a state, not an event, so it is a park/resume pair read
+    from `SequencePlayer.wait`, seeded from the world before the first tick: `trace(0..k) ++ trace(k..n) ==
+    trace(0..n)`, also across a snapshot restore. The request's tuple shape became text lines: diffable, like every
+    testkit trace. An engine without `.sequences()` steps and returns nothing.
+43. **The gallery beat.** `examples/gallery/sequence-beat.yaml` plus `sequences/demo.yaml` (a camera `rig` and its
+    `restore`, two animation keys, a `to` span, a `path` span, a voice, a `wait: line_end` dialogue key and two
+    events, `holds_gameplay`) are proved twice: `tests/sequence_beat.rs` traces the beat under a game builder with
+    dialogue (the expected trace is hand-derived in the test: integer ticks, machine-independent, no committed trace
+    file), and three goldens render ticks 25, 45 and 160 through the preview. The two agree up to the dialogue key
+    (the preview has no dialogue, decision 39). `sequence_update` runs before `dialogue_update`, so a line that
+    ends on tick N clears its wait on tick N + 1.
+44. **`GoldenTest::with_sequence`.** A scene golden of a previewed tick, exactly `ludion render --sequence --bind
+    --at` (`render_sequence_preview`). It refuses a replay, a builder, `view`, `debug_view`, `debug_draw`, `frames`
+    and a model document with `SCENE_OVERRIDE_INVALID`; no new code. Its outcome warnings are ignored.
 
 ## Waves
 
@@ -179,8 +198,8 @@
 - **W3b (mechanized):** audio voices stopped on skip and cancel, `music_crossfade`, duck keys, the camera-zone override
   (decisions 31–36).
 - **W4a (mechanized):** built-in schedule placement and `ludion render --sequence --bind --at` (decisions 37–40).
-- **W4b:** testkit `sequence_trace`, the `sequence-beat` gallery scene, `sequences/demo.yaml`, three-tick `--sequence`
-  render goldens.
+- **W4b (mechanized, blesses owed):** testkit `sequence_trace`, the `sequence-beat` gallery scene,
+  `sequences/demo.yaml`, three-tick `--sequence` render goldens (decisions 42–44).
 - **Wire (R14):** `sequence.play/seek/skip` (decision 41; a protocol schema move).
 
 ## Out of scope
@@ -214,3 +233,9 @@
 - W4a mechanized: `scene_physics.rs` (`assemble_schedule` seat), `sequences/preview.rs`, `render.rs`
   (`render_sequence_preview`, `sequence_preview_world`), `ludion render --sequence/--bind/--at`, `L4018` for a
   scheduled `sequence_update`, `L4355`/`L4356`, `tests/sequences.rs`, `docs/sequences.md`.
+- W4b mechanized: `crates/ludion-testkit/src/{sequence,golden}.rs` (`sequence_trace`, `GoldenTest::with_sequence`),
+  `tests/{sequence_beat,gallery,common/mod}.rs`, the `sequence-beat` scene, `sequences/demo.yaml`,
+  `dialogue/sequence-beat.yaml`, two paths, `sequences/preview.rs` (a dialogue key no longer refuses the preview),
+  `docs/sequences.md`. Owed on the pinned boxes: `ludion test --dir examples/gallery --bless --filter
+  sequence-beat` (the bare scene) and `LUDION_BLESS=1 cargo nextest run -p ludion-testkit --test gallery -E
+  'test(/sequence_beat_at/)'` (three PNGs).

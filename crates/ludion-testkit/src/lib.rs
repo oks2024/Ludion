@@ -21,6 +21,8 @@
 //! game's own golden-image test (resolve the per-OS path, skip/bless/compare) — see its doc example;
 //! [`check_engine_golden`] and [`golden::GoldenTest::from_replay`] run the same recipe on an engine
 //! the test drove and on a recorded session.
+//! [`sequence::sequence_trace`] steps an engine and returns the text log of what its sequences did
+//! (keys, events, ends, waits), the sequence counterpart of [`audio`]'s stream.
 //!
 //! [`stats::image_stats`] answers the other image question — not "did this frame change?" but "does
 //! this frame carry a *defect*?", with no reference image at all: [`ImageStats`] scores quantization
@@ -74,6 +76,7 @@ pub mod driver;
 pub mod golden;
 pub mod imports;
 pub mod report;
+pub mod sequence;
 pub mod sim_assert;
 pub mod spelling;
 pub mod ssim;

@@ -1,0 +1,21 @@
+format: 1
+kind: path
+name: sequence-patrol
+interpolation: catmull_rom
+closed: true
+points:
+  - - 2.2
+    - 0.25
+    - 2.2
+  - - 2.2
+    - 0.25
+    - -0.5
+  - - 0.0
+    - 0.25
+    - -1.0
+  - - -1.6
+    - 0.25
+    - 0.5
+  - - -1.0
+    - 0.25
+    - 2.2

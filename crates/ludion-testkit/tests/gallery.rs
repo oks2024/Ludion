@@ -1950,3 +1950,95 @@ fn needs_gpu_voxel_horde_with_an_unreachable_chain_matches_the_chainless_model()
     let plain = render("voxels/horde-figure.voxel.yaml", "plain").expect("renders");
     assert!(chained == plain, "an unreachable chain changed the bytes");
 }
+
+/// The `sequence-beat` scene with `sequences/demo.yaml` previewed at tick `at`, exactly `ludion render
+/// --sequence --at`: the camera blend, the crate and drone spans and the frozen patroller, the bare
+/// built-in schedule with no dialogue. The document path is absolute because the preview resolves it
+/// against the working directory, which is the crate directory here.
+fn sequence_beat_test(at: u64) -> GoldenTest {
+    let gallery = gallery_dir();
+    let preview = ludion_engine::SequencePreview {
+        doc: gallery.join(common::SEQUENCE_DOC),
+        bindings: [
+            ("cam", "camera"),
+            ("hero", "hero"),
+            ("crate", "crate"),
+            ("drone", "drone"),
+        ]
+        .into_iter()
+        .map(|(role, name)| (role.to_owned(), name.to_owned()))
+        .collect(),
+        at,
+    };
+    let mut test = GoldenTest::new(
+        gallery.join("sequence-beat.yaml"),
+        os_goldens().join(format!("sequence-beat-at-{at}.png")),
+    )
+    .with_sequence(preview);
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// One previewed `sequence-beat` tick compares clean against its committed golden at exactly SSIM 1.0.
+/// Under `LUDION_BLESS`, (re)writes the golden instead. Skips gracefully with no GPU adapter.
+fn check_sequence_beat_at(at: u64) {
+    let test = sequence_beat_test(at);
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!(
+                    "SKIPPED sequence_beat_at_{at}_matches_committed_golden_at_exactly_one (bless): {}",
+                    skip_note(&diagnostics)
+                );
+            }
+            Err(diagnostics) => {
+                panic!("blessing the sequence-beat golden at {at} failed: {diagnostics:?}")
+            }
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir(&format!("sequence_beat_at_{at}_out"));
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => assert_eq!(
+            report.ssim,
+            Some(1.0),
+            "the previewed sequence-beat render at {at} must be byte-identical to its golden"
+        ),
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!(
+                "the sequence-beat golden at {at} failed: {}",
+                report.summary
+            )
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!(
+                "SKIPPED sequence_beat_at_{at}_matches_committed_golden_at_exactly_one: {}",
+                skip_note(&diagnostics)
+            );
+        }
+        Err(diagnostics) => panic!("the sequence-beat render at {at} failed: {diagnostics:?}"),
+    }
+}
+
+/// Tick 25: the camera blend is under way, the crate has begun its span, the drone has not.
+#[test]
+fn needs_gpu_sequence_beat_at_25_matches_committed_golden_at_exactly_one() {
+    check_sequence_beat_at(common::SEQUENCE_GOLDEN_TICKS[0]);
+}
+
+/// Tick 45: the crate and the drone are mid-span, the patroller still frozen.
+#[test]
+fn needs_gpu_sequence_beat_at_45_matches_committed_golden_at_exactly_one() {
+    check_sequence_beat_at(common::SEQUENCE_GOLDEN_TICKS[1]);
+}
+
+/// Tick 160: the beat has completed and its camera is restored; the patroller moves again.
+#[test]
+fn needs_gpu_sequence_beat_at_160_matches_committed_golden_at_exactly_one() {
+    check_sequence_beat_at(common::SEQUENCE_GOLDEN_TICKS[2]);
+}

@@ -25,6 +25,12 @@
 //! [`drive_chase`] sweeps the chase boom round the yard (`ORBIT_*`), writes a corner peek
 //! (`PEEK_*`) and [`fade_occluders`] fades the `camera_pass` prop between the eye and the hero
 //! (`ludion docs camera`).
+//!
+//! **sequence-beat** — [`sequence_beat_builder`] opts into sequences and dialogue; [`play_beat`] binds the
+//! beat's four roles by `Name` and plays [`SEQUENCE_DOC`] between ticks, the instant the bare preview
+//! plays it, so a tick `T` of the driven run and `--at T` of `ludion render --sequence` agree until the
+//! dialogue key (the preview has no dialogue). [`SEQUENCE_GOLDEN_TICKS`] are the previewed goldens
+//! (`ludion docs sequences`).
 
 #![allow(dead_code)]
 
@@ -921,4 +927,42 @@ pub fn chase_builder() -> EngineBuilder {
         .query::<(&mut CameraRig,)>()
         .system("fade_occluders", fade_occluders)
         .query::<(&mut ludion_engine::Fade,)>()
+}
+
+// --- sequence-beat -----------------------------------------------------------------------------
+
+/// The beat document, under the gallery content root.
+pub const SEQUENCE_DOC: &str = "sequences/demo.yaml";
+/// The playhead ticks of the three preview goldens: two inside the camera blend, the crate span and the
+/// drone span (before the dialogue key at 50), one past the end and the restore blend.
+pub const SEQUENCE_GOLDEN_TICKS: [u64; 3] = [25, 45, 160];
+
+/// The `sequence-beat` engine: sequences and dialogue on, `dialogue_update` seated so the beat's line
+/// plays and ends.
+pub fn sequence_beat_builder() -> EngineBuilder {
+    Engine::builder()
+        .sequences()
+        .dialogue(ludion_engine::DialogueConfig::default())
+        .system("dialogue_update", ludion_engine::dialogue_update)
+        .query::<(&ludion_engine::dialogue::DialogueLine,)>()
+        .query::<(&ludion_engine::dialogue::DialogueControl,)>()
+}
+
+/// Plays [`SEQUENCE_DOC`], its roles bound to the scene entities of the same names (`cam` to
+/// `camera`).
+pub fn play_beat(world: &mut World) -> ludion_engine::sequences::SequenceHandle {
+    let mut named = |wanted: &str| {
+        world
+            .query_ids::<(&ludion_engine::Name,)>()
+            .find(|(_, (name,))| name.0 == wanted)
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| panic!("no entity named {wanted}"))
+    };
+    let bindings = [
+        ("cam", named("camera")),
+        ("hero", named("hero")),
+        ("crate", named("crate")),
+        ("drone", named("drone")),
+    ];
+    ludion_engine::sequences::play(world, SEQUENCE_DOC, &bindings).expect("the beat plays")
 }

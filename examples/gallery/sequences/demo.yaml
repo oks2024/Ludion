@@ -1,0 +1,68 @@
+format: 1
+kind: sequence
+roles:
+  - cam
+  - hero
+  - crate
+  - drone
+length_ticks: 120
+clock: sim
+holds_gameplay: true
+skippable: true
+tracks:
+  camera:
+    - at: 10
+      role: cam
+      rig:
+        mode:
+          follow:
+            yaw_deg: -35.0
+            pitch_deg: 12.0
+            distance: 6.0
+        focus_offset:
+          - 0.0
+          - 0.8
+          - 0.0
+        blend_in:
+          seconds: 0.5
+          curve: ease_in_out
+    - at: 100
+      role: cam
+      restore: true
+  transform:
+    - at: 20
+      role: crate
+      over: 40
+      ease: smooth
+      to:
+        offset:
+          - 2.5
+          - 0.5
+          - 0.5
+    - at: 30
+      role: drone
+      over: 50
+      path: paths/sequence-drone.path.yaml
+      orient: yaw
+  animation:
+    - at: 10
+      role: hero
+      clip: run
+    - at: 70
+      role: hero
+      clip: idle
+      fade: 0.3
+  audio:
+    - at: 40
+      play: sounds/chatter.wav
+  dialogue:
+    - at: 50
+      line: beat_ack
+      wait: line_end
+  event:
+    - at: 60
+      name: beat_midpoint
+      on_skip: drop
+    - at: 110
+      name: beat_done
+      on_skip: fire

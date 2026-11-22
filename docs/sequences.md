@@ -164,6 +164,15 @@ under the scene's folder. It runs only the built-in schedule: no game systems, n
 `L4353`), and every `wait: release` clears as it is reached. The summary line names the key, the tick and a beat that
 ended; `L4352`/`L4353` print as warnings. `L4355`: the doc is outside the folder, unreadable or not `kind: sequence`;
 `L4356`: a bind name matches no entity or several. `--frames`, `--view` and the dumps conflict with it.
+The gallery's `sequence-beat` scene is the worked example: `ludion render --scene examples/gallery/sequence-beat.yaml --sequence examples/gallery/sequences/demo.yaml --bind cam=camera --bind hero=hero --bind crate=crate --bind drone=drone --at 45 --out beat.png`.
+
+## Trace
+
+`ludion_testkit::sequence::sequence_trace(&mut engine, ticks) -> Vec<String>` steps the engine and returns one
+line per key applied, event fired, end, wait and resume, per tick in event order then waits by player:
+`"{tick:04} {player} key {track} at {at}"`, `fire {name}`, `end completed|skipped|cancelled`,
+`wait line_end|release at {at}`, `resume at {at}`, e.g. `0050 e7v0 wait line_end at 50`. Two calls
+concatenate to one, also across a snapshot restore. An engine without `.sequences()` returns nothing.
 
 ## Skip and cancel
 
@@ -215,3 +224,4 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
 - `ludion docs dialogue` — lines, speakers, holds.
 - `ludion docs game-clock` — holds and time scale.
 - `ludion docs camera`, `ludion docs ui-tweens` — the rig and tween a key writes.
+- `examples/gallery/sequence-beat.yaml` — a beat to preview and trace.

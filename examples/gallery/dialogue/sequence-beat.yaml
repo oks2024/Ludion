@@ -1,0 +1,13 @@
+# The `sequence-beat` scene's one line (`kind: dialogue`): the beat's dialogue key says it and parks
+# the playhead until it ends. Reuses `strings/subtitles-en.yaml`.
+format: 1
+kind: dialogue
+speakers:
+  beat_operator:
+    name: subtitles.speaker.handler
+    channel: radio
+lines:
+  beat_ack:
+    speaker: beat_operator
+    text: subtitles.terminal_ack
+    duration_ticks: 30
