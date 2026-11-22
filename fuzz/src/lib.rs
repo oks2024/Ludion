@@ -72,13 +72,13 @@ pub fn replay_reader(data: &[u8]) {
 }
 
 /// A nested struct with one `f32`, behind a `$ref`.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct FzInner {
     v: f32,
 }
 
 /// Every `f32` schema position, an `f64` beside them, a string and a nested struct.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct FzFloats {
     single: f32,
     maybe: Option<f32>,
@@ -90,14 +90,14 @@ struct FzFloats {
 }
 
 /// Externally tagged: a unit variant and a struct variant carrying an `f32`.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 enum FzAction {
     Idle,
     Move { speed: f32, dir: String },
 }
 
 /// Internally tagged: one `f32` variant, one `f64` variant.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum FzTagged {
     Gain { amount: f32 },
@@ -105,7 +105,7 @@ enum FzTagged {
 }
 
 /// A plain-string component.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 struct FzNote(String);
 
 /// The registry the idempotence target emits with: real schemas, so the f32 rule is exercised.
