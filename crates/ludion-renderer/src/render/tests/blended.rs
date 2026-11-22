@@ -30,6 +30,7 @@ fn pane(center: Vec3, side: f32, color: [f32; 4], mode: BlendMode, group: u32) -
         instance,
         mode,
         lit: true,
+        nearest: false,
         group,
     }
 }
@@ -331,6 +332,7 @@ fn blended_of(instance: MeshInstance) -> BlendedMesh {
         instance,
         mode: BlendMode::Alpha,
         lit: true,
+        nearest: false,
         group: 0,
     }
 }
@@ -601,4 +603,245 @@ fn needs_gpu_rain_does_not_move_a_shadowed_blended_pane() {
         px(&shadowed, C, C),
         "rain does not move the pane's shading"
     );
+}
+
+// --- `blend_depth: nearest` (W3) ------------------------------------------------------------------
+
+/// A cube of `side` as one part of a figure: opacity `color[3]`, flat emissive, the given sort group.
+fn figure_part(center: Vec3, side: f32, color: [f32; 4], group: u32, nearest: bool) -> BlendedMesh {
+    let mut instance = slab(center, side, [color[0], color[1], color[2]]);
+    instance.color = color;
+    instance.cast_shadows = false;
+    BlendedMesh {
+        instance,
+        mode: BlendMode::Alpha,
+        lit: true,
+        nearest,
+        group,
+    }
+}
+
+const NEAR_RED: [f32; 3] = [0.9, 0.1, 0.1];
+const FAR_BLUE: [f32; 3] = [0.1, 0.1, 0.9];
+
+/// A two-part figure in one group: a near red cube, then a far blue one behind it, listed near first so a
+/// plain blend lets the far part overdraw the near one.
+fn ghost(alpha: f32, nearest: bool) -> Vec<BlendedMesh> {
+    vec![
+        figure_part(
+            Vec3::new(0.0, 0.0, -6.0),
+            2.0,
+            [NEAR_RED[0], NEAR_RED[1], NEAR_RED[2], alpha],
+            0,
+            nearest,
+        ),
+        figure_part(
+            Vec3::new(0.8, 0.0, -10.0),
+            3.0,
+            [FAR_BLUE[0], FAR_BLUE[1], FAR_BLUE[2], alpha],
+            0,
+            nearest,
+        ),
+    ]
+}
+
+fn max_gap(a: &RenderedImage, b: &RenderedImage) -> u8 {
+    a.rgba
+        .iter()
+        .zip(&b.rgba)
+        .map(|(x, y)| x.abs_diff(*y))
+        .max()
+        .unwrap_or(0)
+}
+
+/// (a) At opacity 1 a `nearest` figure is its opaque twin, front surfaces only; without `nearest` the far
+/// part overdraws the near one. Skips with no GPU.
+#[test]
+fn needs_gpu_a_nearest_figure_at_full_opacity_is_its_opaque_twin() {
+    let Some(renderer) = skip_or_renderer("a_nearest_figure_at_full_opacity_is_its_opaque_twin")
+    else {
+        return;
+    };
+    let twin: Vec<MeshInstance> = ghost(1.0, false).iter().map(|p| p.instance).collect();
+    let opaque = renderer
+        .render(&scene(twin, vec![]), size())
+        .expect("opaque");
+    let nearest = renderer
+        .render(&scene(vec![], ghost(1.0, true)), size())
+        .expect("nearest");
+    assert!(
+        max_gap(&opaque, &nearest) <= 2,
+        "the nearest figure differs from its opaque twin by {} LSB",
+        max_gap(&opaque, &nearest)
+    );
+    assert_near(
+        px(&nearest, C, C),
+        bytes(NEAR_RED),
+        3.0,
+        "the near part covers the far one",
+    );
+    let plain = renderer
+        .render(&scene(vec![], ghost(1.0, false)), size())
+        .expect("plain");
+    assert_near(
+        px(&plain, C, C),
+        bytes(FAR_BLUE),
+        3.0,
+        "control: without nearest the far part overdraws",
+    );
+}
+
+/// (b) At opacity 0.5 a `nearest` figure's covered pixel is one layer over the background, not two.
+/// Skips with no GPU.
+#[test]
+fn needs_gpu_a_nearest_figure_blends_one_layer() {
+    let Some(renderer) = skip_or_renderer("a_nearest_figure_blends_one_layer") else {
+        return;
+    };
+    let frame = renderer
+        .render(&scene(vec![], ghost(0.5, true)), size())
+        .expect("nearest");
+    assert_near(
+        px(&frame, C, C),
+        bytes(over(CLEAR, &[(NEAR_RED, 0.5)])),
+        3.0,
+        "front surface over the background",
+    );
+    let plain = renderer
+        .render(&scene(vec![], ghost(0.5, false)), size())
+        .expect("plain");
+    assert_near(
+        px(&plain, C, C),
+        bytes(over(CLEAR, &[(NEAR_RED, 0.5), (FAR_BLUE, 0.5)])),
+        3.0,
+        "control: two layers over the background",
+    );
+    // The copy starts fresh each frame: a repeat frame is byte-identical.
+    let again = renderer
+        .render(&scene(vec![], ghost(0.5, true)), size())
+        .expect("again");
+    assert_eq!(frame.rgba, again.rgba);
+}
+
+/// (c) A `nearest` group behind an opaque wall is hidden where the wall is: the copy carries the opaque
+/// depth. Skips with no GPU.
+#[test]
+fn needs_gpu_a_nearest_group_behind_a_wall_is_hidden() {
+    let Some(renderer) = skip_or_renderer("a_nearest_group_behind_a_wall_is_hidden") else {
+        return;
+    };
+    let wall = vec![slab(Vec3::new(0.0, 0.0, -4.0), 1.0, [0.8, 0.1, 0.1])];
+    let frame = renderer
+        .render(&scene(wall, ghost(1.0, true)), size())
+        .expect("frame");
+    assert_near(
+        px(&frame, C, C),
+        bytes([0.8, 0.1, 0.1]),
+        3.0,
+        "the wall hides the figure",
+    );
+    // Beside the wall the figure shows.
+    let camera = scene(vec![], vec![]).camera;
+    let beside = project(&camera, Vec3::new(2.1, 0.0, -8.5), PX, PX);
+    assert_near(
+        px(&frame, beside.0, beside.1),
+        bytes(FAR_BLUE),
+        3.0,
+        "the figure shows past the wall edge",
+    );
+}
+
+/// (d) Each group copies the depth afresh: a nearer-centred group partly behind an earlier group's front
+/// surface still draws over it. Skips with no GPU.
+#[test]
+fn needs_gpu_a_later_nearest_group_is_not_clipped_by_an_earlier_one() {
+    let Some(renderer) = skip_or_renderer("a_later_nearest_group_is_not_clipped_by_an_earlier_one")
+    else {
+        return;
+    };
+    let groups = vec![
+        // A deep cube whose front face (z = -5) lies in front of the small cube below.
+        figure_part(
+            Vec3::new(0.0, 0.0, -7.0),
+            4.0,
+            [0.1, 0.8, 0.1, 1.0],
+            0,
+            true,
+        ),
+        // Its centre is nearer than the deep cube's, so it draws second, though behind that front face.
+        figure_part(
+            Vec3::new(0.0, 0.0, -6.0),
+            1.0,
+            [0.9, 0.1, 0.1, 1.0],
+            1,
+            true,
+        ),
+    ];
+    let frame = renderer
+        .render(&scene(vec![], groups), size())
+        .expect("frame");
+    assert_near(
+        px(&frame, C, C),
+        bytes([0.9, 0.1, 0.1]),
+        3.0,
+        "the later group draws over the earlier one's front surface",
+    );
+}
+
+/// (e) A sprite behind a `nearest` ghost still draws over it: the ghost wrote nothing into `scene_depth`.
+/// Skips with no GPU.
+#[test]
+fn needs_gpu_a_sprite_behind_a_nearest_ghost_still_draws() {
+    let Some(renderer) = skip_or_renderer("a_sprite_behind_a_nearest_ghost_still_draws") else {
+        return;
+    };
+    let mut s = scene(vec![], ghost(1.0, true));
+    s.sprites = vec![sized_sprite(
+        Vec3::new(0.0, 0.0, -9.0),
+        1.0,
+        [0.0, 1.0, 0.0, 1.0],
+        false,
+    )];
+    let frame = renderer.render(&s, size()).expect("frame");
+    assert_near(
+        px(&frame, C, C),
+        bytes([0.0, 1.0, 0.0]),
+        3.0,
+        "the sprite covers the ghost",
+    );
+}
+
+/// (f) The transparent layer at a `nearest` figure's pixel holds one layer at its front surface's
+/// distance, where a plain blend holds two. Skips with no GPU.
+#[test]
+fn needs_gpu_the_layer_holds_the_front_surface_of_a_nearest_figure() {
+    let Some(renderer) = skip_or_renderer("the_layer_holds_the_front_surface_of_a_nearest_figure")
+    else {
+        return;
+    };
+    let layer_at = |nearest: bool| {
+        let mut s = scene(vec![], ghost(0.5, nearest));
+        s.post = Some(PostData {
+            fog_density: 0.02,
+            ..exact_post()
+        });
+        let texels = layer_texels(&renderer, &s, size());
+        let [weighted, coverage] = texels[(C * PX + C) as usize];
+        (weighted / coverage, coverage)
+    };
+    let (mean, coverage) = layer_at(true);
+    assert!((coverage - 0.5).abs() < 0.01, "coverage {coverage}");
+    // The near part's front face: its centre at 6, half a side of 1.
+    assert!((mean - 5.0).abs() < 0.05, "mean distance {mean}");
+    let (_, plain) = layer_at(false);
+    assert!(plain > 0.7, "control: two layers cover {plain}");
+}
+
+/// (g) A frame without a `nearest` part derives the chain it always did.
+#[test]
+fn only_a_nearest_part_asks_the_chain_for_a_depth_copy() {
+    let plain = crate::graph::PostChain::for_scene(&scene(vec![], ghost(0.5, false)));
+    assert!(plain.blended && !plain.blend_nearest);
+    let nearest = crate::graph::PostChain::for_scene(&scene(vec![], ghost(0.5, true)));
+    assert!(nearest.blended && nearest.blend_nearest);
 }

@@ -81,7 +81,7 @@ pub use ground_marker_clip::{GroundMarkerClip, MAX_CLIP_BINS, MIN_CLIP_BINS};
 pub use ik_targets::{IkTarget, IkTargets, fade_ik_target, ik_target_weight, ik_target_weight_at};
 pub use lane::{LaneConstraint, LaneEnds};
 pub use light_exposure::{Combine, Facing, LightExposure, MAX_EXPOSURE_POINTS};
-pub use mesh_blend::MeshBlend;
+pub use mesh_blend::{BlendDepth, MeshBlend};
 pub use nav_avoid::{NAV_AVOIDANCE_MAX_NEIGHBORS, NavAvoidance, NavObstacle, NavObstacleState};
 pub use nav_blocker::{NavBlocker, NavBlockerMode, NavBlockerShape};
 pub use nav_link::NavLink;
@@ -546,6 +546,11 @@ pub struct Mesh {
     /// `L2361` on a mesh that draws opaque.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub lit: bool,
+    /// Which of a blended mesh's own surfaces blend (default `none`: all); `nearest` blends only its front
+    /// surface, an assembly as one figure: see [`BlendDepth`]. Ignored with `L2362` on a mesh that draws
+    /// opaque.
+    #[serde(default, skip_serializing_if = "BlendDepth::is_none")]
+    pub blend_depth: BlendDepth,
 }
 
 /// A rim term on a [`Mesh`]: adds `color · strength · (1 − n·v)^power` to the shaded colour. Unlit
@@ -600,6 +605,7 @@ impl Default for Mesh {
             porosity: None,
             blend: None,
             lit: true,
+            blend_depth: BlendDepth::None,
         }
     }
 }

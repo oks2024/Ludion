@@ -260,10 +260,10 @@ pub use ludion_camera::{
     add_look_counts, add_trauma, camera_relative, camera_relative_yaw, first_person_eye,
     look_from_counts, orbit_eye, resolve_zone, set_look, snap_rig,
 };
-pub use ludion_components::MeshBlend;
 pub use ludion_components::Rain;
 pub use ludion_components::RenderLayers;
 pub use ludion_components::RenderView;
+pub use ludion_components::{BlendDepth, MeshBlend};
 pub use ludion_components::{
     OccludedSilhouette, SilhouetteOutline, SilhouettePattern, SilhouettePatternKind, SilhouetteWhen,
 };

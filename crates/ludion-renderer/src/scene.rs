@@ -1870,6 +1870,10 @@ pub struct BlendedMesh {
     pub mode: BlendMode,
     /// Shaded as an opaque mesh is (`true`), or unlit: albedo, emissive, rim and flash only.
     pub lit: bool,
+    /// Only the owning entity's front surface blends (`Mesh.blend_depth: nearest`): all parts of a group
+    /// draw depth-only into a scratch copy of the scene depth first, and the colour draw tests against it.
+    /// The same on every part of a group.
+    pub nearest: bool,
     /// The consecutive index of the owning entity in extract order: all parts of one assembly share
     /// it, and the sort orders whole groups.
     pub group: u32,

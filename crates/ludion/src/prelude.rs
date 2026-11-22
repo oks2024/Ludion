@@ -325,7 +325,6 @@ pub use ludion_engine::{AnimEdge, AnimGate, AnimGraph, AnimGraphState, AnimState
 pub use ludion_engine::{RootMotion, root_motion_delta};
 
 pub use ludion_engine::AudioOcclusion;
-pub use ludion_engine::MeshBlend;
 pub use ludion_engine::Rain;
 pub use ludion_engine::RenderLayers;
 pub use ludion_engine::RenderView;
@@ -333,6 +332,7 @@ pub use ludion_engine::SubtitleView;
 pub use ludion_engine::VoiceId;
 pub use ludion_engine::ui::UiNav;
 pub use ludion_engine::{AimKind, RadialEvent, UiRadial, UiRadialItem, UiRadialNav};
+pub use ludion_engine::{BlendDepth, MeshBlend};
 pub use ludion_engine::{
     Combine, Exposure, ExposureError, ExposureQuery, Facing, LightContribution, LightExposure,
     LightExposureResults, LightKind, MAX_EXPOSURE_POINTS, light_exposure, light_exposure_update,

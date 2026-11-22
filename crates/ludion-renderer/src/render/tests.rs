@@ -12127,7 +12127,8 @@ fn ssr_trace_texels(
 /// The transparent layer of `scene`, read back from a harness graph that makes it an output:
 /// each texel as `[distance × coverage, coverage]`.
 fn layer_texels(renderer: &Renderer, scene: &RenderScene, size: FrameSize) -> Vec<[f32; 2]> {
-    let (graph, layer) = crate::graph::build_transparent_depth_graph(size);
+    let (graph, layer) =
+        crate::graph::build_transparent_depth_graph(size, scene.blended.iter().any(|b| b.nearest));
     let recorder = renderer.prepare_frame(scene, size, None).unwrap();
     let copy = renderer
         .gpu

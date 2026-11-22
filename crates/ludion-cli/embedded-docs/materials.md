@@ -391,6 +391,24 @@ Mesh:
   lit: false          # `L2361` if the mesh draws opaque
 ```
 
+`Mesh.blend_depth: nearest` (default `none`, absent from the file) makes only a blended entity's front surface
+blend. Without it every surface blends in draw order, so a translucent figure shows its far arm through its near
+one; with it the figure's far surfaces are dropped, and an assembly counts as one figure, every part included. The
+same holds in the transparent layer, so fog, shafts and depth of field see the front surface's distance. It costs a
+render-extent depth copy and two small passes per `nearest` entity per frame, twice with fog or depth of field on, so
+it is for a handful of figures, not a crowd. Two `nearest` entities that interpenetrate do not sort exactly: each is
+placed whole, by its centre. On a mesh that draws opaque it is ignored with `L2362`.
+
+```yaml
+Mesh:
+  shape: { assembly: voxels/figure.assembly.yaml }
+  color: [0.25, 1.0, 0.55, 0.45]
+  blend: alpha
+  blend_depth: nearest   # `L2362` if the mesh draws opaque
+```
+
+`examples/gallery/ghost-figure.yaml` shows the same figure with and without it, and behind glass.
+
 ## Next
 
 - `ludion docs environment` — the sky and image-based lighting.

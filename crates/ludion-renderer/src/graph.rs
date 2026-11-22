@@ -184,7 +184,7 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_render_graph::{
     BufferDesc, BufferUsage, MAX_TEXTURE_DIMENSION_2D, RenderGraph, ResourceId, TextureDesc,
-    schedule,
+    TextureUsage, schedule,
 };
 
 use crate::quality::{Quality, QualityParams};
@@ -1015,6 +1015,10 @@ pub struct PostChain {
     /// shadow atlas; never ambient occlusion) in its order. Content, so `masked` keeps it. `false`
     /// leaves both passes with no reads, which is what keeps a blend-free frame's graph unchanged.
     pub blended: bool,
+    /// Some blended mesh is `Mesh.blend_depth: nearest`: `scene_depth` also declares
+    /// [`TextureUsage::CopySrc`], because each such group draws against a scratch copy of it. Content, so
+    /// `masked` keeps it. `false` leaves the descriptor, and so the graph's dump, as it was.
+    pub blend_nearest: bool,
 }
 
 impl PostChain {
@@ -1164,6 +1168,7 @@ impl PostChain {
                     || scene.blended.iter().any(|b| b.instance.medium < 1.0)
                     || scene.rain.is_some_and(|r| r.medium < 1.0)),
             blended: !scene.blended.is_empty(),
+            blend_nearest: scene.blended.iter().any(|b| b.nearest),
             aa: AntiAliasing::Off,
             silhouette: !scene.silhouettes.meshes.is_empty(),
             rain: scene.rain.is_some(),
@@ -1493,10 +1498,12 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // The scene pass's depth buffer, owned and aliased by the graph (declared next to the color
     // target it pairs with). Sampleable — not attachment-only — because `composite` reads it for
     // fog, and any pass reading scene depth needs the `TextureBinding` usage on this resource.
-    let scene_depth = graph.transient(
-        "scene_depth",
-        TextureDesc::sampled_depth(render_w, render_h),
-    );
+    let mut scene_depth_desc = TextureDesc::sampled_depth(render_w, render_h);
+    if chain.blend_nearest {
+        // A `nearest` blended group copies it into a scratch depth.
+        scene_depth_desc.usages.push(TextureUsage::CopySrc);
+    }
+    let scene_depth = graph.transient("scene_depth", scene_depth_desc);
     // The opaque pass's two extra targets, read by `reflections`: world normal + clamped roughness,
     // and F0 + specular occlusion (sRGB storage gives the dielectric F0 its precision).
     let scene_normal = graph.transient("scene_normal", TextureDesc::hdr_color(render_w, render_h));
@@ -2425,14 +2432,18 @@ pub(crate) fn build_ssr_trace_graph(size: FrameSize) -> (RenderGraph, ResourceId
 /// the recorder's has on a sunless, AO-free frame. It is rain-free: a rain frame's two passes read the
 /// `rain_occlusion` map, which this graph does not schedule.
 #[cfg(test)]
-pub(crate) fn build_transparent_depth_graph(size: FrameSize) -> (RenderGraph, ResourceId) {
+pub(crate) fn build_transparent_depth_graph(
+    size: FrameSize,
+    blend_nearest: bool,
+) -> (RenderGraph, ResourceId) {
     let (render_w, render_h) = size.render;
     let mut graph = RenderGraph::new();
     let scene = graph.transient("scene", TextureDesc::hdr_color(render_w, render_h));
-    let scene_depth = graph.transient(
-        "scene_depth",
-        TextureDesc::sampled_depth(render_w, render_h),
-    );
+    let mut depth_desc = TextureDesc::sampled_depth(render_w, render_h);
+    if blend_nearest {
+        depth_desc.usages.push(TextureUsage::CopySrc);
+    }
+    let scene_depth = graph.transient("scene_depth", depth_desc);
     let scene_normal = graph.transient("scene_normal", TextureDesc::hdr_color(render_w, render_h));
     let scene_specular = graph.transient("scene_specular", TextureDesc::color(render_w, render_h));
     let mut desc = TextureDesc::layer_color(render_w, render_h);
@@ -2986,6 +2997,7 @@ mod tests {
                 rain: bits & 1 != 0,
                 // Content too: no quality switch removes a blended mesh.
                 blended: bits & 1 != 0,
+                blend_nearest: bits & 1 != 0,
                 // A client setting: no quality preset masks it, so it varies with `ui` and survives.
                 aa: if bits & 1 != 0 {
                     AntiAliasing::Smaa
@@ -4980,6 +4992,37 @@ mod tests {
                 .iter()
                 .any(|r| r == "probe_live")
         );
+    }
+
+    /// `scene_depth` gains `CopySrc` only when a `nearest` blended mesh copies it; any other frame, blended
+    /// or not, keeps the descriptor it had.
+    #[test]
+    fn scene_depth_is_copyable_only_with_a_nearest_blended_mesh() {
+        let size = FrameSize::native(1920, 1080);
+        let usages = |chain: PostChain| {
+            let (graph, _) = build_frame_graph(size, chain);
+            graph
+                .resources()
+                .iter()
+                .find(|r| r.name == "scene_depth")
+                .expect("scene_depth is declared")
+                .desc
+                .usages
+                .clone()
+        };
+        let plain = usages(PostChain::default());
+        assert_eq!(plain, TextureDesc::sampled_depth(1920, 1080).usages);
+        let blended = PostChain {
+            blended: true,
+            ..PostChain::default()
+        };
+        assert_eq!(usages(blended), plain);
+        let nearest = usages(PostChain {
+            blend_nearest: true,
+            ..blended
+        });
+        assert!(nearest.contains(&TextureUsage::CopySrc));
+        assert_eq!(nearest.len(), plain.len() + 1);
     }
 
     /// `for_scene` sets the probe view only for a scene with probes; without them the graph is the

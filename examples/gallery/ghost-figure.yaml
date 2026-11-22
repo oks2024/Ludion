@@ -1,0 +1,186 @@
+# Feature: Mesh.blend_depth - a translucent figure shows its front surface only. The same voxel assembly figure three times,
+# green, alpha 0.45, emissive and unlit, seen from the side so one arm and leg hide behind the other: left, `blend_depth: none`,
+# whose far limbs show through the near ones; middle, `blend_depth: nearest`, which draws the figure's front surface only;
+# right, a `nearest` figure standing partly behind a pane of glass, which still blends over it. Behind a fog, so the transparent
+# layer reads the front surface's distance. ludion docs materials.
+format: 1
+name: ghost-figure - blend_depth nearest keeps a translucent figure to its front surface
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.7
+          - 13.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+      PostProcess:
+        exposure: 0.9
+        tonemap: aces
+        fog_density: 0.015
+        fog_color:
+          - 0.3
+          - 0.36
+          - 0.48
+        fog_start: 6.0
+        fog_height: 0.0
+        fog_height_falloff: 0.115
+        fog_sky: 1.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.0
+          - 10.0
+      DirectionalLight:
+        direction:
+          - -0.3
+          - -0.6
+          - -0.8
+        color:
+          - 1.0
+          - 0.95
+          - 0.9
+        intensity: 1.6
+  - name: floor
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 18.0
+          - 1.0
+          - 9.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.16
+          - 0.17
+          - 0.2
+          - 1.0
+        roughness: 0.9
+  - name: back-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - -4.0
+        scale:
+          - 18.0
+          - 6.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 0.11
+          - 0.14
+          - 1.0
+        roughness: 0.9
+  - name: figure-none
+    components:
+      Transform:
+        translation:
+          - -5.0
+          - 0.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 65.0
+          - 0.0
+        scale:
+          - 0.5
+          - 0.5
+          - 0.5
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.25
+          - 1.0
+          - 0.55
+          - 0.45
+        emissive: 1.0
+        blend: alpha
+        lit: false
+  - name: figure-nearest
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 65.0
+          - 0.0
+        scale:
+          - 0.5
+          - 0.5
+          - 0.5
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.25
+          - 1.0
+          - 0.55
+          - 0.45
+        emissive: 1.0
+        blend: alpha
+        lit: false
+        blend_depth: nearest
+  - name: figure-behind-glass
+    components:
+      Transform:
+        translation:
+          - 5.0
+          - 0.0
+          - 0.0
+        rotation:
+          - 0.0
+          - 65.0
+          - 0.0
+        scale:
+          - 0.5
+          - 0.5
+          - 0.5
+      Mesh:
+        shape:
+          assembly: voxels/figure.assembly.yaml
+        color:
+          - 0.25
+          - 1.0
+          - 0.55
+          - 0.45
+        emissive: 1.0
+        blend: alpha
+        lit: false
+        blend_depth: nearest
+  - name: glass
+    components:
+      Transform:
+        translation:
+          - 4.2
+          - 1.7
+          - 1.6
+        scale:
+          - 2.2
+          - 4.0
+          - 0.08
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.7
+          - 0.8
+          - 0.35
+        roughness: 0.1
+        blend: alpha

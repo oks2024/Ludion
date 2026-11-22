@@ -91,6 +91,19 @@ numbering above.
 14. **`Mesh.lit: false`** (default `true`) draws a blended mesh unlit: albedo (instance, vertex and base map) +
     emissive + rim + flash, with no direct light, ambient, wrap or indirect specular. On a mesh that draws
     opaque it is ignored with `L2361`.
+15. **`Mesh.blend_depth: none | nearest`** (default `none`, absent from the file). `nearest` makes only the
+    entity's front surface blend, so a translucent figure shows no far limb through a near one. Per `nearest` entity
+    (an assembly is one figure: every blended part, by the entity's own `blend_depth`), in draw order: end the
+    `transparents` pass, copy `scene_depth` into a renderer-owned scratch depth, draw the group's instances
+    depth-only into the scratch (`Less`, write on), then draw its colour against the scratch (`LessEqual`, read-only),
+    then reopen the pass for what follows. The group never writes `scene_depth`, so sprites, particles and the
+    composite's fog see the opaque depth and the ghost's own layer distance, not a changed depth buffer. One copy per
+    group, so a nearer group is not clipped by an earlier one's front surface. `transparent_depth` breaks the same
+    way into its layer, so fog, shafts and DoF see the front surface only. The graph declares `CopySrc` on
+    `scene_depth` only when some blended mesh is `nearest`, so any other frame's graph is unchanged. `L2362` on a
+    `nearest` mesh that draws opaque. Cost: a render-extent depth copy and two small passes per `nearest` entity,
+    twice per frame with the layer; for a handful of figures. Limit: two `nearest` entities that interpenetrate do not
+    sort exactly (each is placed whole, by its centre).
 
 Waves:
 
@@ -106,8 +119,8 @@ Waves:
   textures per stage, so `engine_limits` raises `max_sampled_textures_per_shader_stage` to 20 with its
   comment and test; `transparents`/`transparent_depth` read `probe_live` when blended and relit; an unlit
   `BLEND_UNLIT` twin; a parity test of an alpha-1 blended pane against its opaque twin.
-- **W3:** `blend_depth: nearest`, a per-entity depth pre-pass in which an assembly is one figure, and
-  the ghost demo. The pre-pass must take the resolved per-instance mode (`Mesh.blend` or the document's
+- **W3:** `blend_depth: nearest` (decision 15), a per-entity depth pre-pass in which an assembly is one figure, and
+  the `ghost-figure` gallery scene. The pre-pass must take the resolved per-instance mode (`Mesh.blend` or the document's
   `alpha_mode: blend`), not `Mesh.blend` alone.
 - **Open, with trigger:** a merged distance sort with sprites and particles, if smoke behind office
   glass reads wrong.
@@ -180,4 +193,4 @@ tried on Metal, in the orthographic shaft tests, or on the reference game, and w
 - Mesh path (0016) W1 mechanized (r2386, 2026-11-18): `Mesh.blend` (`alpha` or `additive`) draws in the
   `transparents` pass and joins `transparent_depth`; the `glass-and-holograms` gallery golden is blessed on the
   RTX 3090. Opaque scenes keep the same pixels, and no replay content hash, `WorldHash`, existing golden or
-  protocol schema moved. W2a shipped (r2440): asset and glTF `blend`. W2b in progress; W3 is not started.
+  protocol schema moved. W2a shipped (r2440): asset and glTF `blend`. W2b shipped (r2442): indirect specular on lit blends, `lit: false`. W3 in progress: `blend_depth: nearest` with `L2362`, the pass break and scratch depth copy, the `ghost-figure` gallery scene.

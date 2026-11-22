@@ -5221,6 +5221,10 @@
       "lit": {
         "description": "Shades a blended mesh (default `true`); `false` draws albedo + emissive, unlit. Ignored with\n`L2361` on a mesh that draws opaque.",
         "type": "boolean"
+      },
+      "blend_depth": {
+        "description": "Which of a blended mesh's own surfaces blend (default `none`: all); `nearest` blends only its front\nsurface, an assembly as one figure: see [`BlendDepth`]. Ignored with `L2362` on a mesh that draws\nopaque.",
+        "$ref": "#/$defs/BlendDepth"
       }
     },
     "$defs": {
@@ -5402,6 +5406,21 @@
             "description": "Adds the lit colour scaled by its opacity: it brightens and never darkens.",
             "type": "string",
             "const": "additive"
+          }
+        ]
+      },
+      "BlendDepth": {
+        "description": "How a blended [`Mesh`](crate::Mesh) resolves its own overlapping surfaces (`Mesh.blend_depth`,\n`Plan/transparent-depth.md` decision 15).\n\n```\nuse ludion_components::BlendDepth;\nassert_eq!(serde_json::to_string(&BlendDepth::Nearest).unwrap(), \"\\\"nearest\\\"\");\n```",
+        "oneOf": [
+          {
+            "description": "Every surface blends, back faces and far limbs included (the default).",
+            "type": "string",
+            "const": "none"
+          },
+          {
+            "description": "Only the entity's front surface blends: a translucent figure no longer shows its far arm\nthrough its near one. An assembly is one figure. Costs a depth copy and two small passes per\nentity per frame, twice with `transparent_depth`: for a handful of figures.",
+            "type": "string",
+            "const": "nearest"
           }
         ]
       }
@@ -5580,6 +5599,10 @@
           "lit": {
             "description": "Shades a blended mesh (default `true`); `false` draws albedo + emissive, unlit. Ignored with\n`L2361` on a mesh that draws opaque.",
             "type": "boolean"
+          },
+          "blend_depth": {
+            "description": "Which of a blended mesh's own surfaces blend (default `none`: all); `nearest` blends only its front\nsurface, an assembly as one figure: see [`BlendDepth`]. Ignored with `L2362` on a mesh that draws\nopaque.",
+            "$ref": "#/$defs/BlendDepth"
           }
         }
       },
@@ -5761,6 +5784,21 @@
             "description": "Adds the lit colour scaled by its opacity: it brightens and never darkens.",
             "type": "string",
             "const": "additive"
+          }
+        ]
+      },
+      "BlendDepth": {
+        "description": "How a blended [`Mesh`](crate::Mesh) resolves its own overlapping surfaces (`Mesh.blend_depth`,\n`Plan/transparent-depth.md` decision 15).\n\n```\nuse ludion_components::BlendDepth;\nassert_eq!(serde_json::to_string(&BlendDepth::Nearest).unwrap(), \"\\\"nearest\\\"\");\n```",
+        "oneOf": [
+          {
+            "description": "Every surface blends, back faces and far limbs included (the default).",
+            "type": "string",
+            "const": "none"
+          },
+          {
+            "description": "Only the entity's front surface blends: a translucent figure no longer shows its far arm\nthrough its near one. An assembly is one figure. Costs a depth copy and two small passes per\nentity per frame, twice with `transparent_depth`: for a handful of figures.",
+            "type": "string",
+            "const": "nearest"
           }
         ]
       }

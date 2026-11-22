@@ -208,6 +208,11 @@ pub(super) struct BlendTwins {
     /// `[lit, unlit]`, boxed: every shader's pipelines sit on `Renderer::new`'s stack, and these arrays are
     /// large.
     built: [std::sync::OnceLock<Box<BlendPipelines>>; 2],
+    /// The `blend_depth: nearest` twins: the same `[lit, unlit]` sets testing `LessEqual` against the
+    /// group's scratch depth, built on the first `nearest` draw.
+    nearest: [std::sync::OnceLock<Box<BlendPipelines>>; 2],
+    /// The depth-only pre-pass that writes a `nearest` group's front surface into the scratch depth.
+    prepass: std::sync::OnceLock<[wgpu::RenderPipeline; 4]>,
 }
 
 struct BlendPipelines {
@@ -228,19 +233,27 @@ impl BlendTwins {
             shader: shader.clone(),
             layout: layout.clone(),
             built: [std::sync::OnceLock::new(), std::sync::OnceLock::new()],
+            nearest: [std::sync::OnceLock::new(), std::sync::OnceLock::new()],
+            prepass: std::sync::OnceLock::new(),
         }
     }
 
-    fn pipelines(&self, device: &wgpu::Device, lit: bool) -> &BlendPipelines {
-        self.built[usize::from(!lit)].get_or_init(|| {
+    fn pipelines(&self, device: &wgpu::Device, lit: bool, nearest: bool) -> &BlendPipelines {
+        let (cell, compare) = if nearest {
+            (&self.nearest, wgpu::CompareFunction::LessEqual)
+        } else {
+            (&self.built, wgpu::CompareFunction::Less)
+        };
+        cell[usize::from(!lit)].get_or_init(|| {
             let build = |fragment: MeshFragment<'_>, variant| {
-                build_mesh_pipeline_for(
+                build_mesh_pipeline_with(
                     device,
                     self.label,
                     &self.shader,
                     &self.layout,
                     variant,
-                    fragment,
+                    Some(fragment),
+                    compare,
                 )
             };
             let modes = [BlendMode::Alpha, BlendMode::Additive];
@@ -300,15 +313,17 @@ impl BlendTwins {
         })
     }
 
-    /// The colour pass's pipeline for `mode`, `lit` and `variant`.
+    /// The colour pass's pipeline for `mode`, `lit` and `variant`; `nearest` selects the `LessEqual` twin
+    /// that tests against the group's scratch depth.
     pub(super) fn color(
         &self,
         device: &wgpu::Device,
         mode: BlendMode,
         lit: bool,
+        nearest: bool,
         variant: MeshVariant,
     ) -> &wgpu::RenderPipeline {
-        &self.pipelines(device, lit).color[mode as usize][variant.index()]
+        &self.pipelines(device, lit, nearest).color[mode as usize][variant.index()]
     }
 
     /// The transparent layer's pipeline; `medium` selects the `Rgba16Float` layer that carries blue.
@@ -317,10 +332,35 @@ impl BlendTwins {
         device: &wgpu::Device,
         mode: BlendMode,
         lit: bool,
+        nearest: bool,
         variant: MeshVariant,
         medium: bool,
     ) -> &wgpu::RenderPipeline {
-        &self.pipelines(device, lit).layer[usize::from(medium)][mode as usize][variant.index()]
+        &self.pipelines(device, lit, nearest).layer[usize::from(medium)][mode as usize]
+            [variant.index()]
+    }
+
+    /// The depth-only pipeline of a `nearest` group's pre-pass: the colour draws' vertex stage and layout,
+    /// no fragment stage, `Less` with depth writes on.
+    pub(super) fn prepass(
+        &self,
+        device: &wgpu::Device,
+        variant: MeshVariant,
+    ) -> &wgpu::RenderPipeline {
+        let set = self.prepass.get_or_init(|| {
+            MeshVariant::ALL.map(|variant| {
+                build_mesh_pipeline_with(
+                    device,
+                    self.label,
+                    &self.shader,
+                    &self.layout,
+                    variant,
+                    None,
+                    wgpu::CompareFunction::Less,
+                )
+            })
+        });
+        &set[variant.index()]
     }
 }
 
@@ -360,6 +400,40 @@ fn build_mesh_pipeline_for(
     variant: MeshVariant,
     fragment: MeshFragment<'_>,
 ) -> wgpu::RenderPipeline {
+    build_mesh_pipeline_with(
+        device,
+        label,
+        shader,
+        layout,
+        variant,
+        Some(fragment),
+        wgpu::CompareFunction::Less,
+    )
+}
+
+/// [`build_mesh_pipeline_for`] with the depth compare chosen; `fragment: None` builds a depth-only
+/// pipeline that writes depth (the `nearest` pre-pass).
+fn build_mesh_pipeline_with(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    variant: MeshVariant,
+    fragment: Option<MeshFragment<'_>>,
+    compare: wgpu::CompareFunction,
+) -> wgpu::RenderPipeline {
+    let targets: Vec<Option<wgpu::ColorTargetState>> = fragment
+        .iter()
+        .flat_map(|fragment| {
+            fragment.formats.iter().map(|&format| {
+                Some(wgpu::ColorTargetState {
+                    format,
+                    blend: fragment.blend,
+                    write_mask: fragment.write_mask,
+                })
+            })
+        })
+        .collect();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
@@ -380,20 +454,10 @@ fn build_mesh_pipeline_for(
             ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
-        fragment: Some(wgpu::FragmentState {
+        fragment: fragment.as_ref().map(|fragment| wgpu::FragmentState {
             module: shader,
             entry_point: Some(fragment.entry),
-            targets: &fragment
-                .formats
-                .iter()
-                .map(|&format| {
-                    Some(wgpu::ColorTargetState {
-                        format,
-                        blend: fragment.blend,
-                        write_mask: fragment.write_mask,
-                    })
-                })
-                .collect::<Vec<_>>(),
+            targets: &targets,
             compilation_options: wgpu::PipelineCompilationOptions {
                 constants: fragment.constants,
                 ..Default::default()
@@ -401,8 +465,8 @@ fn build_mesh_pipeline_for(
         }),
         primitive: mesh_primitive(variant),
         depth_stencil: Some(depth_state(
-            fragment.depth_write,
-            wgpu::CompareFunction::Less,
+            fragment.as_ref().is_none_or(|f| f.depth_write),
+            compare,
         )),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,

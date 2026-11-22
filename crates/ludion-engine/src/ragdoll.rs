@@ -356,6 +356,7 @@ pub fn switch_to_ragdoll_with(
                     porosity: None,
                     blend: root_mesh.blend,
                     lit: root_mesh.lit,
+                    blend_depth: root_mesh.blend_depth,
                 },
             )
             .expect("just spawned");

@@ -585,6 +585,9 @@ pub struct Renderer {
     /// a different hash replaces it and a scene without a LUT drops it. `RefCell` because the frame
     /// is recorded through `&self`.
     lut_cache: RefCell<Option<(u64, GpuTexture)>>,
+    /// The depth a `blend_depth: nearest` group draws against, sized as `scene_depth` and allocated on the
+    /// first `nearest` group of the first frame that has one; a frame without one never allocates it.
+    scratch_depth_cache: RefCell<Option<(wgpu::Extent3d, wgpu::Texture)>>,
     /// The cube-array view the reflections pass binds when no probe was captured; never sampled.
     fallback_probe_cubes: wgpu::TextureView,
     /// The zero probe list and the one-word cluster mask every mesh draw but a blended one binds at
@@ -868,6 +871,7 @@ impl Renderer {
             fallback_hdr,
             fallback_lut,
             lut_cache: RefCell::new(None),
+            scratch_depth_cache: RefCell::new(None),
             fallback_probe_cubes,
             fallback_probe_list,
             fallback_probe_mask,
@@ -6273,30 +6277,14 @@ impl FrameRecorder<'_> {
             .expect("the transparents pass declares a depth attachment");
         let target = pass.colors()[0].view;
 
-        let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("transparents"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            // Hand-attached, as in `record_scene`; otherwise `--dump-timings` loses the pass.
-            timestamp_writes: pass.timestamp_writes(),
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        // A `blend_depth: nearest` group breaks this pass, so `record_blended` may hand back a reopened one.
+        let main = blended::MainPass {
+            label: "transparents",
+            target,
+            depth: depth_view,
+        };
+        let breaks = self.blended_draw.as_ref().map_or(0, |d| d.nearest_groups());
+        let mut rp = main.open(pass, wgpu::LoadOp::Load, true, breaks == 0);
 
         // The procedural sky: a far-depth fullscreen triangle filling the pixels no opaque mesh wrote,
         // emitted only when the scene has an `Environment` (else the clear color shows). Drawn after
@@ -6318,7 +6306,7 @@ impl FrameRecorder<'_> {
             rp.draw(0..6, 0..markers.count);
         }
 
-        self.record_blended(&mut rp, pass.device, pass.inputs, None);
+        let mut rp = self.record_blended(pass, rp, &main, None);
         // Rain reaches farthest of the transparents, so it draws under the sprites and particles.
         self.record_rain(&mut rp, pass.device, pass.inputs, None);
 
@@ -6374,32 +6362,20 @@ impl FrameRecorder<'_> {
         // The recorded attachment's format picks the layer twin: B is only there when the graph says so.
         let format = pass.colors()[0].format;
 
-        let mut rp = pass.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("transparent_depth"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            // Hand-attached, as in `record_scene`; otherwise `--dump-timings` loses the pass.
-            timestamp_writes: pass.timestamp_writes(),
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let main = blended::MainPass {
+            label: "transparent_depth",
+            target,
+            depth: depth_view,
+        };
+        let breaks = self.blended_draw.as_ref().map_or(0, |d| d.nearest_groups());
+        let rp = main.open(
+            pass,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            true,
+            breaks == 0,
+        );
 
-        self.record_blended(&mut rp, pass.device, pass.inputs, Some(format));
+        let mut rp = self.record_blended(pass, rp, &main, Some(format));
         self.record_rain(&mut rp, pass.device, pass.inputs, Some(format));
 
         rp.set_pipeline(self.r.transparent_depth_pipeline(ShaderId::Sprite, format));
@@ -7881,6 +7857,26 @@ fn unit_f32_to_f16_bits(v: f32) -> u16 {
 }
 
 impl Renderer {
+    /// The scratch depth of `size`, a [`DEPTH_FORMAT`] attachment and copy target; its contents are
+    /// whatever the last `nearest` group left, so a user copies `scene_depth` in first.
+    fn scratch_depth(&self, device: &wgpu::Device, size: wgpu::Extent3d) -> wgpu::Texture {
+        let mut cache = self.scratch_depth_cache.borrow_mut();
+        if cache.as_ref().is_none_or(|(cached, _)| *cached != size) {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("blend nearest scratch depth"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            *cache = Some((size, texture));
+        }
+        cache.as_ref().expect("just filled").1.clone()
+    }
+
     /// The view of the scene's `.cube` LUT as a 3D [`HDR_FORMAT`] texture, uploaded once per content
     /// hash, plus the composite uniform's parameters. `None` (and the cache dropped) when the scene
     /// has no LUT.

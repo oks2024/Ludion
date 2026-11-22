@@ -49,12 +49,13 @@ use crate::character::CharacterData;
 use crate::components::PoseSnapshot;
 use crate::components::SubtitleView;
 use crate::components::{
-    Animation, Camera, CameraOffset, ClipAnchor, Decal, DecalBlend as DecalBlendAuthored, DecalMap,
-    DecalReceiverSet, DirectionalLight, DropShadow, Environment, GiDynamic, GiVolume, GroundMarker,
-    GroundMarkerGrid, GroundMarkerShape, MapWrap, Mesh, MeshBlend, MeshGrid, MeshSource,
-    ParentJoint, ParticleEmitter, PointLight, PostProcess, PostProfile, ProbeShape, Projection,
-    ReflectionProbe, Rim, SkinBone, SpotLight, Sprite, SpriteBlend, Text, Tilemap, TonemapOperator,
-    Transform, UiList, UiRadial, UiRect, UiShape, UiText,
+    Animation, BlendDepth, Camera, CameraOffset, ClipAnchor, Decal,
+    DecalBlend as DecalBlendAuthored, DecalMap, DecalReceiverSet, DirectionalLight, DropShadow,
+    Environment, GiDynamic, GiVolume, GroundMarker, GroundMarkerGrid, GroundMarkerShape, MapWrap,
+    Mesh, MeshBlend, MeshGrid, MeshSource, ParentJoint, ParticleEmitter, PointLight, PostProcess,
+    PostProfile, ProbeShape, Projection, ReflectionProbe, Rim, SkinBone, SpotLight, Sprite,
+    SpriteBlend, Text, Tilemap, TonemapOperator, Transform, UiList, UiRadial, UiRect, UiShape,
+    UiText,
 };
 use crate::components::{AnimationLayer, AnimationLayers, BlendClock, LayerMode, layer_weight_at};
 use crate::components::{ExposureMode, GrainMotion, Metering};
@@ -1635,6 +1636,7 @@ fn extract_inner(
                         mesh.blend,
                         mesh_assets[index].blend,
                         mesh.lit,
+                        mesh.blend_depth,
                         viewmodel_frame.contains(mesh.id),
                         degraded,
                     );
@@ -1644,6 +1646,7 @@ fn extract_inner(
                                 instance,
                                 mode,
                                 mesh.lit,
+                                mesh.blend_depth == BlendDepth::Nearest,
                                 blend_route.group(mesh.id),
                             ));
                             blended_owners.push(mesh.id);
@@ -1704,6 +1707,7 @@ fn extract_inner(
                 mesh.blend,
                 document_blend,
                 mesh.lit,
+                mesh.blend_depth,
                 viewmodel_frame.contains(mesh.id),
                 degraded,
             ) {
@@ -1712,6 +1716,7 @@ fn extract_inner(
                         instance,
                         mode,
                         mesh.lit,
+                        mesh.blend_depth == BlendDepth::Nearest,
                         blend_route.group(mesh.id),
                     ));
                     blended_owners.push(mesh.id);
@@ -3611,6 +3616,8 @@ pub(crate) struct PlacedMesh<'w> {
     pub(crate) blend: Option<MeshBlend>,
     /// The `Mesh` component's `lit`; read only when the mesh draws blended.
     pub(crate) lit: bool,
+    /// The `Mesh` component's `blend_depth`; read only when the mesh draws blended.
+    pub(crate) blend_depth: BlendDepth,
     /// The normal matrix (object→world for normals): the model's upper-3×3 for a uniform scale, its
     /// inverse-transpose otherwise. See [`normal_matrix`].
     pub(crate) normal_matrix: Mat3,
@@ -4235,6 +4242,7 @@ pub(crate) fn placed_mesh<'a>(
         porosity: mesh.porosity,
         blend: mesh.blend,
         lit: mesh.lit,
+        blend_depth: mesh.blend_depth,
         source: placed_source(&mesh.shape),
         dynamic,
     }
@@ -5777,9 +5785,16 @@ pub(crate) fn mesh_instance(
 }
 
 /// A blended instance: it never casts a shadow, whatever `Visibility` says.
-fn blended_mesh(instance: MeshInstance, mode: MeshBlend, lit: bool, group: u32) -> BlendedMesh {
+fn blended_mesh(
+    instance: MeshInstance,
+    mode: MeshBlend,
+    lit: bool,
+    nearest: bool,
+    group: u32,
+) -> BlendedMesh {
     BlendedMesh {
         lit,
+        nearest,
         instance: MeshInstance {
             cast_shadows: false,
             ..instance
@@ -5799,12 +5814,14 @@ struct BlendRoute {
     group: Option<(EntityId, u32)>,
     viewmodel_reported: Vec<EntityId>,
     lit_reported: Vec<EntityId>,
+    depth_reported: Vec<EntityId>,
 }
 
 impl BlendRoute {
     /// The mode an instance draws with: the entity's `Mesh.blend`, else `Alpha` when its document
     /// says `alpha_mode: blend`. A blended `Viewmodel` mesh draws opaque, with `L2360` once per entity;
-    /// a `lit: false` mesh that draws opaque reports `L2361` once per entity.
+    /// a `lit: false` mesh that draws opaque reports `L2361` once per entity, and a `blend_depth: nearest`
+    /// one `L2362`.
     #[allow(clippy::too_many_arguments)]
     fn mode(
         &mut self,
@@ -5813,10 +5830,29 @@ impl BlendRoute {
         own: Option<MeshBlend>,
         document_blend: bool,
         lit: bool,
+        blend_depth: BlendDepth,
         viewmodel: bool,
         degraded: &mut Vec<(String, Diagnostic)>,
     ) -> Option<MeshBlend> {
         let mode = own.or(document_blend.then_some(MeshBlend::Alpha));
+        if (mode.is_none() || viewmodel)
+            && blend_depth == BlendDepth::Nearest
+            && !self.depth_reported.contains(&id)
+        {
+            self.depth_reported.push(id);
+            let at = crate::diagnostics::offender_key(world, id);
+            degraded.push((
+                format!("{at}/blend-depth-on-opaque"),
+                Diagnostic::new(
+                    code::MESH_BLEND_DEPTH_ON_OPAQUE,
+                    format!(
+                        "{id} sets `Mesh.blend_depth: nearest`, which only applies to a blended mesh; \
+                         it draws opaque"
+                    ),
+                )
+                .with_help("add `blend: alpha`, or remove `blend_depth`"),
+            ));
+        }
         if (mode.is_none() || viewmodel) && !lit && !self.lit_reported.contains(&id) {
             self.lit_reported.push(id);
             let at = crate::diagnostics::offender_key(world, id);

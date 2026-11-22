@@ -2328,6 +2328,10 @@ pub mod code {
     /// `L2361` — a `Mesh.lit: false` on a mesh that draws opaque, where it has no effect. Raised by extract.
     pub const MESH_LIT_ON_OPAQUE: DiagnosticCode = DiagnosticCode::new("L2361");
 
+    /// `L2362` — a `Mesh.blend_depth: nearest` on a mesh that draws opaque, where it has no effect. Raised by
+    /// extract.
+    pub const MESH_BLEND_DEPTH_ON_OPAQUE: DiagnosticCode = DiagnosticCode::new("L2362");
+
     /// `L2370` — a `RenderView` has an empty `name`, a `size` axis outside `16..=2048`, or no `Camera` on
     /// its entity.
     pub const RENDER_VIEW_INVALID: DiagnosticCode = DiagnosticCode::new("L2370");
@@ -11409,6 +11413,17 @@ Raised once per entity by extract.
 Fix: add `blend: alpha` (or `additive`) to the mesh, or remove `lit`.",
     },
     CodeEntry {
+        code: code::MESH_BLEND_DEPTH_ON_OPAQUE,
+        severity: Severity::Warning,
+        title: "Mesh.blend_depth: nearest on an opaque mesh is ignored",
+        explanation: "A `Mesh` sets `blend_depth: nearest`, but it draws opaque: it has no `blend`, and its asset
+document does not say `alpha_mode: blend` (or it is a `Viewmodel` mesh, which is never blended).
+`blend_depth: nearest` makes only a blended mesh's front surface blend, and an opaque mesh already shows
+only its front surface, so it has no effect. Raised once per entity by extract.
+
+Fix: add `blend: alpha` (or `additive`) to the mesh, or remove `blend_depth`.",
+    },
+    CodeEntry {
         code: code::RENDER_VIEW_INVALID,
         severity: Severity::Error,
         title: "RenderView is not valid",
@@ -15004,6 +15019,7 @@ mod tests {
         code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
         code::MESH_BLEND_ON_VIEWMODEL,
         code::MESH_LIT_ON_OPAQUE,
+        code::MESH_BLEND_DEPTH_ON_OPAQUE,
         code::RENDER_VIEW_INVALID,
         code::RENDER_VIEW_NAME_DUPLICATE,
         code::UI_RECT_VIEW_UNRESOLVED,
@@ -15415,6 +15431,7 @@ mod tests {
             code::OCCLUDED_SILHOUETTE_STYLE_LIMIT,
             code::MESH_BLEND_ON_VIEWMODEL,
             code::MESH_LIT_ON_OPAQUE,
+            code::MESH_BLEND_DEPTH_ON_OPAQUE,
             code::RENDER_VIEW_BUDGET,
             code::POST_PROFILE_VIEW_IGNORED,
             code::RAIN_DUPLICATE,

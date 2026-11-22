@@ -7,7 +7,7 @@ use std::path::Path;
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::DiagnosticCode;
-use ludion_engine::{Diagnostics, Engine, Mesh, MeshBlend};
+use ludion_engine::{BlendDepth, Diagnostics, Engine, Mesh, MeshBlend};
 use ludion_renderer::{BlendMode, RenderScene};
 
 fn engine_for(text: &str) -> Engine {
@@ -333,4 +333,58 @@ fn an_absent_lit_round_trips_with_no_lit_key() {
     assert!(!back.lit);
     let absent: Mesh = serde_json::from_value(serde_json::json!({ "shape": "cube" })).unwrap();
     assert!(absent.lit);
+}
+
+#[test]
+fn blend_depth_nearest_reaches_every_part_of_a_blended_assembly() {
+    let text = document(
+        "  - name: figure\n    components:\n      Transform: {}\n      Mesh:\n        shape:\n          assembly: voxels/figure.assembly.yaml\n        blend: alpha\n        blend_depth: nearest\n",
+    ) + &cube("plain", "        blend: alpha\n");
+    let mut engine = gallery_engine(&text);
+    let scene = extract(&mut engine);
+    let last = scene.blended.len() - 1;
+    assert!(scene.blended.len() > 2, "the assembly places several parts");
+    assert!(
+        scene.blended[..last].iter().all(|b| b.nearest),
+        "every part of the figure is nearest"
+    );
+    assert!(!scene.blended[last].nearest, "the default stays none");
+    assert_eq!(reported(&engine, code::MESH_BLEND_DEPTH_ON_OPAQUE), 0);
+}
+
+#[test]
+fn blend_depth_nearest_without_blend_warns_once_and_draws_opaque() {
+    let mut engine = engine_for(&document(&cube("solid", "        blend_depth: nearest\n")));
+    let scene = extract(&mut engine);
+    assert_eq!(scene.meshes.len(), 1);
+    assert!(scene.blended.is_empty());
+    assert_eq!(reported(&engine, code::MESH_BLEND_DEPTH_ON_OPAQUE), 1);
+    let _ = extract(&mut engine);
+    assert_eq!(reported(&engine, code::MESH_BLEND_DEPTH_ON_OPAQUE), 1);
+}
+
+#[test]
+fn an_absent_blend_depth_round_trips_with_no_key() {
+    let plain = serde_json::to_value(Mesh::default()).unwrap();
+    assert!(plain.get("blend_depth").is_none());
+    let ghost = Mesh {
+        blend: Some(MeshBlend::Alpha),
+        blend_depth: BlendDepth::Nearest,
+        ..Mesh::default()
+    };
+    let value = serde_json::to_value(&ghost).unwrap();
+    assert_eq!(value["blend_depth"], "nearest");
+    let back: Mesh = serde_json::from_value(value).unwrap();
+    assert_eq!(back.blend_depth, BlendDepth::Nearest);
+    // An explicit `none` parses, and saves without the key.
+    let explicit: Mesh =
+        serde_json::from_value(serde_json::json!({ "shape": "cube", "blend_depth": "none" }))
+            .unwrap();
+    assert_eq!(explicit.blend_depth, BlendDepth::None);
+    assert!(
+        serde_json::to_value(&explicit)
+            .unwrap()
+            .get("blend_depth")
+            .is_none()
+    );
 }
