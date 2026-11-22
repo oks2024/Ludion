@@ -130,6 +130,31 @@ Call these from a system registered before the physics systems.
 
 - **`IgnoreCollisions { with }`** (a component on the motor) makes the motor's own queries look through one entity's collider: its sweeps, ground probes, posture and resize tests, `character_fit` and `resume_character`. Two capsules at a 0.5 m choke overlap, so a paired action ignores its partner. It changes only what the motor sees: the solver's contacts with a dynamic body that `with` names still push it. It holds a list of at most four entities (`L1759`; past four the first four count); without the component every result is unchanged. `character_fit_ignoring(world, hero, None, feet, yaw, Some(&[partner]))` is `character_fit` looking through that list for that one test, in place of the component's.
 
+## Carrying
+
+**Drag carry** (a guard hauled by the collar): the body hangs from a **kinematic anchor** that is a plain `Parent` child of the walking motor, and the carrier's own capsule must not fight the body. No new component: a `Joint` end may be `kinematic` (posed from its world pose; its pose write is a velocity, so the joint drags the body smoothly and wakes a sleeping part).
+
+```yaml
+physics:
+  layers:
+    - name: body        # every ragdoll part, authored, never edited
+    - name: carrying    # the carrier's layer while it carries
+      ignores:
+        - body
+    - name: anchor      # sits inside the capsule: meets nothing
+      ignores:
+        - default
+        - body
+        - carrying
+        - anchor
+```
+
+- **Pick-up order:** switch the guard to ragdoll (suspends its motor); spawn the `anchor` under the carrier (`Parent`, local translation at the shoulder, `body: kinematic`, `layer: anchor`); set the **carrier's** `CharacterMotor.layer` to `carrying`; add the torso `Joint` to the anchor (`a: anchor`, `anchor` is in the anchor's frame; the zero is captured at formation). **Drop:** remove that `Joint`, restore the carrier's layer, despawn the anchor.
+- **Why the carrier's layer:** the parts stay on `body` for their whole life, so no jointed body rebuilds and no joint zero is re-captured; the edit rebuilds only the carrier's capsule, which carries no joint. The motor's casts skip the layers its own layer ignores and the solver's groups filter the pair, so a carrying motor passes through every `body` part while the parts still meet the world. Not `IgnoreCollisions`: it is motor-query-only, capped at four entities, and the solver still pushes parts against the capsule.
+- **Shoulder carry:** `switch_ragdoll_to_assembly` the guard, then `reparent` it under the carrier (the motor is suspended, so no `L1297`). Drop with `switch_to_ragdoll_with`; revive with `resume_character`.
+- **Gotchas:** a carrying motor passes through every `body`-layer part, including other bodies; snapping the anchor with `teleport_kinematic` jerks the body (a velocity-free snap, the joint then yanks).
+- Proof: `crates/ludion-physics/tests/carry_anchor.rs`, `crates/ludion-engine/tests/body_carry.rs`.
+
 ## Freshness
 
 Casts and overlaps see the last completed physics step. A press or wall coming at the character is seen one tick late: one tick of overlap, then depenetration, and `stuck` up to a tick late; the platform carry is the explicit exception. Queries skip sensors by default, so the motor never stands on, or reports, a trigger volume (`ludion docs physics-sensors`). The motor's own capsule and the layers its `layer` ignores (`ludion docs collision-layers`) are excluded from its casts.

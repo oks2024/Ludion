@@ -1,13 +1,13 @@
 # Plan: Character controller and camera rigs — a 3D motor, paths and configurable cameras
 
-> Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). W1–W2 mechanized; W3's track subset mechanized; the rest of W3+ not started.**
+> Status: **DESIGN SETTLED (2026-09-29, grilling session; every ruling is the user's). W1–W2 mechanized; W3a–W3d mechanized (the track subset, `chase`/`follow`, the collision stage, framing, zones and the gallery chase scene); decision 16, the vigil migration and W4+ remain.**
 > W2 holds the motor (`CharacterMotor`, `move_character`, `MoveReport`), `SurfaceVelocity`, resize and
 > teleport, platform carry, the numeric trace and the course (`ludion docs motor`, `games/character-course`). The fourth external request added
 > the lane constraint (`LaneConstraint`, `ludion docs lane`): a lateral hold to a `kind: path` corridor, and the fifth the
 > track camera rig (`CameraRig`, `ludion-camera`, `ludion docs camera`), proved on the course's behind and side rigs. A first-person game's
 > request added the `first_person` mode (look deltas, pitch clamp, `aim()`) and post-aim kick, roll and FOV channels. `chase` and `follow` are
-> mechanized (Neon Shroud request 0010, W3a: decisions 29–32), as are the collision stage, the framing channel and the chase recenter (W3b: decisions 33–36), and the engine `CameraZone` with the occluder query (W3c: decisions 37–39); the gallery chase scene (W3d), decision 16 and the vigil migration remain open; `manual` is dropped (decision 12, amended).
-> Neon Shroud request 0006 (2026-11-18): N1 `suspend_character` / `resume_character` / `character_fit` is mechanized (decision 26); N2 postures and N3 carry are accepted by the owner 2026-11-19 (decisions 27–28).
+> mechanized (Neon Shroud request 0010, W3a: decisions 29–32), as are the collision stage, the framing channel and the chase recenter (W3b: decisions 33–36), and the engine `CameraZone` with the occluder query (W3c: decisions 37–39); the gallery chase scene with `camera_relative` ignoring the framing yaw (W3d: decision 40, pinned blesses owed); decision 16 and the vigil migration remain open; `manual` is dropped (decision 12, amended).
+> Neon Shroud request 0006 (2026-11-18): N1 `suspend_character` / `resume_character` / `character_fit` is mechanized (decision 26); N2 postures and N3 carry are mechanized (decisions 27–28).
 > W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
 > teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
 > external platformer's first engine request drove its last additions, and its second shipped sensor
@@ -229,7 +229,8 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
     - **Why:** small orthogonal crates. Games with no character use the camera.
 21. **Proof vehicle:** `examples/character-course`.
     - A greybox course: a Blender-scripted trimesh with slopes past the limit, steps, gaps, a platform
-      on a path, a track section and a chase section.
+      on a path, a track section and a chase section (the chase proof is the gallery's `camera-chase`
+      scene, decision 40: the course's own chase section is deferred, see W3).
     - A run/jump **reference controller** drives it; it is the runnable example for motor and rigs.
     - The game crate starts after its GDD; it copies the pattern, not the code.
 22. **Sequencing and input:**
@@ -327,10 +328,19 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
       shape (no posture, authored height) when it fits at the new spot.
     - Diagnostics: L1294 at posture pointers (names with `/` or `~` refused); `L1540` check-scene for an
       authored undeclared `CharacterMotorState.posture`; `L4170` once per entity at runtime (fallback).
-28. **Carry** (Neon Shroud request 0006, wave N3; **accepted 2026-11-19, scheduled (wave N3)**). A joint whose `a` is a
-    kinematic anchor, documented and tested. The carrier/carried filter is served by request 0002's
-    in-place layer membership if that ships in place; otherwise by `IgnoreCollisions { with }`. Recipes
-    for the drag carry and the shoulder carry go in `docs/motor.md` §Carrying.
+28. **Carry** (Neon Shroud request 0006, wave N3; mechanized). A `Joint` end may be a `kinematic` body: it is posed
+    from its world pose (a kinematic child under a `Parent` included), its pose write is a velocity, so the joint
+    drags smoothly, and the zero is captured at formation. The carrier/carried filter is a **carrier-side layer
+    swap**, in place for every joint: the ragdoll parts live on a `body` layer permanently (authored, never edited:
+    no jointed body rebuilds, no zero is re-captured); on pick-up the game sets the carrier's
+    `CharacterMotor.layer` to `carrying` (`ignores: [body]`), which rebuilds only the carrier's kinematic capsule
+    (no joint on it). The anchor sits inside the capsule on an `anchor` layer that ignores every layer, itself
+    included. Why not `IgnoreCollisions`: it is motor-query-only, capped at four entities, and the solver still
+    pushes parts against the capsule. No engine change was needed: a sleeping part wakes when its kinematic
+    anchor moves (proved by `crates/ludion-physics/tests/carry_anchor.rs`, so the conditional wake fix did not
+    ship). Request-shape differences: no `IgnoreCollisions` solver filter; the carry test uses scene-authored
+    parts, not an assembly ragdoll switch. Recipes for the drag carry and the shoulder carry are
+    `docs/motor.md` §Carrying. Owner decision: Proposed — owner ruling owed: none new.
 
 ## The formats (sketch; exact key names settle in the wave that builds them)
 
@@ -470,14 +480,23 @@ game crate, and the tooling knows `games/*`).
 39. **The course's gate is renamed `CameraGate`** (0010 W3c). The engine took the name `CameraZone`; the
     course's switch-and-stay component keeps its semantics under the new name. Its hashes moved (component
     names are hashed) and `run.lrp` was re-recorded; no golden moved.
+40. **`camera_relative` maps through the unframed yaw while framing is applied** (Neon Shroud request 0010 item 5,
+    W3d; owner default). While a `chase` or `follow` rig has a nonzero applied framing weight, the stick maps
+    through `state.yaw_deg`, not the posed yaw; at weight 0 it is bit-identical to before. `aim()` and
+    `yaw_deg()` keep the framed yaw. **Why:** a peek must not turn the stick; the framing offset is a view,
+    not a heading.
 
 ### W3 — Camera rigs and vigil
 
 Items 1, 2 and 5 are mechanized for the track subset (`ludion-camera`, `ludion docs camera`); item 3 as the course's
-behind/side rigs, zones, snap and respawn trauma (`games/character-course`, `tests/camera.rs`); a chase section is open.
+behind/side rigs, zones, snap and respawn trauma (`games/character-course`, `tests/camera.rs`); the chase section is the gallery scene (W3d, below).
 W3's remaining work splits (Neon Shroud request 0010): **W3a** `chase`, `follow` and `enter_pitch_deg`
 (mechanized, decisions 29–32); **W3b** the collision stage, the framing channel and the chase recenter (mechanized, decisions 33–36); **W3c** the engine
-`CameraZone` and the occluder query (mechanized, decisions 37–39); **W3d** `examples/gallery/camera-chase.yaml` (its trace and golden, pinned blesses owed) and the course's chase section (re-recording the course corpus a second time).
+`CameraZone` and the occluder query (mechanized, decisions 37–39); **W3d** (mechanized; the pinned blesses are owed): `examples/gallery/camera-chase.yaml` with its game half (`common::chase_builder`), CPU proofs (`tests/camera_chase.rs`: a per-tick `WorldHash` trace, 1/2/8-thread identity, snapshot rejoins, the scenario assertions), a driven golden and the `camera_chase` example, plus `camera_relative` unframed (decision 40).
+
+**The course's chase section is deferred.** Adding entities to `games/character-course/scenes/main.yaml` moves `run.lrp`'s hashes and the whole-course `goldens/<os>/main.png`, and a second course scene would fork the course only to repeat what the gallery scene proves. Trigger: the next owner-approved course re-record.
+
+**W3d blesses owed (the pinned 3090):** (1) the bare frame-0 golden, from the repo root: `cargo run -p ludion-cli --release -- test --dir examples/gallery --bless --filter camera-chase`; (2) the driven golden: `LUDION_BLESS=1 cargo nextest run -p ludion-testkit --test gallery -E 'test(/camera_chase_driven/)'`; (3) the cross-arch trace: `LUDION_BLESS=1 cargo nextest run -p ludion-testkit --test camera_chase -E 'test(/committed_cross_arch_trace/)'` (the M4 must reproduce it byte-identically); (4) the macOS twins of 1 and 2 on the M4.
 
 **Owner rulings (2026-11-19)** (Neon Shroud request 0010):
 1. Accepted. Promote the non-goal "Engine camera zones" to a decision; the trigger fired.
@@ -525,7 +544,7 @@ W3's remaining work splits (Neon Shroud request 0010): **W3a** `chase`, `follow`
   `motor_in_force`, `MoveReport.posture`, `L1540`/`L4170`. Docs: `docs/motor.md` §Postures.
 - **N2b — the `lying` shape** (mechanized; decision 27). `PostureShape::Lying`, `turn_character`,
   `TurnReport`, `motor_capsule_segment`. Docs: `docs/motor.md` §Postures.
-- **N3 — carry** (**accepted 2026-11-19, scheduled (wave N3)**, decision 28).
+- **N3 — carry** (mechanized; decision 28). `docs/motor.md` §Carrying, the kinematic-anchor recipe, `carry_anchor` and `body_carry` tests.
 
 ### Exit (human gate, owed)
 

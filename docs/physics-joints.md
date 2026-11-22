@@ -4,7 +4,7 @@ description: The Joint and JointMotor components — hinge, ball, slider, fixed 
 
 # Physics joints
 
-**Scope:** Authoring a `Joint` component to constrain two rigid bodies together, and a `JointMotor`
+**Scope:** Authoring a `Joint` component to constrain two bodies together (a rigid body, or a rigid body and a kinematic anchor), and a `JointMotor`
 to drive its free axes. Defers to `ludion docs physics` for `Collider`, `RigidBody` and the rest of
 `ludion-physics`'s rigid-body dynamics, and `ludion devdocs physics-joints` for the rapier mapping.
 
@@ -191,6 +191,7 @@ See `examples/gallery/ragdoll-pose-blend.yaml` (skinned, voxel and pinned ragdol
 
 ## Rules
 
+- An end may be `kinematic`: it is posed by its parent or `Transform`, never pushed, and the other end follows it (a sleeping part wakes).
 - `a` and `b` must name two distinct bodies; every axis and the anchor must be finite; an axis must
   be non-zero; each `limits` pair must be ordered `[min, max]` with both finite; `break_impulse`, if
   set, must be strictly positive and finite as an `f32` — any violation is `L1183`, pointing at the
@@ -312,6 +313,7 @@ idiom is pinned by `crates/ludion-testkit/tests/ragdoll_retire.rs`, with helpers
 
 ## Gotchas
 
+- A carried body is a rigid part `Joint`ed to a kinematic anchor under a walking motor; the carrier-side layer swap that frees the pair is `ludion docs motor` §Carrying.
 - Editing a live `Joint`, or rebuilding a body it names (a `Collider` edit), re-captures the zero at
   the bodies' new poses — it does not resume the old constraint. The exception is an in-place tunable
   edit (`ludion docs physics` §Live edits): it keeps the zero; any other edit on a jointed body
