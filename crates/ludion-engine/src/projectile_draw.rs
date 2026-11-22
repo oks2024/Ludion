@@ -655,6 +655,8 @@ pub(crate) fn extract_projectiles(
                     softness,
                     additive: visual.additive,
                     lit: false,
+                    shadowed: false,
+                    streak: Vec3::ZERO,
                     viewmodel: false,
                     medium: visual.medium,
                 });

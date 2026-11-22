@@ -195,6 +195,8 @@ mod tests {
             softness: 0.0,
             additive: true,
             lit: false,
+            shadowed: false,
+            streak: Vec3::ZERO,
             viewmodel: true,
             medium: 1.0,
         });

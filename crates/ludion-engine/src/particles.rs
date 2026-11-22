@@ -246,6 +246,57 @@ impl Segment {
     }
 }
 
+impl Segment {
+    /// The velocity `t` seconds into this phase: the closed-form derivative of
+    /// [`offset_at`](Segment::offset_at). `t` at or below zero is the phase's start velocity; a `t`
+    /// past [`duration`](Segment::duration) is not clamped here ([`Motion::velocity_at`] owns that).
+    pub fn velocity_at(self, t: f32) -> Vec3 {
+        let t = t.max(0.0);
+        match self {
+            Segment::Ballistic {
+                velocity,
+                gravity,
+                drag,
+                ..
+            } => {
+                let acceleration = Vec3::new(0.0, -gravity, 0.0);
+                if drag > 0.0 && drag.is_finite() {
+                    // d/dt of the drift is e^(−k·t) = 1 − k·drift, and of the fall is the drift.
+                    let (drift, _) = drag_integrals(drag, t);
+                    velocity * (1.0 - drag * drift) + acceleration * drift
+                } else {
+                    velocity + acceleration * t
+                }
+            }
+            Segment::Ramp {
+                heading,
+                from,
+                to,
+                duration,
+            } => {
+                if to != from && duration > 0.0 && duration.is_finite() {
+                    heading * (from + (to - from) * t / duration)
+                } else {
+                    heading * from
+                }
+            }
+            Segment::Turn {
+                heading,
+                normal,
+                speed,
+                rate,
+                ..
+            } => {
+                if rate.abs() < TURN_MIN_RATE {
+                    return heading * speed;
+                }
+                let angle = rate * t;
+                (heading * cos(angle) + normal.cross(heading) * sin(angle)) * speed
+            }
+        }
+    }
+}
+
 /// Below this `drag · t` the drag integrals use their Taylor series: `(t − E)/k` subtracts two
 /// nearly equal numbers, losing about `ε / (k·t)` of its value to `f32` rounding.
 const DRAG_SERIES_LIMIT: f32 = 0.5;
@@ -351,6 +402,23 @@ impl Motion {
             }
         }
         position
+    }
+
+    /// How fast the moving thing travels `t` seconds after the motion began, in units per second.
+    ///
+    /// Walks the phases as [`position_at`](Motion::position_at) does and returns the active phase's
+    /// velocity. A negative `t` is the first phase's start velocity; past the last finite phase the
+    /// thing holds still, so the velocity is zero.
+    pub fn velocity_at(&self, t: f32) -> Vec3 {
+        let mut remaining = t.max(0.0);
+        for segment in self.segments.iter().flatten() {
+            let duration = segment.duration();
+            if remaining < duration {
+                return segment.velocity_at(remaining);
+            }
+            remaining -= duration;
+        }
+        Vec3::ZERO
     }
 }
 
@@ -637,6 +705,13 @@ impl EmitterContext {
             return None;
         }
 
+        // Render-only, and only when asked for, so an unstretched emitter does no extra work.
+        let streak = if self.emitter.stretch > 0.0 {
+            motion.velocity_at(age) * (self.emitter.stretch / 60.0)
+        } else {
+            Vec3::ZERO
+        };
+
         let phase = (age / life).clamp(0.0, 1.0);
         let mut color = [0.0f32; 4];
         for (channel, slot) in color.iter_mut().enumerate() {
@@ -655,6 +730,8 @@ impl EmitterContext {
             softness: self.emitter.softness,
             additive: self.emitter.blend == ParticleBlend::Additive,
             lit: self.emitter.lit,
+            shadowed: self.emitter.lit && self.emitter.shadowed,
+            streak,
             viewmodel: false,
             medium: self.emitter.medium.unwrap_or(1.0),
         })
@@ -1124,6 +1201,144 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Every segment kind's `velocity_at` is the derivative of its `offset_at`: a central finite
+    /// difference of the offset agrees within 1e-3, at several instants and in every drag regime.
+    #[test]
+    fn velocity_at_is_the_derivative_of_offset_at() {
+        let heading = Vec3::new(1.0, 0.0, 1.0).normalize();
+        let segments = [
+            Segment::Ballistic {
+                velocity: Vec3::new(2.0, 5.0, -1.0),
+                gravity: 9.8,
+                drag: 0.0,
+                duration: f32::INFINITY,
+            },
+            Segment::Ballistic {
+                velocity: Vec3::new(2.0, 5.0, -1.0),
+                gravity: 9.8,
+                drag: 0.3,
+                duration: f32::INFINITY,
+            },
+            Segment::Ballistic {
+                velocity: Vec3::new(2.0, 5.0, -1.0),
+                gravity: -2.0,
+                drag: 2.5,
+                duration: f32::INFINITY,
+            },
+            Segment::Ramp {
+                heading,
+                from: 1.0,
+                to: 5.0,
+                duration: 2.0,
+            },
+            Segment::straight(heading, 3.0),
+            Segment::Turn {
+                heading,
+                normal: Vec3::Y,
+                speed: 4.0,
+                rate: 1.5,
+                duration: 4.0,
+            },
+            Segment::Turn {
+                heading,
+                normal: Vec3::Y,
+                speed: 4.0,
+                rate: 0.01,
+                duration: 4.0,
+            },
+        ];
+        let h = 1e-2;
+        for segment in segments {
+            for t in [0.1, 0.5, 1.0, 1.7] {
+                let numeric = (segment.offset_at(t + h) - segment.offset_at(t - h)) / (2.0 * h);
+                let exact = segment.velocity_at(t);
+                assert!(
+                    (numeric - exact).length() < 1e-3,
+                    "{segment:?} at {t}: {numeric:?} vs {exact:?}"
+                );
+            }
+        }
+    }
+
+    /// `t <= 0` is the first phase's start velocity, each phase hands over to the next at its
+    /// boundary, and a motion past its last finite phase (or with none) is still.
+    #[test]
+    fn motion_velocity_walks_phases_and_holds_still_after_the_last() {
+        let mut motion = Motion::new(Vec3::ZERO);
+        assert_eq!(motion.velocity_at(1.0), Vec3::ZERO);
+        motion.push(Segment::Ramp {
+            heading: Vec3::X,
+            from: 2.0,
+            to: 4.0,
+            duration: 1.0,
+        });
+        motion.push(Segment::Ramp {
+            heading: Vec3::Y,
+            from: 7.0,
+            to: 7.0,
+            duration: 1.0,
+        });
+        assert_eq!(motion.velocity_at(-3.0), Vec3::new(2.0, 0.0, 0.0));
+        assert_eq!(motion.velocity_at(0.0), Vec3::new(2.0, 0.0, 0.0));
+        assert_eq!(motion.velocity_at(0.5), Vec3::new(3.0, 0.0, 0.0));
+        assert_eq!(motion.velocity_at(1.0), Vec3::new(0.0, 7.0, 0.0));
+        assert_eq!(motion.velocity_at(1.5), Vec3::new(0.0, 7.0, 0.0));
+        assert_eq!(motion.velocity_at(2.0), Vec3::ZERO);
+        assert_eq!(motion.velocity_at(50.0), Vec3::ZERO);
+    }
+
+    /// Asking for the streak must not move anything else: with `stretch` on, every other field of
+    /// every instance is the unstretched emitter's (no RNG draw is reordered), and with `stretch` at
+    /// zero (the default) `shadowed` is false and the streak is zero — the pre-change instance.
+    #[test]
+    fn stretch_changes_only_the_streak_lane() {
+        let base = ParticleEmitter {
+            shape: EmitShape::Sphere,
+            burst: 7,
+            gravity: 9.0,
+            drag: 0.5,
+            lit: true,
+            ..endless()
+        };
+        let transform = Transform {
+            translation: [3.0, 1.0, -2.0],
+            rotation: [10.0, 45.0, 0.0],
+            scale: [2.0, 2.0, 2.0],
+        };
+        let plain: Vec<_> = evaluate(&base, &transform, at(90), 1.0, BASIS).collect();
+        assert!(!plain.is_empty());
+        assert!(plain.iter().all(|p| !p.shadowed && p.streak == Vec3::ZERO));
+
+        let stretched = ParticleEmitter {
+            stretch: 1.5,
+            shadowed: true,
+            ..base
+        };
+        let moving: Vec<_> = evaluate(&stretched, &transform, at(90), 1.0, BASIS).collect();
+        assert_eq!(moving.len(), plain.len());
+        assert!(moving.iter().any(|p| p.streak.length() > 0.0));
+        for (m, p) in moving.iter().zip(&plain) {
+            assert!(m.shadowed);
+            assert_eq!(
+                ParticleInstance {
+                    shadowed: false,
+                    streak: Vec3::ZERO,
+                    ..*m
+                },
+                *p
+            );
+        }
+
+        let unlit = ParticleEmitter {
+            lit: false,
+            ..stretched
+        };
+        assert!(
+            evaluate(&unlit, &transform, at(90), 1.0, BASIS).all(|p| !p.shadowed),
+            "shadowed without lit is inert"
+        );
     }
 
     fn endless() -> ParticleEmitter {

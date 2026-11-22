@@ -213,6 +213,9 @@ struct ParticleInstanceRaw {
     params: [f32; 4],
     /// `ParticleEmitter.medium`, read at `@location(5)` and passed to the layer's depth pass.
     medium: f32,
+    /// `(streak.xyz, shadowed)` at `@location(6)`: the world streak vector (zero for a disc) and
+    /// `1.0` for a lit particle that takes shadow taps.
+    motion: [f32; 4],
 }
 
 /// One end of a debug line. Matches `debug_line.wgsl`'s `VsIn`.
@@ -2536,6 +2539,7 @@ impl Renderer {
             light_shadow_buf,
             sun: scene.sun,
             has_shadow_map: chain.shadow_map.is_some(),
+            transparent_lighting: chain.blended || chain.rain_shadowed || chain.particles_shadowed,
             has_ao: chain.ssao,
             has_shafts: chain.shafts,
             has_medium_scatter: chain.medium_scatter,
@@ -4118,6 +4122,12 @@ fn particle_raws(view: &Mat4, particles: &[ParticleInstance]) -> Vec<ParticleIns
                     if p.lit { 1.0 } else { 0.0 },
                 ],
                 medium: p.medium,
+                motion: [
+                    p.streak.x,
+                    p.streak.y,
+                    p.streak.z,
+                    if p.shadowed { 1.0 } else { 0.0 },
+                ],
             }
         })
         .collect()
@@ -4273,6 +4283,10 @@ struct FrameRecorder<'a> {
     /// `record_scene` (the graph's `shadow_map` against the 1×1 fallback), counts the scene pass's
     /// first conditional input slot, and mirrors the `shadow` pass's presence.
     has_shadow_map: bool,
+    /// Whether the graph declared the lighting tail on `transparents` and `transparent_depth` (a blended
+    /// mesh, a shadowed rain or a shadowed particle); [`transparent_sun_group`](FrameRecorder::transparent_sun_group)
+    /// reads it only then.
+    transparent_lighting: bool,
     /// Whether this frame runs the ambient-occlusion chain. Picks the group-3 AO texture in
     /// `record_scene` (the graph's `ssao_blur` when true, the 1×1 fallback when false), sets the
     /// shader's `EnvParams.ao` flag, and gates the three passes' presence.
@@ -5125,6 +5139,24 @@ impl FrameRecorder<'_> {
             &[],
             bytemuck::bytes_of(&uniform),
         );
+    }
+
+    /// The sun group a transparent draw (the rain, the particles) binds: the lighting tail the graph declared
+    /// ahead of `inputs`' other reads, counted as `record_blended` counts it, or the fallbacks when the frame
+    /// declared none.
+    pub(super) fn transparent_sun_group(
+        &self,
+        device: &wgpu::Device,
+        inputs: &[&wgpu::TextureView],
+    ) -> wgpu::BindGroup {
+        let tail = if self.transparent_lighting {
+            usize::from(self.has_shadow_map)
+                + usize::from(self.gi_inject.is_some())
+                + usize::from(self.local_shadow.is_some())
+        } else {
+            0
+        };
+        self.sun_group(device, &inputs[..tail])
     }
 
     /// The sun group: the sun uniform, the shadow map and the local-light atlas, read from `tail`, the
@@ -6424,9 +6456,11 @@ impl FrameRecorder<'_> {
         // Depth-tested against the opaque meshes and never depth-written, so the whole back-to-front
         // sorted list composites in one draw.
         if let Some(particles) = &self.particle_draw {
+            let sun_bg = self.transparent_sun_group(pass.device, pass.inputs);
             rp.set_pipeline(self.r.pipeline(ShaderId::Particle));
             rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
             rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
+            rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);
             rp.set_vertex_buffer(0, particles.instances.slice(..));
             rp.draw(0..6, 0..particles.viewmodel_start);
             // The gun's particles draw last through the lens and depth slice, so a flash is never
@@ -6487,12 +6521,14 @@ impl FrameRecorder<'_> {
         }
 
         if let Some(particles) = &self.particle_draw {
+            let sun_bg = self.transparent_sun_group(pass.device, pass.inputs);
             rp.set_pipeline(
                 self.r
                     .transparent_depth_pipeline(ShaderId::Particle, format),
             );
             rp.set_bind_group(CAMERA_GROUP, &self.camera_bg, &[]);
             rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
+            rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);
             rp.set_vertex_buffer(0, particles.instances.slice(..));
             // The world's own distance only: a gun-layer particle must not stand in for the world
             // behind it.
@@ -8369,7 +8405,8 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
         file_name: "particle.wgsl",
         body: include_str!("shaders/particle.wgsl"),
         // The camera to billboard against and the sprite's light rule, which a lit instance runs
-        // once per centre in the vertex stage; an unlit instance never reads the light set.
+        // once per centre in the vertex stage; an unlit instance never reads the light set. A
+        // shadowed one also takes the shadow taps, so the sun group rides at 2.
         snippets: &[
             Snippet::Camera,
             Snippet::TransparentLayer,
@@ -8378,8 +8415,14 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::BillboardLight,
             Snippet::Quad,
             Snippet::SoftFalloff,
+            Snippet::ShadowBindings,
+            Snippet::BillboardShadowed,
         ],
-        layouts: &[Some(LayoutId::Camera), Some(LayoutId::Lights)],
+        layouts: &[
+            Some(LayoutId::Camera),
+            Some(LayoutId::Lights),
+            Some(LayoutId::Sun),
+        ],
     },
     ShaderDesc {
         id: ShaderId::Text,
@@ -9842,8 +9885,9 @@ const GROUND_MARKER_INSTANCE_ATTRS: [wgpu::VertexAttribute; 12] = wgpu::vertex_a
 /// flags lane, the hit-flash lane, the tiling/scroll lane, and the medium scale), locations 0-8.
 const SPRITE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Uint32, 6 => Float32x4, 7 => Float32x4, 8 => Float32];
 /// Particle per-instance attributes (`ParticleInstanceRaw`: center/right/up/color, then the
-/// `(size, softness, additive, lit)` lane), locations 0-4.
-const PARTICLE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Float32];
+/// `(size, softness, additive, lit)` lane, the medium scale and the `(streak, shadowed)` motion lane),
+/// locations 0-6.
+const PARTICLE_INSTANCE_ATTRS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4, 5 => Float32, 6 => Float32x4];
 /// Text per-vertex attributes (`TextVertexRaw`: position/uv/color/sdf), locations 0-3.
 const TEXT_VERTEX_ATTRS: [wgpu::VertexAttribute; 4] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4, 3 => Float32];

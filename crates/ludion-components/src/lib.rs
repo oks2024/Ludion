@@ -6362,9 +6362,21 @@ pub struct ParticleEmitter {
     pub softness: f32,
     /// Lights the particles (default `false`: the authored colour is the look). `true`: a
     /// particle's colour is its albedo times the light reaching its centre, with the lit sprite's
-    /// terms (ambient, point, spot, sun); shadow maps are ignored. Omitted from the text when false.
+    /// terms (ambient, point, spot, sun); unshadowed unless `shadowed`. Omitted from the text when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lit: bool,
+    /// With `lit`, each particle's centre also takes one sun shadow tap and one tap per shadow-granted
+    /// local light (default `false`): a mote behind a wall goes dark. Inert without `lit`. Omitted from
+    /// the text when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shadowed: bool,
+    /// Velocity streak (default `0.0`: a disc). Above zero a particle draws as a capsule along its
+    /// world velocity, its core `stretch × |v| / 60` metres long and as wide as the disc; a particle at
+    /// rest is a disc. Non-negative (`L1014`; non-finite `L2107`). Omitted from the text when zero.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    #[schemars(range(min = 0.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 4.0]))]
+    pub stretch: f32,
     /// Names this emitter's random stream (default `0`). Two emitters sharing a seed draw the same
     /// lives, speeds and directions — which is a feature for a rank of torches and a mistake for a
     /// pair of impacts meant to look different.
@@ -6399,6 +6411,8 @@ impl Default for ParticleEmitter {
             blend: ParticleBlend::Alpha,
             softness: 0.5,
             lit: false,
+            shadowed: false,
+            stretch: 0.0,
             seed: 0,
             medium: None,
         }
@@ -6438,7 +6452,14 @@ impl SemanticValidate for ParticleEmitter {
                 AlphaRule::Clamped,
             ));
         }
-        for field in ["rate", "duration", "drag", "start_size", "end_size"] {
+        for field in [
+            "rate",
+            "duration",
+            "drag",
+            "start_size",
+            "end_size",
+            "stretch",
+        ] {
             check_particle_dimension(
                 field,
                 value.get(field).and_then(as_stored_f32),
@@ -8019,6 +8040,52 @@ mod tests {
             !serde_json::from_value::<ParticleEmitter>(serde_json::json!({}))
                 .unwrap()
                 .lit
+        );
+    }
+
+    /// `shadowed` and `stretch` default to off and write no key at their defaults, so the canonical
+    /// text, snapshots and `WorldHash` of every existing emitter are unmoved.
+    #[test]
+    fn particle_shadowed_and_stretch_are_omitted_at_their_defaults() {
+        let json = serde_json::to_value(ParticleEmitter::default()).unwrap();
+        assert!(json.get("shadowed").is_none());
+        assert!(json.get("stretch").is_none());
+        let emitter = ParticleEmitter {
+            lit: true,
+            shadowed: true,
+            stretch: 1.5,
+            ..ParticleEmitter::default()
+        };
+        let json = serde_json::to_value(&emitter).unwrap();
+        assert_eq!(json["shadowed"], serde_json::json!(true));
+        assert_eq!(json["stretch"], serde_json::json!(1.5));
+        assert_eq!(
+            serde_json::from_value::<ParticleEmitter>(json).unwrap(),
+            emitter
+        );
+        let absent: ParticleEmitter = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!absent.shadowed);
+        assert_eq!(absent.stretch, 0.0);
+    }
+
+    /// A negative `stretch` is the schema's `L1014` at the field; a non-finite one (an overflowing
+    /// number a client hands `component.set`) is the validator's `L2107`.
+    #[test]
+    fn a_bad_particle_stretch_is_l1014_or_l2107() {
+        let registry = builtin_registry();
+        let bad = "format: 1\nentities:\n  - components:\n      ParticleEmitter:\n        \
+                   stretch: -1.0\n";
+        let diagnostics = ludion_scene::check(bad, &registry).unwrap_err();
+        assert!(
+            diagnostics.iter().any(|d| d.code.as_str() == "L1014"
+                && d.path.as_deref() == Some("/entities/0/components/ParticleEmitter/stretch")),
+            "expected an L1014 at ParticleEmitter/stretch: {diagnostics:?}"
+        );
+        let out = ParticleEmitter::validate_semantics(&serde_json::json!({ "stretch": 1e300 }));
+        assert!(
+            out.iter()
+                .any(|d| d.code.as_str() == "L2107" && d.path.as_deref() == Some("/stretch")),
+            "expected an L2107 at /stretch: {out:?}"
         );
     }
 

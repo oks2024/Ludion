@@ -15,6 +15,7 @@ mod lit_additive;
 mod lut;
 mod medium_scatter;
 mod mesh_medium;
+mod particle_shadows;
 mod rain;
 mod rim;
 mod screen_effect;
@@ -13852,6 +13853,8 @@ fn particle(center: Vec3, size: f32, color: [f32; 4], softness: f32) -> Particle
         softness,
         additive: false,
         lit: false,
+        shadowed: false,
+        streak: Vec3::ZERO,
         viewmodel: false,
         medium: 1.0,
     }

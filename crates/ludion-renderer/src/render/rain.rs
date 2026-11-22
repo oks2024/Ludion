@@ -233,13 +233,7 @@ impl FrameRecorder<'_> {
         let occlusion = inputs
             .last()
             .expect("a rain frame schedules the occlusion map as its last read");
-        // The lighting tail the graph declares ahead of the map, counted as `record_blended` counts it; a rain
-        // frame that declares none (`rain_shadowed` unset, no blended meshes) binds the fallbacks.
-        let tail = (usize::from(self.has_shadow_map)
-            + usize::from(self.gi_inject.is_some())
-            + usize::from(self.local_shadow.is_some()))
-        .min(inputs.len() - 1);
-        let sun_bg = self.sun_group(device, &inputs[..tail]);
+        let sun_bg = self.transparent_sun_group(device, inputs);
         let params_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("rain bind group"),
             layout: self.r.layouts.get(LayoutId::Rain),

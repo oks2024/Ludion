@@ -1067,6 +1067,8 @@ mod tests {
             softness: 0.0,
             additive: false,
             lit: false,
+            shadowed: false,
+            streak: Vec3::ZERO,
             viewmodel: false,
             medium: 1.0,
         }

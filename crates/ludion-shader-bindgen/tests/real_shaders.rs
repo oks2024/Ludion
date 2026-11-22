@@ -213,12 +213,13 @@ fn all_repo_shaders_reflect_and_unify() {
         .bind_group_named("sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow")
         .expect("mesh's group-2 sun layout");
     assert_eq!(sun_group.group, 2);
-    // The lit decal pass shades with the mesh lighting, so it binds the same group; the rain takes its shadow taps from it.
+    // The lit decal pass shades with the mesh lighting, so it binds the same group; the rain and the shadowed particles take their shadow taps from it.
     assert_eq!(
         sun_group.units,
         vec![
             "decal_lit.wgsl".to_string(),
             "mesh.wgsl".to_string(),
+            "particle.wgsl".to_string(),
             "rain.wgsl".to_string()
         ]
     );

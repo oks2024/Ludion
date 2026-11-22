@@ -334,6 +334,8 @@ pub const COMPOSITIONS: &[(&str, &[&str])] = &[
             "billboard_light.wgsl",
             "quad.wgsl",
             "soft_falloff.wgsl",
+            "shadow_bindings.wgsl",
+            "billboard_shadowed.wgsl",
         ],
     ),
     (

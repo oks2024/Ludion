@@ -29,7 +29,57 @@ struct VsIn {
     @location(4) params: vec4<f32>,
     // ParticleEmitter.medium: the scale on the medium's optical depth to this disc, read by `vs_depth` only.
     @location(5) medium: f32,
+    // xyz = the world streak vector (velocity x stretch / 60; zero draws the disc), w = the shadowed flag
+    // (0 or 1): a lit centre also takes the sun and local-light shadow taps.
+    @location(6) motion: vec4<f32>,
 };
+
+// The quad's world corner, its position in disc radii and the capsule's core half-length in the same
+// radii (0 for a disc). A streak runs the quad along the screen-facing side of the velocity axis: the
+// disc's width across, `size + |streak|` along, so the core is `|streak|` long and both ends are
+// half-discs.
+struct ParticleQuad {
+    world: vec3<f32>,
+    local: vec2<f32>,
+    core: f32,
+};
+
+fn particle_quad(in: VsIn, vi: u32) -> ParticleQuad {
+    let corner = CORNERS[vi] * QUAD_PAD;
+    var q: ParticleQuad;
+    q.world = in.center + corner.x * in.params.x * in.right + corner.y * in.params.x * in.up;
+    // The corner spans half the diameter, so doubling puts the rim at length 1 whatever the size.
+    q.local = corner * 2.0;
+    q.core = 0.0;
+    let reach = length(in.motion.xyz);
+    if (reach > 0.0) {
+        let axis = in.motion.xyz / reach;
+        let ortho = camera.view_forward.w > 0.5;
+        let view_dir = select(in.center - camera.cam_pos.xyz, camera.view_forward.xyz, ortho);
+        var side = cross(axis, view_dir);
+        let side_len = length(side);
+        side = select(in.right, side / max(side_len, 1e-6), side_len > 1e-4);
+        let size = in.params.x;
+        q.world = in.center + corner.x * size * side + corner.y * (size + reach) * axis;
+        q.local = vec2<f32>(corner.x * 2.0, corner.y * 2.0 * (size + reach) / size);
+        q.core = reach / size;
+    }
+    return q;
+}
+
+// A lit centre's light: one cluster lookup, the cell a sprite fragment there would read. A shadowed
+// particle adds one sun tap and one tap per granted local light (no backlight); the rest take the
+// lit sprite's unshadowed rule.
+fn particle_light(in: VsIn) -> vec3<f32> {
+    let c = camera.view_proj * vec4<f32>(in.center, 1.0);
+    let ndc = c.xy / max(abs(c.w), 1e-4);
+    let frag = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) / lights.grid.xy;
+    let n = cross(in.right, in.up);
+    if (in.motion.w > 0.5) {
+        return shade_billboard_shadowed(in.center, n, frag, true, 0.0, 0.0);
+    }
+    return shade_two_sided(in.center, n, frag);
+}
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -37,24 +87,20 @@ struct VsOut {
     @location(0) local: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) params: vec4<f32>,
+    @location(3) @interpolate(flat) core: f32,
 };
 
 @vertex
 fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
-    let corner = CORNERS[vi] * QUAD_PAD;
-    let world = in.center + corner.x * in.params.x * in.right + corner.y * in.params.x * in.up;
+    let q = particle_quad(in, vi);
 
     var out: VsOut;
-    out.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    // The corner spans half the diameter, so doubling puts the rim at length 1 whatever the size.
-    out.local = corner * 2.0;
+    out.clip = camera.view_proj * vec4<f32>(q.world, 1.0);
+    out.local = q.local;
+    out.core = q.core;
     var color = in.color;
     if (in.params.w > 0.5) {
-        // One lookup per particle centre, the cell a sprite fragment there would read.
-        let c = camera.view_proj * vec4<f32>(in.center, 1.0);
-        let ndc = c.xy / max(abs(c.w), 1e-4);
-        let frag = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) / lights.grid.xy;
-        color = vec4<f32>(in.color.rgb * shade_two_sided(in.center, cross(in.right, in.up), frag), in.color.a);
+        color = vec4<f32>(in.color.rgb * particle_light(in), in.color.a);
     }
     out.color = color;
     out.params = in.params;
@@ -63,7 +109,9 @@ fn vs_main(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let d = length(in.local);
+    // A capsule measures from its core segment; a disc (`core` 0) keeps its own radial distance.
+    let reach = vec2<f32>(in.local.x, max(abs(in.local.y) - in.core, 0.0));
+    let d = length(select(in.local, reach, in.core > 0.0));
 
     // Hard end: analytic anti-aliasing over one screen-space texel of the radial distance, centred
     // on the rim, so the edge is one pixel wide at any particle size and any distance.
@@ -93,27 +141,25 @@ struct DepthOut {
     @location(2) @interpolate(flat) params: vec4<f32>,
     @location(3) world: vec3<f32>,
     @location(4) @interpolate(flat) medium: f32,
+    @location(5) @interpolate(flat) core: f32,
 };
 
 @vertex
 fn vs_depth(in: VsIn, @builtin(vertex_index) vi: u32) -> DepthOut {
-    let corner = CORNERS[vi] * QUAD_PAD;
-    let world = in.center + corner.x * in.params.x * in.right + corner.y * in.params.x * in.up;
+    let q = particle_quad(in, vi);
 
     var out: DepthOut;
-    out.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    out.local = corner * 2.0;
+    out.clip = camera.view_proj * vec4<f32>(q.world, 1.0);
+    out.local = q.local;
+    out.core = q.core;
     var color = in.color;
     if (in.params.w > 0.5 && in.params.z > 0.5) {
         // A lit additive claims from the colour it adds, shaded exactly as `vs_main` does.
-        let c = camera.view_proj * vec4<f32>(in.center, 1.0);
-        let ndc = c.xy / max(abs(c.w), 1e-4);
-        let frag = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) / lights.grid.xy;
-        color = vec4<f32>(in.color.rgb * shade_two_sided(in.center, cross(in.right, in.up), frag), in.color.a);
+        color = vec4<f32>(in.color.rgb * particle_light(in), in.color.a);
     }
     out.color = color;
     out.params = in.params;
-    out.world = world;
+    out.world = q.world;
     out.medium = in.medium;
     return out;
 }
@@ -122,7 +168,9 @@ fn vs_depth(in: VsIn, @builtin(vertex_index) vi: u32) -> DepthOut {
 // additive instance claims its brightest channel, clamped to 1, as the sprite pass does.
 @fragment
 fn fs_depth(in: DepthOut) -> @location(0) vec4<f32> {
-    let d = length(in.local);
+    // A capsule measures from its core segment; a disc (`core` 0) keeps its own radial distance.
+    let reach = vec2<f32>(in.local.x, max(abs(in.local.y) - in.core, 0.0));
+    let d = length(select(in.local, reach, in.core > 0.0));
     let aa = max(fwidth(d), 1e-6);
     let hard = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, d);
     let rim = exp(-SOFT_FALLOFF);

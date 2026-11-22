@@ -207,6 +207,12 @@ pub struct ParticleInstance {
     pub additive: bool,
     /// Lit: the colour is shaded once, at the centre, by the lit sprite's light rule.
     pub lit: bool,
+    /// Lit and shadowed: the centre's shade also takes one sun shadow tap and one tap per granted
+    /// local light. Only meaningful with `lit`; false for viewmodel particles.
+    pub shadowed: bool,
+    /// World-space streak vector, `velocity × stretch / 60`: the particle draws as a capsule whose
+    /// core runs along it. Zero draws the disc.
+    pub streak: Vec3,
     /// Camera-local, drawn through the viewmodel lens and depth slice; see
     /// [`ViewmodelParticle`](crate::ViewmodelParticle).
     pub viewmodel: bool,

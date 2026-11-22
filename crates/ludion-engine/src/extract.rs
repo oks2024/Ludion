@@ -3046,6 +3046,7 @@ fn extract_particles(
                         particles::evaluate_keyed(emitter, transform, now, particle_density, *basis)
                             .map(|(stream, mut p)| {
                                 p.viewmodel = *gun;
+                                p.shadowed &= !*gun;
                                 (particles::instance_key(*id, emitter.started, stream), p)
                             })
                     })
@@ -3073,6 +3074,7 @@ fn extract_particles(
                     particles::evaluate(emitter, transform, now, particle_density, *basis).map(
                         |mut p| {
                             p.viewmodel = *gun;
+                            p.shadowed &= !*gun;
                             p
                         },
                     )

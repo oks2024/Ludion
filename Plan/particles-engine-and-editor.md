@@ -1,6 +1,7 @@
 # Plan: Particles — a stateless engine emitter and its editor surface
 
 > Status: **Wave 4 COMPLETE (2026-09-06) — the plan's mechanized half is in the tree; what remains is the pinned-box measurements and the human sittings.**
+> **2026-11-22 log — shadowed and stretched particles (Neon Shroud 0018 W4b).** `ParticleEmitter.shadowed` (lit particles take the sun and granted local-light shadow taps) and `.stretch` (a capsule along the world velocity) ship, both omitted from the text at their defaults; the two deferrals above fired. `Plan/rain-and-wet.md` D32–D34; the gallery scene `particles-shadowed`.
 > **2026-11-02 log — lit particles (Clockout 0037).** `ParticleEmitter.lit` (serde-default false, omitted from text when false, so no hash, snapshot or replay moved): a lit particle's colour is albedo × the light at its centre, the lit sprite's rule (`snippets/billboard_light.wgsl`, one definition shared with `sprite.wgsl`), shaded once per centre in the vertex stage. Gallery `particles-lit`, `docs/particles.md`. Decision 5 amended below.
 > **2026-09-13 log — the held gameplay clock (shmup request 22).** `GameClock` (`ludion_core::time`, in the prelude) is the resource a game holds each frozen frame; the driver folds it at tick start and `SystemCtx` carries `game_frame`/`game_time`/`game_dt`. The kernel stays pure: `extract_inner` reads the clock once and passes gameplay time down, so emitters, flipbooks, clips and volleys freeze together. Snapshotted (the `rng` precedent, omitted when unheld), never a `WorldHash` term, held = 0 the identity — no scene, replay, hash or snapshot moved. `ludion docs game-clock` owns the rules; `crates/ludion-engine/tests/game_clock.rs` is the instrument.
 > **2026-10-10 log — par over the emitter list.** Decision 9's first trigger is built: `extract_particles` evaluates emitters through `ludion_core::par` (one emitter a chunk, results concatenated in chunk order, so the list is element-for-element the sequential one; a frame under 4096 live particles runs on one thread and pays no spawn). RTX 3090, 120-frame release profile: extract median **1.129 ms** at 8 threads (1.134 / 1.106 / 1.345 / 1.124) against 2.898 at `--threads 1`; the loop test reads 3.296 ms @ 1 thread, 1.210 @ 8. The parallel reading still passes the 1 ms line, so the second trigger (stateless vertex-shader evaluation) is reached — recorded, not acted on. `extract_ms` re-calibrated 5.0 → 2.5. `tests/particles.rs` pins the list equal at 1/2/8 threads. Zero hash, schema, golden or replay movement; the M4 re-measure is owed.
@@ -606,12 +607,12 @@ prelude and `docs/components.md` row point at it. The `ludion-docs` skill writes
   in the reference game, or the Game Designer view wanting a doc form for it.
 - **World-space emission from a moving emitter** (decision 2) — trigger: a sitting judging the
   burst-left-behind trail idiom insufficient for the tracer bolt.
-- **Shadow-map sampling for lit particles** — trigger: a sitting sees motes glowing behind a wall.
+- **Shadow-map sampling for lit particles** — trigger: a sitting sees motes glowing behind a wall. Fired by Neon Shroud request 0018 W4b, see `Plan/rain-and-wet.md` D32–D34.
 - **A wrap term for lit particles** — trigger: a sitting sees a mote lane dim near the lamp's plane at a level camera (the `|n·l|` zero; `docs/particles.md` Gotchas).
 - **Soft-depth intersection** (fading a particle where it crosses geometry) — trigger: hard cuts at
   the ground reading wrong at a sitting; needs a depth copy or a later pass, both real costs.
 - **Per-particle rotation / spin, stretched sparks along velocity, sub-emitters, collision** —
-  no consumer names them; each is a field or a second draw when one does.
+  no consumer names them; each is a field or a second draw when one does. Velocity-stretched sparks fired by Neon Shroud request 0018 W4b, see `Plan/rain-and-wet.md` D32–D34.
 - **Parallel or GPU evaluation** — decision 9's two measured triggers.
 - **A true time scrubber in the Effects view** — trigger: restart-and-watch judged too slow at an
   editor sitting; `engine.snapshot` + `engine.restore` + `sim.step` is the shape, no wire movement.

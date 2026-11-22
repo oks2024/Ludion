@@ -6879,8 +6879,22 @@
         ]
       },
       "lit": {
-        "description": "Lights the particles (default `false`: the authored colour is the look). `true`: a\nparticle's colour is its albedo times the light reaching its centre, with the lit sprite's\nterms (ambient, point, spot, sun); shadow maps are ignored. Omitted from the text when false.",
+        "description": "Lights the particles (default `false`: the authored colour is the look). `true`: a\nparticle's colour is its albedo times the light reaching its centre, with the lit sprite's\nterms (ambient, point, spot, sun); unshadowed unless `shadowed`. Omitted from the text when false.",
         "type": "boolean"
+      },
+      "shadowed": {
+        "description": "With `lit`, each particle's centre also takes one sun shadow tap and one tap per shadow-granted\nlocal light (default `false`): a mote behind a wall goes dark. Inert without `lit`. Omitted from\nthe text when false.",
+        "type": "boolean"
+      },
+      "stretch": {
+        "description": "Velocity streak (default `0.0`: a disc). Above zero a particle draws as a capsule along its\nworld velocity, its core `stretch × |v| / 60` metres long and as wide as the disc; a particle at\nrest is a disc. Non-negative (`L1014`; non-finite `L2107`). Omitted from the text when zero.",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "x-ui-range": [
+          0.0,
+          4.0
+        ]
       },
       "seed": {
         "description": "Names this emitter's random stream (default `0`). Two emitters sharing a seed draw the same\nlives, speeds and directions — which is a feature for a rank of torches and a mistake for a\npair of impacts meant to look different.",

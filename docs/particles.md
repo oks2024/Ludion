@@ -63,6 +63,8 @@ ParticleEmitter:
   blend: additive                    # alpha | additive (default alpha)
   softness: 0.8                      # 0 = hard circle, 1 = gaussian smudge (default 0.5, [0,1]: L1014)
   lit: false                         # true: colour is albedo x the light at the particle's centre (default false; omitted from text when false)
+  shadowed: false                    # with lit: one sun tap and one tap per shadow-granted light at the centre (default false; omitted when false)
+  stretch: 0.0                       # >0: a capsule along the world velocity, core length stretch x |v| / 60 m (default 0 = disc, >= 0: L1014; omitted when 0)
   seed: 101                          # names this emitter's random stream (default 0)
   medium: 1.0                        # fog medium scale, [0,1] (default 1.0; L1014; `ludion docs atmosphere`)
 ```
@@ -131,8 +133,20 @@ axis-aligned box of half-extents `extent`; `disc` releases uniformly across a di
   particle's colour is its albedo (`start_color`/`end_color`, lerped) times the light reaching its
   centre, evaluated once per particle with exactly the lit sprite's terms: the scene's flat ambient
   (`Environment.ambient`, else the default ambient), every point and spot light in range, and the
-  sun, all two-sided. Shadow maps are ignored, and there is no IBL or probe term. Both blends take it
-  (additive lit motes add albedo × light). Alpha is untouched.
+  sun, all two-sided. There is no IBL or probe term. Both blends take it (additive lit motes add
+  albedo × light). Alpha is untouched. Lit particles are unshadowed unless `shadowed: true`.
+- **`shadowed: true` (with `lit`) shades a particle's centre through the shadow maps.** Each centre
+  takes one sun tap (the anchored map or the first covering cascade) and one tap per shadow-granted
+  local light, so a plume behind a casting wall goes dark where the wall blocks the light. It is
+  one hard tap, no PCF and no backlight; the cost is one extra tap per light per particle in the
+  vertex stage, plus the transparent passes reading the shadow map. `shadowed` without `lit` is
+  inert: no warning, the unlit look and bytes. A camera-local (viewmodel) emitter never takes it.
+- **`stretch > 0` draws each particle as a capsule along its world velocity.** The core is
+  `stretch × |v| / 60` metres long (`v` the particle's own velocity in m/s, the closed-form
+  derivative of its motion, so it follows gravity and drag), the width is the disc diameter
+  (`start_size` → `end_size`), and `softness` falls off across the width and around both ends. A
+  particle at rest, or past its motion, is a disc. `stretch: 1.0` is one 60 Hz frame of travel.
+  Render-only: nothing in the sim or its hash sees it.
 ### Recipe: motes in a lamp pool
 
 Faint additive motes over the whole room with `lit: true` glow only inside a lamp's reach:
@@ -159,7 +173,7 @@ ParticleEmitter:
 
 The pool's extent is the light's `range`; a lamp that toggles or moves just works. The darkness
 outside needs `Environment.ambient` low (ambient lights every mote equally). See
-`examples/gallery/particles-lit.yaml`.
+`examples/gallery/particles-lit.yaml`; a shadowed plume and stretched sparks: `examples/gallery/particles-shadowed.yaml`.
 
 ## Gotchas
 

@@ -969,6 +969,10 @@ pub struct PostChain {
     /// (shadow map, injected GI, local atlas, relight table) ahead of the rain map, as a blended mesh does, so the
     /// rain takes its shadow taps. `false` keeps a rain frame's graph as it was. It is content, so `masked` keeps it.
     pub rain_shadowed: bool,
+    /// Some particle is `lit` and `shadowed` (a viewmodel particle never is): `transparents` and
+    /// `transparent_depth` read the lighting tail, as for a shadowed rain, so its centre takes the shadow
+    /// taps. `false` keeps a particle frame's graph as it was. It is content, so `masked` keeps it.
+    pub particles_shadowed: bool,
     /// The scene has probes: the [`pass::PROBE_RELIGHT`] compute pass is added before `reflections`,
     /// writing the `probe_live` transient (`MAX_PROBES`×6, `Rgba32Float`: one row per cube axis) that `reflections` reads
     /// as its last input. `false` leaves the graph with neither the pass nor the resource, which is
@@ -1185,6 +1189,7 @@ impl PostChain {
             rain_view: scene.debug_view == Some(crate::DebugView::RainOcclusion)
                 && scene.rain.is_some(),
             rain_shadowed: scene.rain.is_some_and(|r| r.lit && r.shadowed),
+            particles_shadowed: scene.particles.iter().any(|p| p.shadowed && !p.viewmodel),
         }
     }
 
@@ -1851,16 +1856,17 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     // so means nothing behind a surface the opaque pass never drew: its two passes read the same tail
     // in the same order, then the probe relight table the blended mesh's own indirect specular reads.
     // A frame with none declares no reads there.
-    let blended_reads: Vec<ResourceId> = if chain.blended || chain.rain_shadowed {
-        shadow_map
-            .into_iter()
-            .chain(gi_dynamic)
-            .chain(local_shadow_atlas)
-            .chain(probe_live)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let blended_reads: Vec<ResourceId> =
+        if chain.blended || chain.rain_shadowed || chain.particles_shadowed {
+            shadow_map
+                .into_iter()
+                .chain(gi_dynamic)
+                .chain(local_shadow_atlas)
+                .chain(probe_live)
+                .collect()
+        } else {
+            Vec::new()
+        };
     // The lit decals shade like the scene pass, so they read what it reads, after their own inputs.
     let decals_lit_tail = chain.lit_decals.then(|| scene_reads.clone());
     // The rain's overhead depth map runs ahead of the scene pass, which reads it last to wet the
@@ -3016,6 +3022,8 @@ mod tests {
                 rain_view: false,
                 // Content too: no quality switch removes the rain's shadow taps.
                 rain_shadowed: bits & 1 != 0,
+                // Content too: no quality switch removes a particle's shadow taps.
+                particles_shadowed: bits & 1 != 0,
                 // Content too: no quality switch removes a blended mesh.
                 blended: bits & 1 != 0,
                 blend_nearest: bits & 1 != 0,
@@ -5114,6 +5122,42 @@ mod tests {
         }
     }
 
+    /// A lit, shadowed particle takes shadow taps, so the two transparent passes read the shadow map; with no
+    /// rain there is no rain map behind it, and a frame without one keeps the graph it had.
+    #[test]
+    fn transparent_passes_read_the_shadow_map_only_with_shadowed_particles() {
+        let size = FrameSize::native(1920, 1080);
+        let chain = PostChain {
+            shadow_map: Some(2048),
+            fog: true,
+            transparent_cover: true,
+            ..PostChain::default()
+        };
+        let reads = |graph: &RenderGraph, name: &str| {
+            graph_pass(graph, name)
+                .unwrap_or_else(|| panic!("{name} is declared"))
+                .0
+        };
+        let (plain, _) = build_frame_graph(size, chain);
+        let (shadowed, _) = build_frame_graph(
+            size,
+            PostChain {
+                particles_shadowed: true,
+                ..chain
+            },
+        );
+        for name in [pass::TRANSPARENTS, pass::TRANSPARENT_DEPTH] {
+            assert!(
+                !reads(&plain, name).iter().any(|r| r == "shadow_map"),
+                "{name} reads no shadow map without shadowed particles"
+            );
+            assert!(
+                reads(&shadowed, name).iter().any(|r| r == "shadow_map"),
+                "{name} reads the shadow map for shadowed particles"
+            );
+        }
+    }
+
     /// `scene_depth` gains `CopySrc` only when a `nearest` blended mesh copies it; any other frame, blended
     /// or not, keeps the descriptor it had.
     #[test]
@@ -6632,6 +6676,8 @@ mod tests {
             softness: 0.0,
             additive: false,
             lit: false,
+            shadowed: false,
+            streak: glam::Vec3::ZERO,
             viewmodel: false,
             medium: 1.0,
         }

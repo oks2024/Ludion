@@ -258,7 +258,7 @@ pub const TONEMAP_NONE: u32 = 3;
 
 /// `UNSHADOWED`, hoisted from WGSL `const UNSHADOWED: u32`.
 ///
-/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 pub const UNSHADOWED: u32 = 4294967295;
 
 /// `VIEWMODEL_CELL`, hoisted from WGSL `const VIEWMODEL_CELL: u32`.
@@ -806,7 +806,7 @@ const _: () = assert!(core::mem::offset_of!(LocalShadowDebug, cells) == 16);
 
 /// WGSL `struct LocalView`.
 ///
-/// Declared in `decal_lit.wgsl`, `medium_scatter.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// Declared in `decal_lit.wgsl`, `medium_scatter.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct LocalView {
@@ -1507,7 +1507,7 @@ const _: () = assert!(core::mem::offset_of!(SsrTrace, view_forward) == 176);
 
 /// WGSL `struct Sun`.
 ///
-/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// Declared in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct Sun {
@@ -2467,11 +2467,11 @@ pub const SCATTER_GI_B_BINDING: u32 = 3;
 pub const SPRITE_TEX_GROUP: u32 = 2;
 pub const SPRITE_TEX_BINDING: u32 = 0;
 
-/// `sun` — `@group(2) @binding(0)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// `sun` — `@group(2) @binding(0)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 pub const SUN_GROUP: u32 = 2;
 pub const SUN_BINDING: u32 = 0;
 
-/// `shadow_tex` — `@group(2) @binding(1)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// `shadow_tex` — `@group(2) @binding(1)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 pub const SHADOW_TEX_GROUP: u32 = 2;
 pub const SHADOW_TEX_BINDING: u32 = 1;
 
@@ -2479,19 +2479,19 @@ pub const SHADOW_TEX_BINDING: u32 = 1;
 pub const SPRITE_SAMPLER_GROUP: u32 = 2;
 pub const SPRITE_SAMPLER_BINDING: u32 = 1;
 
-/// `shadow_samp` — `@group(2) @binding(2)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// `shadow_samp` — `@group(2) @binding(2)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 pub const SHADOW_SAMP_GROUP: u32 = 2;
 pub const SHADOW_SAMP_BINDING: u32 = 2;
 
-/// `local_shadow_tex` — `@group(2) @binding(3)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// `local_shadow_tex` — `@group(2) @binding(3)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 pub const LOCAL_SHADOW_TEX_GROUP: u32 = 2;
 pub const LOCAL_SHADOW_TEX_BINDING: u32 = 3;
 
-/// `local_views` — `@group(2) @binding(4)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// `local_views` — `@group(2) @binding(4)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 pub const LOCAL_VIEWS_GROUP: u32 = 2;
 pub const LOCAL_VIEWS_BINDING: u32 = 4;
 
-/// `light_shadow` — `@group(2) @binding(5)`, in `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// `light_shadow` — `@group(2) @binding(5)`, in `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 pub const LIGHT_SHADOW_GROUP: u32 = 2;
 pub const LIGHT_SHADOW_BINDING: u32 = 5;
 
@@ -5216,7 +5216,7 @@ pub fn create_ssr_src_ssr_samp_ssr_color_params_bgl(
     })
 }
 
-/// Bind group layout `sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow` (@group 2), from `decal_lit.wgsl`, `mesh.wgsl`, `rain.wgsl`.
+/// Bind group layout `sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow` (@group 2), from `decal_lit.wgsl`, `mesh.wgsl`, `particle.wgsl`, `rain.wgsl`.
 pub fn create_sun_shadow_tex_shadow_samp_local_shadow_tex_local_views_light_shadow_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
@@ -5535,6 +5535,7 @@ pub const PARTICLE_VS_DEPTH_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (3, wgpu::VertexFormat::Float32x4),
     (4, wgpu::VertexFormat::Float32x4),
     (5, wgpu::VertexFormat::Float32),
+    (6, wgpu::VertexFormat::Float32x4),
 ];
 
 /// `particle.wgsl`'s `vs_main` `@location` inputs, in location order.
@@ -5545,6 +5546,7 @@ pub const PARTICLE_VS_MAIN_INPUTS: &[(u32, wgpu::VertexFormat)] = &[
     (3, wgpu::VertexFormat::Float32x4),
     (4, wgpu::VertexFormat::Float32x4),
     (5, wgpu::VertexFormat::Float32),
+    (6, wgpu::VertexFormat::Float32x4),
 ];
 
 /// `prepass.wgsl`'s `vs_main` `@location` inputs, in location order.

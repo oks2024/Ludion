@@ -1,6 +1,6 @@
 # Plan: Rain and wet weather
 
-> Status: **W1a, W1b, W2a, W2b, W2c, W3a and W3b mechanized; W4a (shadowed, backlit rain) mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
+> Status: **W1a, W1b, W2a, W2b, W2c, W3a and W3b mechanized; W4a (shadowed, backlit rain) and W4b (shadowed, stretched particles) mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
 > roof occlusion, mesh wetness, authored porosity, `RainOccluder`, the `rain_occlusion` debug view, the `rain_density` quality lever, ripples on wet ground and coat decals, splashes on exposed tops (`rain-splashes`), shadowed and backlit rain (`rain-shadows`), and the `rain-open`, `rain-awning`, `rain-wet`, `rain-porosity` and `rain-occluder` goldens. Usage is `ludion docs weather`; the gallery scenes are
 > `examples/gallery/rain-open.yaml`, `rain-awning.yaml`, `rain-wet.yaml`, `rain-porosity.yaml` and `rain-occluder.yaml`.
 
@@ -139,6 +139,22 @@ for the whole arc; W1a ships the streak field.
     `backlight: 0` keeps the W3b bytes. `PostChain.rain_shadowed = rain.lit && rain.shadowed` opens the lighting-tail reads in
     `transparents`/`transparent_depth`; `record_rain` binds the sun group through the same `sun_group` factor `shading_groups` uses.
     The seven earlier rain scenes author `shadowed: false` and `backlight: 0.0`.
+32. **Particle velocity** (W4b). `Segment::velocity_at` and `Motion::velocity_at` in `particles.rs` walk the phases as
+    `offset_at` does and return the closed-form derivative: ballistic `velocity x (1 - k x drift) + acceleration x drift` (with
+    drag; `velocity + acceleration x t` without), ramp `heading x lerp(from, to, t / duration)`, turn
+    `speed x (heading x cos(rate t) + normal.cross(heading) x sin(rate t))` through `ludion_core::math`. A motion past its last
+    finite phase is still (zero); `t <= 0` gives the first phase's start velocity. `EmitterContext::particle` calls it only
+    when `stretch > 0` and never reorders the RNG draws. Render-only, deterministic.
+33. **Particle lanes.** `ParticleEmitter.shadowed` (default false) and `.stretch` (`>= 0`, default 0) skip serialization at
+    their defaults, so text, snapshots and `WorldHash` do not move. `ParticleInstance` gains `shadowed` (`lit && shadowed`, false
+    for viewmodel particles) and `streak` (`velocity x stretch / 60`, zero for a disc); `ParticleInstanceRaw` gains
+    `motion: [f32; 4]` (xyz streak, w shadowed) at `@location(6)`. A non-finite `stretch` is the existing `L2107`.
+34. **Particle shader and binding.** `particle.wgsl` composes `shadow_bindings.wgsl` and `billboard_shadowed.wgsl`; its layouts
+    are `[Camera, Lights, Sun]`. A shadowed lit particle shades through `shade_billboard_shadowed` with `backlight = 0`; a
+    streaked one is a capsule along `axis = normalize(streak)` of core length `|streak|` and the disc's width, with the
+    softness falloff around both ends (a flat `core` varying; 0 is the old disc path). `PostChain.particles_shadowed` joins
+    `blended` and `rain_shadowed` in opening the lighting-tail reads; one `transparent_sun_group` helper builds the sun group
+    for rain and particles, binding fallbacks when the chain declared no tail.
 
 ## Waves
 
@@ -153,7 +169,8 @@ for the whole arc; W1a ships the streak field.
 - **W3a, ripples:** `Rain.ripples` and `Decal.ripples`; a shading-normal perturbation on wet ground and on `coat` decals (D22-D24).
 - **W3b, splashes** (shipped): the instanced splash draw on exposed tops (D25-D27).
 - **W4a, rain lighting** (shipped): sun and local shadow taps and `backlight` on the rain (D28-D31).
-- **W4b, particles:** `ParticleEmitter.shadowed` through `shade_billboard_shadowed`, and `.stretch`, a quad along the
+  **W4b status:** `ParticleEmitter.shadowed` and `.stretch` ship (Neon Shroud request 0018): `velocity_at` in `particles.rs`, the `streak`/`shadowed` instance lanes, `particle.wgsl` on the sun group, `PostChain.particles_shadowed`, one `transparent_sun_group` helper shared with the rain. An unauthored emitter keeps its bytes (the 18 guard renders of the particle scenes at ticks 0 and 12 are byte-equal; no replay, `WorldHash` or protocol schema moved); the disc distance is a `select`, since an `if` there moved three pixels of `particles-stress` by one level. New golden `particles-shadowed` (Windows blessed on the RTX 3090; macOS twin owed). Docs: `docs/particles.md`.
+- **W4b, particles** (shipped, D32-D34): `ParticleEmitter.shadowed` through `shade_billboard_shadowed`, and `.stretch`, a quad along the
   screen-projected velocity of length `stretch x |v| / 60` (default 0 is byte-identical).
 - **W5:** `rain-camera-move`, budget files, and a tile cache if the measured cost asks for one.
 

@@ -1,0 +1,187 @@
+# Feature: ParticleEmitter.shadowed and ParticleEmitter.stretch - lit particles that take the shadow maps, and sparks drawn
+# as velocity capsules. A dark room with one shadow-granted sodium spot from the right throws a casting wall's shadow across
+# the floor. A lit `shadowed: true` smoke plume rises astride the wall's end, so the half behind the wall goes dark where the
+# spot's tap is blocked and the half past it stays lit. An additive spark burst with `stretch: 1.5` and gravity falls in the
+# lit pool, each spark a capsule along its own velocity. Rendered at tick 12, a fixed frame of the burst.
+format: 1
+name: "particles-shadowed - shadowed lit smoke across a wall's shadow edge, and stretched sparks"
+seed: 1
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 4.6
+          - 11.0
+        rotation:
+          - -20.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 45.0
+  - name: dark
+    components:
+      Environment:
+        sky_zenith:
+          - 0.0
+          - 0.0
+          - 0.0
+        sky_horizon:
+          - 0.0
+          - 0.0
+          - 0.0
+        sky_ground:
+          - 0.0
+          - 0.0
+          - 0.0
+        ambient:
+          - 0.01
+          - 0.01
+          - 0.012
+  - name: floor
+    components:
+      Transform:
+        scale:
+          - 20.0
+          - 1.0
+          - 14.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.42
+          - 0.42
+          - 0.45
+          - 1.0
+  - name: back-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.0
+          - -5.0
+        scale:
+          - 20.0
+          - 6.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.42
+          - 0.42
+          - 0.45
+          - 1.0
+  - name: casting-wall
+    components:
+      Transform:
+        translation:
+          - -0.5
+          - 2.0
+          - 0.0
+        scale:
+          - 0.4
+          - 4.0
+          - 5.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.6
+          - 0.55
+          - 0.5
+          - 1.0
+  - name: sodium-spot
+    components:
+      Transform:
+        translation:
+          - 6.0
+          - 4.5
+          - 2.5
+      SpotLight:
+        color:
+          - 1.0
+          - 0.62
+          - 0.22
+        intensity: 9.0
+        range: 22.0
+        direction:
+          - -8.0
+          - -4.5
+          - -1.0
+        inner_angle: 30.0
+        outer_angle: 50.0
+        cast_shadows: true
+  - name: smoke
+    components:
+      Transform:
+        translation:
+          - -2.6
+          - 0.2
+          - 2.5
+      ParticleEmitter:
+        shape: sphere
+        extent:
+          - 0.4
+          - 0.2
+          - 2.2
+        rate: 90.0
+        life:
+          - 2.0
+          - 3.0
+        speed:
+          - 0.2
+          - 0.6
+        spread_deg: 20.0
+        gravity: -0.8
+        drag: 0.3
+        start_size: 0.7
+        end_size: 1.6
+        start_color:
+          - 0.9
+          - 0.9
+          - 0.9
+          - 0.55
+        end_color:
+          - 0.9
+          - 0.9
+          - 0.9
+          - 0.0
+        softness: 0.85
+        lit: true
+        shadowed: true
+        seed: 5
+  - name: sparks
+    components:
+      Transform:
+        translation:
+          - 2.8
+          - 0.2
+          - 3.5
+      ParticleEmitter:
+        rate: 0.0
+        burst: 80
+        life:
+          - 0.9
+          - 1.4
+        speed:
+          - 6.0
+          - 9.0
+        spread_deg: 38.0
+        gravity: 9.8
+        start_size: 0.07
+        end_size: 0.05
+        start_color:
+          - 4.0
+          - 1.9
+          - 0.5
+          - 1.0
+        end_color:
+          - 3.0
+          - 0.9
+          - 0.2
+          - 1.0
+        blend: additive
+        softness: 0.3
+        stretch: 1.5
+        seed: 11
