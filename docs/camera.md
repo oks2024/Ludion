@@ -176,7 +176,7 @@ framing:
 
 - At weight 0 the boom is the plain orbit, bit for bit; a returned peek rests at exactly 0 and leaves the state.
 - The framed yaw and pitch are the pose's: `aim()` and `yaw_deg()` see the framed view. `rig.state.yaw_deg` is the unframed orbit yaw.
-- `camera_relative` reads the framed yaw. To keep stick directions fixed during a peek, call `camera_relative_yaw(stick, rig.state.yaw_deg)`.
+- `camera_relative` ignores the framing yaw while a `chase` or `follow` rig has a nonzero applied weight: it maps through the unframed `rig.state.yaw_deg`, so "forward" stays toward the wall during a peek. At weight 0 it is `camera_relative_yaw(stick, rig.yaw_deg())` bit for bit.
 
 ## Kick and roll
 
@@ -257,7 +257,7 @@ The pipeline runs on the **gameplay clock**: a `GameClock::hold` on frame f free
 
 ## Ordering and `camera_relative`
 
-Order per tick: `path_follow` → game systems → physics → `camera_rig` → presentation. The target pose the camera reads is this tick's settled one. A game system runs **before** the rig, so `camera_relative(stick, &rig)` (or `camera_relative_yaw` with a yaw you latched) reads **last tick's** yaw: one tick of latency, and the yaw is pre-shake so a shake never twists the controls. `y` pushes away from the camera.
+Order per tick: `path_follow` → game systems → physics → `camera_rig` → presentation. The target pose the camera reads is this tick's settled one. A game system runs **before** the rig, so `camera_relative(stick, &rig)` (or `camera_relative_yaw` with a yaw you latched) reads **last tick's** yaw: one tick of latency, and the yaw is pre-shake so a shake never twists the controls (and, under an applied framing peek, pre-framing: see Framing). `y` pushes away from the camera.
 
 The system is installed on every schedule and returns at once in a world without a rig, so a rig spawned at runtime poses its camera like an authored one.
 
@@ -328,4 +328,5 @@ Runnable: `crates/ludion/examples/camera_offset.rs`.
 - `ludion docs lane`, `ludion docs motor` — the character the camera follows and the stick it reads
 - `ludion docs debug-draw` — seeing the rig
 - `ludion docs sequences` — camera keys that write a rig and restore it
+- `examples/gallery/camera-chase.yaml` — a chase boom pulled in by a pillar and a ceiling, two overlapping zones, a `camera_pass` prop that fades and a corner peek, driven by `crates/ludion-testkit/tests/common/mod.rs`: `cargo run -p ludion-testkit --example camera_chase -- --scene examples/gallery/camera-chase.yaml --window --debug-draw camera`
 - `games/character-course` — the course as the in-game proof: behind and side rigs, zone sensors, a snap and a shake on respawn, `camera_relative`

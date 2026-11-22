@@ -2,7 +2,7 @@
 
 use ludion_core::math::sin_cos;
 
-use crate::rig::CameraRig;
+use crate::rig::{CameraRig, RigMode};
 
 const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
 
@@ -29,6 +29,18 @@ pub fn camera_relative_yaw(stick: [f32; 2], yaw_deg: f32) -> [f32; 3] {
 /// [`camera_relative_yaw`] at the rig's last posed yaw ([`CameraRig::yaw_deg`]). The rig runs after
 /// game systems, so a system reads the yaw posed on the previous tick; the yaw is taken before
 /// shake, so a shake never twists the controls.
+///
+/// While a `chase` or `follow` rig has a nonzero applied framing weight, the stick maps through the
+/// unframed orbit yaw (`state.yaw_deg`) instead: a corner peek never turns the controls.
 pub fn camera_relative(stick: [f32; 2], rig: &CameraRig) -> [f32; 3] {
-    camera_relative_yaw(stick, rig.yaw_deg())
+    let framed = rig.state.framing_weight != 0.0
+        && matches!(rig.rig.mode, RigMode::Chase(_) | RigMode::Follow(_));
+    camera_relative_yaw(
+        stick,
+        if framed {
+            rig.state.yaw_deg
+        } else {
+            rig.yaw_deg()
+        },
+    )
 }

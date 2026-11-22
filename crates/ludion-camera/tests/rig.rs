@@ -625,6 +625,80 @@ fn camera_relative_reads_the_rigs_posed_yaw_before_shake() {
     );
 }
 
+/// A chase rig stepped until its framing (a 35 degree peek) is fully applied.
+fn peeking_chase(weight: f32) -> CameraRig {
+    let mut rig = chase_rig(ChaseRig::default());
+    fp_tick(&mut rig, [0.0; 3], 0);
+    rig.framing = Framing {
+        yaw_offset_deg: 35.0,
+        ..framed(weight)
+    };
+    for k in 1..400 {
+        fp_tick(&mut rig, [0.0; 3], k);
+    }
+    rig
+}
+
+#[test]
+fn camera_relative_at_framing_weight_zero_is_the_posed_yaw_bit_for_bit() {
+    let rig = peeking_chase(0.0);
+    assert_eq!(rig.state.framing_weight, 0.0);
+    for stick in [[0.0, 1.0], [1.0, 0.0], [0.6, 0.8]] {
+        assert_eq!(
+            camera_relative(stick, &rig),
+            camera_relative_yaw(stick, rig.yaw_deg())
+        );
+    }
+}
+
+#[test]
+fn camera_relative_under_a_chase_peek_maps_through_the_unframed_yaw() {
+    for rig in [peeking_chase(1.0), {
+        let mut rig = rig_with(boom_cfg(RigMode::Follow(FollowRig::default()), 0.0));
+        fp_tick(&mut rig, [0.0; 3], 0);
+        rig.framing = Framing {
+            yaw_offset_deg: 35.0,
+            ..framed(1.0)
+        };
+        for k in 1..400 {
+            fp_tick(&mut rig, [0.0; 3], k);
+        }
+        rig
+    }] {
+        assert_eq!(rig.state.framing_weight, 1.0);
+        assert!(
+            (rig.yaw_deg() - rig.state.yaw_deg - 35.0).abs() < 1e-3,
+            "the posed yaw carries the peek: {} vs {}",
+            rig.yaw_deg(),
+            rig.state.yaw_deg
+        );
+        assert_eq!(
+            camera_relative([0.0, 1.0], &rig),
+            camera_relative_yaw([0.0, 1.0], rig.state.yaw_deg)
+        );
+        assert_ne!(
+            camera_relative([0.0, 1.0], &rig),
+            camera_relative_yaw([0.0, 1.0], rig.yaw_deg())
+        );
+    }
+}
+
+#[test]
+fn camera_relative_on_a_track_or_first_person_rig_ignores_the_framing_weight() {
+    let path = straight();
+    let mut track = rig_with(rigid([0.0, 2.0, 4.0]));
+    tick(&mut track, &path, [0.0, 0.0, -10.0], 0);
+    let mut first_person = fp_rig();
+    fp_tick(&mut first_person, [0.0; 3], 0);
+    for mut rig in [track, first_person] {
+        rig.state.framing_weight = 1.0;
+        assert_eq!(
+            camera_relative([0.0, 1.0], &rig),
+            camera_relative_yaw([0.0, 1.0], rig.yaw_deg())
+        );
+    }
+}
+
 // ── degenerate and absent inputs ─────────────────────────────────────────────────────────────────
 
 #[test]

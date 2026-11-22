@@ -20,6 +20,11 @@
 //! **camera-rig** — [`drive_rig`] swaps the rail camera to a side-on rig at [`SWITCH_TICK`] (a timed
 //! blend), cuts back with `snap_rig` at [`SNAP_TICK`] and pulses trauma at [`SHAKE_TICK`]
 //! (`ludion docs camera`).
+//!
+//! **camera-chase** — [`chase_builder`] walks the hero a closed-form route ([`chase_route`]) while
+//! [`drive_chase`] sweeps the chase boom round the yard (`ORBIT_*`), writes a corner peek
+//! (`PEEK_*`) and [`fade_occluders`] fades the `camera_pass` prop between the eye and the hero
+//! (`ludion docs camera`).
 
 #![allow(dead_code)]
 
@@ -33,8 +38,9 @@ use ludion_engine::{
     Animation, AnimationEvents, Engine, EngineBuilder, Mesh, PrefabInstance, Sprite,
 };
 use ludion_engine::{
-    AssemblyData, BlendIn, CameraRig, RigConfig, RigMode, TrackRig, add_trauma, animation_events,
-    crossfade, load_assembly, snap_rig, switch_skin_to_ragdoll, switch_to_ragdoll,
+    AssemblyData, BlendIn, CameraRig, Framing, RigConfig, RigMode, TrackRig, add_look, add_trauma,
+    animation_events, crossfade, load_assembly, snap_rig, switch_skin_to_ragdoll,
+    switch_to_ragdoll,
 };
 use std::sync::Arc;
 
@@ -821,4 +827,98 @@ pub fn subtitles_builder() -> EngineBuilder {
         .system("dialogue_update", ludion_engine::dialogue_update)
         .query::<(&ludion_engine::dialogue::DialogueLine,)>()
         .query::<(&ludion_engine::dialogue::DialogueControl,)>()
+}
+
+// --- camera-chase ------------------------------------------------------------------------------
+
+/// The scene's hero by document position (`examples/gallery/camera-chase.yaml`).
+pub const CHASE_HERO: EntityId = EntityId::new(3, 0);
+/// Ticks of the whole run: the hero walks 0.1 m a tick until [`CHASE_WALK_TICKS`], then stands.
+pub const CHASE_TICKS: u64 = 360;
+/// Ticks the hero walks for.
+pub const CHASE_WALK_TICKS: u64 = 305;
+/// The boom sweeps one full turn over `ORBIT_START..ORBIT_END`, past the pillar and across the yard.
+pub const ORBIT_START: u64 = 15;
+pub const ORBIT_END: u64 = 105;
+/// Degrees of look each orbit tick (90 ticks make one turn).
+pub const ORBIT_DEG_PER_TICK: f32 = 4.0;
+/// The tick the hero crosses into the room (its ceiling pulls the boom in).
+pub const ROOM_ENTER_TICK: u64 = 160;
+/// The corner peek is written at `PEEK_START` and released at `PEEK_END`; its half-life is short
+/// enough that the weight rests at exactly 1 and then exactly 0 within about 50 ticks.
+pub const PEEK_START: u64 = 250;
+pub const PEEK_END: u64 = 300;
+/// The tick the driven golden is rendered at: the hero is under the ceiling with the boom pulled in.
+pub const CHASE_GOLDEN_TICK: u64 = 200;
+/// The layer of the prop that fades instead of pulling the boom in.
+pub const CAMERA_PASS_LAYER: &str = "camera_pass";
+
+/// The hero's feet at gameplay tick `t`: a closed form, so a restored run needs no state.
+pub fn chase_hero_at(tick: u64) -> [f32; 3] {
+    [-8.0 + 0.1 * tick.min(CHASE_WALK_TICKS) as f32, 0.5, 0.0]
+}
+
+/// Moves the hero along its route.
+pub fn chase_route(world: &mut World, ctx: &SystemCtx) {
+    let at = chase_hero_at(ctx.game_frame.as_u64());
+    world
+        .get_mut::<ludion_engine::Transform>(CHASE_HERO)
+        .expect("the hero is live")
+        .expect("the hero has a Transform")
+        .translation = at;
+}
+
+/// The orbit sweep and the corner peek, keyed on `ctx.game_frame`. Game systems run before
+/// `camera_rig`, so a write at tick N is seen at N.
+pub fn drive_chase(world: &mut World, ctx: &SystemCtx) {
+    let tick = ctx.game_frame.as_u64();
+    for (_, (rig,)) in world.query_ids::<(&mut CameraRig,)>() {
+        if (ORBIT_START..ORBIT_END).contains(&tick) {
+            add_look(rig, ORBIT_DEG_PER_TICK, 0.0);
+        }
+        if tick == PEEK_START {
+            rig.framing = Framing {
+                weight: 1.0,
+                pivot_offset: [0.8, 0.3, 0.0],
+                yaw_offset_deg: 35.0,
+                pitch_offset_deg: 0.0,
+                distance: Some(4.0),
+                half_life: 0.06,
+            };
+        } else if tick == PEEK_END {
+            rig.framing.weight = 0.0;
+        }
+    }
+}
+
+/// Fades every `camera_pass` prop between the camera and the hero, restoring the others.
+pub fn fade_occluders(world: &mut World, _ctx: &SystemCtx) {
+    let Some(camera) = world.entities().find(|&id| world.has::<CameraRig>(id)) else {
+        return;
+    };
+    let layers = ludion::prelude::LayerSet::from(vec![CAMERA_PASS_LAYER.to_string()]);
+    let Ok(hidden) = ludion_engine::camera_occluders(world, camera, &layers, 0.2) else {
+        return;
+    };
+    let props: Vec<EntityId> = world
+        .query_ids::<(&ludion_engine::Fade,)>()
+        .map(|(id, _)| id)
+        .collect();
+    for prop in props {
+        let fade = if hidden.contains(&prop) { 0.2 } else { 1.0 };
+        if let Ok(Some(component)) = world.get_mut::<ludion_engine::Fade>(prop) {
+            component.fade = fade;
+        }
+    }
+}
+
+/// The camera-chase scene's engine: the route, then the camera writes, then the occluder fade.
+pub fn chase_builder() -> EngineBuilder {
+    Engine::builder()
+        .system("chase_route", chase_route)
+        .query::<(&mut ludion_engine::Transform,)>()
+        .system("drive_chase", drive_chase)
+        .query::<(&mut CameraRig,)>()
+        .system("fade_occluders", fade_occluders)
+        .query::<(&mut ludion_engine::Fade,)>()
 }

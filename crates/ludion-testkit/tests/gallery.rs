@@ -939,6 +939,66 @@ fn needs_gpu_camera_rig_driven_matches_committed_golden_at_exactly_one() {
     }
 }
 
+/// The `camera-chase` scene driven by `common::chase_builder` to the hero under the room's ceiling:
+/// the boom is pulled in, with the `camera` debug category on (the red pull-in cross, the pivot, the
+/// boom and the active zone). The bare discovered `camera-chase.png` is the authored pose at frame 0.
+fn camera_chase_driven_test() -> GoldenTest {
+    let gallery = gallery_dir();
+    let mut test = GoldenTest::new(
+        gallery.join("camera-chase.yaml"),
+        os_goldens().join("camera-chase-driven.png"),
+    )
+    .with_builder(common::chase_builder)
+    .with_frames(common::CHASE_GOLDEN_TICK)
+    .with_debug_draw(ludion_engine::DebugCategories::parse("camera"));
+    test.ssim_threshold = 1.0;
+    test
+}
+
+/// The driven `camera-chase` render compares clean against its committed golden at exactly SSIM 1.0.
+/// Under `LUDION_BLESS`, (re)writes the golden instead. Skips gracefully with no GPU adapter.
+#[test]
+fn needs_gpu_camera_chase_driven_matches_committed_golden_at_exactly_one() {
+    let test = camera_chase_driven_test();
+
+    if bless_requested() {
+        match test.bless() {
+            Ok(GoldenOutcome::Blessed { .. }) => {}
+            Ok(_) => unreachable!("bless() only ever returns Blessed"),
+            Err(diagnostics) if is_skip(&diagnostics) => {
+                eprintln!(
+                    "SKIPPED camera_chase_driven_matches_committed_golden_at_exactly_one (bless): {}",
+                    skip_note(&diagnostics)
+                );
+            }
+            Err(diagnostics) => {
+                panic!("blessing the camera-chase golden failed: {diagnostics:?}")
+            }
+        }
+        return;
+    }
+
+    let out_dir = scratch_dir("camera_chase_driven_out");
+    match test.run(&out_dir) {
+        Ok(GoldenOutcome::Passed { report }) => assert_eq!(
+            report.ssim,
+            Some(1.0),
+            "the driven camera-chase render must be byte-identical to its freshly-blessed golden"
+        ),
+        Ok(GoldenOutcome::Failed { report, .. }) => {
+            panic!("the driven camera-chase golden failed: {}", report.summary)
+        }
+        Ok(GoldenOutcome::Blessed { .. }) => unreachable!("run() never blesses"),
+        Err(diagnostics) if is_skip(&diagnostics) => {
+            eprintln!(
+                "SKIPPED camera_chase_driven_matches_committed_golden_at_exactly_one: {}",
+                skip_note(&diagnostics)
+            );
+        }
+        Err(diagnostics) => panic!("the driven camera-chase render failed: {diagnostics:?}"),
+    }
+}
+
 /// The lantern model's contact sheet compares clean against its committed golden at exactly SSIM 1.0
 /// — the "one golden per model" harness proof (`Plan/roadmap-voxel-mesh-pbr.md`). Under
 /// `LUDION_BLESS`, (re)writes the committed golden instead (the suite's bless mechanism, mirroring

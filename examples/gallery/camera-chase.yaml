@@ -1,0 +1,356 @@
+# Feature: the chase camera — a `chase` CameraRig on a hero who walks an open yard past a pillar
+# (the boom pulls in), under a low ceiling through two overlapping `CameraZone`s (a wide `follow`
+# over a close `chase`), behind a `camera_pass` prop (listed by `camera_occluders`, faded by the
+# game) and into a peek corner (`framing`). Bare, this scene shows the authored rig before its
+# first tick; the game half is `crates/ludion-testkit/tests/common/mod.rs` (`chase_builder`), which
+# walks the hero, sweeps the boom around the yard with `add_look`, writes the peek and fades the
+# occluders (`ludion docs camera`). Run `--debug-draw camera` to see the pivot, the boom, the red
+# pull-in cross and the active zone.
+format: 1
+name: "camera-chase - a chase camera pulls in, crosses zones, fades a prop and peeks a corner"
+seed: 1
+physics:
+  space: free
+  layers:
+    - name: camera_pass
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 6.2
+          - 5.7
+        rotation:
+          - -45.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 55.0
+      CameraRig:
+        target:
+          index: 3
+          generation: 0
+        rig:
+          mode:
+            chase:
+              distance: 8.0
+              pitch_deg: 45.0
+              pitch_min_deg: 20.0
+              pitch_max_deg: 70.0
+          collision:
+            enabled: true
+            radius: 0.3
+            ignore_layers:
+              - camera_pass
+  - name: sun
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.5
+          - -0.8
+          - -0.35
+        color:
+          - 1.0
+          - 0.96
+          - 0.86
+        intensity: 2.6
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 10.0
+          - 0.0
+          - 0.0
+        scale:
+          - 70.0
+          - 1.0
+          - 40.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.42
+          - 0.46
+          - 0.4
+          - 1.0
+        roughness: 0.9
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 35.0
+              - 0.05
+              - 20.0
+        body: static
+  - name: hero
+    components:
+      Transform:
+        translation:
+          - -8.0
+          - 0.5
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.95
+          - 0.55
+          - 0.12
+          - 1.0
+        roughness: 0.5
+  - name: pillar
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 2.0
+          - 3.0
+        scale:
+          - 1.0
+          - 4.0
+          - 1.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.78
+          - 0.3
+          - 0.26
+          - 1.0
+        roughness: 0.8
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.5
+              - 2.0
+              - 0.5
+        body: static
+  - name: prop
+    components:
+      Transform:
+        translation:
+          - 4.0
+          - 2.5
+          - 3.5
+        scale:
+          - 1.4
+          - 5.0
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.5
+          - 0.8
+          - 1.0
+        roughness: 0.8
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.7
+              - 2.5
+              - 0.7
+        body: static
+        layer: camera_pass
+      Fade: {}
+  - name: room-wall-left
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 1.5
+          - -3.6
+        scale:
+          - 8.0
+          - 3.0
+          - 0.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.75
+          - 0.3
+          - 1.0
+        roughness: 0.8
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 4.0
+              - 1.5
+              - 0.1
+        body: static
+  - name: room-wall-right
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 1.5
+          - 3.6
+        scale:
+          - 8.0
+          - 3.0
+          - 0.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.8
+          - 0.75
+          - 0.3
+          - 1.0
+        roughness: 0.8
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 4.0
+              - 1.5
+              - 0.1
+        body: static
+  - name: room-ceiling
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 3.1
+          - 0.0
+        scale:
+          - 8.0
+          - 0.2
+          - 7.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.7
+          - 0.45
+          - 1.0
+        roughness: 0.8
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 4.0
+              - 0.1
+              - 3.7
+        body: static
+  - name: corner-wall-a
+    components:
+      Transform:
+        translation:
+          - 20.0
+          - 1.5
+          - -1.0
+        scale:
+          - 6.0
+          - 3.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.4
+          - 0.55
+          - 1.0
+        roughness: 0.8
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 3.0
+              - 1.5
+              - 0.2
+        body: static
+  - name: corner-wall-b
+    components:
+      Transform:
+        translation:
+          - 24.0
+          - 1.5
+          - 2.0
+        scale:
+          - 0.4
+          - 3.0
+          - 6.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.4
+          - 0.55
+          - 1.0
+        roughness: 0.8
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 0.2
+              - 1.5
+              - 3.0
+        body: static
+  - name: zone-wide
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 2.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 5.0
+              - 4.0
+              - 4.0
+        body: static
+        sensor: true
+      CameraZone:
+        priority: 1
+        rig:
+          mode:
+            follow:
+              yaw_deg: 0.0
+              pitch_deg: 45.0
+              distance: 10.0
+          collision:
+            enabled: true
+            radius: 0.3
+            ignore_layers:
+              - camera_pass
+          blend_in:
+            seconds: 0.5
+  - name: zone-inner
+    components:
+      Transform:
+        translation:
+          - 12.0
+          - 2.0
+          - 0.0
+      Collider:
+        shape:
+          box:
+            half_extents:
+              - 2.0
+              - 4.0
+              - 4.0
+        body: static
+        sensor: true
+      CameraZone:
+        priority: 2
+        rig:
+          mode:
+            chase:
+              distance: 4.0
+              pitch_deg: 45.0
+              pitch_min_deg: 20.0
+              pitch_max_deg: 70.0
+          collision:
+            enabled: true
+            radius: 0.3
+            ignore_layers:
+              - camera_pass
+          blend_in:
+            seconds: 0.5
