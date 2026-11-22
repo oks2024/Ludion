@@ -81,6 +81,10 @@ pub fn engine_limits() -> wgpu::Limits {
         // 19), and fourteen per-instance (model rows 6-9, color 10, material 11, normal-matrix rows
         // 12-15, occlusion `fade` 16, hit-`flash` 17, `rim` 20, `medium` 21 — `shaders/mesh.wgsl`). The floor is 16.
         max_vertex_attributes: 22,
+        // The mesh fragment stage samples 16 textures (`@group(2)` 2, `@group(3)` 9, `@group(4)` 5 — the
+        // floor) plus the blended meshes' reflection resources: the sky specular cube, the probe cube
+        // and emissive arrays and the relight table. Metal's floor is 31.
+        max_sampled_textures_per_shader_stage: 20,
         ..wgpu::Limits::default()
     }
 }
@@ -1552,10 +1556,12 @@ mod tests {
         assert_eq!(limits.max_texture_dimension_2d, MAX_TEXTURE_DIMENSION_2D);
         assert_eq!(limits.max_bind_groups, 5);
         assert_eq!(limits.max_vertex_attributes, 22);
+        assert_eq!(limits.max_sampled_textures_per_shader_stage, 20);
         assert_eq!(
             wgpu::Limits {
                 max_bind_groups: floor.max_bind_groups,
                 max_vertex_attributes: floor.max_vertex_attributes,
+                max_sampled_textures_per_shader_stage: floor.max_sampled_textures_per_shader_stage,
                 ..limits
             },
             floor,

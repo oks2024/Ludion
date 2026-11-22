@@ -29,6 +29,7 @@ fn pane(center: Vec3, side: f32, color: [f32; 4], mode: BlendMode, group: u32) -
     BlendedMesh {
         instance,
         mode,
+        lit: true,
         group,
     }
 }
@@ -311,4 +312,293 @@ fn needs_gpu_a_blended_mesh_casts_no_shadow() {
         "control: an opaque slab shadows the ground there"
     );
     assert_eq!(px(&blended, at.0, at.1), px(&bare, at.0, at.1));
+}
+
+// --- Indirect specular and `lit: false` (W2b) ---------------------------------------------------
+
+/// A glossy, non-emissive pane: `color` albedo at opacity `color[3]`, `material` `[roughness, metallic, emissive]`.
+fn glossy(center: Vec3, side: f32, color: [f32; 4], material: [f32; 3]) -> MeshInstance {
+    let mut instance = slab(center, 1.0, [color[0], color[1], color[2]]);
+    instance.model = Mat4::from_translation(center) * Mat4::from_scale(Vec3::new(side, side, 0.05));
+    instance.color = color;
+    instance.material = material;
+    instance.cast_shadows = false;
+    instance
+}
+
+fn blended_of(instance: MeshInstance) -> BlendedMesh {
+    BlendedMesh {
+        instance,
+        mode: BlendMode::Alpha,
+        lit: true,
+        group: 0,
+    }
+}
+
+fn assert_within(a: [u8; 3], b: [u8; 3], tolerance: u8, what: &str) {
+    for c in 0..3 {
+        assert!(
+            a[c].abs_diff(b[c]) <= tolerance,
+            "{what}: channel {c} is {} against {} (± {tolerance})",
+            a[c],
+            b[c]
+        );
+    }
+}
+
+/// A pane at opacity 1 sees the sky's specular as its opaque twin does, from the same `Environment`.
+/// Skips with no GPU.
+#[test]
+fn needs_gpu_an_opaque_alpha_pane_reflects_the_sky_like_its_opaque_twin() {
+    let Some(renderer) =
+        skip_or_renderer("an_opaque_alpha_pane_reflects_the_sky_like_its_opaque_twin")
+    else {
+        return;
+    };
+    let pane_at = Vec3::new(0.0, 0.0, -5.0);
+    let instance = glossy(pane_at, 3.0, [0.5, 0.5, 0.5, 1.0], [0.1, 0.0, 0.0]);
+    let mut opaque = scene(vec![instance], vec![]);
+    opaque.environment = Some(vivid_env(1.0));
+    let mut blended = scene(vec![], vec![blended_of(instance)]);
+    blended.environment = Some(vivid_env(1.0));
+    let want = renderer.render(&opaque, size()).expect("opaque");
+    let got = renderer.render(&blended, size()).expect("blended");
+    assert_within(
+        px(&got, C, C),
+        px(&want, C, C),
+        3,
+        "the pane's centre against its opaque twin",
+    );
+    // The control: the twin reflects something, or the parity proves nothing.
+    let mut dry = opaque.clone();
+    dry.environment = None;
+    let dry = renderer.render(&dry, size()).expect("no environment");
+    assert!(
+        px(&want, C, C)[1] > px(&dry, C, C)[1] + 10,
+        "the opaque twin shows the sky"
+    );
+}
+
+/// A glossy black pane over black shows only the sky's reflection: brighter with an `Environment` than
+/// without. Skips with no GPU.
+#[test]
+fn needs_gpu_a_glossy_blended_pane_shows_the_sky() {
+    let Some(renderer) = skip_or_renderer("a_glossy_blended_pane_shows_the_sky") else {
+        return;
+    };
+    let instance = glossy(
+        Vec3::new(0.0, 0.0, -5.0),
+        3.0,
+        [0.0, 0.0, 0.0, 1.0],
+        [0.05, 0.0, 0.0],
+    );
+    let mut lit = scene(vec![], vec![blended_of(instance)]);
+    lit.environment = Some(vivid_env(1.0));
+    let mut off = lit.clone();
+    off.environment = None;
+    let with = renderer.render(&lit, size()).expect("with");
+    let without = renderer.render(&off, size()).expect("without");
+    let (with, without) = (px(&with, C, C), px(&without, C, C));
+    assert!(
+        with[1] > without[1] + 15,
+        "the sky shows in the pane: {with:?} against {without:?}"
+    );
+}
+
+/// The room of `probe_shade`'s `a_box_probe_reflects_the_room`: a mirror floor under a blue sky and an emissive
+/// red wall. `floor_blended` draws the floor as an alpha-1 blended mesh instead of an opaque one.
+fn probe_room(floor_blended: bool) -> RenderScene {
+    let mut scene = RenderScene::empty((64, 64));
+    scene.post = Some(exact_post());
+    scene.environment = Some(crate::scene::EnvironmentData {
+        sky_zenith: [0.05, 0.1, 0.9],
+        sky_horizon: [0.05, 0.1, 0.9],
+        sky_ground: [0.05, 0.1, 0.9],
+        ..test_env()
+    });
+    let eye = Vec3::new(0.0, 2.0, 4.0);
+    scene.camera = crate::scene::RenderCamera {
+        view: Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y),
+        projection: Mat4::perspective_rh(60.0_f32.to_radians(), 1.0, 0.1, 100.0),
+        position: eye,
+    };
+    let mut floor = slab(Vec3::ZERO, 1.0, [0.9, 0.9, 0.9]);
+    floor.shape = MeshShape::Plane;
+    floor.model = Mat4::from_scale(Vec3::new(30.0, 1.0, 30.0));
+    floor.material = [0.05, 1.0, 0.0];
+    floor.cast_shadows = false;
+    let mut wall = slab(Vec3::new(0.0, 4.0, -6.1), 1.0, [1.0, 0.0, 0.0]);
+    wall.model = Mat4::from_translation(Vec3::new(0.0, 4.0, -6.1))
+        * Mat4::from_scale(Vec3::new(30.0, 8.0, 0.2));
+    wall.material = [1.0, 0.0, 4.0];
+    scene.meshes = vec![wall];
+    if floor_blended {
+        scene.blended = vec![blended_of(floor)];
+    } else {
+        scene.meshes.push(floor);
+    }
+    scene.probes = vec![crate::ProbeData {
+        entity: ludion_core::ids::EntityId::new(1, 0),
+        position: Vec3::new(0.0, 4.0, 0.0),
+        rotation: ludion_core::math::glam::Quat::IDENTITY,
+        volume: crate::ProbeVolume::Box {
+            extent: Vec3::new(15.0, 5.0, 6.0),
+        },
+        blend: 0.0,
+        priority: 0,
+    }];
+    scene
+}
+
+/// With a reflection probe the blended mirror floor shows the wall as its opaque twin does. Skips with no GPU.
+#[test]
+fn needs_gpu_a_blended_floor_reflects_a_probe_like_its_opaque_twin() {
+    let Some(renderer) = skip_or_renderer("a_blended_floor_reflects_a_probe_like_its_opaque_twin")
+    else {
+        return;
+    };
+    let size = FrameSize::native(64, 64);
+    let want = renderer.render(&probe_room(false), size).expect("opaque");
+    let got = renderer.render(&probe_room(true), size).expect("blended");
+    let [wr, _, wb] = px(&want, 32, 32);
+    assert!(
+        wr > wb + 40,
+        "control: the opaque floor shows the wall ({wr} {wb})"
+    );
+    assert_within(
+        px(&got, 32, 32),
+        px(&want, 32, 32),
+        3,
+        "the floor's reflection",
+    );
+}
+
+/// An unlit pane is `albedo + emissive` at its opacity whatever lights the scene. Skips with no GPU.
+#[test]
+fn needs_gpu_an_unlit_pane_ignores_the_lights() {
+    let Some(renderer) = skip_or_renderer("an_unlit_pane_ignores_the_lights") else {
+        return;
+    };
+    let albedo = [0.2, 0.5, 0.8];
+    let build = |light: Option<Vec3>| {
+        let instance = glossy(
+            Vec3::new(0.0, 0.0, -5.0),
+            3.0,
+            [albedo[0], albedo[1], albedo[2], 0.6],
+            [0.5, 0.0, 0.5],
+        );
+        let mut s = scene(
+            vec![],
+            vec![BlendedMesh {
+                lit: false,
+                ..blended_of(instance)
+            }],
+        );
+        s.lights = light
+            .map(|color| crate::scene::PointLightData {
+                position: Vec3::new(0.0, 0.0, -2.0),
+                color,
+                intensity: 12.0,
+                range: 20.0,
+                dynamic: false,
+                shadow: None,
+                scatter: 0.0,
+            })
+            .into_iter()
+            .collect();
+        s
+    };
+    let dark = renderer.render(&build(None), size()).expect("dark");
+    let red = renderer
+        .render(&build(Some(Vec3::new(1.0, 0.1, 0.1))), size())
+        .expect("red light");
+    let green = renderer
+        .render(&build(Some(Vec3::new(0.1, 1.0, 0.1))), size())
+        .expect("green light");
+    let colour = [albedo[0] * 1.5, albedo[1] * 1.5, albedo[2] * 1.5];
+    let want = bytes(over(CLEAR, &[(colour, 0.6)]));
+    for (frame, what) in [
+        (&dark, "no light"),
+        (&red, "a red light"),
+        (&green, "a green light"),
+    ] {
+        assert_near(px(frame, C, C), want, 3.0, what);
+    }
+}
+
+/// Rain, a shadowed local light and a blended pane in one frame record cleanly, and the pane takes the
+/// light's own shadow atlas, not the rain map (which trails the pass's reads). Skips with no GPU.
+#[test]
+fn needs_gpu_rain_does_not_move_a_shadowed_blended_pane() {
+    let Some(renderer) = skip_or_renderer("rain_does_not_move_a_shadowed_blended_pane") else {
+        return;
+    };
+    let build = |rain: bool, occluder: bool| {
+        let pane = BlendedMesh {
+            instance: glossy(
+                Vec3::new(0.0, 0.0, -5.0),
+                3.0,
+                [0.8, 0.8, 0.8, 1.0],
+                [1.0, 0.0, 0.0],
+            ),
+            ..blended_of(slab(Vec3::ZERO, 1.0, [0.0; 3]))
+        };
+        let mut s = scene(vec![], vec![pane]);
+        if occluder {
+            let mut block = slab(Vec3::new(1.5, 0.0, -4.0), 0.8, [0.2; 3]);
+            block.material = [1.0, 0.0, 0.0];
+            s.meshes.push(block);
+        }
+        s.lights = vec![crate::scene::PointLightData {
+            position: Vec3::new(3.0, 0.0, -3.0),
+            color: Vec3::ONE,
+            intensity: 20.0,
+            range: 20.0,
+            dynamic: false,
+            shadow: Some(crate::scene::LocalShadowData {
+                bias: 0.05,
+                near: 0.1,
+                distance: None,
+                fade: 0.0,
+            }),
+            scatter: 0.0,
+        }];
+        if rain {
+            s.rain = Some(crate::rain::RainData {
+                radius: 16.0,
+                height: [-6.0, 14.0],
+                cell: 4.0,
+                fall_speed: [7.0, 9.0],
+                wind: [1.2, 0.0, 0.4],
+                gust: 0.15,
+                drop_width: 0.05,
+                streak: 2.0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                lit: true,
+                medium: 1.0,
+                occlusion: true,
+                wetness: 0.5,
+                seed: 0,
+                time_s: 1.0,
+                per_tile: 0,
+            });
+        }
+        s
+    };
+    let shadowed = renderer
+        .render(&build(false, true), size())
+        .expect("shadowed");
+    let open = renderer.render(&build(false, false), size()).expect("open");
+    let rained = renderer.render(&build(true, true), size()).expect("rained");
+    assert!(
+        px(&shadowed, C, C)[0] + 10 < px(&open, C, C)[0],
+        "control: the block shadows the pane ({:?} against {:?})",
+        px(&shadowed, C, C),
+        px(&open, C, C)
+    );
+    assert_eq!(
+        px(&rained, C, C),
+        px(&shadowed, C, C),
+        "rain does not move the pane's shading"
+    );
 }

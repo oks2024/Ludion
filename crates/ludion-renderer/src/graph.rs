@@ -1827,12 +1827,14 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     scene_reads.extend(local_shadow_atlas);
     // A blended mesh shades like the scene pass minus ambient occlusion, which reads opaque depth and
     // so means nothing behind a surface the opaque pass never drew: its two passes read the same tail
-    // in the same order. A frame with none declares no reads there.
+    // in the same order, then the probe relight table the blended mesh's own indirect specular reads.
+    // A frame with none declares no reads there.
     let blended_reads: Vec<ResourceId> = if chain.blended {
         shadow_map
             .into_iter()
             .chain(gi_dynamic)
             .chain(local_shadow_atlas)
+            .chain(probe_live)
             .collect()
     } else {
         Vec::new()
@@ -1965,8 +1967,8 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
             vec![scene],
         );
     }
-    // The two passes that draw the rain read the map last, so `record_blended`'s fixed input indices
-    // do not move.
+    // The two passes that draw the rain read the map after the relight table, so `record_blended`'s
+    // input indices do not move.
     let mut blended_reads = blended_reads;
     if let Some(map) = rain_occlusion {
         blended_reads.push(map);
@@ -4921,6 +4923,62 @@ mod tests {
                 .resources()
                 .iter()
                 .all(|resource| resource.name != "probe_live")
+        );
+    }
+
+    /// A blended mesh shades its own indirect specular from the relight table, so `transparents` and
+    /// `transparent_depth` read it after the lighting tail and before the rain map; a frame with no blended
+    /// mesh declares no such read, probes or not.
+    #[test]
+    fn blended_passes_read_the_relight_table_only_with_a_blended_mesh() {
+        let size = FrameSize::native(1920, 1080);
+        let chain = PostChain {
+            probe_relight: true,
+            rain: true,
+            fog: true,
+            transparent_cover: true,
+            ..PostChain::default()
+        };
+        let reads = |graph: &RenderGraph, name: &str| {
+            graph_pass(graph, name)
+                .unwrap_or_else(|| panic!("{name} is declared"))
+                .0
+        };
+        let (plain, _) = build_frame_graph(size, chain);
+        for name in [pass::TRANSPARENTS, pass::TRANSPARENT_DEPTH] {
+            assert!(
+                !reads(&plain, name).iter().any(|r| r == "probe_live"),
+                "{name} reads no relight table without a blended mesh"
+            );
+        }
+        let (blended, _) = build_frame_graph(
+            size,
+            PostChain {
+                blended: true,
+                ..chain
+            },
+        );
+        for name in [pass::TRANSPARENTS, pass::TRANSPARENT_DEPTH] {
+            let read = reads(&blended, name);
+            let at = read.iter().position(|r| r == "probe_live").unwrap();
+            assert_eq!(
+                read.get(at + 1).map(String::as_str),
+                Some(pass::RAIN_OCCLUSION)
+            );
+            assert_eq!(read.len(), at + 2, "{name}");
+        }
+        let (dry, _) = build_frame_graph(
+            size,
+            PostChain {
+                blended: true,
+                probe_relight: false,
+                ..chain
+            },
+        );
+        assert!(
+            !reads(&dry, pass::TRANSPARENTS)
+                .iter()
+                .any(|r| r == "probe_live")
         );
     }
 

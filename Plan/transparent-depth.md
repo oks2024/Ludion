@@ -81,6 +81,16 @@ numbering above.
 11. Per instance: an assembly's parts each take their own document's mode, and share the entity's sort
     group.
 12. glTF `BLEND` imports as `alpha_mode: blend`; it is no longer an `L1202`.
+13. **Indirect specular on a lit blended mesh** is the sky's specular IBL plus the reflection probes (relit,
+    emissive part, sky visibility), never SSR (ruling e). `fs_blend`/`fs_blend_layer` compute it inline with a
+    binding-free twin of `reflections.wgsl` `reflection_fill`, because a blended mesh has no opaque surface
+    targets for the `reflections` pass to read; the two fills must change together. The mesh pipeline already
+    sits at the WebGPU floor of 16 sampled textures per fragment stage, so the reflection resources join group 3
+    and `engine_limits` raises `max_sampled_textures_per_shader_stage` to 20 (Metal's floor is 31). Only the
+    blended draw binds the frame's real probe resources; every other mesh draw binds fallbacks.
+14. **`Mesh.lit: false`** (default `true`) draws a blended mesh unlit: albedo (instance, vertex and base map) +
+    emissive + rim + flash, with no direct light, ambient, wrap or indirect specular. On a mesh that draws
+    opaque it is ignored with `L2361`.
 
 Waves:
 
@@ -170,4 +180,4 @@ tried on Metal, in the orthographic shaft tests, or on the reference game, and w
 - Mesh path (0016) W1 mechanized (r2386, 2026-11-18): `Mesh.blend` (`alpha` or `additive`) draws in the
   `transparents` pass and joins `transparent_depth`; the `glass-and-holograms` gallery golden is blessed on the
   RTX 3090. Opaque scenes keep the same pixels, and no replay content hash, `WorldHash`, existing golden or
-  protocol schema moved. W2a in progress; W2b and W3 are not started.
+  protocol schema moved. W2a shipped (r2440): asset and glTF `blend`. W2b in progress; W3 is not started.

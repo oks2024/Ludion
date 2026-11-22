@@ -1,0 +1,40 @@
+# A 1 x 1 pane facing +Z that draws seen through: `alpha_mode: blend` makes any instance of it a blended mesh
+# without a `Mesh.blend`. The instance colour's alpha is its opacity.
+format: 1
+kind: mesh
+name: glass-pane
+alpha_mode: blend
+double_sided: true
+positions:
+  - -0.5
+  - -0.5
+  - 0.0
+  - 0.5
+  - -0.5
+  - 0.0
+  - 0.5
+  - 0.5
+  - 0.0
+  - -0.5
+  - 0.5
+  - 0.0
+normals:
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 1.0
+indices:
+  - 0
+  - 1
+  - 2
+  - 0
+  - 2
+  - 3

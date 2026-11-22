@@ -355,6 +355,7 @@ pub fn switch_to_ragdoll_with(
                     medium: root_mesh.medium,
                     porosity: None,
                     blend: root_mesh.blend,
+                    lit: root_mesh.lit,
                 },
             )
             .expect("just spawned");

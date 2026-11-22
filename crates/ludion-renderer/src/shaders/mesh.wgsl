@@ -194,12 +194,107 @@ fn fs_medium(in: VsOut, @builtin(front_facing) front_facing: bool) -> MediumOut 
     return MediumOut(c.color, flag_skinned(c.normal_roughness, in.fade.z), c.specular, vec4<f32>(in.medium, 0.0, 0.0, 0.0));
 }
 
+// True in the blended twins of a `Mesh.lit: false` mesh: albedo, emissive, rim and flash, with no direct
+// light, ambient, wrap or indirect specular.
+override BLEND_UNLIT: bool = false;
+
+// The indirect specular a blended mesh gives itself: the twin of `reflections.wgsl` `reflection_fill`, which
+// reads surface targets a blended mesh never wrote. The same operations in the same order over this
+// fragment's own values (`nr` the normal and roughness, `spec` the F0 and specular occlusion), minus the depth
+// fetch and the sky early-out: a change to one is a change to the other.
+fn blend_fill(world: vec3<f32>, pos: vec4<f32>, nr: vec4<f32>, spec: vec4<f32>) -> vec3<f32> {
+    let env_on = env.params.x > 0.5;
+    let probe_count = u32(blend_probe_list.header.x);
+    if (!env_on && probe_count == 0u) {
+        return vec3<f32>(0.0);
+    }
+    let n = normalize(nr.xyz);
+    let roughness = abs(nr.w);
+    let v = normalize(view_to_eye(camera.cam_pos.xyz - world, camera.view_forward));
+    let ndv = max(dot(n, v), 1e-4);
+    let r = reflect(-v, n);
+    let rd = normalize(mix(r, n, dominant_lerp(roughness * roughness, ndv)));
+    var sky_fill = vec3<f32>(0.0);
+    if (env_on) {
+        sky_fill = sky_specular(blend_sky_cube, env_brdf_lut, env_samp, rd, ndv, roughness, spec.rgb, env.params.z)
+            * env.params.y * spec.a;
+        if (env.gi_origin.w > 0.5) {
+            sky_fill = sky_fill * mix(
+                1.0,
+                sky_visibility_at(gi_tex, env_samp, env.gi_origin.xyz, env.gi_scale, world, n),
+                env.params.w,
+            );
+        }
+    }
+    var fill = sky_fill;
+    if (probe_count > 0u) {
+        let cell = cluster_cell(pos.xy, dot(world - camera.cam_pos.xyz, world - camera.cam_pos.xyz), blend_probe_list.grid);
+        var mask = blend_probe_mask[cell];
+        var coverage = 0.0;
+        var radiance = vec3<f32>(0.0);
+        var taken = 0u;
+        let lod = specular_cube_lod(roughness, blend_probe_list.header.y);
+        let sky_lod = specular_cube_lod(roughness, env.params.z);
+        let sky_k = select(0.0, env.params.y, env_on);
+        let view_dist = length(world - camera.cam_pos.xyz);
+        loop {
+            if (mask == 0u || taken >= 4u || coverage >= 1.0) {
+                break;
+            }
+            let k = firstTrailingBit(mask);
+            mask = mask & (mask - 1u);
+            let probe = blend_probe_list.probes[k];
+            let w = probe_weight(probe, world, view_dist);
+            if (w <= 0.0) {
+                continue;
+            }
+            let contribution = w * (1.0 - coverage);
+            let dir = probe_lookup(probe, world, rd);
+            let sampled = textureSampleLevel(blend_probe_cubes, env_samp, dir, i32(probe.center.w), lod);
+            var em = vec3<f32>(0.0);
+            if (probe.params.z > 0.5) {
+                em = textureSampleLevel(blend_probe_emissive, env_samp, dir, i32(probe.center.w), lod).rgb;
+            }
+            let facing = select(vec3<f32>(0.0, 1.0, 0.0), -normalize(dir), dot(dir, dir) > 1e-12);
+            let rows = probe_axis_rows(facing);
+            let ratio = probe_axis_ratio(
+                probe.baked[rows.x].xyz, probe.baked[rows.y].xyz, probe.baked[rows.z].xyz,
+                textureLoad(blend_probe_live, vec2<i32>(i32(k), i32(rows.x)), 0).xyz,
+                textureLoad(blend_probe_live, vec2<i32>(i32(k), i32(rows.y)), 0).xyz,
+                textureLoad(blend_probe_live, vec2<i32>(i32(k), i32(rows.z)), 0).xyz,
+                facing * facing,
+            );
+            let sky = textureSampleLevel(blend_sky_cube, env_samp, rd, sky_lod).rgb;
+            radiance = radiance + contribution * probe_relit(sampled, em, ratio, sky, sky_k);
+            coverage = coverage + contribution;
+            taken = taken + 1u;
+        }
+        if (coverage > 0.0) {
+            let ab = textureSampleLevel(env_brdf_lut, env_samp, vec2<f32>(ndv, roughness), 0.0).rg;
+            fill = radiance * dfg_specular(ab, spec.rgb) * spec.a + sky_fill * (1.0 - coverage);
+        }
+    }
+    return hdr_safe(fill);
+}
+
+// A blended mesh's colour: the scene pass's shading plus, when lit, the indirect specular the `reflections`
+// pass gives an opaque mesh (`blend_fill`; never a screen-space trace). `specular` already carries the
+// hit-flash complement, so the sum matches the opaque path's after-the-fact add.
+fn blend_shade(in: VsOut, front_facing: bool) -> vec4<f32> {
+    let c = shade_fragment(in, front_facing, true);
+    var rgb = c.color.rgb;
+    if (!BLEND_UNLIT) {
+        rgb = hdr_safe(rgb + blend_fill(in.world_pos, in.clip, c.normal_roughness, c.specular));
+    }
+    return vec4<f32>(rgb, c.color.a);
+}
+
 // The blended twins' colour: premultiplied by the opacity, so the alpha pipeline's
 // `(One, OneMinusSrcAlpha)` blend covers what is behind and the additive pipeline's `(One, One)` adds it.
 @fragment
 fn fs_blend(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
-    let c = shade_fragment(in, front_facing, true);
-    return vec4<f32>(c.color.rgb * c.color.a, c.color.a);
+    let c = blend_shade(in, front_facing);
+    return vec4<f32>(c.rgb * c.a, c.a);
 }
 
 // True only in the additive blend layer twin: the weight is the brightest channel the colour pass adds,
@@ -210,10 +305,10 @@ override BLEND_ADDITIVE: bool = false;
 // blended with (`particle.wgsl` `fs_depth`).
 @fragment
 fn fs_blend_layer(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
-    let c = shade_fragment(in, front_facing, true);
-    var weight = clamp(c.color.a, 0.0, 1.0);
+    let c = blend_shade(in, front_facing);
+    var weight = clamp(c.a, 0.0, 1.0);
     if (BLEND_ADDITIVE) {
-        let rgb = c.color.rgb * weight;
+        let rgb = c.rgb * weight;
         weight = weight * min(1.0, max(rgb.r, max(rgb.g, rgb.b)));
     }
     return transparent_layer(in.world_pos, weight, in.medium);
@@ -312,6 +407,25 @@ fn wrap_band(
 // stage's sampled-texture limit: only the mesh pipelines bind it. A frame without rain (and the blended
 // draws) binds a 1×1 fallback and carries `wet = 0`, so it is never read.
 @group(3) @binding(11) var wet_map: texture_depth_2d;
+
+// The reflection resources a blended mesh reads for its own indirect specular (`blend_fill`): a blended
+// mesh has no opaque surface targets for the `reflections` pass to fill, so `fs_blend`/`fs_blend_layer`
+// compute the fill inline. They mirror the pass's bindings (`reflections.wgsl`); every other mesh draw
+// binds fallbacks and never reads them.
+@group(3) @binding(12) var blend_sky_cube: texture_cube<f32>;
+@group(3) @binding(13) var blend_probe_cubes: texture_cube_array<f32>;
+@group(3) @binding(14) var blend_probe_emissive: texture_cube_array<f32>;
+@group(3) @binding(15) var blend_probe_live: texture_2d<f32>;
+struct ProbeList {
+    // x = the probe count (0 skips the probe path), y = the cube's max LOD.
+    header: vec4<f32>,
+    // The frame's `LightHeader.grid`, the cluster cell lookup's input.
+    grid: vec4<f32>,
+    // The ranked probes; bit `k` of a cell's mask is `probes[k]`.
+    probes: array<ShadeProbe, 32>,
+}
+@group(3) @binding(16) var<uniform> blend_probe_list: ProbeList;
+@group(3) @binding(17) var<storage, read> blend_probe_mask: array<u32>;
 
 // How wet the rain has left a surface point, in [0, 1]: `wetness × exposure × facing`. Exposure is the
 // overhead occlusion map's — a point at its column's top is 1, one under a roof 0 — and blends over the
@@ -446,7 +560,10 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
         return view_out;
     }
     var lit = shaded.lit;
-    if (in.wrap.a > 0.0) {
+    if (BLEND_UNLIT) {
+        lit = albedo;
+    }
+    if (in.wrap.a > 0.0 && !BLEND_UNLIT) {
         let diffuse = (1.0 - clamp(surface.y, 0.0, 1.0)) * albedo;
         lit = lit + wrap_band(in.world_pos, shaded.n, diffuse, ao, in.clip.xy, in.wrap, in.wrap_extent);
     }

@@ -123,7 +123,7 @@ pub const MAX_RELIGHT_POINTS: u32 = 32;
 
 /// `MAX_SHADE_PROBES`, hoisted from WGSL `const MAX_SHADE_PROBES: u32`.
 ///
-/// Declared in `probe_debug.wgsl`, `reflections.wgsl`.
+/// Declared in `mesh.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`.
 pub const MAX_SHADE_PROBES: u32 = 32;
 
 /// `NO_OCCLUSION`, hoisted from WGSL `const NO_OCCLUSION: u32`.
@@ -937,7 +937,7 @@ const _: () = assert!(core::mem::offset_of!(ProbeFace, pad) == 0);
 
 /// WGSL `struct ProbeList`.
 ///
-/// Declared in `probe_debug.wgsl`, `reflections.wgsl`.
+/// Declared in `mesh.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct ProbeList {
@@ -1232,7 +1232,7 @@ const _: () = assert!(core::mem::offset_of!(ScreenEffectParams, pad2) == 124);
 
 /// WGSL `struct ShadeProbe`.
 ///
-/// Declared in `probe_debug.wgsl`, `reflections.wgsl`.
+/// Declared in `mesh.wgsl`, `probe_debug.wgsl`, `reflections.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct ShadeProbe {
@@ -2539,6 +2539,30 @@ pub const GI_DYN_TEX_BINDING: u32 = 10;
 pub const WET_MAP_GROUP: u32 = 3;
 pub const WET_MAP_BINDING: u32 = 11;
 
+/// `blend_sky_cube` — `@group(3) @binding(12)`, in `mesh.wgsl`.
+pub const BLEND_SKY_CUBE_GROUP: u32 = 3;
+pub const BLEND_SKY_CUBE_BINDING: u32 = 12;
+
+/// `blend_probe_cubes` — `@group(3) @binding(13)`, in `mesh.wgsl`.
+pub const BLEND_PROBE_CUBES_GROUP: u32 = 3;
+pub const BLEND_PROBE_CUBES_BINDING: u32 = 13;
+
+/// `blend_probe_emissive` — `@group(3) @binding(14)`, in `mesh.wgsl`.
+pub const BLEND_PROBE_EMISSIVE_GROUP: u32 = 3;
+pub const BLEND_PROBE_EMISSIVE_BINDING: u32 = 14;
+
+/// `blend_probe_live` — `@group(3) @binding(15)`, in `mesh.wgsl`.
+pub const BLEND_PROBE_LIVE_GROUP: u32 = 3;
+pub const BLEND_PROBE_LIVE_BINDING: u32 = 15;
+
+/// `blend_probe_list` — `@group(3) @binding(16)`, in `mesh.wgsl`.
+pub const BLEND_PROBE_LIST_GROUP: u32 = 3;
+pub const BLEND_PROBE_LIST_BINDING: u32 = 16;
+
+/// `blend_probe_mask` — `@group(3) @binding(17)`, in `mesh.wgsl`.
+pub const BLEND_PROBE_MASK_GROUP: u32 = 3;
+pub const BLEND_PROBE_MASK_BINDING: u32 = 17;
+
 /// `base_color_tex` — `@group(4) @binding(0)`, in `decal_receiver.wgsl`, `mesh.wgsl`, `prepass.wgsl`, `shadow_cutout.wgsl`, `silhouette_mask.wgsl`.
 pub const BASE_COLOR_TEX_GROUP: u32 = 4;
 pub const BASE_COLOR_TEX_BINDING: u32 = 0;
@@ -3465,12 +3489,12 @@ pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r
     })
 }
 
-/// Bind group layout `irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map` (@group 3), from `mesh.wgsl`.
-pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map_bgl(
+/// Bind group layout `irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map_blend_sky_cube_blend_probe_cubes_blend_probe_emissive_blend_probe_live_blend_probe_list_blend_probe_mask` (@group 3), from `mesh.wgsl`.
+pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map_blend_sky_cube_blend_probe_cubes_blend_probe_emissive_blend_probe_live_blend_probe_list_blend_probe_mask_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map"),
+        label: Some("irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map_blend_sky_cube_blend_probe_cubes_blend_probe_emissive_blend_probe_live_blend_probe_list_blend_probe_mask"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: IRRADIANCE_TEX_BINDING,
@@ -3575,6 +3599,66 @@ pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r
                     sample_type: wgpu::TextureSampleType::Depth,
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: BLEND_SKY_CUBE_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: BLEND_PROBE_CUBES_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::CubeArray,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: BLEND_PROBE_EMISSIVE_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::CubeArray,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: BLEND_PROBE_LIVE_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: BLEND_PROBE_LIST_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(6176),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: BLEND_PROBE_MASK_BINDING,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(4),
                 },
                 count: None,
             },

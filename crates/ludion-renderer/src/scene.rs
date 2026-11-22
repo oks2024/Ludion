@@ -1868,6 +1868,8 @@ pub struct BlendedMesh {
     pub instance: MeshInstance,
     /// The blend.
     pub mode: BlendMode,
+    /// Shaded as an opaque mesh is (`true`), or unlit: albedo, emissive, rim and flash only.
+    pub lit: bool,
     /// The consecutive index of the owning entity in extract order: all parts of one assembly share
     /// it, and the sort orders whole groups.
     pub group: u32,

@@ -542,6 +542,10 @@ pub struct Mesh {
     /// `Viewmodel` mesh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blend: Option<MeshBlend>,
+    /// Shades a blended mesh (default `true`); `false` draws albedo + emissive, unlit. Ignored with
+    /// `L2361` on a mesh that draws opaque.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub lit: bool,
 }
 
 /// A rim term on a [`Mesh`]: adds `color · strength · (1 − n·v)^power` to the shaded colour. Unlit
@@ -595,6 +599,7 @@ impl Default for Mesh {
             medium: None,
             porosity: None,
             blend: None,
+            lit: true,
         }
     }
 }

@@ -587,6 +587,10 @@ pub struct Renderer {
     lut_cache: RefCell<Option<(u64, GpuTexture)>>,
     /// The cube-array view the reflections pass binds when no probe was captured; never sampled.
     fallback_probe_cubes: wgpu::TextureView,
+    /// The zero probe list and the one-word cluster mask every mesh draw but a blended one binds at
+    /// the reflection slots of group 3; never read.
+    fallback_probe_list: wgpu::Buffer,
+    fallback_probe_mask: wgpu::Buffer,
     meshes: [MeshBuffer; 3],
     white: GpuTexture,
     atlas: GpuTexture,
@@ -776,6 +780,12 @@ impl Renderer {
         let fallback_hdr = hdr_1x1(device);
         let fallback_lut = lut_1x1(device);
         let fallback_probe_cubes = crate::probe_shade::fallback_cubes(device);
+        let fallback_probe_list = init_buffer(
+            device,
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::bytes_of(&shader_gen::ProbeList::zeroed()),
+        );
+        let fallback_probe_mask = init_buffer(device, wgpu::BufferUsages::STORAGE, &[0u8; 4]);
 
         let meshes = [
             mesh_buffer(device, MeshShape::Cube),
@@ -859,6 +869,8 @@ impl Renderer {
             fallback_lut,
             lut_cache: RefCell::new(None),
             fallback_probe_cubes,
+            fallback_probe_list,
+            fallback_probe_mask,
             meshes,
             white,
             atlas,
@@ -3510,6 +3522,7 @@ impl Renderer {
         gi_dyn: Option<&wgpu::TextureView>,
         gi_strengths: GiStrengths,
         wet: WetInput<'_>,
+        reflections: blended::BlendReflections<'_>,
     ) -> wgpu::BindGroup {
         let mut params = env.params;
         params[3] = gi_strengths.sky_visibility;
@@ -3584,6 +3597,32 @@ impl Renderer {
                     frame.map_or(&self.fallback_shadow.view, |(view, _)| view),
                 ),
             });
+            entries.extend([
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_SKY_CUBE_BINDING,
+                    resource: wgpu::BindingResource::TextureView(reflections.sky),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_PROBE_CUBES_BINDING,
+                    resource: wgpu::BindingResource::TextureView(reflections.probe_cubes),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_PROBE_EMISSIVE_BINDING,
+                    resource: wgpu::BindingResource::TextureView(reflections.probe_emissive),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_PROBE_LIVE_BINDING,
+                    resource: wgpu::BindingResource::TextureView(reflections.probe_live),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_PROBE_LIST_BINDING,
+                    resource: reflections.probe_list.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: shader_gen::BLEND_PROBE_MASK_BINDING,
+                    resource: reflections.probe_mask.as_entire_binding(),
+                },
+            ]);
         }
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("env bind group"),
@@ -5030,6 +5069,7 @@ impl FrameRecorder<'_> {
         inputs: &[&wgpu::TextureView],
         ao: bool,
         wet: WetInput<'_>,
+        blend_live: Option<&wgpu::TextureView>,
     ) -> (wgpu::BindGroup, wgpu::BindGroup) {
         // The mesh group-2 sun bind group: the sun uniform + the shadow map + the comparison sampler.
         // On a frame that drew one the scene pass reads the graph's `shadow_map`;
@@ -5084,6 +5124,27 @@ impl FrameRecorder<'_> {
             .gi_inject
             .is_some()
             .then(|| inputs[usize::from(self.has_shadow_map) + usize::from(ao)]);
+        // Group 3's reflection slots: the frame's real resources for a blended draw (`blend_live` is its
+        // relight table or the fallback), the renderer's fallbacks for every other draw.
+        let fallback_cubes = &self.r.fallback_probe_cubes;
+        let reflections = match blend_live {
+            Some(live) => blended::BlendReflections {
+                sky: &self.resolved_env.specular,
+                probe_cubes: self.probe_cube_view.as_ref().unwrap_or(fallback_cubes),
+                probe_emissive: self.probe_emissive_view.as_ref().unwrap_or(fallback_cubes),
+                probe_live: live,
+                probe_list: &self.probe_list_buf,
+                probe_mask: &self.probe_mask_buf,
+            },
+            None => blended::BlendReflections {
+                sky: &self.resolved_env.specular,
+                probe_cubes: fallback_cubes,
+                probe_emissive: fallback_cubes,
+                probe_live: self.r.probe_relight.fallback(),
+                probe_list: &self.r.fallback_probe_list,
+                probe_mask: &self.r.fallback_probe_mask,
+            },
+        };
         let env_bg = self.r.env_bind_group(
             device,
             &self.resolved_env,
@@ -5093,6 +5154,7 @@ impl FrameRecorder<'_> {
             gi_dyn,
             self.gi_strengths,
             wet,
+            reflections,
         );
         (sun_bg, env_bg)
     }
@@ -5190,7 +5252,7 @@ impl FrameRecorder<'_> {
             None => (pass.inputs, None),
         };
         let wet = WetInput::Mesh(wet);
-        let (sun_bg, env_bg) = self.shading_groups(pass.device, tail, self.has_ao, wet);
+        let (sun_bg, env_bg) = self.shading_groups(pass.device, tail, self.has_ao, wet, None);
 
         // Meshes.
         // A probe capture draws no viewmodel (`face_scene` drops the gun).
@@ -5993,6 +6055,7 @@ impl FrameRecorder<'_> {
             &pass.inputs[head..],
             self.has_ao,
             WetInput::Decal,
+            None,
         );
         let decal_buf = init_buffer(
             pass.device,
@@ -8102,6 +8165,9 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::Bayer,
             Snippet::Hdr,
             Snippet::Dfg,
+            Snippet::Lobe,
+            Snippet::SpecularIbl,
+            Snippet::Probes,
             Snippet::GiProbe,
             Snippet::ViewRay,
             Snippet::Math,
@@ -9195,7 +9261,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::EnvWet,
-        create: shader_gen::create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map_bgl,
+        create: shader_gen::create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r_gi_bounce_g_gi_bounce_b_gi_dyn_tex_wet_map_blend_sky_cube_blend_probe_cubes_blend_probe_emissive_blend_probe_live_blend_probe_list_blend_probe_mask_bgl,
     },
     LayoutDesc {
         id: LayoutId::ScreenEffect,

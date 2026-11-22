@@ -5217,6 +5217,10 @@
             "type": "null"
           }
         ]
+      },
+      "lit": {
+        "description": "Shades a blended mesh (default `true`); `false` draws albedo + emissive, unlit. Ignored with\n`L2361` on a mesh that draws opaque.",
+        "type": "boolean"
       }
     },
     "$defs": {
@@ -5572,6 +5576,10 @@
                 "type": "null"
               }
             ]
+          },
+          "lit": {
+            "description": "Shades a blended mesh (default `true`); `false` draws albedo + emissive, unlit. Ignored with\n`L2361` on a mesh that draws opaque.",
+            "type": "boolean"
           }
         }
       },

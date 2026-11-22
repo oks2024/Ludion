@@ -1,0 +1,196 @@
+# Feature: indirect specular on lit blended meshes, and `Mesh.lit: false`. Under a sky with IBL and one reflection probe
+# fitted to the stage: (1) a glossy tinted glass pane tilted up (alpha 0.3, roughness 0.05) reflecting the sky; (2) a glass pane
+# from a mesh document with `alpha_mode: blend`, which reflects the probe's capture of the bright lamp block behind the
+# camera; (3) an unlit additive green hologram (`lit: false`), which takes no light and no reflection. Blended meshes are
+# never SSR origins: they reflect the sky and the probes. ludion docs materials.
+format: 1
+name: glass-reflections - blended meshes reflect the sky and a probe, and lit false draws them unlit
+entities:
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.04
+          - 0.12
+          - 0.5
+        sky_horizon:
+          - 0.45
+          - 0.38
+          - 0.35
+        sky_ground:
+          - 0.03
+          - 0.03
+          - 0.04
+        sun_disc_size: 0.0
+        sun_disc_intensity: 0.0
+        ibl_intensity: 1.0
+  - name: sun
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 8.0
+          - 8.0
+      DirectionalLight:
+        direction:
+          - -0.3
+          - -0.7
+          - -0.6
+        color:
+          - 1.0
+          - 0.95
+          - 0.9
+        intensity: 0.8
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.0
+          - 12.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 42.0
+      PostProcess:
+        exposure: 0.9
+        tonemap: aces
+  - name: floor
+    components:
+      Transform:
+        scale:
+          - 24.0
+          - 1.0
+          - 14.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.1
+          - 0.11
+          - 0.14
+          - 1.0
+        roughness: 0.6
+  - name: back-wall
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - -5.0
+        scale:
+          - 24.0
+          - 5.0
+          - 0.4
+      Mesh:
+        shape: cube
+        color:
+          - 0.22
+          - 0.09
+          - 0.07
+          - 1.0
+        roughness: 0.8
+  - name: stage-probe
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 2.5
+          - 0.0
+      ReflectionProbe:
+        shape:
+          box:
+            extent:
+              - 12.0
+              - 2.5
+              - 4.5
+        blend: 0.5
+        priority: 0
+  - name: lamp-block
+    components:
+      Transform:
+        translation:
+          - -7.0
+          - 1.2
+          - 7.0
+        scale:
+          - 1.4
+          - 2.4
+          - 1.4
+      Mesh:
+        shape: cube
+        color:
+          - 1.0
+          - 0.9
+          - 0.6
+          - 1.0
+        roughness: 1.0
+        emissive: 5.0
+  - name: glass-sky
+    components:
+      Transform:
+        translation:
+          - -4.5
+          - 1.8
+          - 1.0
+        rotation:
+          - -30.0
+          - 0.0
+          - 0.0
+        scale:
+          - 3.0
+          - 3.2
+          - 0.08
+      Mesh:
+        shape: cube
+        color:
+          - 0.45
+          - 0.7
+          - 0.85
+          - 0.3
+        roughness: 0.05
+        blend: alpha
+  - name: glass-asset
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.8
+          - 1.0
+        rotation:
+          - 0.0
+          - -35.0
+          - 0.0
+        scale:
+          - 3.0
+          - 3.2
+          - 1.0
+      Mesh:
+        shape:
+          asset: meshes/glass-pane.mesh.yaml
+        color:
+          - 0.6
+          - 0.85
+          - 0.6
+          - 0.3
+        roughness: 0.05
+  - name: hologram
+    components:
+      Transform:
+        translation:
+          - 4.5
+          - 1.8
+          - 1.0
+        scale:
+          - 2.6
+          - 3.2
+          - 0.04
+      Mesh:
+        shape: cube
+        color:
+          - 0.1
+          - 1.0
+          - 0.4
+          - 0.6
+        emissive: 0.0
+        blend: additive
+        lit: false

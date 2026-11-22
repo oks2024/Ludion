@@ -198,12 +198,16 @@ impl CascadeViewTwins {
 /// The blended meshes' pipelines (`Mesh.blend`): the colour pass into the one HDR target, and the
 /// transparent layer's twins into `Rg16Float` or `Rgba16Float`, each for both modes and every
 /// [`MeshVariant`]. Built on the first blended frame, so a game that never blends neither compiles
-/// them nor pays for them. A shader reload builds a fresh, empty set.
+/// them nor pays for them; the unlit set (`Mesh.lit: false`, `BLEND_UNLIT`) is a second set built on
+/// the first unlit blend, so a frame with only lit blends compiles nothing more. A shader reload builds
+/// a fresh, empty set.
 pub(super) struct BlendTwins {
     label: &'static str,
     shader: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
-    built: std::sync::OnceLock<BlendPipelines>,
+    /// `[lit, unlit]`, boxed: every shader's pipelines sit on `Renderer::new`'s stack, and these arrays are
+    /// large.
+    built: [std::sync::OnceLock<Box<BlendPipelines>>; 2],
 }
 
 struct BlendPipelines {
@@ -223,12 +227,12 @@ impl BlendTwins {
             label,
             shader: shader.clone(),
             layout: layout.clone(),
-            built: std::sync::OnceLock::new(),
+            built: [std::sync::OnceLock::new(), std::sync::OnceLock::new()],
         }
     }
 
-    fn pipelines(&self, device: &wgpu::Device) -> &BlendPipelines {
-        self.built.get_or_init(|| {
+    fn pipelines(&self, device: &wgpu::Device, lit: bool) -> &BlendPipelines {
+        self.built[usize::from(!lit)].get_or_init(|| {
             let build = |fragment: MeshFragment<'_>, variant| {
                 build_mesh_pipeline_for(
                     device,
@@ -244,7 +248,11 @@ impl BlendTwins {
                 let fragment = MeshFragment {
                     entry: "fs_blend",
                     formats: &[HDR_FORMAT],
-                    constants: &[("BLENDED", 1.0)],
+                    constants: if lit {
+                        &[("BLENDED", 1.0)]
+                    } else {
+                        &[("BLENDED", 1.0), ("BLEND_UNLIT", 1.0)]
+                    },
                     blend: Some(match mode {
                         BlendMode::Alpha => premultiplied_blend(),
                         BlendMode::Additive => additive_blend(),
@@ -263,9 +271,17 @@ impl BlendTwins {
                         } else {
                             &[wgpu::TextureFormat::Rg16Float]
                         },
-                        constants: match mode {
-                            BlendMode::Alpha => &[("BLENDED", 1.0)],
-                            BlendMode::Additive => &[("BLENDED", 1.0), ("BLEND_ADDITIVE", 1.0)],
+                        constants: match (mode, lit) {
+                            (BlendMode::Alpha, true) => &[("BLENDED", 1.0)],
+                            (BlendMode::Alpha, false) => &[("BLENDED", 1.0), ("BLEND_UNLIT", 1.0)],
+                            (BlendMode::Additive, true) => {
+                                &[("BLENDED", 1.0), ("BLEND_ADDITIVE", 1.0)]
+                            }
+                            (BlendMode::Additive, false) => &[
+                                ("BLENDED", 1.0),
+                                ("BLEND_UNLIT", 1.0),
+                                ("BLEND_ADDITIVE", 1.0),
+                            ],
                         },
                         blend: Some(premultiplied_blend()),
                         write_mask: if medium {
@@ -280,18 +296,19 @@ impl BlendTwins {
                     MeshVariant::ALL.map(|variant| build(fragment, variant))
                 })
             });
-            BlendPipelines { color, layer }
+            Box::new(BlendPipelines { color, layer })
         })
     }
 
-    /// The colour pass's pipeline for `mode` and `variant`.
+    /// The colour pass's pipeline for `mode`, `lit` and `variant`.
     pub(super) fn color(
         &self,
         device: &wgpu::Device,
         mode: BlendMode,
+        lit: bool,
         variant: MeshVariant,
     ) -> &wgpu::RenderPipeline {
-        &self.pipelines(device).color[mode as usize][variant.index()]
+        &self.pipelines(device, lit).color[mode as usize][variant.index()]
     }
 
     /// The transparent layer's pipeline; `medium` selects the `Rgba16Float` layer that carries blue.
@@ -299,10 +316,11 @@ impl BlendTwins {
         &self,
         device: &wgpu::Device,
         mode: BlendMode,
+        lit: bool,
         variant: MeshVariant,
         medium: bool,
     ) -> &wgpu::RenderPipeline {
-        &self.pipelines(device).layer[usize::from(medium)][mode as usize][variant.index()]
+        &self.pipelines(device, lit).layer[usize::from(medium)][mode as usize][variant.index()]
     }
 }
 

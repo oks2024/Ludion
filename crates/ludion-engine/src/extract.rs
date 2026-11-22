@@ -1634,12 +1634,18 @@ fn extract_inner(
                         mesh.id,
                         mesh.blend,
                         mesh_assets[index].blend,
+                        mesh.lit,
                         viewmodel_frame.contains(mesh.id),
                         degraded,
                     );
                     match mode {
                         Some(mode) => {
-                            blended.push(blended_mesh(instance, mode, blend_route.group(mesh.id)));
+                            blended.push(blended_mesh(
+                                instance,
+                                mode,
+                                mesh.lit,
+                                blend_route.group(mesh.id),
+                            ));
                             blended_owners.push(mesh.id);
                         }
                         None => {
@@ -1697,11 +1703,17 @@ fn extract_inner(
                 mesh.id,
                 mesh.blend,
                 document_blend,
+                mesh.lit,
                 viewmodel_frame.contains(mesh.id),
                 degraded,
             ) {
                 Some(mode) => {
-                    blended.push(blended_mesh(instance, mode, blend_route.group(mesh.id)));
+                    blended.push(blended_mesh(
+                        instance,
+                        mode,
+                        mesh.lit,
+                        blend_route.group(mesh.id),
+                    ));
                     blended_owners.push(mesh.id);
                 }
                 None => {
@@ -3597,6 +3609,8 @@ pub(crate) struct PlacedMesh<'w> {
     pub(crate) porosity: Option<f32>,
     /// The `Mesh` component's own blend; never inherited.
     pub(crate) blend: Option<MeshBlend>,
+    /// The `Mesh` component's `lit`; read only when the mesh draws blended.
+    pub(crate) lit: bool,
     /// The normal matrix (object→world for normals): the model's upper-3×3 for a uniform scale, its
     /// inverse-transpose otherwise. See [`normal_matrix`].
     pub(crate) normal_matrix: Mat3,
@@ -4220,6 +4234,7 @@ pub(crate) fn placed_mesh<'a>(
         medium: mesh.medium,
         porosity: mesh.porosity,
         blend: mesh.blend,
+        lit: mesh.lit,
         source: placed_source(&mesh.shape),
         dynamic,
     }
@@ -5762,8 +5777,9 @@ pub(crate) fn mesh_instance(
 }
 
 /// A blended instance: it never casts a shadow, whatever `Visibility` says.
-fn blended_mesh(instance: MeshInstance, mode: MeshBlend, group: u32) -> BlendedMesh {
+fn blended_mesh(instance: MeshInstance, mode: MeshBlend, lit: bool, group: u32) -> BlendedMesh {
     BlendedMesh {
+        lit,
         instance: MeshInstance {
             cast_shadows: false,
             ..instance
@@ -5782,21 +5798,40 @@ struct BlendRoute {
     /// The last entity that pushed a blended instance, and its group.
     group: Option<(EntityId, u32)>,
     viewmodel_reported: Vec<EntityId>,
+    lit_reported: Vec<EntityId>,
 }
 
 impl BlendRoute {
     /// The mode an instance draws with: the entity's `Mesh.blend`, else `Alpha` when its document
-    /// says `alpha_mode: blend`. A blended `Viewmodel` mesh draws opaque, with `L2360` once per entity.
+    /// says `alpha_mode: blend`. A blended `Viewmodel` mesh draws opaque, with `L2360` once per entity;
+    /// a `lit: false` mesh that draws opaque reports `L2361` once per entity.
+    #[allow(clippy::too_many_arguments)]
     fn mode(
         &mut self,
         world: &World,
         id: EntityId,
         own: Option<MeshBlend>,
         document_blend: bool,
+        lit: bool,
         viewmodel: bool,
         degraded: &mut Vec<(String, Diagnostic)>,
     ) -> Option<MeshBlend> {
-        let mode = own.or(document_blend.then_some(MeshBlend::Alpha))?;
+        let mode = own.or(document_blend.then_some(MeshBlend::Alpha));
+        if (mode.is_none() || viewmodel) && !lit && !self.lit_reported.contains(&id) {
+            self.lit_reported.push(id);
+            let at = crate::diagnostics::offender_key(world, id);
+            degraded.push((
+                format!("{at}/lit-on-opaque"),
+                Diagnostic::new(
+                    code::MESH_LIT_ON_OPAQUE,
+                    format!(
+                        "{id} sets `Mesh.lit: false`, which only applies to a blended mesh; it draws lit"
+                    ),
+                )
+                .with_help("add `blend: alpha`, or remove `lit`"),
+            ));
+        }
+        let mode = mode?;
         if !viewmodel {
             return Some(mode);
         }

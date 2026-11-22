@@ -362,6 +362,8 @@ light shafts and depth of field read it at its own distance.
 | GI voxelization, probe captures, `OccludedSilhouette` mask | No |
 | Asset `alpha_mode: blend` | Blended exactly as `Mesh.blend: alpha`: every row here holds for it, including `Static` and `Viewmodel` |
 | Sun and local-light shadows *on* it, sun, point and spot light | Yes: it is shaded like an opaque mesh |
+| Indirect specular: the sky's IBL and `ReflectionProbe`s | Yes, a lit blended mesh reflects the sky and the probes (relit, with their emissive part and sky visibility) as an opaque mesh does |
+| Screen-space reflections | Never: a blended mesh is not an SSR origin and shows no trace |
 | Fog, shafts, depth of field, `Mesh.medium` | Yes, at its own distance |
 | Sprites, particles, text | Draw after it, in their own order: a sprite behind glass is painted over it |
 | `Static` | A `Static` blended mesh takes the dynamic path (`L1341`) |
@@ -371,6 +373,23 @@ light shafts and depth of field read it at its own distance.
 Primitive glass: a thin cube (`scale: [3, 3, 0.08]`) with a low alpha and low `roughness`, in a frame of
 opaque cubes. Give the pane a collider on a layer that sight rays ignore if guards should see through it. `examples/gallery/glass-and-holograms.yaml` shows glass, an additive
 hologram, a ghost assembly and a faded pane.
+
+A glossy pane reflects the sky and a nearby probe: low `roughness` with an `Environment` (and a `ReflectionProbe`
+around the scene) shows them in the glass, scaled by the pane's F0 and its opacity like the rest of its colour.
+`examples/gallery/glass-reflections.yaml` shows glass over a sky and a probe.
+
+`Mesh.lit: false` (default `true`) draws a blended mesh unlit: instance colour × vertex colour × base map, plus
+`emissive`, `rim` and `flash`, with no direct light, ambient, `wrap` or indirect specular. It is the hologram
+look: the colour is what it says whatever lights the scene. On a mesh that draws opaque (no `blend`, a document
+without `alpha_mode: blend`, or a `Viewmodel` mesh) `lit: false` is ignored with `L2361` and the mesh draws lit.
+
+```yaml
+Mesh:
+  shape: cube
+  color: [0.1, 1.0, 0.4, 0.6]
+  blend: additive
+  lit: false          # `L2361` if the mesh draws opaque
+```
 
 ## Next
 

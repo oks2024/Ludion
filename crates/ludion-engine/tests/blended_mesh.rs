@@ -293,3 +293,44 @@ fn the_canonical_form_omits_an_absent_blend_and_round_trips_a_set_one() {
     let back: Mesh = serde_json::from_value(value).unwrap();
     assert_eq!(back.blend, Some(MeshBlend::Additive));
 }
+
+#[test]
+fn lit_false_reaches_the_blended_mesh_and_lit_defaults_true() {
+    let mut engine = engine_for(&document(&format!(
+        "{}{}",
+        cube("hologram", "        blend: additive\n        lit: false\n"),
+        cube("glass", "        blend: alpha\n"),
+    )));
+    let scene = extract(&mut engine);
+    assert_eq!(scene.blended.len(), 2);
+    assert!(!scene.blended[0].lit);
+    assert!(scene.blended[1].lit);
+    assert_eq!(reported(&engine, code::MESH_LIT_ON_OPAQUE), 0);
+}
+
+#[test]
+fn lit_false_without_blend_warns_once_and_draws_opaque() {
+    let mut engine = engine_for(&document(&cube("solid", "        lit: false\n")));
+    let scene = extract(&mut engine);
+    assert_eq!(scene.meshes.len(), 1);
+    assert!(scene.blended.is_empty());
+    assert_eq!(reported(&engine, code::MESH_LIT_ON_OPAQUE), 1);
+    let _ = extract(&mut engine);
+    assert_eq!(reported(&engine, code::MESH_LIT_ON_OPAQUE), 1);
+}
+
+#[test]
+fn an_absent_lit_round_trips_with_no_lit_key() {
+    let plain = serde_json::to_value(Mesh::default()).unwrap();
+    assert!(plain.get("lit").is_none());
+    let unlit = Mesh {
+        lit: false,
+        ..Mesh::default()
+    };
+    let value = serde_json::to_value(&unlit).unwrap();
+    assert_eq!(value["lit"], false);
+    let back: Mesh = serde_json::from_value(value).unwrap();
+    assert!(!back.lit);
+    let absent: Mesh = serde_json::from_value(serde_json::json!({ "shape": "cube" })).unwrap();
+    assert!(absent.lit);
+}

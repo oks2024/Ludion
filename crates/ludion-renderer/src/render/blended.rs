@@ -10,11 +10,25 @@ use crate::cull::{Aabb, AssetBounds, local_bounds};
 use crate::scene::{BlendMode, MeshShape, RenderScene};
 use ludion_core::math::glam::Vec3;
 
+/// The reflection resources at the mesh pipelines' group-3 slots 12–17, which only a blended draw reads
+/// (`blend_fill` in `mesh.wgsl`). Every other mesh draw binds the renderer's fallbacks, so an opaque frame
+/// never reads a live probe texture, nor one a probe capture is rendering into.
+#[derive(Clone, Copy)]
+pub(super) struct BlendReflections<'a> {
+    pub(super) sky: &'a wgpu::TextureView,
+    pub(super) probe_cubes: &'a wgpu::TextureView,
+    pub(super) probe_emissive: &'a wgpu::TextureView,
+    pub(super) probe_live: &'a wgpu::TextureView,
+    pub(super) probe_list: &'a wgpu::Buffer,
+    pub(super) probe_mask: &'a wgpu::Buffer,
+}
+
 /// One blended instance's draw: its geometry, mode and pipeline variant. Instance `i` of the draw's
 /// buffer belongs to item `i`.
 struct BlendedItem {
     shape: MeshShape,
     mode: BlendMode,
+    lit: bool,
     variant: MeshVariant,
     /// The uploaded asset, `None` for a primitive.
     asset: Option<MeshAssetGpu>,
@@ -54,6 +68,7 @@ pub(super) fn build_blended_draw(
         items.push(BlendedItem {
             shape: part.instance.shape,
             mode: part.mode,
+            lit: part.lit,
             variant: MeshVariant {
                 mirrored: is_mirrored(&part.instance.model),
                 double_sided,
@@ -92,21 +107,37 @@ impl FrameRecorder<'_> {
             .as_ref()
             .expect("the mesh shader has lazy twins")
             .blend;
-        let (sun_bg, env_bg) = self.shading_groups(device, inputs, false, WetInput::Mesh(None));
+        // The pass reads the lighting tail (shadow map, injected GI, local atlas), then the relight table
+        // when the scene has probes, then the rain map: `shading_groups` takes the tail alone, so a rain
+        // map never lands in the local atlas slot.
+        let tail = usize::from(self.has_shadow_map)
+            + usize::from(self.gi_inject.is_some())
+            + usize::from(self.local_shadow.is_some());
+        let live = match self.probe_relight {
+            Some(_) => inputs[tail],
+            None => self.r.probe_relight.fallback(),
+        };
+        let (sun_bg, env_bg) = self.shading_groups(
+            device,
+            &inputs[..tail],
+            false,
+            WetInput::Mesh(None),
+            Some(live),
+        );
         rp.set_bind_group(CAMERA_GROUP, &self.camera_skin_bg, &[]);
         rp.set_bind_group(LIGHTS_GROUP, &self.lights_bg, &[]);
         rp.set_bind_group(SUN_GROUP, &sun_bg, &[]);
         rp.set_bind_group(ENV_GROUP, &env_bg, &[]);
         rp.set_vertex_buffer(1, draw.instances.slice(..));
-        let mut bound: Option<(BlendMode, MeshVariant)> = None;
+        let mut bound: Option<(BlendMode, bool, MeshVariant)> = None;
         for (i, item) in draw.items.iter().enumerate() {
-            if bound != Some((item.mode, item.variant)) {
-                bound = Some((item.mode, item.variant));
+            if bound != Some((item.mode, item.lit, item.variant)) {
+                bound = Some((item.mode, item.lit, item.variant));
                 rp.set_pipeline(match layer {
-                    None => twins.color(device, item.mode, item.variant),
+                    None => twins.color(device, item.mode, item.lit, item.variant),
                     Some(format) => {
                         let medium = format == ludion_render_graph::TextureFormat::Rgba16Float;
-                        twins.layer(device, item.mode, item.variant, medium)
+                        twins.layer(device, item.mode, item.lit, item.variant, medium)
                     }
                 });
             }
@@ -205,6 +236,7 @@ mod tests {
                 rim: [0.0; 4],
             },
             mode: BlendMode::Alpha,
+            lit: true,
             group,
         }
     }
