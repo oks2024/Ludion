@@ -1,6 +1,6 @@
 # In-memory checkpoints — capture and restore the world from a system
 
-> **Status:** Waves 1 and 2 mechanized (2026-11-18); W4a in progress; W3, W4b and W5 not started. The Status section at the end
+> **Status:** Waves 1 and 2 mechanized (2026-11-18); W4a shipped (Lore 2450); W4b mechanized (measured medians owed); W3 and W5 not started. The Status section at the end
 > records what shipped as each wave closes.
 >
 > Neon Shroud request 0012 (`engine-requests/0012-in-memory-checkpoints.md`, filed 2026-11-17, audited
@@ -157,7 +157,7 @@ scene text, and held slots refuse arming, `L4207`).
 - **W3 — the store rides the snapshot.** A `checkpoints` snapshot field lifts the keyframe skip and the arm
   refusal (re-records the replay corpus); the slot digest joins `WorldHash`;
   `SceneChangeKind::CheckpointRestore`.
-- **W4a — structured slots** (in progress; decisions W4-1..7). In-memory slots as erased column clones plus a
+- **W4a — structured slots** (shipped, Lore 2450; decisions W4-1..7). In-memory slots as erased column clones plus a
   typed `SnapshotDoc`; disk slots keep the JSON envelope.
 - **W4b — budgets** (0012-04). The capture ≤ 4 ms / restore ≤ 50 ms budgets, measured by a bench or test that
   reads no new wire field; a `ProfileReport` `checkpoints` section and the `checkpoint_capture` /
@@ -181,6 +181,19 @@ scene text, and held slots refuse arming, `L4207`).
   outcome after that boundary. R14, because new `Command` variants move the protocol schema and
   `replay_content_hash`.
 - **W4-7** Budgets in W4b, on the fixture "5 000 entities with physics".
+
+## Wave 4b decisions — budgets
+
+- **W4b-1** Measured by an `#[ignore]` release bench (`crates/ludion-engine/tests/checkpoint_bench.rs`), by the
+  frame-difference method: a request made in tick N is drained in the same `advance_live()`, so the bench
+  times whole calls and subtracts the frame before. No engine API, wire field or profiler key.
+- **W4b-2** Budget files `budgets/checkpoints-<os>.toml` with their own schema (`threads`, `capture_ms`,
+  `restore_ms`), the image-stats / reflection-parity precedent; the ceilings are the request's fixed targets
+  (capture 4 ms, restore 50 ms), not 2x tripwires. Measured medians are owed to the pinned boxes.
+- **W4b-3** The `checkpoint_capture` / `checkpoint_restore` profiler keys and a `ProfileReport` `checkpoints`
+  section stay R14.
+- **W4b-4** "Memory per slot <= 2x live component bytes" is not gated: the column heap size is not observable
+  without per-type size hooks. Trigger: a game reporting slot memory pressure.
 
 ## Owner rulings (2026-11-19)
 
@@ -213,6 +226,9 @@ scene text, and held slots refuse arming, `L4207`).
   `disk_error` in `crates/ludion-engine/src/checkpoints.rs`, the `save/checkpoint.json` envelope with a
   `BuildStamp`, strict refusal with a `.bak.<hash>` backup (`L4209`), `L4208` write failures; documented in
   `docs/checkpoints.md`.
-- **W4a in progress:** structured in-memory slots (`ColumnCopy`, `World::copy_column`/`install_column`,
+- **W4a shipped (Lore 2450):** structured in-memory slots (`ColumnCopy`, `World::copy_column`/`install_column`,
   `SlotBody`, `capture_structured`, `restore_decoded`); `Registry::register*` require `Clone`; decisions W4-1..7.
-- **W3, W4b, W5:** not started.
+- **W4b mechanized:** `checkpoint_bench.rs` (smoke test plus the ignored 5,001-entity bench),
+  `budgets/checkpoints-{windows,macos}.toml` with the fixed targets, the corpus-test exclusion; the pinned
+  medians are owed to the RTX 3090 box and the M4; decisions W4b-1..4.
+- **W3, W5:** not started.

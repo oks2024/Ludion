@@ -34,6 +34,7 @@ mod character;
 mod character_animation;
 mod character_motor;
 mod character_motor_state;
+mod checkpoint_bench;
 mod checkpoints;
 mod collision_plane;
 mod command_panic;

@@ -83,6 +83,10 @@ vigil's E6 pair carry `threads = 8`; the rest state no worker count.
   `LUDION_BLESS=1 cargo nextest run -p ludion-engine --test it -E 'test(/^reflection_parity::/)'`; Windows was calibrated
   on the RTX 3090 (2026-10-27), macOS on an unpinned M5 (the M4 re-calibration is owed), and a pinned
   OS with no file fails the test until it is calibrated.
+- `budgets/checkpoints-windows.toml` / `budgets/checkpoints-macos.toml` — the checkpoint cost gate (own schema,
+  read by `ludion-engine`'s `checkpoint_bench`, `Plan/checkpoints.md` W4b): the median capture and restore of a
+  5,001-entity scene with physics (400 rigid, 600 static, 4,000 props), 8 threads, by frame-difference. The
+  ceilings are the request's fixed targets, 4.0 / 50.0 ms. Measured: owed (the RTX 3090 box and the M4).
 - `games/vigil/budgets/pinned-rtx3090.toml` / `pinned-apple-m4.toml` — vigil's own E6 gate (vigil is the private reference game: its files exist only in the Lore tree, absent from a public clone) over
   `scenes/budget-horde.yaml` (the generated 3x-scale, 500-enemy/300-projectile/200-pickup horde),
   checked **in-process**, from `games/vigil/`: `cargo run --release -p vigil -- --scene scenes/budget-horde.yaml

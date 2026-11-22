@@ -14,7 +14,7 @@ reads them.
 
 ## Layout
 
-The per-file catalogue (one entry per calibration scene and per-OS twin, with measured values) is `ludion devdocs budget-corpus`. Families: engine tripwire (`pinned-*.toml`), `-post-full`, `-lights-stress`, `-particles-stress`, `-shmup-stress`, `-sprite-stress`, `-physics-stress`, `-gi-inject-stress`, `image-stats-*`, vigil's E6 files, and the frozen `stress-*.json` recordings.
+The per-file catalogue (one entry per calibration scene and per-OS twin, with measured values) is `ludion devdocs budget-corpus`. Families: engine tripwire (`pinned-*.toml`), `-post-full`, `-lights-stress`, `-particles-stress`, `-shmup-stress`, `-sprite-stress`, `-physics-stress`, `-gi-inject-stress`, `image-stats-*`, `checkpoints-*`, vigil's E6 files, and the frozen `stress-*.json` recordings.
 
 ## Dataflow
 
@@ -55,6 +55,10 @@ The per-file catalogue (one entry per calibration scene and per-OS twin, with me
   observed median"). `image-stats-*.toml` uses a **different** rule, because a defect score is a pure
   function of committed bytes rather than a noisy wall-clock measurement: ceiling = measured value +
   0.02, clamped at the metric's own 1.0 ceiling (`budgets/image-stats-windows.toml` lines 9–12, 44–47).
+- **`checkpoints-<os>.toml` is its own schema** (`threads`, `capture_ms`, `restore_ms`), read by
+  `ludion-engine`'s `checkpoint_bench`, not a `Budget`. The ceilings are the request's fixed targets, not 2x a
+  median, and the bench measures by frame-difference (whole `advance_live()` calls with and without a
+  request), so no profiler key or report field exists.
 - **Vigil's E6 gate splits the 2x convention further.** Systems doing real work get ~2x their median
   (`update_flow_field` 0.70 = 2x of the measured 0.32–0.34); any system under ~0.01 ms gets a flat
   0.05 ms floor instead, because 2x-of-near-zero still trips on scheduler jitter

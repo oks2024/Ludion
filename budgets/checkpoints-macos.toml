@@ -1,0 +1,15 @@
+# Checkpoint cost budget — pinned Apple M4 mac mini, release, 8 sim threads.
+#
+# Gates the median cost of one in-memory capture and one restore on a 5,000-entity slice greybox with
+# physics (a static floor, 400 rigid boxes, 600 static colliders, 4,000 props carrying a `Guard`
+# component), measured by `checkpoint_bench.rs` as the frame-difference of whole `advance_live()` calls:
+#
+#   cargo test -p ludion-engine --release --test it -- checkpoint_bench --ignored --nocapture
+#
+# Fixed targets from Neon Shroud request 0012 §6 (capture <= 4 ms, restore <= 50 ms), not 2x tripwires.
+# Own schema (`threads`, `capture_ms`, `restore_ms`), not a `Budget`. All values are milliseconds.
+#
+# MEASURED: owed (pinned Apple M4 mac mini, release, 8 threads)
+threads = 8
+capture_ms = 4.0
+restore_ms = 50.0

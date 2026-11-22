@@ -3848,7 +3848,10 @@ entities:
                 let is_budget = path.extension().is_some_and(|ext| ext == "toml")
                     && !path.file_name().is_some_and(|name| {
                         let name = name.to_string_lossy();
-                        name.starts_with("image-stats") || name.starts_with("reflection-parity")
+                        name.starts_with("image-stats")
+                            || name.starts_with("reflection-parity")
+                            // Own schema, read by `tests/checkpoint_bench.rs`.
+                            || name.starts_with("checkpoints-")
                     });
                 if is_budget {
                     files.push(path);

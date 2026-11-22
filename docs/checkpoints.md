@@ -132,3 +132,7 @@ A slot lives and dies with the process unless it was persisted.
 A held slot is structured, not JSON: a capture clones each registered component's column plus a typed copy of the resources and entity ids, and a restore installs those columns in bulk. Every registered component must therefore derive `Clone` (`Registry::register` requires it). Only the disk slot is JSON: `persist` renders the slot as the snapshot document, byte-identical to `engine.snapshot` at the capture frame, and `load_disk` restores a document.
 
 Because a capture reads no component value, a NaN or infinite float does not fail it. It fails the `persist`: `L4208` carrying the `L0007` message, nothing written, the slot kept and restorable in memory. A restore still costs a world rebuild, so budget it for a fade, not for a frame.
+
+## Cost
+
+The targets, on a 5,000-entity scene with physics, are a capture of at most 4 ms and a restore of at most 50 ms. An `#[ignore]` release bench gates them on the pinned boxes against `budgets/checkpoints-*.toml`. Hide a restore under your fade: the capture fits a frame, the restore does not.
