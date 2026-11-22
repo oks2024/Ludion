@@ -24,6 +24,7 @@ fn rain(time_s: f32) -> RainData {
         medium: 1.0,
         occlusion: true,
         wetness: 0.0,
+        ripples: 0.0,
         seed: 0,
         time_s,
         per_tile: 96,
@@ -519,6 +520,7 @@ fn wet_rain(wetness: f32) -> RainData {
     RainData {
         per_tile: 0,
         wetness,
+        ripples: 0.0,
         ..rain(0.0)
     }
 }
@@ -860,4 +862,181 @@ fn needs_gpu_porosity_zero_still_glosses() {
         peak(1.0) > peak(0.0),
         "the film still glosses at porosity 0"
     );
+}
+
+// --- Ripples -------------------------------------------------------------------------------------
+
+/// A wet rain (no streaks, no sky shafts) at `ripples` and game time `time_s`.
+fn rippling(ripples: f32, time_s: f32) -> RainData {
+    RainData {
+        ripples,
+        time_s,
+        ..wet_rain(1.0)
+    }
+}
+
+/// The wet matte floor, rippling, with an optional roof.
+fn rippled_floor(ripples: f32, time_s: f32, roof: Option<MeshInstance>) -> RenderScene {
+    let mut scene = matte_under_roof(1.0, roof);
+    scene.rain = Some(rippling(ripples, time_s));
+    // A point light low in front of the camera, so the lowered roughness has a highlight to bend.
+    scene.lights.push(crate::scene::PointLightData {
+        position: Vec3::new(0.0, 0.0, -5.0),
+        color: Vec3::ONE,
+        intensity: 2.0,
+        range: 40.0,
+        dynamic: false,
+        shadow: None,
+        scatter: 0.0,
+    });
+    scene
+}
+
+/// The half roof of the wetness tests: it covers every x left of the middle.
+fn half_roof() -> Option<MeshInstance> {
+    Some(roof(
+        Vec3::new(-30.0, 3.0, 0.0),
+        Vec3::new(60.0, 0.2, 60.0),
+        true,
+    ))
+}
+
+/// Ripples change a wet floor with game time, hold at a held time and are off at `ripples: 0`,
+/// whatever the time. Skips with no GPU.
+#[test]
+fn needs_gpu_ripples_animate_the_wet_floor_with_game_time() {
+    let Some(renderer) = skip_or_renderer("ripples_animate_the_wet_floor_with_game_time") else {
+        return;
+    };
+    let at = |ripples: f32, time_s: f32| {
+        renderer
+            .render(&rippled_floor(ripples, time_s, None), size())
+            .expect("render")
+    };
+    let (first, held, later) = (at(1.0, 0.0), at(1.0, 0.2), at(1.0, 0.2));
+    assert!(held.rgba == later.rgba, "one tick, one picture");
+    assert!(near_floor(&first, &held, 0..PX), "the rings moved");
+    assert!(
+        at(0.0, 0.0).rgba == at(0.0, 0.2).rgba,
+        "ripples: 0 does not read the clock"
+    );
+    assert!(
+        near_floor(&at(0.0, 0.2), &held, 0..PX),
+        "ripples change the floor"
+    );
+}
+
+/// Wet floor under a roof stays still at any `ripples`, byte for byte, while the open half ripples.
+/// Skips with no GPU.
+#[test]
+fn needs_gpu_covered_ground_does_not_ripple() {
+    let Some(renderer) = skip_or_renderer("covered_ground_does_not_ripple") else {
+        return;
+    };
+    let off = renderer
+        .render(&rippled_floor(0.0, 0.2, half_roof()), size())
+        .expect("off");
+    let on = renderer
+        .render(&rippled_floor(2.0, 0.2, half_roof()), size())
+        .expect("on");
+    let mid = PX / 2;
+    assert!(
+        !near_floor(&off, &on, 0..mid - 4),
+        "the roofed floor stays still"
+    );
+    assert!(near_floor(&off, &on, mid + 4..PX), "the open floor ripples");
+}
+
+/// A `coat` decal over the wet floor: a lowered-roughness white coat so its lobe shows the ripples.
+fn coat_scene(
+    ripples: f32,
+    time_s: f32,
+    decal_ripples: f32,
+    blend: crate::scene::DecalBlend,
+    x: f32,
+    roof: Option<MeshInstance>,
+) -> RenderScene {
+    let mut scene = rippled_floor(ripples, time_s, roof);
+    let box_to_world = Mat4::from_translation(Vec3::new(x, -1.0, -4.0))
+        * Mat4::from_scale(Vec3::new(3.0, 1.0, 4.0));
+    scene.decals.push(crate::scene::DecalInstance {
+        box_to_world,
+        world_to_box: box_to_world.inverse(),
+        blend,
+        color: [1.0, 1.0, 1.0, 1.0],
+        opacity: 1.0,
+        roughness: Some(0.1),
+        metallic: 0.0,
+        ripples: decal_ripples,
+        uv_rect: [0.0, 0.0, 1.0, 1.0],
+        angle_fade: [60.0, 80.0],
+        layer: 0,
+        maps: crate::scene::DecalMaps::default(),
+        receivers: crate::scene::DecalReceivers::Exclude(Vec::new()),
+    });
+    scene
+}
+
+/// An exposed coat decal ripples with game time; `Decal.ripples: 0` is `Rain.ripples: 0` byte for byte;
+/// an `alpha` decal never ripples. The floor's own ripples are off (`Rain.ripples` scales both, so the
+/// compare uses the decal weight alone through `Decal.ripples`). Skips with no GPU.
+#[test]
+fn needs_gpu_an_exposed_coat_decal_ripples_and_an_alpha_decal_does_not() {
+    let Some(renderer) =
+        skip_or_renderer("an_exposed_coat_decal_ripples_and_an_alpha_decal_does_not")
+    else {
+        return;
+    };
+    use crate::scene::DecalBlend::{Alpha, Coat};
+    let render = |scene: RenderScene| renderer.render(&scene, size()).expect("render");
+    let coat = |ripples, time_s, decal| render(coat_scene(ripples, time_s, decal, Coat, 2.0, None));
+    let (a, b) = (coat(1.0, 0.0, 1.0), coat(1.0, 0.2, 1.0));
+    assert!(near_floor(&a, &b, 0..PX), "the coat's rings moved");
+    assert!(b.rgba == coat(1.0, 0.2, 1.0).rgba, "one tick, one picture");
+    // The floor still ripples at `Rain.ripples: 1`, so compare a still decal against a still rain
+    // only where the floor's own ripples cannot reach: with the decal off, the two frames differ by the
+    // floor alone, and the coat's contribution is what the first comparison isolates.
+    let still_decal = coat(1.0, 0.2, 0.0);
+    let still_rain = coat(0.0, 0.2, 1.0);
+    let still_both = coat(0.0, 0.2, 0.0);
+    assert!(
+        still_rain.rgba == still_both.rgba,
+        "Rain.ripples 0 is still water on the decal"
+    );
+    assert!(
+        still_decal.rgba != b.rgba,
+        "Decal.ripples scales the coat's rings"
+    );
+    let alpha = |decal| render(coat_scene(1.0, 0.2, decal, Alpha, 2.0, None));
+    assert!(
+        alpha(0.0).rgba == alpha(2.0).rgba,
+        "an alpha decal reads no ripple weight"
+    );
+}
+
+/// A coat decal under a roof is byte-equal at `ripples` 0 and 2, and a frame with a coat decal and no
+/// rain does not depend on `Decal.ripples`. Skips with no GPU.
+#[test]
+fn needs_gpu_a_covered_coat_decal_does_not_ripple() {
+    let Some(renderer) = skip_or_renderer("a_covered_coat_decal_does_not_ripple") else {
+        return;
+    };
+    use crate::scene::DecalBlend::Coat;
+    let render = |scene: RenderScene| renderer.render(&scene, size()).expect("render");
+    let covered = |ripples| render(coat_scene(ripples, 0.2, 1.0, Coat, -2.0, half_roof()));
+    let (off, on) = (covered(0.0), covered(2.0));
+    assert!(
+        !near_floor(&off, &on, 0..PX / 2 - 4),
+        "the covered coat is still"
+    );
+    assert!(
+        near_floor(&off, &on, PX / 2 + 4..PX),
+        "the open floor ripples"
+    );
+    let dry = |decal| {
+        let mut scene = coat_scene(1.0, 0.2, decal, Coat, 2.0, None);
+        scene.rain = None;
+        render(scene)
+    };
+    assert!(dry(0.0).rgba == dry(2.0).rgba, "no rain, no ripples");
 }

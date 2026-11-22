@@ -1860,7 +1860,8 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
     let decals_lit_tail = chain.lit_decals.then(|| scene_reads.clone());
     // The rain's overhead depth map runs ahead of the scene pass, which reads it last to wet the
     // surfaces the rain reaches; `transparents` and `transparent_depth` read it last as well. The
-    // lit decals bind none, so it joins the scene's reads after their tail was copied.
+    // lit decals read it last too, for their ripples, but only after their tail was copied (the shading
+    // groups take the tail's last slot as the local-light atlas).
     if let Some(map) = rain_occlusion {
         graph.add_external_pass_with_depth(
             pass::RAIN_OCCLUSION,
@@ -1904,6 +1905,7 @@ pub fn build_frame_graph(size: FrameSize, chain: PostChain) -> (RenderGraph, Res
         let mut lit_reads = vec![scene_depth, scene_normal];
         lit_reads.extend(decal_receivers);
         lit_reads.extend(tail);
+        lit_reads.extend(rain_occlusion);
         let mut lit_writes = vec![scene];
         lit_writes.extend(lit_normal);
         lit_writes.push(scene_specular);
@@ -3772,6 +3774,7 @@ mod tests {
             medium: 1.0,
             occlusion: true,
             wetness: 1.0,
+            ripples: 0.0,
             seed: 0,
             time_s: 0.0,
             per_tile: 8,
@@ -4329,6 +4332,7 @@ mod tests {
             opacity: 1.0,
             roughness: None,
             metallic: 0.0,
+            ripples: 1.0,
             uv_rect: [0.0, 0.0, 1.0, 1.0],
             angle_fade: [60.0, 80.0],
             layer: 0,
@@ -7085,6 +7089,45 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// The lit decal pass reads the rain's occlusion map last, only on a frame with rain.
+    #[test]
+    fn decals_lit_reads_the_rain_occlusion_map_last_only_with_rain() {
+        let reads = |graph: &RenderGraph, name: &str| -> Vec<String> {
+            let pass = graph.passes().iter().find(|p| p.name == name).unwrap();
+            pass.reads
+                .iter()
+                .map(|id| graph.resources()[id.index()].name.to_string())
+                .collect()
+        };
+        let size = FrameSize::native(1920, 1080);
+        let off_chain = PostChain {
+            fog: true,
+            transparent_cover: true,
+            lit_decals: true,
+            ..PostChain::default()
+        };
+        let (off, _) = build_frame_graph(size, off_chain);
+        let (on, _) = build_frame_graph(
+            size,
+            PostChain {
+                rain: true,
+                ..off_chain
+            },
+        );
+        assert_ne!(
+            reads(&off, pass::DECALS_LIT).last().map(String::as_str),
+            Some(pass::RAIN_OCCLUSION)
+        );
+        assert_eq!(
+            reads(&on, pass::DECALS_LIT).last().map(String::as_str),
+            Some(pass::RAIN_OCCLUSION)
+        );
+        assert_eq!(
+            reads(&on, pass::DECALS_LIT).len(),
+            reads(&off, pass::DECALS_LIT).len() + 1
+        );
     }
 
     /// A frame with no silhouette declares neither the mask pass nor its two transients, and

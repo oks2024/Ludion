@@ -1,0 +1,188 @@
+# Feature: Rain ripples - a low camera over wet voxel ground at night under one sodium spot. Two 2 x 1.5 m coat puddles:
+# the one in the open rings with expanding ripples (so does the open ground, faintly), and the one under the small roof
+# stays still and mirror-like, because ripples read the rain's occlusion map at the decal's box top and never ring
+# covered water. Rain.ripples is left at its default of 1; the golden is the frame at tick 12. ludion docs weather.
+format: 1
+name: "rain-ripples - Rain ripples: rings on open water, none under a roof"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.2
+          - 5.5
+        rotation:
+          - -25.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 50.0
+  - name: environment
+    components:
+      Environment:
+        sky_zenith:
+          - 0.01
+          - 0.015
+          - 0.03
+        sky_horizon:
+          - 0.03
+          - 0.04
+          - 0.06
+        sky_ground:
+          - 0.005
+          - 0.006
+          - 0.01
+        ibl_intensity: 0.4
+      PostProcess:
+        bloom_threshold: 0.8
+        bloom_strength: 0.1
+        exposure: 1.0
+        tonemap: aces
+        fog_density: 0.02
+        fog_color:
+          - 0.03
+          - 0.04
+          - 0.06
+        fog_start: 4.0
+        ssr: 1.0
+        vignette: 0.4
+        vignette_radius: 0.9
+  - name: moon
+    components:
+      Transform: {}
+      DirectionalLight:
+        direction:
+          - 0.3
+          - -0.8
+          - -0.5
+        color:
+          - 0.4
+          - 0.5
+          - 0.8
+        intensity: 0.15
+  - name: lamp
+    components:
+      Transform:
+        translation:
+          - 0.8
+          - 3.2
+          - 3.2
+      SpotLight:
+        color:
+          - 1.0
+          - 0.7
+          - 0.35
+        intensity: 14.0
+        range: 14.0
+        direction:
+          - 0.0
+          - -0.68
+          - -0.73
+        inner_angle: 26.0
+        outer_angle: 50.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.25
+          - 0.0
+        scale:
+          - 0.125
+          - 0.125
+          - 0.125
+      Mesh:
+        shape:
+          voxel: voxels/rain-ground.voxel.yaml
+  - name: wall-back
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.4
+          - -3.5
+        scale:
+          - 9.0
+          - 2.8
+          - 0.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.3
+          - 0.3
+          - 0.33
+          - 1.0
+        roughness: 0.85
+  - name: roof
+    components:
+      Transform:
+        translation:
+          - 2.4
+          - 1.6
+          - -0.5
+        scale:
+          - 2.6
+          - 0.12
+          - 2.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.2
+          - 0.2
+          - 0.22
+          - 1.0
+        roughness: 0.85
+  - name: puddle-open
+    components:
+      Transform:
+        translation:
+          - -1.0
+          - 0.0
+          - 1.2
+      Decal:
+        size:
+          - 2.0
+          - 1.0
+          - 1.5
+        color:
+          - 0.05
+          - 0.06
+          - 0.08
+          - 1.0
+        roughness: 0.05
+        blend: coat
+  - name: puddle-covered
+    components:
+      Transform:
+        translation:
+          - 2.4
+          - 0.0
+          - -0.5
+      Decal:
+        size:
+          - 2.0
+          - 1.0
+          - 1.5
+        color:
+          - 0.05
+          - 0.06
+          - 0.08
+          - 1.0
+        roughness: 0.05
+        blend: coat
+  - name: weather
+    presentation: true
+    components:
+      Rain:
+        wind:
+          - 0.6
+          - 0.0
+          - 0.2
+        color:
+          - 0.75
+          - 0.8
+          - 0.9
+          - 0.6

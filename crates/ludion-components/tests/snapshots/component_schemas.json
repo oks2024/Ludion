@@ -3469,6 +3469,17 @@
       "receivers": {
         "description": "Which surfaces the decal paints (default every unskinned mesh).",
         "$ref": "#/$defs/DecalReceiverSet"
+      },
+      "ripples": {
+        "description": "`coat` decals only: scales the rain's ripples on this decal, in `[0, 2]` (default `1`); `0` is\nstill water.",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 2.0,
+        "x-ui-range": [
+          0.0,
+          2.0
+        ]
       }
     },
     "$defs": {
@@ -8572,6 +8583,18 @@
         "type": "number",
         "format": "float",
         "default": 1.0
+      },
+      "ripples": {
+        "description": "How strongly wet ground and `coat` decals ripple, in `[0, 2]`: 0 keeps the water still (default 1).",
+        "type": "number",
+        "format": "float",
+        "minimum": 0.0,
+        "maximum": 2.0,
+        "default": 1.0,
+        "x-ui-range": [
+          0.0,
+          2.0
+        ]
       },
       "seed": {
         "description": "Varies the lattice hash (default 0).",

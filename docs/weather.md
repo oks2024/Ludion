@@ -31,6 +31,7 @@ entities:
         medium: 1.0          # how much fog reaches the streaks, [0, 1]
         occlusion: true      # hide streaks under roofs; false keeps the pass but draws no casters
         wetness: 1.0         # how wet exposed surfaces look, [0, 1]; 0 leaves every surface dry
+        ripples: 1.0         # rings on wet ground and coat decals, [0, 2]; 0 keeps the water still
         seed: 0              # varies the lattice
 ```
 Every field is optional. `Rain` is a singleton: the lowest entity id wins and each further one is `L2381`.
@@ -100,7 +101,22 @@ standing under a roof read dry. Past the map's edge (the outer 10 % of `radius` 
 1 facing up, 0.5 on a wall, 0 facing down. Drying is a game-written `wetness`: write it from a presentation system
 over time, the way a game writes `focus_distance`; `wetness: 0` renders the frame as a dry one.
 
-## Gotchas
+## Ripples
+**Ripples are on by default** (`ripples: 1`); `ripples: 0` turns them off and renders the frame as one without
+them, byte for byte. Rain leaves expanding rings on standing water: the world's xz is tiled in 0.35 m cells, each
+sending one ring per 0.7 s from a hashed origin, summed over the 3x3 neighbouring cells. The rings are a function of the
+world position, the rain's game time and `seed` alone, so they never swim with the camera, a held clock holds them
+and two renders at one tick are byte-identical. A ripple leans the shading normal, so it shows in the lit highlight
+and the reflection, not as geometry.
+- **Wet ground.** Every up-facing opaque mesh fragment ripples at weight `ripples x 0.3 x w`, where `w` is its
+  wetness (`## Wetness`): ground under a roof is dry and never ripples.
+- **`coat` decals.** A coat decal ripples at weight `Rain.ripples x Decal.ripples x exposure`. `Decal.ripples`
+  (`[0, 2]`, default 1) scales the rain's ripples on that decal and `0` is still water; it is read for `coat`
+  only, never for `alpha`. The exposure is read once per decal at the column of the box's top-face centre in the
+  `rain_occlusion` map (1 outside the map or with no caster), so a puddle under an awning is still while its
+  neighbour in the open rings. Keep `size.y` small, so the box top stays below the roof over it.
+
+
 | Situation | What happens |
 |---|---|
 | A roof over the camera | No streaks under it, per pixel; `occlusion: false` draws through. A mesh with `cast_shadows: false` does not occlude unless it carries `RainOccluder: {}`; a net that should let rain through carries `occludes: false` |
@@ -111,6 +127,8 @@ over time, the way a game writes `focus_distance`; `wetness: 0` renders the fram
 | Gameplay rain zones | Separate sim data, not the picture's rain |
 | A character under a roof | Wet per pixel from the map, so it dries the instant it steps under cover |
 | A `coat` decal | The authored puddle: wetness leaves decals and blended meshes (glass, holograms) untouched |
+| A coat decal over wet ground | Both ripple: the ground at 0.3 and the decal at its own weight |
+| Ripples on `alpha` decals, blended meshes, walls | None: up-facing opaque meshes and `coat` decals only |
 | Viewmodel | Never wetted |
 | Time past 4096 s | Wraps; every drop jumps once |
 
@@ -121,8 +139,9 @@ over time, the way a game writes `focus_distance`; `wetness: 0` renders the fram
 - `L2383` (warning): a `RainOccluder` with `occludes: true` sits on a blended mesh, which never writes the map.
 
 `ludion explain L2380` gives the fix. The gallery scenes are `examples/gallery/rain-open.yaml`, `rain-awning.yaml`,
-`rain-wet.yaml` (wet voxel ground and figures, a dry awning) and `rain-occluder.yaml` (a net that lets rain through beside a
-shadowless canopy that stops it).
+`rain-wet.yaml` (wet voxel ground and figures, a dry awning), `rain-porosity.yaml`, `rain-occluder.yaml` (a net that lets
+rain through beside a shadowless canopy that stops it) and `rain-ripples.yaml` (rings on an open puddle and the ground,
+a still one under a roof). The first five author `ripples: 0.0`, so their goldens show the scene still.
 
 `--quality low` draws 0.4 of the streaks (`rain_density`, a prefix of the same drops); wetness and the map are unchanged.
 

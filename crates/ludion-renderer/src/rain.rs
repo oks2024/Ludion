@@ -4,7 +4,7 @@
 //! rounds, so a drop's position is a function of the tile and the time alone and never of the camera;
 //! `shaders/rain.wgsl` evaluates the same arithmetic and [`drop_position`] is its twin.
 
-use ludion_core::math::glam::{IVec3, Mat4, Vec3};
+use ludion_core::math::glam::{IVec3, Mat4, Vec2, Vec3};
 
 /// The most streaks one draw carries. A scene asking for more is clamped per tile.
 pub const MAX_RAIN_STREAKS: u32 = 65_536;
@@ -41,6 +41,8 @@ pub struct RainData {
     pub occlusion: bool,
     /// How wet exposed surfaces look, in `[0, 1]`; 0 draws no wetness.
     pub wetness: f32,
+    /// How strongly wet ground and coat decals ripple, in `[0, 2]`.
+    pub ripples: f32,
     /// Varies the lattice hash.
     pub seed: u32,
     /// Game seconds, wrapped at [`RAIN_TIME_WRAP_S`].
@@ -174,6 +176,55 @@ fn fract(x: f32) -> f32 {
     x - x.floor()
 }
 
+/// Side of one ripple cell, in metres: world xz is tiled in squares of this size.
+pub const RIPPLE_CELL: f32 = 0.35;
+/// Seconds between the rings of one cell.
+pub const RIPPLE_PERIOD: f32 = 0.7;
+/// Radius a ring grows to before it fades out, in metres.
+pub const RIPPLE_RADIUS: f32 = 0.16;
+/// Distance between the crests of a ring, in metres.
+pub const RIPPLE_WAVELENGTH: f32 = 0.05;
+/// Half-width of the band around a ring's radius where it has any height, in metres.
+pub const RIPPLE_WINDOW: f32 = 0.03;
+
+/// The slope of the ripple height field at world `xz`, `rain_ripple.wgsl`'s `ripple_slope`. Each cell of
+/// [`RIPPLE_CELL`] sends one ring per [`RIPPLE_PERIOD`] from a hashed origin inside it; the ring is
+/// `sin(k (d - r)) / k` (`k = 2 pi / RIPPLE_WAVELENGTH`, so its crest slope is the amplitude) under a smooth
+/// window of half-width [`RIPPLE_WINDOW`] and a `(1 - age)^2` fade. A ring reaches at most
+/// `RIPPLE_RADIUS + RIPPLE_WINDOW` from its origin, under a cell's width, so the 3x3 cells around a point
+/// hold every ring that touches it and the field has no seam. A pure function of `(xz, time, seed)`.
+pub fn ripple_slope(xz: Vec2, time: f32, seed: u32) -> Vec2 {
+    let cell = (xz / RIPPLE_CELL).floor();
+    let k = std::f32::consts::TAU / RIPPLE_WAVELENGTH;
+    let mut sum = Vec2::ZERO;
+    for dj in -1..=1 {
+        for di in -1..=1 {
+            let i = cell.x as i32 + di;
+            let j = cell.y as i32 + dj;
+            let mut h = pcg(seed ^ 0x9e37_79b9);
+            h = pcg(h ^ i as u32);
+            h = pcg(h ^ j as u32);
+            let phase = unit_hash(pcg(h.wrapping_add(1)));
+            let origin = Vec2::new(
+                (i as f32 + unit_hash(pcg(h.wrapping_add(2)))) * RIPPLE_CELL,
+                (j as f32 + unit_hash(pcg(h.wrapping_add(3)))) * RIPPLE_CELL,
+            );
+            let age = fract(time / RIPPLE_PERIOD + phase);
+            let delta = xz - origin;
+            let d = delta.length();
+            let x = d - age * RIPPLE_RADIUS;
+            let u = x / RIPPLE_WINDOW;
+            if u.abs() < 1.0 && d > 1.0e-6 {
+                let window = (1.0 - u * u) * (1.0 - u * u);
+                let fade = (1.0 - age) * (1.0 - age);
+                let slope = ludion_core::math::cos(k * x) * window * fade;
+                sum += delta / d * slope;
+            }
+        }
+    }
+    sum
+}
+
 /// World position of drop `k` of `tile` at `rain.time_s`, the CPU twin of the shader. It never reads a
 /// camera: the drop wraps inside its own tile column.
 pub fn drop_position(rain: &RainData, tile: IVec3, k: u32) -> Vec3 {
@@ -224,6 +275,7 @@ mod tests {
             medium: 1.0,
             occlusion: true,
             wetness: 0.0,
+            ripples: 0.0,
             seed: 0,
             time_s: 3.25,
             per_tile: 96,
@@ -284,6 +336,73 @@ mod tests {
         assert_ne!(drop_position(&r, tile, 3), later);
         assert_ne!(drop_hash(tile, 0, 0), drop_hash(tile, 0, 1));
         assert_ne!(drop_hash(tile, 0, 0), drop_hash(tile, 1, 0));
+    }
+
+    /// A point far from every ring has no slope: cells' rings never reach past 0.19 m.
+    #[test]
+    fn ripples_are_zero_far_from_any_ring() {
+        // At age 0 every ring has radius 0, so only the 0.03 m window around each origin is lit; find a
+        // point farther than the window from all nine origins by scanning a few candidates.
+        let quiet = (0..200)
+            .map(|n| Vec2::new(0.013 * n as f32, 0.007 * n as f32))
+            .filter(|p| ripple_slope(*p, 0.0, 0).length() == 0.0)
+            .count();
+        assert!(
+            quiet > 20,
+            "most of the floor is flat at one instant: {quiet}"
+        );
+    }
+
+    #[test]
+    fn ripples_repeat_every_period() {
+        for n in 0..40 {
+            let p = Vec2::new(0.11 * n as f32 + 0.02, 0.07 * n as f32);
+            let a = ripple_slope(p, 0.3, 5);
+            let b = ripple_slope(p, 0.3 + RIPPLE_PERIOD, 5);
+            assert!((a - b).length() < 2.0e-3, "{p}: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn ripples_move_with_time_and_depend_on_the_seed() {
+        let differs = |f: &dyn Fn(Vec2) -> (Vec2, Vec2)| {
+            (0..400).any(|n| {
+                let p = Vec2::new(0.031 * n as f32, 0.017 * n as f32);
+                let (a, b) = f(p);
+                (a - b).length() > 1.0e-3
+            })
+        };
+        assert!(differs(&|p| (
+            ripple_slope(p, 0.0, 1),
+            ripple_slope(p, 0.2, 1)
+        )));
+        assert!(differs(&|p| (
+            ripple_slope(p, 0.2, 1),
+            ripple_slope(p, 0.2, 2)
+        )));
+        assert_eq!(
+            ripple_slope(Vec2::new(1.0, 2.0), 0.2, 1),
+            ripple_slope(Vec2::new(1.0, 2.0), 0.2, 1)
+        );
+    }
+
+    /// The field is continuous across every cell edge: the 3x3 neighbourhood leaves no seam.
+    #[test]
+    fn ripples_have_no_seam_at_cell_edges() {
+        let eps = 1.0e-5;
+        for k in -3..4 {
+            for n in 0..60 {
+                let t = 0.011 * n as f32;
+                let z = 0.0173 * n as f32 - 0.4;
+                let x = k as f32 * RIPPLE_CELL;
+                let left = ripple_slope(Vec2::new(x - eps, z), t, 9);
+                let right = ripple_slope(Vec2::new(x + eps, z), t, 9);
+                assert!(
+                    (left - right).length() < 0.05,
+                    "x = {x} z = {z}: {left} vs {right}"
+                );
+            }
+        }
     }
 
     /// The hash is pinned: it is the WGSL's, and a drift here moves every frame of rain.

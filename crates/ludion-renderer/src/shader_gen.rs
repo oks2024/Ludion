@@ -623,8 +623,9 @@ pub struct EnvParams {
     pub gi_bounce: [f32; 4],
     pub wet_view: [[f32; 4]; 4],
     pub wet: [f32; 4],
+    pub ripple: [f32; 4],
 }
-const _: () = assert!(core::mem::size_of::<EnvParams>() == 160);
+const _: () = assert!(core::mem::size_of::<EnvParams>() == 176);
 const _: () = assert!(core::mem::offset_of!(EnvParams, params) == 0);
 const _: () = assert!(core::mem::offset_of!(EnvParams, ao) == 16);
 const _: () = assert!(core::mem::offset_of!(EnvParams, gi_origin) == 32);
@@ -632,6 +633,7 @@ const _: () = assert!(core::mem::offset_of!(EnvParams, gi_scale) == 48);
 const _: () = assert!(core::mem::offset_of!(EnvParams, gi_bounce) == 64);
 const _: () = assert!(core::mem::offset_of!(EnvParams, wet_view) == 80);
 const _: () = assert!(core::mem::offset_of!(EnvParams, wet) == 144);
+const _: () = assert!(core::mem::offset_of!(EnvParams, ripple) == 160);
 
 /// WGSL `struct ExposureMeterDebug`.
 ///
@@ -2639,6 +2641,10 @@ pub const LIT_MR_MAP_BINDING: u32 = 10;
 pub const LIT_MR_SAMP_GROUP: u32 = 4;
 pub const LIT_MR_SAMP_BINDING: u32 = 11;
 
+/// `lit_wet_map` — `@group(4) @binding(12)`, in `decal_lit.wgsl`.
+pub const LIT_WET_MAP_GROUP: u32 = 4;
+pub const LIT_WET_MAP_BINDING: u32 = 12;
+
 /// Bind group layout `atlas_tex_atlas_sampler` (@group 1), from `text.wgsl`, `ui_text.wgsl`.
 pub fn create_atlas_tex_atlas_sampler_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -3417,11 +3423,11 @@ pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r
             },
             wgpu::BindGroupLayoutEntry {
                 binding: ENV_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(160),
+                    min_binding_size: wgpu::BufferSize::new(176),
                 },
                 count: None,
             },
@@ -3524,11 +3530,11 @@ pub fn create_irradiance_tex_env_brdf_lut_env_samp_env_ao_tex_gi_tex_gi_bounce_r
             },
             wgpu::BindGroupLayoutEntry {
                 binding: ENV_BINDING,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(160),
+                    min_binding_size: wgpu::BufferSize::new(176),
                 },
                 count: None,
             },
@@ -3801,12 +3807,12 @@ pub fn create_lights_light_list_cluster_table_cluster_lights_bgl(
     })
 }
 
-/// Bind group layout `lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_receiver_ids_lit_base_map_lit_base_samp_lit_normal_map_lit_normal_samp_lit_mr_map_lit_mr_samp` (@group 4), from `decal_lit.wgsl`.
-pub fn create_lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_receiver_ids_lit_base_map_lit_base_samp_lit_normal_map_lit_normal_samp_lit_mr_map_lit_mr_samp_bgl(
+/// Bind group layout `lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_receiver_ids_lit_base_map_lit_base_samp_lit_normal_map_lit_normal_samp_lit_mr_map_lit_mr_samp_lit_wet_map` (@group 4), from `decal_lit.wgsl`.
+pub fn create_lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_receiver_ids_lit_base_map_lit_base_samp_lit_normal_map_lit_normal_samp_lit_mr_map_lit_mr_samp_lit_wet_map_bgl(
     device: &wgpu::Device,
 ) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_receiver_ids_lit_base_map_lit_base_samp_lit_normal_map_lit_normal_samp_lit_mr_map_lit_mr_samp"),
+        label: Some("lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_receiver_ids_lit_base_map_lit_base_samp_lit_normal_map_lit_normal_samp_lit_mr_map_lit_mr_samp_lit_wet_map"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: LIT_DEPTH_BINDING,
@@ -3914,6 +3920,16 @@ pub fn create_lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_rece
                 binding: LIT_MR_SAMP_BINDING,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: LIT_WET_MAP_BINDING,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
                 count: None,
             },
         ],

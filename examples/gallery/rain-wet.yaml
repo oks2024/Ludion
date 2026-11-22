@@ -4,6 +4,7 @@
 # humanoid voxel assembly stands in the open and is wet; a second stands under the awning and is dry. The coat decal is
 # the authored puddle, untouched by wetness. A presentation entity holds the rain, so it never enters the world hash.
 # ludion docs weather.
+# Ripples off (ripples: 0.0), so this golden shows the scene still.
 format: 1
 name: "rain-wet - Rain wetness: wet open street and figure, dry under the awning"
 entities:
@@ -303,6 +304,7 @@ entities:
     components:
       Rain:
         wetness: 1.0
+        ripples: 0.0
         wind:
           - 1.2
           - 0.0

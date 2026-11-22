@@ -30,6 +30,7 @@ analytic marker is `ludion docs ground-telegraphs`; the map block is `ludion doc
 | `size` | `[1, 1, 1]` × world scale | `L2106` |
 | `color` | `[1, 1, 1, 1]` (HDR for `add`) | `L1263` |
 | `opacity`, `metallic` | `1`, `0` | `L1014` |
+| `ripples` | `1` (`coat` only; `[0, 2]`) | `L1014` |
 | `roughness` | the receiver's own | `L1014` |
 | `uv_rect` | `[0, 0, 1, 1]` | `L1014` |
 | `angle_fade` | `[60, 80]` degrees, `0 <= start <= end <= 90` | `L2112` |
@@ -52,7 +53,8 @@ green = image up = box −Z.
   - `multiply`: an unlit darkening (scorch, grime).
   - `add`: an HDR add that blooms.
   - `coat`: the `multiply` darkening plus a dielectric specular lobe (F0 0.04 at the coat's
-    roughness); it replaces the receiver's environment specular. Wet patches, varnish.
+    roughness); it replaces the receiver's environment specular. Wet patches, varnish. Under a `Rain` its normal
+    ripples, scaled by `ripples` (`0` is still water; `ludion docs weather`); no other blend reads it.
   - Lit decals (`alpha`, `coat`) show probe, sky and SSR reflections at their own roughness and
     normal. At quality `low` they lose the sun shadow.
 - **Order.** Lit decals first (the `decals_lit` pass, before `reflections`), then `multiply` and `add`

@@ -2879,6 +2879,7 @@ fn extract_decals(
             opacity: decal.opacity,
             roughness: decal.roughness,
             metallic: decal.metallic,
+            ripples: decal.ripples,
             uv_rect: decal.uv_rect,
             angle_fade: decal.angle_fade,
             layer: decal.layer,

@@ -140,6 +140,10 @@ struct EnvParams {
     // this frame's `rain_occlusion`), z = the map's half extent in metres (the edge fade), w = 1 draws
     // the `rain_occlusion` debug tint (0 otherwise).
     wet: vec4<f32>,
+    // The rain's ripples (all zero on a frame without rain, and both passes then skip them): x = game time
+    // (s), y = the seed's bits, z = the ground weight (`Rain.ripples` × 0.3), w = the coat decals' base
+    // weight (`Rain.ripples`).
+    ripple: vec4<f32>,
 };
 @group(3) @binding(0) var irradiance_tex: texture_cube<f32>;
 // Binding 1 (the specular cube) is the `reflections` pass's; binding 2, the split-sum BRDF LUT, is read by

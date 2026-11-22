@@ -1,6 +1,7 @@
 # Feature: Rain - a world-anchored field of velocity-stretched streaks. Open ground at night under one sodium spot: the
 # streaks inside the lit cone catch the light and the rest fall dark, slanted by the wind. A presentation entity holds
 # the rain, so it never enters the world hash. The camera sits at head height facing the cone.
+# Ripples off (ripples: 0.0), so this golden shows the scene still.
 format: 1
 name: "rain-open - Rain: lit streaks in a sodium cone, wind-slanted"
 entities:
@@ -138,6 +139,7 @@ entities:
     presentation: true
     components:
       Rain:
+        ripples: 0.0
         wind:
           - 1.2
           - 0.0

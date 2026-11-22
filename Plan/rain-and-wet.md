@@ -1,7 +1,7 @@
 # Plan: Rain and wet weather
 
-> Status: **W1a, W1b, W2a, W2b and W2c mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
-> roof occlusion, mesh wetness, authored porosity, `RainOccluder`, the `rain_occlusion` debug view, the `rain_density` quality lever and the `rain-open`, `rain-awning`, `rain-wet`, `rain-porosity` and `rain-occluder` goldens. Usage is `ludion docs weather`; the gallery scenes are
+> Status: **W1a, W1b, W2a, W2b, W2c and W3a mechanized** (Neon Shroud request 0018): the `Rain` component, the GPU-evaluated streak field,
+> roof occlusion, mesh wetness, authored porosity, `RainOccluder`, the `rain_occlusion` debug view, the `rain_density` quality lever, ripples on wet ground and coat decals, and the `rain-open`, `rain-awning`, `rain-wet`, `rain-porosity` and `rain-occluder` goldens. Usage is `ludion docs weather`; the gallery scenes are
 > `examples/gallery/rain-open.yaml`, `rain-awning.yaml`, `rain-wet.yaml`, `rain-porosity.yaml` and `rain-occluder.yaml`.
 
 ## Why
@@ -83,6 +83,28 @@ for the whole arc; W1a ships the streak field.
 21. **`rain_density`** is a `QualityParams` multiplier (full/high/medium 1.0, low 0.4) spent in the renderer: `build_rain_draw`
     thins `per_tile` before the layout, so drops `0..thinned` are the same drops as at full. Wetness, occlusion and the `L2382`
     budget are untouched. It is an override-file key, not in the wire-hashed `QualityProfile` (`particle_density`'s precedent).
+22. **The ripple field** (W3a; `snippets/rain_ripple.wgsl`, CPU twin `ludion_renderer::ripple_slope`, tests only). `ripple_slope(xz, time, seed)`
+    returns a height gradient. World xz is tiled in cells of 0.35 m; each cell carries one ring per 0.7 s period, with a phase and
+    an origin inside the cell from a PCG hash of `(seed ^ 0x9e3779b9, i, j)`. Age `a = fract(time / 0.7 + phase)`, radius
+    `a x 0.16 m`, profile `sin((d - r) x 2pi / 0.05)` inside `|d - r| < 0.03`, amplitude `(1 - a)^2`; the 3x3 neighbouring cells sum.
+    Stateless: a function of `(xz, RainData.time_s, seed)`, so a held `GameClock` holds it. Never `fract(sin())`. The shading normal
+    is `normalize(n + weight x up x (-s.x, 0, -s.y))`, `up = smoothstep(0.7, 0.95, n.y)` on the geometric normal.
+23. **Uniform lanes.** `EnvParams.ripple`: x = `time_s`, y = the seed bitcast, z = ground weight (`ripples x 0.3`), w = decal base
+    weight (`ripples`). A frame without rain writes zero; both shaders skip the ripple at weight <= 0. `Rain.ripples` in `[0, 2]`,
+    default 1. Ground weight is `ripples x 0.3 x w` (`w` = `surface_wetness`, so covered ground never ripples). The decal env
+    bind group now carries the frame's `wet_view` and `ripple`.
+24. **Decal exposure.** `Decal.ripples` in `[0, 2]` (default 1; coat decals only; 0 is still water). `vs_lit` reads the
+    `rain_occlusion` map (`@group(4) @binding(12)`, vertex stage only) at the column of the box's top-face centre; exposure is
+    `smoothstep(column - 0.2, column, top.y)`, 1 outside the map. The weight `env.ripple.w x Decal.ripples x exposure` rides
+    `LitVsOut` flat; `ProjectorDecal.surface.w` carries `Decal.ripples` for coat decals (0 otherwise). `decals_lit` reads
+    `rain_occlusion` as its last input only with rain. The five rain scenes of W1-W2c author `ripples: 0.0` so their goldens
+    stay still.
+25. **W3b, splashes (laid out, not built).** A second instanced draw in `transparents`/`transparent_depth` after the streaks,
+    from the same rain bind group. Its own lattice: 0.5 m cells over `camera.xz +- min(radius, 12)`; one hashed splash per 0.16 s
+    slot per cell, present when `unit_hash < intensity x splashes x rate`. Height comes from the `rain_occlusion` map in the
+    vertex stage (the topmost surface, roofs included, never under them); none where the map's 2x2 slope exceeds 45 degrees.
+    Each splash is a ring quad plus 4 droplet quads, lit as the streaks are. It adds `Rain.splashes` in `[0, 2]`, default 1, and
+    `L2384` for a budget if one is needed. The request's ring-only splash on puddle decals is Proposed, owner ruling owed.
 
 ## Waves
 
@@ -94,7 +116,8 @@ for the whole arc; W1a ships the streak field.
   wet without authoring. Characters are wet per pixel. `Rain.wetness` defaults to 1.
 - **W2b, porosity:** the `porosity` field on palettes, sculpt, `Mesh` and mesh documents (D15–D17).
 - **W2c:** `RainOccluder`, `--debug-view rain_occlusion` and a `rain_density` quality lever.
-- **W3:** splashes, plus ripples on wet ground and on `coat` decals.
+- **W3a, ripples:** `Rain.ripples` and `Decal.ripples`; a shading-normal perturbation on wet ground and on `coat` decals (D22-D24).
+- **W3b, splashes:** the instanced splash draw (D25).
 - **W4:** sun and local shadow taps, `backlight`, `ParticleEmitter.shadowed` and `.stretch`.
 - **W5:** `rain-camera-move`, budget files, and a tile cache if the measured cost asks for one.
 
@@ -148,3 +171,4 @@ for the whole arc; W1a ships the streak field.
   `rain-porosity`. W2c (`RainOccluder`, `rain_occlusion` debug view, `rain_density`) is next.
 - M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twin of `rain-porosity` is blessed (r2455).
 - **W2c mechanized (2026-11-22):** `RainOccluder { occludes }` (D18; resolved per placed mesh at extract, nearest on the entity or a `Parent` ancestor, into the CPU-only `MeshInstance.rain_occluder`), `L2383` (D19), `ludion render --debug-view rain_occlusion` (D20; `PostChain.rain_view`, `EnvParams.wet.w`, no pass, CLI-only) and `QualityParams.rain_density` (D21; `low` 0.4, a prefix of the same drops). `rain-occluder` and `rain-occluder-view` are new Windows goldens blessed on the RTX 3090; the other 124 gallery goldens passed unblessed. No replay content hash, `WorldHash` or protocol schema moved; the component schema snapshot gained `RainOccluder`. Owed: the macOS twins of both goldens.
+- **W3a mechanized (2026-11-22):** `Rain.ripples` and `Decal.ripples` (both `[0, 2]`, default 1; the decal's is read for `coat` only), the stateless ripple field `rain_ripple.wgsl` with its CPU twin `ripple_slope` (D22), `EnvParams.ripple` (D23) and the decal exposure read at the box top from the `rain_occlusion` map through `decal_lit.wgsl`'s `@group(4) @binding(12)`, which `decals_lit` reads last only with rain (D24). A frame without rain, and `ripples: 0`, render the W2c bytes: the five earlier rain scenes now author `ripples: 0.0`, and every one of them and `decals` re-rendered byte-equal to its pre-edit PNG. `rain-ripples` is the new Windows golden blessed on the RTX 3090; nothing else was re-blessed. No replay content hash, `WorldHash` or protocol schema moved; the component schema snapshot gained the two fields. Owed: the macOS twin of `rain-ripples`, the editor TS types. W3b (splashes, D25) is next.

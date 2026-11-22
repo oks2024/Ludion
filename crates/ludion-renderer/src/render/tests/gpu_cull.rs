@@ -1364,6 +1364,7 @@ fn needs_gpu_decal_receivers_follow_the_selected_level() {
             opacity: 1.0,
             roughness: None,
             metallic: 0.0,
+            ripples: 1.0,
             uv_rect: [0.0, 0.0, 1.0, 1.0],
             angle_fade: [60.0, 80.0],
             layer: 0,

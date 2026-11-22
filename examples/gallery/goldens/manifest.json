@@ -13,5 +13,6 @@
   "assembly-socket": { "frames": 30 },
   "assembly-ground": { "frames": 30 },
   "render-view-radar": { "views": ["radar"] },
-  "render-view-portrait": { "views": ["portrait"] }
+  "render-view-portrait": { "views": ["portrait"] },
+  "rain-ripples": { "frames": 12 }
 }

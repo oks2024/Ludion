@@ -3798,6 +3798,12 @@ pub struct Decal {
     /// Which surfaces the decal paints (default every unskinned mesh).
     #[serde(default, skip_serializing_if = "is_default_receivers")]
     pub receivers: DecalReceiverSet,
+    /// `coat` decals only: scales the rain's ripples on this decal, in `[0, 2]` (default `1`); `0` is
+    /// still water.
+    #[serde(default = "one_f32", skip_serializing_if = "is_one_f32")]
+    #[schemars(range(min = 0.0, max = 2.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 2.0]))]
+    pub ripples: f32,
 }
 
 impl Default for Decal {
@@ -3816,6 +3822,7 @@ impl Default for Decal {
             angle_fade: decal_angle_fade_default(),
             layer: 0,
             receivers: DecalReceiverSet::All,
+            ripples: 1.0,
         }
     }
 }
@@ -11845,6 +11852,7 @@ entities:
             ("        opacity: 1.5\n", "opacity"),
             ("        roughness: -0.1\n", "roughness"),
             ("        metallic: 2.0\n", "metallic"),
+            ("        ripples: 2.5\n", "ripples"),
             (
                 "        uv_rect:\n          - 0.0\n          - 0.0\n          - 1.5\n          - 1.0\n",
                 "uv_rect/2",
@@ -11856,6 +11864,27 @@ entities:
                 "{body}: {found:?}"
             );
         }
+    }
+
+    /// `ripples` at its default writes no key; an authored value survives the writer.
+    #[test]
+    fn decal_ripples_is_omitted_at_its_default() {
+        let value = serde_json::to_value(Decal::default()).unwrap();
+        assert!(value.get("ripples").is_none());
+        let still = Decal {
+            ripples: 0.0,
+            ..Decal::default()
+        };
+        assert_eq!(serde_json::to_value(still).unwrap()["ripples"], 0.0);
+        let registry = builtin_registry();
+        let source = "format: 1
+entities:
+  - components:
+      Decal:
+        ripples: 0.0
+";
+        let scene = ludion_scene::check(source, &registry).expect("valid decal");
+        assert!(ludion_scene::emit(&scene, &registry).contains("ripples: 0.0"));
     }
 
     /// The angle fade holds `0 <= start <= end <= 90` (`L2112`).

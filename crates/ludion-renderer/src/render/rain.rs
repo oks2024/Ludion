@@ -33,13 +33,16 @@ pub(super) struct WetFrame {
     pub(super) half_extent: f32,
     /// The `rain_occlusion` debug view: the scene pass tints by the map (`EnvParams.wet.w`).
     pub(super) debug: bool,
+    /// `EnvParams.ripple`: game time, the seed's bits, the ground weight and the decal base weight.
+    pub(super) ripple: [f32; 4],
 }
 
 /// The group-3 flavour a shading bind group is built for.
 #[derive(Clone, Copy)]
 pub(super) enum WetInput<'a> {
-    /// The lit decal pass's layout, which has no map slot.
-    Decal,
+    /// The lit decal pass's layout, which has no map slot: the frame's view and ripple lanes only. The
+    /// pass reads the map through its own binding.
+    Decal(Option<&'a WetFrame>),
     /// A mesh pipeline's layout: the `rain_occlusion` map and its frame, or none on a frame that is
     /// dry (the fallback depth is bound and the shader's wet branch is never taken).
     Mesh(Option<(&'a wgpu::TextureView, &'a WetFrame)>),
@@ -49,7 +52,15 @@ impl<'a> WetInput<'a> {
     pub(super) fn frame(self) -> Option<(&'a wgpu::TextureView, &'a WetFrame)> {
         match self {
             WetInput::Mesh(frame) => frame,
-            WetInput::Decal => None,
+            WetInput::Decal(_) => None,
+        }
+    }
+
+    /// The frame's wet lanes, which the decal layout carries too.
+    pub(super) fn wet_frame(self) -> Option<&'a WetFrame> {
+        match self {
+            WetInput::Mesh(frame) => frame.map(|(_, wet)| wet),
+            WetInput::Decal(wet) => wet,
         }
     }
 }
@@ -61,6 +72,12 @@ impl WetFrame {
             wetness: rain.wetness,
             half_extent: rain.radius,
             debug,
+            ripple: [
+                rain.time_s,
+                f32::from_bits(rain.seed),
+                rain.ripples * 0.3,
+                rain.ripples,
+            ],
         }
     }
 }

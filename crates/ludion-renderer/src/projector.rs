@@ -343,7 +343,12 @@ fn decal_instance(
             decal.roughness.unwrap_or(-1.0),
             decal.metallic,
             decal.maps.normal_scale,
-            0.0,
+            // The rain's ripples on this decal: the lit pass's `coat` draws only.
+            if decal.blend == DecalBlend::Coat {
+                decal.ripples
+            } else {
+                0.0
+            },
         ],
     }
 }
@@ -535,6 +540,7 @@ mod tests {
             opacity: 1.0,
             roughness: None,
             metallic: 0.0,
+            ripples: 1.0,
             uv_rect: [0.0, 0.0, 1.0, 1.0],
             angle_fade: [60.0, 80.0],
             layer: 0,

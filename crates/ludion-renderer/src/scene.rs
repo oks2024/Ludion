@@ -534,6 +534,8 @@ pub struct DecalInstance {
     pub roughness: Option<f32>,
     /// The metallic value painted, `[0, 1]`.
     pub metallic: f32,
+    /// How strongly the rain ripples this decal, `[0, 2]`; read for the `coat` blend only.
+    pub ripples: f32,
     /// The sub-rectangle of the maps the box covers, `[u0, v0, u1, v1]`.
     pub uv_rect: [f32; 4],
     /// The angle fade `[start, end]` in degrees.

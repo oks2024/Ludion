@@ -3560,10 +3560,11 @@ impl Renderer {
                 0.0,
                 0.0,
             ],
-            wet_view: wet.frame().map_or([[0.0; 4]; 4], |(_, w)| w.view),
+            wet_view: wet.wet_frame().map_or([[0.0; 4]; 4], |w| w.view),
             wet: wet.frame().map_or([0.0; 4], |(_, w)| {
                 [w.wetness, 1.0, w.half_extent, f32::from(w.debug)]
             }),
+            ripple: wet.wet_frame().map_or([0.0; 4], |w| w.ripple),
         };
         let params_buf = init_buffer(
             device,
@@ -3649,7 +3650,7 @@ impl Renderer {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("env bind group"),
             layout: self.layouts.get(match wet {
-                WetInput::Decal => LayoutId::Env,
+                WetInput::Decal(_) => LayoutId::Env,
                 WetInput::Mesh(_) => LayoutId::EnvWet,
             }),
             entries: &entries,
@@ -6131,11 +6132,21 @@ impl FrameRecorder<'_> {
         } else {
             &self.r.fallback_receivers.view
         };
+        // A rain frame reads the occlusion map last, after the shading tail.
+        let (tail, wet_map) = match &self.wet {
+            Some(_) => {
+                let (map, tail) = pass.inputs[head..].split_last().expect(
+                    "a rain frame schedules the occlusion map as the lit decals' last read",
+                );
+                (tail, *map)
+            }
+            None => (&pass.inputs[head..], &self.r.fallback_shadow.view),
+        };
         let (sun_bg, env_bg) = self.shading_groups(
             pass.device,
-            &pass.inputs[head..],
+            tail,
             self.has_ao,
-            WetInput::Decal,
+            WetInput::Decal(self.wet.as_ref()),
             None,
         );
         let decal_buf = init_buffer(
@@ -6227,6 +6238,10 @@ impl FrameRecorder<'_> {
                         wgpu::BindGroupEntry {
                             binding: shader_gen::LIT_MR_SAMP_BINDING,
                             resource: wgpu::BindingResource::Sampler(mr_samp),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: shader_gen::LIT_WET_MAP_BINDING,
+                            resource: wgpu::BindingResource::TextureView(wet_map),
                         },
                     ],
                 })
@@ -8252,6 +8267,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::ViewRay,
             Snippet::Math,
             Snippet::RainOcclusion,
+            Snippet::RainRipple,
             Snippet::MeshShading,
             Snippet::MeshMaterial,
         ],
@@ -8705,6 +8721,8 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::GiProbe,
             Snippet::ViewRay,
             Snippet::Math,
+            Snippet::RainOcclusion,
+            Snippet::RainRipple,
             Snippet::MeshShading,
             Snippet::Decal,
         ],
@@ -8769,6 +8787,7 @@ const SHADERS: [ShaderDesc; SHADER_COUNT] = [
             Snippet::BillboardLight,
             Snippet::Quad,
             Snippet::RainOcclusion,
+            Snippet::RainRipple,
         ],
         layouts: &[
             Some(LayoutId::Camera),
@@ -8912,11 +8931,14 @@ pub(crate) enum Snippet {
     /// `occluder_top`, the height of the nearest shadow caster over a world point in the overhead
     /// rain-occlusion map, binding-free (rain, mesh).
     RainOcclusion,
+    /// `ripple_slope` and `ripple_normal`, the stateless ripple field of standing water, plus the
+    /// `pcg`/`unit_hash` rounds, binding-free (rain, mesh, decal_lit).
+    RainRipple,
 }
 
 impl Snippet {
     /// Every snippet.
-    pub(crate) const ALL: [Snippet; 32] = [
+    pub(crate) const ALL: [Snippet; 33] = [
         Snippet::Camera,
         Snippet::ClusterGrid,
         Snippet::Probes,
@@ -8949,6 +8971,7 @@ impl Snippet {
         Snippet::SoftFalloff,
         Snippet::WorldFromDepth,
         Snippet::RainOcclusion,
+        Snippet::RainRipple,
     ];
 
     /// The snippet's file name under `shaders/snippets/`; its reload key is `snippets/<file name>`.
@@ -8986,6 +9009,7 @@ impl Snippet {
             Snippet::SoftFalloff => "soft_falloff.wgsl",
             Snippet::WorldFromDepth => "world_from_depth.wgsl",
             Snippet::RainOcclusion => "rain_occlusion.wgsl",
+            Snippet::RainRipple => "rain_ripple.wgsl",
         }
     }
 
@@ -9026,6 +9050,7 @@ impl Snippet {
             Snippet::SoftFalloff => include_str!("shaders/snippets/soft_falloff.wgsl"),
             Snippet::WorldFromDepth => include_str!("shaders/snippets/world_from_depth.wgsl"),
             Snippet::RainOcclusion => include_str!("shaders/snippets/rain_occlusion.wgsl"),
+            Snippet::RainRipple => include_str!("shaders/snippets/rain_ripple.wgsl"),
         }
     }
 }
@@ -9313,7 +9338,7 @@ const LAYOUTS: [LayoutDesc; LAYOUT_COUNT] = [
     },
     LayoutDesc {
         id: LayoutId::DecalLit,
-        create: shader_gen::create_lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_receiver_ids_lit_base_map_lit_base_samp_lit_normal_map_lit_normal_samp_lit_mr_map_lit_mr_samp_bgl,
+        create: shader_gen::create_lit_depth_lit_surface_lit_receivers_lit_params_lit_decals_lit_receiver_ids_lit_base_map_lit_base_samp_lit_normal_map_lit_normal_samp_lit_mr_map_lit_mr_samp_lit_wet_map_bgl,
     },
     LayoutDesc {
         id: LayoutId::SmaaEdges,

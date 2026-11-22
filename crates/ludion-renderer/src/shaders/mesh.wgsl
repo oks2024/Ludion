@@ -565,6 +565,10 @@ fn shade_fragment(in: VsOut, front_facing: bool, with_rim: bool) -> CaptureOut {
         let wet = surface_wetness(in.world_pos, geometric);
         albedo = albedo * mix(1.0, WET_ALBEDO_DARKEN, wet * in.material.w);
         surface.x = mix(surface.x, WET_ROUGHNESS, wet * (1.0 - surface.y));
+        // Standing water ripples where the ground is wet, so covered ground stays still.
+        if (env.ripple.z > 0.0 && wet > 0.0) {
+            normal = ripple_normal(normal, geometric, in.world_pos, env.ripple.x, bitcast<u32>(env.ripple.y), env.ripple.z * wet);
+        }
     }
 
     let shaded = shade(in.world_pos, normal, albedo, surface, ao, in.clip.xy, occlusion_map);

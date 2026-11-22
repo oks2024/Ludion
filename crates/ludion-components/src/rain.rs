@@ -75,6 +75,11 @@ pub struct Rain {
     /// rain reaches (default 1). Games write it to dry a street.
     #[serde(default = "default_wetness")]
     pub wetness: f32,
+    /// How strongly wet ground and `coat` decals ripple, in `[0, 2]`: 0 keeps the water still (default 1).
+    #[serde(default = "default_ripples")]
+    #[schemars(range(min = 0.0, max = 2.0))]
+    #[schemars(extend("x-ui-range" = [0.0, 2.0]))]
+    pub ripples: f32,
     /// Varies the lattice hash (default 0).
     #[serde(default)]
     pub seed: u32,
@@ -98,6 +103,7 @@ impl Default for Rain {
             medium: default_medium(),
             occlusion: true,
             wetness: default_wetness(),
+            ripples: default_ripples(),
             seed: 0,
         }
     }
@@ -134,6 +140,9 @@ fn default_color() -> [f32; 4] {
     [0.55, 0.6, 0.65, 0.25]
 }
 fn default_wetness() -> f32 {
+    1.0
+}
+fn default_ripples() -> f32 {
     1.0
 }
 fn default_true() -> bool {
@@ -266,6 +275,11 @@ pub fn rain_problems(rain: &Rain) -> Vec<(String, String)> {
         "/wetness".into(),
         format!("`wetness` is {}; it takes a value in [0, 1]", rain.wetness),
     );
+    check(
+        rain.ripples.is_finite() && (0.0..=2.0).contains(&rain.ripples),
+        "/ripples".into(),
+        format!("`ripples` is {}; it takes a value in [0, 2]", rain.ripples),
+    );
     out
 }
 
@@ -360,6 +374,9 @@ mod tests {
         assert_eq!(paths(json!({ "wetness": 1.5 })), ["/wetness"]);
         assert_eq!(paths(json!({ "wetness": -0.1 })), ["/wetness"]);
         assert!(paths(json!({ "wetness": 0.0 })).is_empty());
+        assert_eq!(paths(json!({ "ripples": 2.5 })), ["/ripples"]);
+        assert_eq!(paths(json!({ "ripples": -0.1 })), ["/ripples"]);
+        assert!(paths(json!({ "ripples": 2.0 })).is_empty());
         assert!(paths(json!({ "height": [-6.0, 58.0], "cell": 8.0 })).is_empty());
     }
 }

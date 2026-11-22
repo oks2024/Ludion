@@ -804,6 +804,7 @@ mod tests {
             opacity: 1.0,
             roughness: None,
             metallic: 0.0,
+            ripples: 1.0,
             uv_rect: [0.0, 0.0, 1.0, 1.0],
             angle_fade: [60.0, 80.0],
             layer: 0,

@@ -51,6 +51,9 @@ struct LitParams {
 @group(4) @binding(9) var lit_normal_samp: sampler;
 @group(4) @binding(10) var lit_mr_map: texture_2d<f32>;
 @group(4) @binding(11) var lit_mr_samp: sampler;
+// The `rain_occlusion` map, read in the vertex stage only (`vs_lit`); a dry frame binds the 1×1 fallback
+// and its ripple weight is 0.
+@group(4) @binding(12) var lit_wet_map: texture_depth_2d;
 
 // `ProjectorDecal.ids.z` bit 0: a normal map is bound.
 const LIT_NORMAL_MAP: u32 = 1u;
@@ -58,6 +61,8 @@ const LIT_NORMAL_MAP: u32 = 1u;
 struct LitVsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) @interpolate(flat) decal: u32,
+    // The rain's ripple weight on this decal: `Rain.ripples × Decal.ripples × exposure`, 0 off `coat`.
+    @location(1) @interpolate(flat) ripple: f32,
 }
 
 // The decal's box as the 36-vertex cube in box space `[-0.5, 0.5]^3`. A mirrored box reverses the
@@ -70,6 +75,15 @@ fn vs_lit(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> L
     var out: LitVsOut;
     out.clip = camera.view_proj * (d.box_to_world * vec4<f32>(corner * 0.5, 1.0));
     out.decal = ii;
+    out.ripple = 0.0;
+    let base_weight = env.ripple.w * d.surface.w;
+    if (base_weight > 0.0) {
+        // Exposure at the box's top-face centre: a puddle under a roof stays still.
+        let top = (d.box_to_world * vec4<f32>(0.0, 0.5, 0.0, 1.0)).xyz;
+        let column = occluder_top(env.wet_view, lit_wet_map, top).x;
+        let exposure = select(1.0, smoothstep(column - 0.2, column, top.y), column > -1.0e8);
+        out.ripple = base_weight * exposure;
+    }
     return out;
 }
 
@@ -148,6 +162,9 @@ fn lit_sample(in: LitVsOut) -> LitSample {
         b = select(-b, b, dot(b, -bz) >= 0.0);
         let scaled = vec3<f32>(normal_tap.xy * d.surface.z, normal_tap.z);
         n = normalize(mat3x3<f32>(t, b, n_r) * scaled);
+    }
+    if (in.ripple > 0.0) {
+        n = ripple_normal(n, n_r, world, env.ripple.x, bitcast<u32>(env.ripple.y), in.ripple);
     }
 
     var out: LitSample;

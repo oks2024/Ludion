@@ -15,8 +15,8 @@
 // A fragment under a roof is hidden: it reads the `rain_occlusion` depth map (every shadow caster seen
 // straight down) and fades out below the caster's top at its column (`rain_open_sky`).
 //
-// The `Camera` uniform (@group 0), the clustered light set (@group 1) and the map's `occluder_top` are
-// shared snippets composed ahead of this file.
+// The `Camera` uniform (@group 0), the clustered light set (@group 1), the map's `occluder_top` and the
+// `pcg`/`unit_hash` rounds (`rain_ripple.wgsl`) are shared snippets composed ahead of this file.
 
 struct RainParams {
     // xyz = the base tile of the drawn block, w unused.
@@ -42,18 +42,6 @@ struct RainParams {
 @group(2) @binding(0) var<uniform> rain: RainParams;
 // The `rain_occlusion` map: the nearest shadow caster's depth over each texel, 1.0 where there is none.
 @group(2) @binding(1) var rain_occlusion: texture_depth_2d;
-
-// One round of PCG: a cheap integer hash with good avalanche.
-fn pcg(v: u32) -> u32 {
-    let s = v * 747796405u + 2891336453u;
-    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
-    return (w >> 22u) ^ w;
-}
-
-// The top 24 bits as a float in [0, 1).
-fn unit_hash(h: u32) -> f32 {
-    return f32(h >> 8u) * (1.0 / 16777216.0);
-}
 
 struct RainVert {
     clip: vec4<f32>,
