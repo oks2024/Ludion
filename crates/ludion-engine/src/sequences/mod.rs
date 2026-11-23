@@ -19,6 +19,7 @@ mod docs;
 mod events;
 pub(crate) mod preview;
 mod update;
+pub(crate) mod wire;
 
 /// The system's name in the schedule and in `engine.describe`.
 pub(crate) const SYSTEM_NAME: &str = "sequence_update";

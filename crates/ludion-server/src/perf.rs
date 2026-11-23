@@ -454,6 +454,9 @@ mod tests {
                     frame_tail: None,
                 },
                 transport: None,
+                assembly: None,
+                exposure: None,
+                checkpoints: None,
                 samples: ProfileSamples {
                     frames,
                     system_names: Vec::new(),

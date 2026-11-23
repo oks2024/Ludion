@@ -612,6 +612,9 @@ pub struct Engine {
     /// The in-memory checkpoint store, `Some` once [`checkpoints`](crate::EngineBuilder::checkpoints)
     /// opted in. The [`Checkpoints`](crate::Checkpoints) resource mirrors it after every rebuild.
     pub(crate) checkpoints: Option<crate::checkpoints::CheckpointState>,
+    /// The `sequence.seek` stash: the last `sequence.play`'s player and its starting snapshot.
+    /// Host session state, never hashed; a scene load clears it, a session restore installs it.
+    pub(crate) sequence_seek: Option<crate::sequences::wire::SequenceSeek>,
     /// The run-recording state, `Some` once [`run_recordings`](crate::EngineBuilder::run_recordings)
     /// opted in. It lives here, not in `SessionState`, because a run's reset clears the session.
     run_recording: Option<RunRecordingState>,
@@ -681,7 +684,7 @@ pub struct Engine {
     /// is this one `Option` test, with no clock read, no observer, and no allocation. Boxed so an
     /// unarmed [`Engine`] carries a pointer rather than the whole window state. Pure host-side
     /// observation: never hashed, never snapshotted, never recorded (see [`crate::perf_live`]).
-    perf: Option<Box<LivePerf>>,
+    pub(crate) perf: Option<Box<LivePerf>>,
 }
 
 /// The most recent [`AudioLogEntry`] entries a session keeps. Beyond this the oldest is dropped (the
@@ -1065,6 +1068,7 @@ impl Engine {
             profile_off_disk: false,
             run_save: None,
             checkpoints: None,
+            sequence_seek: None,
             run_recording: None,
             replay_playback: None,
             playback: None,
@@ -9021,6 +9025,8 @@ pub(crate) struct RestoredWorld {
     /// The snapshot's checkpoint store, or `None` for one without slots (or predating the field).
     /// A session restore replaces the engine's store with it; a checkpoint restore ignores it.
     pub checkpoints: Option<crate::checkpoints::RestoredStore>,
+    /// The snapshot's `sequence.seek` stash, or `None` for one without (or a checkpoint).
+    pub sequence_seek: Option<crate::sequences::wire::SequenceSeek>,
 }
 
 /// A top-level prefab instance's root and the placement its scene entry gave it.
@@ -9078,6 +9084,7 @@ pub(crate) enum Rebuild {
         arrived_by_restart: bool,
         render_extent: Option<(u32, u32)>,
         checkpoints: Option<crate::checkpoints::RestoredStore>,
+        sequence_seek: Option<crate::sequences::wire::SequenceSeek>,
     },
     /// A scene switch: the same session, a new district. A `restart` rebuilds the current scene and
     /// stays in its prefab epoch.
@@ -9132,6 +9139,7 @@ impl Engine {
                 arrived_by_restart: restored.arrived_by_restart,
                 render_extent: restored.render_extent,
                 checkpoints: restored.checkpoints,
+                sequence_seek: restored.sequence_seek,
             },
         });
         Ok(())
@@ -9367,6 +9375,12 @@ impl Engine {
             }
         };
         self.install_checkpoints(store_row);
+        // The stash follows the store's rows: a load clears it, a restore installs the snapshot's.
+        match &mut kind {
+            Rebuild::Load { .. } => self.sequence_seek = None,
+            Rebuild::Restore { sequence_seek, .. } => self.sequence_seek = sequence_seek.take(),
+            Rebuild::Switch { .. } | Rebuild::Checkpoint { .. } => {}
+        }
         self.install_run_recording();
         self.install_replay_playback();
         self.commit_docs(docs);

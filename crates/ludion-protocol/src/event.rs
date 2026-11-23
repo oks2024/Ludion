@@ -226,6 +226,9 @@ mod tests {
                 frame_tail: None,
             },
             transport: None,
+            assembly: None,
+            exposure: None,
+            checkpoints: None,
             samples: crate::perf::ProfileSamples {
                 frames: vec![0],
                 system_names: vec!["enemy_ai".into()],

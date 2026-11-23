@@ -61,7 +61,7 @@ use crate::components::{AnimationLayer, AnimationLayers, BlendClock, LayerMode, 
 use crate::components::{ExposureMode, GrainMotion, Metering};
 use crate::dialogue::Subtitles;
 use crate::docs::DocStore;
-use crate::extract_observer::{ExtractPhase, SkinCounts};
+use crate::extract_observer::{AssemblyCounts, ExtractPhase, SkinCounts};
 use crate::fonts::FontLibrary;
 use crate::hierarchy::{FrameVisibility, WorldAffines, level_trs};
 use crate::load_observer::LoadPhase;
@@ -154,6 +154,8 @@ pub(crate) trait SceneAssets {
     fn extract_end(&mut self, _phase: ExtractPhase) {}
     /// The extract's skin counters, inside the `Skin` bracket.
     fn extract_skin(&mut self, _counts: SkinCounts) {}
+    /// The extract's assembly posing counters, inside the `Meshes` bracket.
+    fn extract_assembly(&mut self, _counts: AssemblyCounts) {}
     /// The memo of ground-marker visibility profiles; `None` for a loader with nowhere to keep it,
     /// whose clipped markers cast fresh every extract.
     fn clip_cache(&mut self) -> Option<&mut crate::ground_marker_clip::ClipCache> {
@@ -248,6 +250,11 @@ impl SceneAssets for CachedAssets<'_> {
     fn extract_skin(&mut self, counts: SkinCounts) {
         if let Some(observer) = self.cache.extract_observer_mut() {
             observer.skin(counts);
+        }
+    }
+    fn extract_assembly(&mut self, counts: AssemblyCounts) {
+        if let Some(observer) = self.cache.extract_observer_mut() {
+            observer.assembly(counts);
         }
     }
 }
@@ -1532,6 +1539,7 @@ fn extract_inner(
     assets.extract_end(ExtractPhase::Ui);
 
     assets.extract_begin(ExtractPhase::Meshes);
+    let mut assembly_counts = AssemblyCounts::default();
     // Resolve asset meshes, voxel models, sculpts, and assemblies in the same first-encounter (entity)
     // order, deduplicated by path — so two `Mesh` components pointing at the same document produce one
     // `mesh_assets` entry (one run of entries for an assembly, one per part), and two extractions of
@@ -1659,7 +1667,14 @@ fn extract_inner(
                 ) else {
                     continue;
                 };
-                let placed = assembly_part_models(world, mesh.id, &data, mesh.model, now);
+                let placed = assembly_part_models_counted(
+                    world,
+                    mesh.id,
+                    &data,
+                    mesh.model,
+                    now,
+                    &mut assembly_counts,
+                );
                 for (part, (local, local_normal)) in placed.into_iter().enumerate() {
                     let index = base + part;
                     let instance = MeshInstance {
@@ -1813,6 +1828,7 @@ fn extract_inner(
     });
     let silhouettes =
         crate::silhouette::extract_silhouettes(world, &meshes, &mesh_owners, degraded);
+    assets.extract_assembly(assembly_counts);
     assets.extract_end(ExtractPhase::Meshes);
 
     assets.extract_begin(ExtractPhase::Skin);
@@ -7322,16 +7338,40 @@ pub(crate) fn assembly_part_models(
     model: Mat4,
     now: GameTime,
 ) -> Vec<(Mat4, Mat3)> {
+    assembly_part_models_counted(world, id, data, model, now, &mut AssemblyCounts::default())
+}
+
+/// [`assembly_part_models`], adding what it did to `counts`: the mesh loop's twin, so the drawn
+/// assemblies are counted once each and a socket re-pose is not.
+pub(crate) fn assembly_part_models_counted(
+    world: &World,
+    id: EntityId,
+    data: &AssemblyData,
+    model: Mat4,
+    now: GameTime,
+    counts: &mut AssemblyCounts,
+) -> Vec<(Mat4, Mat3)> {
     let held_now = held_for(world, id, now);
     let (pose, crossfade) = animation_pose(world, id, data, held_now);
     let layers = assembly_layer_poses(world, id, data, held_now);
     let mut placed = part_placements_layered(data, pose, crossfade, &layers);
     let ik_goals = crate::assembly_ik::assembly_ik_goals(world, id, data, model, held_now);
+    counts.instances += 1;
+    counts.parts_posed += placed.len() as u32;
+    counts.layers_sampled += layers.len() as u32;
     if !ik_goals.is_empty() {
-        crate::assembly_ik::apply_assembly_ik(data, &ik_goals, &mut placed);
+        counts.ik_chains_solved +=
+            crate::assembly_ik::apply_assembly_ik(data, &ik_goals, &mut placed) as u32;
     }
     if data.ground.is_some() {
-        crate::assembly_ik::apply_assembly_ground(world, id, data, model, &ik_goals, &mut placed);
+        counts.ik_ground_casts += crate::assembly_ik::apply_assembly_ground(
+            world,
+            id,
+            data,
+            model,
+            &ik_goals,
+            &mut placed,
+        ) as u32;
     }
     placed
 }

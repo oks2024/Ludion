@@ -4,7 +4,7 @@ description: Profiling capture surfaces: offline driver, live channel, profile.c
 
 # profiling-capture
 
-**Scope:** the capture half of `ludion devdocs profiling` (the hub: layers, report shape, arming rule, layout). Offline and live surfaces, the deferred capture reply, replay tails, the `cluster`, `load`, `skin` and `extract` sections and the Perfetto export.
+**Scope:** the capture half of `ludion devdocs profiling` (the hub: layers, report shape, arming rule, layout). Offline and live surfaces, the deferred capture reply, replay tails, the `cluster`, `load`, `skin`, `extract`, `assembly`, `exposure` and `checkpoints` sections and the Perfetto export.
 
 ## Dataflow
 
@@ -42,6 +42,15 @@ phase beside the medians of its five per-extract counters (instances; palettes s
 shared; joints sampled). Offline only, like `cluster`, and absent for a scene with no skinned
 instance. `profile_sim` attaches an `ExtractClock` over the measured frames alone and restores the caller's
 extract observer. Posing is parallel, so read `pose_median_ms` beside `sim.threads`.
+
+**The `assembly`, `exposure` and `checkpoints` sections.** `assembly` is the deterministic count of voxel-assembly
+posing per extract (parts, layers, IK goals, ground casts), counted in the mesh loop only, so a socket's re-pose adds
+nothing; absent when no measured extract posed an assembly. `exposure` is the metered verdict (median EV, median
+log2 mean, clamped readings) read back through `set_meter_readback` beside the cull ring in `profile_gpu`; absent
+for a manual scene, with no adapter and live. Both are offline-only, like `cluster`. `checkpoints` times boundary
+captures and in-memory restores (`checkpoint_capture`, `checkpoint_restore`; count, median, max and its frame; disk
+load, persist and discard are untimed): armed around the measured loop offline (a replay keeps ticks in its window),
+and by the live profiler, so it is the one of the three a live window fills. Disarmed it costs one `Option` test.
 
 **The `extract` section.** A report also carries `ExtractProfile`: the median wall time of every extract
 phase in walk order (`phases`, all eleven, zeros included; `Poses` is the prefab part poses and

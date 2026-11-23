@@ -166,6 +166,18 @@ ended; `L4352`/`L4353` print as warnings. `L4355`: the doc is outside the folder
 `L4356`: a bind name matches no entity or several. `--frames`, `--view` and the dumps conflict with it.
 The gallery's `sequence-beat` scene is the worked example: `ludion render --scene examples/gallery/sequence-beat.yaml --sequence examples/gallery/sequences/demo.yaml --bind cam=camera --bind hero=hero --bind crate=crate --bind drone=drone --at 45 --out beat.png`.
 
+## Wire
+
+Over the protocol: `sequence.play { sequence, bindings: {role: entity} }` replies `{ player }`;
+`sequence.seek { player, tick }` replies `{ player, ended }` (`ended`: `completed`, `skipped` or `cancelled`, absent
+while it plays); `sequence.skip { player }` replies an ack and applies at the next tick. A play keeps **one stash per
+host**, the engine snapshot taken as the player spawned (the last play's). A seek restores it and runs `tick + 1`
+ticks, releasing the player before each, so its world equals `ludion render --sequence ... --at tick` on a
+builtin-only engine; seek forward, then back. `engine.snapshot` and replay keyframes carry the stash. `scene.load`
+clears it; a skip, an end and a checkpoint restore keep it. `L4358`: a seek of a player the last play did not
+return; `L4357`: a skip of a dead or `skippable: false` player; a dead bound entity is `L0002`; `tick + 1` over the
+step limit is `L3057`.
+
 ## Trace
 
 `ludion_testkit::sequence::sequence_trace(&mut engine, ticks) -> Vec<String>` steps the engine and returns one
@@ -202,6 +214,7 @@ events fire in order, then `Ended { Skipped }`. A skipped and a watched beat lea
 | `L4353` | Key degraded: missing `CameraRig`/`Animation`/`Transform`, a `path` that does not load, `say` refused, doc gone (warning, once) |
 | `L4354` | Called without `.sequences()` |
 | `L4355` / `L4356` | Preview: doc outside the scene folder or not a sequence / `--bind` name matches no entity or several |
+| `L4357` / `L4358` | `sequence.skip`: player dead or not skippable / `sequence.seek`: not the last play's player |
 
 ## Gotchas
 

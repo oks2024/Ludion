@@ -26,10 +26,12 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use ludion_core::math::glam::Mat4;
 use ludion_core::par;
 use ludion_core::time::{SimTime, TickRate};
+use ludion_engine::extract_observer::{AssemblyCounts, ExtractObserver, ExtractPhase};
 use ludion_engine::{
     Engine, ProfileReport, QualityParams, check_budget, extract_at, profile_engine,
 };
@@ -311,6 +313,52 @@ fn advanced(arm: Arm, ground: bool, threads: usize) -> (Engine, u64) {
         let hash = engine.world_hash().expect("hashes").as_u64();
         (engine, hash)
     })
+}
+
+#[derive(Clone, Default)]
+struct Recorder(Arc<Mutex<Vec<AssemblyCounts>>>);
+
+impl ExtractObserver for Recorder {
+    fn begin(&mut self, _: ExtractPhase) {}
+    fn end(&mut self, _: ExtractPhase) {}
+    fn assembly(&mut self, counts: AssemblyCounts) {
+        self.0.lock().unwrap().push(counts);
+    }
+}
+
+/// The counters on the fixture's constants: every figure poses once per extract, ten parts, two
+/// layers, the right-hand chain, and two ground feet. The fixture's `look` target sets no weight,
+/// and a target's weight defaults to 0 (off), so its look-at is never solved: one goal per figure.
+/// The mesh loop emits one row per extract, so the socket path and a second extract add nothing to
+/// the first.
+#[test]
+fn assembly_posing_counters_match_the_fixture() {
+    let (mut full, _) = advanced(Arm::Full, true, 1);
+    let recorder = Recorder::default();
+    full.set_extract_observer(Some(Box::new(recorder.clone())));
+    full.extract_present_scene().expect("extracts");
+    let rows = recorder.0.lock().unwrap().clone();
+    assert_eq!(rows.len(), 1, "one counter row per extract");
+    assert_eq!(
+        rows[0],
+        AssemblyCounts {
+            instances: FIGURES as u32,
+            parts_posed: (FIGURES * PARTS) as u32,
+            layers_sampled: (FIGURES * 2) as u32,
+            ik_chains_solved: FIGURES as u32,
+            ik_ground_casts: (FIGURES * 2) as u32,
+        }
+    );
+
+    let (mut empty, _) = advanced(Arm::Empty, true, 1);
+    let recorder = Recorder::default();
+    empty.set_extract_observer(Some(Box::new(recorder.clone())));
+    empty.extract_present_scene().expect("extracts");
+    assert_eq!(
+        recorder.0.lock().unwrap().as_slice(),
+        [AssemblyCounts::default()],
+        "an extract with no assembly still reports its zeros"
+    );
 }
 
 #[test]

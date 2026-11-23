@@ -239,6 +239,20 @@ pub enum Command {
     /// the store after the discard.
     #[serde(rename = "checkpoint.discard")]
     CheckpointDiscard(CheckpointNameParams),
+
+    /// `sequence.play` — start a `kind: sequence` document with each role bound to an entity.
+    /// Replies with the player; the host keeps the play's starting state so `sequence.seek` can
+    /// rewind to it. Refused with `L4354` when the engine was built without sequences.
+    #[serde(rename = "sequence.play")]
+    SequencePlay(SequencePlayParams),
+    /// `sequence.seek` — put the world where the last `sequence.play` left it, then run `tick + 1`
+    /// ticks, so the world is the one `ludion render --sequence ... --at tick` renders.
+    #[serde(rename = "sequence.seek")]
+    SequenceSeek(SequenceSeekParams),
+    /// `sequence.skip` — cut the player to its end state at the next tick. `L4357` when the player
+    /// is not live or its document is not skippable.
+    #[serde(rename = "sequence.skip")]
+    SequenceSkip(SequenceSkipParams),
 }
 
 impl Command {
@@ -296,6 +310,9 @@ impl Command {
             Command::CheckpointCapture(_) => "checkpoint.capture",
             Command::CheckpointRestore(_) => "checkpoint.restore",
             Command::CheckpointDiscard(_) => "checkpoint.discard",
+            Command::SequencePlay(_) => "sequence.play",
+            Command::SequenceSeek(_) => "sequence.seek",
+            Command::SequenceSkip(_) => "sequence.skip",
         }
     }
 
@@ -338,6 +355,8 @@ impl Command {
             | Command::EngineRestore(_) => true,
             // Replaces the whole world with a captured one.
             Command::CheckpointRestore(_) => true,
+            // A play spawns the player entity; a seek replaces the world and runs ticks.
+            Command::SequencePlay(_) | Command::SequenceSeek(_) => true,
             // Runs ticks: the world has already moved by the time the reply is sent.
             Command::SimStep(_) => true,
             // Touches no entity, yet a reloaded mesh, texture or shader is drawn.
@@ -396,6 +415,8 @@ impl Command {
             | Command::CheckpointList
             | Command::CheckpointCapture(_)
             | Command::CheckpointDiscard(_) => false,
+            // A flag the next tick reads, the `input.inject` reason.
+            Command::SequenceSkip(_) => false,
         }
     }
 
@@ -456,6 +477,9 @@ impl Command {
         "checkpoint.capture",
         "checkpoint.restore",
         "checkpoint.discard",
+        "sequence.play",
+        "sequence.seek",
+        "sequence.skip",
     ];
 }
 
@@ -480,6 +504,53 @@ impl Command {
 pub struct CheckpointNameParams {
     /// The slot name.
     pub name: String,
+}
+
+/// Parameters for `sequence.play`.
+///
+/// # Example
+/// ```
+/// use std::collections::BTreeMap;
+/// use ludion_core::ids::EntityId;
+/// use ludion_protocol::Command;
+/// use ludion_protocol::command::SequencePlayParams;
+///
+/// let cmd = Command::SequencePlay(SequencePlayParams {
+///     sequence: "sequences/intro.yaml".into(),
+///     bindings: BTreeMap::from([("hero".to_string(), EntityId::new(3, 0))]),
+/// });
+/// assert_eq!(cmd.method(), "sequence.play");
+/// assert_eq!(
+///     serde_json::to_value(&cmd).unwrap()["params"]["sequence"],
+///     "sequences/intro.yaml",
+/// );
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SequencePlayParams {
+    /// The document's content-root path, as the sequence store keys it.
+    pub sequence: String,
+    /// Role name → the entity playing it. A role the document does not declare is `L4351`.
+    #[serde(default)]
+    pub bindings: BTreeMap<String, EntityId>,
+}
+
+/// Parameters for `sequence.seek`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SequenceSeekParams {
+    /// The player the last `sequence.play` returned.
+    pub player: EntityId,
+    /// The playhead tick to land on: the world right after the update whose playhead is `tick`.
+    pub tick: u64,
+}
+
+/// Parameters for `sequence.skip`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SequenceSkipParams {
+    /// The player to skip.
+    pub player: EntityId,
 }
 
 /// Parameters for `scene.load`.
@@ -1545,7 +1616,7 @@ mod tests {
         // A tripwire, not a fact worth asserting for its own sake: the surface is deliberately small
         // and every addition is a protocol rev, so growing it should require editing this number and
         // saying so in the commit — not slip in unremarked.
-        assert_eq!(Command::METHODS.len(), 45);
+        assert_eq!(Command::METHODS.len(), 48);
     }
 
     /// One instance of every variant, in declaration order. The method-name assertion below is what
@@ -1661,6 +1732,17 @@ mod tests {
             Command::CheckpointCapture(CheckpointNameParams { name: "a".into() }),
             Command::CheckpointRestore(CheckpointNameParams { name: "a".into() }),
             Command::CheckpointDiscard(CheckpointNameParams { name: "a".into() }),
+            Command::SequencePlay(SequencePlayParams {
+                sequence: "a".into(),
+                bindings: BTreeMap::new(),
+            }),
+            Command::SequenceSeek(SequenceSeekParams {
+                player: EntityId::new(1, 0),
+                tick: 0,
+            }),
+            Command::SequenceSkip(SequenceSkipParams {
+                player: EntityId::new(1, 0),
+            }),
         ]
     }
 
@@ -1698,6 +1780,8 @@ mod tests {
                 "asset.reload",
                 "engine.restore",
                 "checkpoint.restore",
+                "sequence.play",
+                "sequence.seek",
             ]
         );
     }

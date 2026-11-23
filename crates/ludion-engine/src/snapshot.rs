@@ -318,11 +318,27 @@ struct SnapshotDoc {
     /// engine's store; an older snapshot without it restores as an empty store.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     checkpoints: Option<crate::checkpoints::CheckpointsDoc>,
+    /// The host's `sequence.seek` stash: the last `sequence.play`'s player and the snapshot taken
+    /// right after it spawned. Additive (the `checkpoints` precedent): omitted with no play, and
+    /// never present inside the stash itself or a checkpoint slot. A session restore installs it;
+    /// an older snapshot without it restores with no stash. Never hashed: host session state
+    /// derived from the world at the play frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence_seek: Option<SequenceSeekDoc>,
     /// Top-level fields this build does not define, kept only so a restore can report them. Never
     /// written: capture leaves it empty, so the document stays byte-identical.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     #[schemars(skip)]
     unknown: BTreeMap<String, Value>,
+}
+
+/// The snapshot's `sequence_seek` field: a played sequence and the world it started from.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+struct SequenceSeekDoc {
+    /// The player entity the play returned.
+    player: ludion_core::ids::EntityId,
+    /// The engine snapshot taken right after the player spawned.
+    snapshot: Value,
 }
 
 /// The snapshot's `projectiles` field: the pool's config and its bytes.
@@ -512,8 +528,26 @@ pub(crate) fn snapshot_schema() -> Value {
 /// # Errors
 /// Propagates a component serialization failure (`L0007`) or a missing RNG resource (`L3008`).
 pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
-    let mut doc = capture_doc(engine, true)?;
+    let mut doc = session_doc(engine)?;
     doc.checkpoints = engine.checkpoints_doc()?;
+    doc.sequence_seek = engine.sequence_seek.as_ref().map(|stash| SequenceSeekDoc {
+        player: stash.player,
+        snapshot: Value::clone(&stash.snapshot),
+    });
+    snapshot_value(&doc)
+}
+
+/// Captures the world the way a `sequence.seek` stash holds it: a session snapshot with neither a
+/// checkpoint store nor a stash, which the seek's restore leaves to the engine.
+///
+/// # Errors
+/// As [`capture`].
+pub(crate) fn capture_stash(engine: &Engine) -> Result<Value, Diagnostic> {
+    snapshot_value(&session_doc(engine)?)
+}
+
+fn session_doc(engine: &Engine) -> Result<SnapshotDoc, Diagnostic> {
+    let mut doc = capture_doc(engine, true)?;
     doc.actions = engine
         .world()
         .resource::<ludion_sim::actions::Actions>()
@@ -521,7 +555,7 @@ pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
         .unwrap_or_default();
     doc.input_bindings = engine.input_bindings_snapshot_text();
     doc.settings = engine.settings_snapshot_text();
-    snapshot_value(&doc)
+    Ok(doc)
 }
 
 /// The engine's state as a typed document, without the checkpoint store: a slot never nests
@@ -634,6 +668,7 @@ fn capture_doc(engine: &Engine, components: bool) -> Result<SnapshotDoc, Diagnos
             .resource::<crate::SceneSwitch>()
             .is_some_and(crate::SceneSwitch::arrived_by_restart),
         checkpoints: None,
+        sequence_seek: None,
         unknown: BTreeMap::new(),
     };
     Ok(doc)
@@ -1507,6 +1542,16 @@ fn restore_decoded(
         _ => None,
     };
 
+    let sequence_seek = match (&mode, doc.sequence_seek.take()) {
+        (RestoreMode::Session(_) | RestoreMode::Resume, Some(stash)) => {
+            Some(crate::sequences::wire::SequenceSeek {
+                player: stash.player,
+                snapshot: std::sync::Arc::new(stash.snapshot),
+            })
+        }
+        _ => None,
+    };
+
     let frame = doc.frame;
     let restored = RestoredWorld {
         driver,
@@ -1525,6 +1570,7 @@ fn restore_decoded(
         arrived_by_restart: doc.arrived_by_restart,
         render_extent,
         checkpoints,
+        sequence_seek,
     };
     match mode {
         RestoreMode::Session(_) | RestoreMode::Resume => engine.install_restored(restored),
@@ -1658,6 +1704,16 @@ mod clock_and_store_schema_tests {
         for name in ["slowed_q16", "pending_q16", "step_q16", "checkpoints"] {
             assert!(schema.contains(name), "{name} is in the schema");
         }
+    }
+
+    /// The seek stash is part of what `replay_content_hash` covers.
+    #[test]
+    fn the_snapshot_schema_names_the_sequence_seek_stash() {
+        let schema = super::snapshot_schema().to_string();
+        assert!(
+            schema.contains("sequence_seek"),
+            "sequence_seek is in the schema"
+        );
     }
 
     /// The gesture state, the input overrides and the settings view are part of what

@@ -170,6 +170,19 @@ pub struct ProfileReport {
     /// `sim.threads`; the phases are CPU wall time and do not sum with GPU time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extract: Option<ExtractProfile>,
+    /// Deterministic counters of voxel-assembly posing inside extract. Filled by the **offline**
+    /// driver; absent when no measured extract posed an assembly, and for a live capture, for
+    /// `cluster`'s reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<AssemblyProfile>,
+    /// The metered exposure verdict read back during the GPU loop. Filled by the **offline**
+    /// driver; absent for a manual-exposure scene, with no adapter, and for a live capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<ExposureProfile>,
+    /// Wall time of checkpoint captures and in-memory restores inside the measured window. Absent
+    /// when the window captured nothing and restored nothing. Filled offline and by a live capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoints: Option<CheckpointProfile>,
     /// The measured frames' raw per-frame columns, present when the request asked for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<ProfileSamples>,
@@ -197,6 +210,61 @@ pub struct SkinProfile {
     pub palettes_shared_median: f64,
     /// Median joints sampled per extract.
     pub joints_sampled_median: f64,
+}
+
+/// Voxel-assembly posing inside extract: the per-extract work counters, as medians.
+///
+/// Deterministic shape, like `SkinProfile`'s counters. Counts the drawn assemblies once each.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AssemblyProfile {
+    /// Measured extracts the medians are over.
+    pub sampled_frames: u64,
+    /// Median assembly instances posed per extract.
+    pub instances_median: f64,
+    /// Median parts posed per extract.
+    pub parts_posed_median: f64,
+    /// Median animation layers sampled per extract.
+    pub layers_sampled_median: f64,
+    /// Median IK goals solved (look-ats and point chains) per extract.
+    pub ik_chains_solved_median: f64,
+    /// Median ground ray casts the IK feet cast per extract.
+    pub ik_ground_casts_median: f64,
+}
+
+/// The metered exposure verdict (`ExposureMode::Metered`), reduced over the measured frames.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ExposureProfile {
+    /// Readings the medians are over.
+    pub sampled_frames: u64,
+    /// Median exposure correction in EV.
+    pub correction_ev_median: f64,
+    /// Median log2 mean luminance the meter saw.
+    pub mean_log2_median: f64,
+    /// Readings whose correction hit the clamp.
+    pub clamped_frames: u64,
+}
+
+/// Wall time of checkpoint captures and in-memory restores. Disk loads, persists and discards are
+/// not timed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CheckpointProfile {
+    /// One entry per key that occurred, capture first.
+    pub timings: Vec<CheckpointTiming>,
+}
+
+/// One checkpoint operation key's timing over the measured window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CheckpointTiming {
+    /// `checkpoint_capture` or `checkpoint_restore`.
+    pub name: String,
+    /// Operations timed.
+    pub count: u64,
+    /// Median wall time.
+    pub median_ms: f64,
+    /// Slowest operation.
+    pub max_ms: f64,
+    /// The produced-frame index the slowest operation ran in.
+    pub max_frame: u64,
 }
 
 /// Where extract spends its wall time: one median per phase of the walk, in walk order.
@@ -694,6 +762,16 @@ pub struct ProfileWindowData {
     /// window's frames reached no subscriber.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<TransportProfile>,
+    /// Assembly posing counters. Offline-only, as on the report: the live profiler leaves it
+    /// `None`, for `cluster`'s reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<AssemblyProfile>,
+    /// The metered exposure verdict. Offline-only; the live profiler leaves it `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<ExposureProfile>,
+    /// Checkpoint capture and restore timings over the window; absent when it had none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoints: Option<CheckpointProfile>,
     /// The window's raw per-frame samples, columnar (names once, parallel arrays).
     pub samples: ProfileSamples,
 }
@@ -784,7 +862,7 @@ impl ProfileWindowData {
     /// #     first_frame: 0, last_frame: 59, frames: 60, capture: true,
     /// #     systems: vec![], sequential: vec![], frame_total_median_ms: 1.0, threads: 8,
     /// #     gpu: LiveGpuProfile { timestamps_supported: false, sampled_frames: 0, passes: vec![], frame_median_ms: None, frame_tail: None },
-    /// #     transport: None,
+    /// #     transport: None, assembly: None, exposure: None, checkpoints: None,
     /// #     samples: ProfileSamples {
     /// #         frames: vec![], system_names: vec![], system_ms: vec![], frame_total_ms: vec![],
     /// #         extract_ms: vec![], submit_ms: vec![], pass_names: vec![], pass_ms: vec![],
@@ -825,6 +903,9 @@ impl ProfileWindowData {
             culling: None,
             skin: None,
             extract: None,
+            assembly: self.assembly,
+            exposure: self.exposure,
+            checkpoints: self.checkpoints,
             samples: include_samples.then_some(self.samples),
         }
     }
@@ -894,6 +975,52 @@ mod tests {
                 .skin
                 .is_none()
         );
+    }
+
+    #[test]
+    fn assembly_exposure_checkpoint_sections_round_trip_and_are_optional() {
+        let mut report = window().into_report("scene".to_string(), false);
+        assert!(
+            report.assembly.is_none() && report.exposure.is_none() && report.checkpoints.is_none()
+        );
+        report.assembly = Some(AssemblyProfile {
+            sampled_frames: 3,
+            instances_median: 2.0,
+            parts_posed_median: 14.0,
+            layers_sampled_median: 4.0,
+            ik_chains_solved_median: 4.0,
+            ik_ground_casts_median: 4.0,
+        });
+        report.exposure = Some(ExposureProfile {
+            sampled_frames: 3,
+            correction_ev_median: -1.5,
+            mean_log2_median: -3.0,
+            clamped_frames: 0,
+        });
+        report.checkpoints = Some(CheckpointProfile {
+            timings: vec![CheckpointTiming {
+                name: "checkpoint_capture".into(),
+                count: 1,
+                median_ms: 0.4,
+                max_ms: 0.4,
+                max_frame: 7,
+            }],
+        });
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["assembly"]["parts_posed_median"], 14.0);
+        assert_eq!(json["exposure"]["correction_ev_median"], -1.5);
+        assert_eq!(json["checkpoints"]["timings"][0]["max_frame"], 7);
+        assert_eq!(
+            serde_json::from_value::<ProfileReport>(json).unwrap(),
+            report
+        );
+        report.assembly = None;
+        report.exposure = None;
+        report.checkpoints = None;
+        let json = serde_json::to_value(&report).unwrap();
+        for key in ["assembly", "exposure", "checkpoints"] {
+            assert!(json.get(key).is_none());
+        }
     }
 
     #[test]
@@ -1025,6 +1152,9 @@ mod tests {
                 frame_tail: None,
             },
             transport: None,
+            assembly: None,
+            exposure: None,
+            checkpoints: None,
             samples: ProfileSamples {
                 frames: vec![10, 11, 12],
                 system_names: vec!["bump".into()],

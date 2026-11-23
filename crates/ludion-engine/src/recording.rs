@@ -140,7 +140,10 @@ pub(crate) fn record_kind(command: &Command) -> Option<RecordKind> {
         | Command::EngineRestore(_)
         | Command::CheckpointCapture(_)
         | Command::CheckpointRestore(_)
-        | Command::CheckpointDiscard(_) => Some(RecordKind::Command),
+        | Command::CheckpointDiscard(_)
+        | Command::SequencePlay(_)
+        | Command::SequenceSeek(_)
+        | Command::SequenceSkip(_) => Some(RecordKind::Command),
     }
 }
 

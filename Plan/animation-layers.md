@@ -274,7 +274,10 @@ share one driver shape.
 11. **Foot grounding** (W5): read-only physics casts in extract, the 32-character budget of ≤0.5 ms, and
     `ProfileReport` counters (a schema move, re-blessed there). *Amended (2026-11-21):* the bench gates
     `ProfileReport`'s existing extract sequential timing (`Budget.extract_ms`); the four counters move the
-    protocol schema, so they ride R14 (decision 54).
+    protocol schema, so they ride R14 (decision 54). **Shipped in R14:** `ProfileReport.assembly`
+    (`AssemblyProfile`: median `instances`, `parts_posed`, `layers_sampled`, `ik_chains_solved`,
+    `ik_ground_casts` per extract), counted in the mesh loop only (a socket's re-pose adds nothing), absent when no
+    measured extract posed an assembly, offline-only.
 12. **Root motion** (W6): *amended by W6a:* root motion is the reserved `$root` track of `kind: animation` (request
     section 5), read by `root_motion_delta` on assemblies, a deterministic sim read of clip data through the libm
     sampler. The glTF `ludion_root_motion` extras flag becomes a later import-side writer of `$root`. **Trigger:** a
@@ -516,7 +519,8 @@ share one driver shape.
 - **W5a (shipped 2026-11-19).** Ground feet on voxel assemblies (decisions 45–49; the macOS twin of the
   `assembly-ground` golden is owed to the M4).
 - **W5b (bench shipped 2026-11-21).** The 32-character bench (decision 54); the measurement and the budget
-  files are owed. The `ProfileReport` counters (decision 11) ride R14.
+  files are owed. The `ProfileReport` counters (decision 11) shipped in R14 as the `assembly` section; the bench
+  fixture's counts are asserted exactly (its `look` target has no weight, so one IK goal per figure is solved).
 - **W6a (shipped 2026-11-21).** The `$root` track and `root_motion_delta` on assemblies (decisions 12 and 55-60).
 - **W6b.** Blend-space root motion (points weighted on the `BlendClock` phase; trigger: a locomotion blend whose
   clips carry `$root`), a `check-scene` root row and a `render --model --clip --root-motion` travel strip, characters

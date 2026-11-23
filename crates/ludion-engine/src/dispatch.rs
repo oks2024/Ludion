@@ -15,7 +15,7 @@ use ludion_core::time::FrameIndex;
 use ludion_protocol::{Command, ResponseBody};
 
 use crate::commands::{
-    ai, asset, checkpoint, engine_cmds, entity, perf, prefab, render, scene, sim, stream,
+    ai, asset, checkpoint, engine_cmds, entity, perf, prefab, render, scene, sequence, sim, stream,
 };
 use crate::engine::Engine;
 
@@ -99,6 +99,9 @@ pub fn dispatch(engine: &mut Engine, command: Command) -> Result<Dispatched, Dia
         Command::CheckpointCapture(params) => checkpoint::capture(engine, params)?,
         Command::CheckpointRestore(params) => checkpoint::restore(engine, params)?,
         Command::CheckpointDiscard(params) => checkpoint::discard(engine, params)?,
+        Command::SequencePlay(params) => sequence::play(engine, params)?,
+        Command::SequenceSeek(params) => sequence::seek(engine, params)?,
+        Command::SequenceSkip(params) => sequence::skip(engine, params)?,
     };
     Ok(Dispatched {
         body,

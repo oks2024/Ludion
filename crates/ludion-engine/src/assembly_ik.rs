@@ -113,12 +113,13 @@ pub(crate) fn assembly_ik_goals(
 
 /// Poses `placed` (one `(model, normal)` pair per part, assembly frame) toward `goals`: every
 /// look-at first, then every chain, each in name order. A goal whose aim does not fit its entry (a
-/// direction on a chain) is skipped.
+/// direction on a chain) is skipped. Returns the number of goals applied (look-ats and chains).
 pub(crate) fn apply_assembly_ik(
     data: &AssemblyData,
     goals: &[IkGoal],
     placed: &mut [(Mat4, Mat3)],
-) {
+) -> usize {
+    let mut applied = 0;
     let mut ordered: Vec<&IkGoal> = goals.iter().collect();
     ordered.sort_by_key(|goal| {
         (
@@ -132,7 +133,10 @@ pub(crate) fn apply_assembly_ik(
                 weights,
                 forward,
                 limits_deg,
-            } => look_at(data, placed, weights, *forward, *limits_deg, goal),
+            } => {
+                look_at(data, placed, weights, *forward, *limits_deg, goal);
+                applied += 1;
+            }
             AssemblyIkKind::Chain {
                 parts,
                 effector,
@@ -142,6 +146,7 @@ pub(crate) fn apply_assembly_ik(
                 ..
             } => {
                 if let IkAim::Point(target) = goal.aim {
+                    applied += 1;
                     chain(
                         data,
                         placed,
@@ -157,6 +162,7 @@ pub(crate) fn apply_assembly_ik(
             }
         }
     }
+    applied
 }
 
 /// Puts the effector of every `ground: true` chain without an active goal on the static ground

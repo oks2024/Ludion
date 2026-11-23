@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 
 use ludion_core::time::FrameIndex;
 use ludion_ecs::ScheduleObserver;
+use ludion_protocol::perf::{CheckpointProfile, CheckpointTiming};
 use ludion_renderer::{PassTimingRing, Renderer};
 
 use crate::profile::{PassTiming, SystemColumns, SystemTiming, TimingObserver, median_f64, tail};
@@ -130,6 +131,56 @@ pub struct FrameSample {
     /// The frame-spanning GPU time in milliseconds, or `None` where the sample carried no provable
     /// span (or never arrived).
     pub(crate) gpu_frame_ms: Option<f64>,
+    /// Checkpoint captures and in-memory restores the tick's frame boundary performed, timed.
+    pub(crate) checkpoints: Vec<(CheckpointKey, f64)>,
+}
+
+/// Which checkpoint operation a [`CheckpointSample`] timed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckpointKey {
+    /// A slot capture.
+    Capture,
+    /// An in-memory slot restore.
+    Restore,
+}
+
+impl CheckpointKey {
+    /// The profiler key the report names the operation by.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            CheckpointKey::Capture => "checkpoint_capture",
+            CheckpointKey::Restore => "checkpoint_restore",
+        }
+    }
+}
+
+/// One timed checkpoint operation and the produced-frame index it ran in.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CheckpointSample {
+    pub(crate) key: CheckpointKey,
+    pub(crate) ms: f64,
+    pub(crate) frame: FrameIndex,
+}
+
+/// Reduces timed checkpoint operations to one entry per key that occurred, capture first; `None`
+/// when there were none. Shared by the offline drivers and the live window.
+pub(crate) fn reduce_checkpoints(samples: &[CheckpointSample]) -> Option<CheckpointProfile> {
+    let timings: Vec<CheckpointTiming> = [CheckpointKey::Capture, CheckpointKey::Restore]
+        .into_iter()
+        .filter_map(|key| {
+            let own: Vec<&CheckpointSample> = samples.iter().filter(|s| s.key == key).collect();
+            let slowest = own.iter().copied().max_by(|a, b| a.ms.total_cmp(&b.ms))?;
+            let mut values: Vec<f64> = own.iter().map(|s| s.ms).collect();
+            Some(CheckpointTiming {
+                name: key.name().to_string(),
+                count: own.len() as u64,
+                median_ms: median_f64(&mut values),
+                max_ms: slowest.ms,
+                max_frame: slowest.frame.as_u64() + 1,
+            })
+        })
+        .collect();
+    (!timings.is_empty()).then_some(CheckpointProfile { timings })
 }
 
 // The window shapes are wire types: a closed window goes out verbatim as a `profile` subscription
@@ -245,7 +296,19 @@ impl LivePerf {
             render_stamp: None,
             passes: None,
             gpu_frame_ms: None,
+            checkpoints: Vec::new(),
         });
+    }
+
+    /// Files a timed checkpoint operation against the tick that ran as `frame`; dropped when no
+    /// sample carries that frame. The boundary drains run after [`end_frame`](LivePerf::end_frame)
+    /// filed the tick, so the sample is already there.
+    pub(crate) fn record_checkpoint(&mut self, frame: FrameIndex, key: CheckpointKey, ms: f64) {
+        for builder in &mut self.builders {
+            if let Some(sample) = builder.samples.iter_mut().rev().find(|s| s.frame == frame) {
+                sample.checkpoints.push((key, ms));
+            }
+        }
     }
 
     /// Files a streamed render's host spans against the tick that produced the world it drew — the
@@ -437,6 +500,7 @@ impl WindowBuilder {
         // The frame span of each sampled frame that carried one, with the frame it belongs to.
         let mut frame_spans: Vec<f64> = Vec::new();
         let mut frame_span_frames: Vec<u64> = Vec::new();
+        let mut checkpoint_samples: Vec<CheckpointSample> = Vec::new();
 
         for sample in &self.samples {
             frame_indices.push(sample.frame.as_u64());
@@ -461,6 +525,13 @@ impl WindowBuilder {
             {
                 sampled_frames += 1;
             }
+            checkpoint_samples.extend(sample.checkpoints.iter().map(|&(key, ms)| {
+                CheckpointSample {
+                    key,
+                    ms,
+                    frame: sample.frame,
+                }
+            }));
             if let Some(span) = sample.gpu_frame_ms {
                 frame_spans.push(span);
                 frame_span_frames.push(sample.frame.as_u64());
@@ -509,6 +580,9 @@ impl WindowBuilder {
             threads: ludion_core::par::threads(),
             // Filled by the server before the event goes out; the engine cannot see delivery.
             transport: None,
+            assembly: None,
+            exposure: None,
+            checkpoints: reduce_checkpoints(&checkpoint_samples),
             gpu: LiveGpuProfile {
                 timestamps_supported,
                 sampled_frames,
@@ -595,6 +669,7 @@ mod tests {
             render_stamp: None,
             passes: None,
             gpu_frame_ms: None,
+            checkpoints: Vec::new(),
         }
     }
 
@@ -607,6 +682,95 @@ mod tests {
             perf.record_render(FrameIndex::new(frame + 1), Some(0.2), Some(0.3));
         }
         from + frames
+    }
+
+    /// A counter engine that captures `a` at frame 5 and restores it at frame 8, once each.
+    fn checkpointing_builder() -> crate::EngineBuilder {
+        let restored = std::sync::atomic::AtomicBool::new(false);
+        counter_engine()
+            .checkpoints(crate::CheckpointConfig { max_slots: 2 })
+            .system("director", move |world, ctx| {
+                let frame = ctx.frame.as_u64();
+                let checkpoints = world.resource_mut::<crate::Checkpoints>().unwrap();
+                if frame == 5 {
+                    checkpoints.capture("a");
+                } else if frame == 8 && !restored.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    checkpoints.restore("a");
+                }
+            })
+    }
+
+    #[test]
+    fn reduce_checkpoints_reports_each_key_that_occurred_capture_first() {
+        let sample = |key, ms, frame| CheckpointSample {
+            key,
+            ms,
+            frame: FrameIndex::new(frame),
+        };
+        assert!(reduce_checkpoints(&[]).is_none());
+        let profile = reduce_checkpoints(&[
+            sample(CheckpointKey::Restore, 2.0, 9),
+            sample(CheckpointKey::Capture, 1.0, 3),
+            sample(CheckpointKey::Capture, 5.0, 4),
+            sample(CheckpointKey::Capture, 3.0, 6),
+        ])
+        .unwrap();
+        let [capture, restore] = profile.timings.as_slice() else {
+            panic!("two keys occurred");
+        };
+        assert_eq!(capture.name, "checkpoint_capture");
+        assert_eq!(
+            (
+                capture.count,
+                capture.median_ms,
+                capture.max_ms,
+                capture.max_frame
+            ),
+            (3, 3.0, 5.0, 5)
+        );
+        assert_eq!(restore.name, "checkpoint_restore");
+        assert_eq!(
+            (restore.count, restore.max_ms, restore.max_frame),
+            (1, 2.0, 10)
+        );
+        let only_restore = reduce_checkpoints(&[sample(CheckpointKey::Restore, 1.0, 1)]).unwrap();
+        assert_eq!(only_restore.timings.len(), 1);
+    }
+
+    #[test]
+    fn a_window_over_samples_carrying_a_capture_reports_it() {
+        let mut with_capture = sample(1);
+        with_capture.checkpoints.push((CheckpointKey::Capture, 0.5));
+        let window = closed(vec![sample(0), with_capture, sample(2)]);
+        let timings = window.checkpoints.expect("the capture is reported").timings;
+        assert_eq!(timings.len(), 1);
+        assert_eq!((timings[0].count, timings[0].max_frame), (1, 2));
+        assert!(window.assembly.is_none() && window.exposure.is_none());
+        assert!(closed(vec![sample(0)]).checkpoints.is_none());
+    }
+
+    #[test]
+    fn a_live_window_reports_checkpoint_timings_and_the_hash_is_unmoved() {
+        let mut plain = loaded(checkpointing_builder());
+        let mut armed = loaded(checkpointing_builder());
+        armed.perf_arm();
+        for _ in 0..=PROFILE_WINDOW_FRAMES {
+            plain.advance_live();
+            armed.advance_live();
+            assert_eq!(plain.world_hash().unwrap(), armed.world_hash().unwrap());
+        }
+        let windows = armed.perf_take_windows();
+        let window = windows.first().expect("a full window closed");
+        let names: Vec<&str> = window
+            .checkpoints
+            .as_ref()
+            .expect("the window saw a capture and a restore")
+            .timings
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(names, ["checkpoint_capture", "checkpoint_restore"]);
+        assert!(window.assembly.is_none() && window.exposure.is_none());
     }
 
     #[test]

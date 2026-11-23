@@ -124,9 +124,10 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
     scene draws the normal frame and the CLI says why. The EV is text, not drawn: the table's texel 64 is read back
     through a non-blocking three-deep ring (the cull-stats precedent, `Renderer::set_meter_readback` /
     `collect_meter_readings`) and `ludion render` prints it in its summary, ` (metered: +1.42 EV, mean log2 -4.05)` with
-    `, clamped` when the correction sits on a range end; a `--frames` strip prints one per frame. **R14 item:** the
-    `ProfileReport` per-frame EV field moves the protocol schema and `replay_schema_hash`; ship it in the R14 round, with
-    the render summary as the shipped stand-in.
+    `, clamped` when the correction sits on a range end; a `--frames` strip prints one per frame. **Shipped in R14:**
+    `ProfileReport.exposure` (`ExposureProfile`: `sampled_frames`, median `correction_ev` and `mean_log2`,
+    `clamped_frames`), read back during the offline GPU loop; absent for a manual scene, with no adapter and on a live
+    capture. It moved the protocol schema and `replay_schema_hash`.
 
 ### D — animated grain
 
@@ -199,7 +200,7 @@ The rest of both ranges is reserved for this plan.
   and `anti-aliasing.md` (where the LUT sits with SMAA on).
 - **W3 — metered exposure** (C), split: **W3a** the fields, `L1760`, `exposure_compensation`, the `exposure_meter`
   pass, the composite's optional input, `[post_groups] exposure`; **W3b** the `exposure_meter` view, the render-summary
-  EV (the `ProfileReport` field is an R14 item, decision 20), a bright-to-dark pan check as a CLI test (`image-stats`
+  EV (the `ProfileReport` `exposure` section shipped in R14, decision 20), a bright-to-dark pan check as a CLI test (`image-stats`
   measures defects, not brightness, so it is not an `image-stats` metric).
 - **W4 — animated grain and region/fill effects** (D, F), split three ways. Needs no 0018 field (decision 3).
   - **W4a** (D): the tick in `PostData`, `grain_motion`.
@@ -246,7 +247,7 @@ before the silhouette (decision 13); codes renumbered.
 - W2a (`.cube` parser, `lut` field, the composite step 7a) mechanized on the M5 2026-11-21; Windows golden committed; macOS twin owed.
 - W2b (`ludion lut identity|bake|apply|stats`, the `grade_model` CPU twin of `grade()`) mechanized on the M5 2026-11-21: a LUT baked from a warm/teal analytic grade renders within 5 output steps (mean 0.05) of the analytic render of the same scene. Scene `post-film-1982-lut` lives in `examples/gallery/` with its Windows golden; the macOS twin is owed.
 - W3a (`exposure_mode`, `exposure_compensation`, `metering*`, `exposure_range`, `L1760`, the `exposure_meter` pass) mechanized on the M5 2026-11-21; Windows goldens (`post-metered-exposure`) committed; the macOS twins and the `exposure` budget are owed.
-- W3b (`--debug-view exposure_meter`, the metered EV in the `ludion render` summary and `--frames` strip, the pan check `exposure_pan`) mechanized on the M5 2026-11-21: a metered frame and its manual twin render byte-identical with the readback armed or not, and manual scenes' graphs are unmoved. The `ProfileReport` EV field is an R14 item (it moves the protocol schema and `replay_schema_hash`). The view's look is judged by a human at the next sitting.
+- W3b (`--debug-view exposure_meter`, the metered EV in the `ludion render` summary and `--frames` strip, the pan check `exposure_pan`) mechanized on the M5 2026-11-21: a metered frame and its manual twin render byte-identical with the readback armed or not, and manual scenes' graphs are unmoved. The `ProfileReport` `exposure` section shipped in R14 (it moved the protocol schema and `replay_schema_hash`). The view's look is judged by a human at the next sitting.
 - W4b (`ScreenEffect` component, presets, `L1761`/`L2392`, extract into `RenderScene.screen_effects`, check-scene's cap warning) mechanized on the M5 2026-11-21; no pass reads it yet, so every frame and `dump-graph` is unchanged.
 - W4c mechanized on the RTX 3090 2026-11-21: no-effect renders and `dump-graph` byte-identical (22 files: six gallery scenes plain and SMAA, `ui-hud` at both resamples); golden `screen-effects` blessed (Windows); `screen_fx` 0.072 ms at 1080p (median of three runs, fill `scan` 0.051 + 320x320 `crt` 0.021) vs the 0.15 ms target; macOS twin and the budget ceiling owed.
 - W4a (`grain_motion`) mechanized on the RTX 3090 2026-11-21: absent/static left 25 renders and `dump-graph` dumps (seven gallery scenes plain and SMAA, `post-full` at both resamples) byte-identical; animated grain moves per tick in all four owning passes. The M4 check is owed.

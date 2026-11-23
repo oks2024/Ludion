@@ -144,4 +144,4 @@ Because a capture reads no component value, a NaN or infinite float does not fai
 
 ## Cost
 
-The targets, on a 5,000-entity scene with physics, are a capture of at most 4 ms and a restore of at most 50 ms. An `#[ignore]` release bench gates them on the pinned boxes against `budgets/checkpoints-*.toml`. Hide a restore under your fade: the capture fits a frame, the restore does not.
+The targets, on a 5,000-entity scene with physics, are a capture of at most 4 ms and a restore of at most 50 ms. An `#[ignore]` release bench gates them on the pinned boxes against `budgets/checkpoints-*.toml`. Hide a restore under your fade: the capture fits a frame, the restore does not. A game's `--profile` and `--profile-replay` report the measured window's `checkpoints` section: the median and worst `checkpoint_capture` and `checkpoint_restore` wall time (in-memory only; disk loads and persists are not timed).

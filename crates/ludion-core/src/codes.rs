@@ -707,6 +707,12 @@ pub mod code {
     pub const SEQUENCE_PREVIEW_DOC: DiagnosticCode = DiagnosticCode::new("L4355");
     /// `L4356` — a `ludion render --bind` entity name matches no entity in the scene, or several.
     pub const SEQUENCE_PREVIEW_BIND: DiagnosticCode = DiagnosticCode::new("L4356");
+    /// `L4357` — `sequence.skip` named a player that is not live, or whose document is not
+    /// `skippable`.
+    pub const SEQUENCE_SKIP_REFUSED: DiagnosticCode = DiagnosticCode::new("L4357");
+    /// `L4358` — `sequence.seek` named a player the last `sequence.play` did not return, or no
+    /// play has happened this session.
+    pub const SEQUENCE_SEEK_NO_PLAY: DiagnosticCode = DiagnosticCode::new("L4358");
     /// `L4370` — `paired_fit` found no `kind: paired` document at the path it was given: the engine
     /// has no project, or the document fails to load (the loader's diagnostics follow).
     pub const PAIRED_UNKNOWN: DiagnosticCode = DiagnosticCode::new("L4370");
@@ -14418,6 +14424,26 @@ Fix: give the entity a unique `name:` in the scene, or bind the role to another 
 nearest name when there is one.",
     },
     CodeEntry {
+        code: code::SEQUENCE_SKIP_REFUSED,
+        severity: Severity::Error,
+        title: "the sequence cannot be skipped",
+        explanation: "`sequence.skip` was given a player that is not live (it ended, was never played, or is not a sequence player),
+or whose document declares `skippable: false`. Nothing changed.
+
+Fix: skip the player the last `sequence.play` returned while it is still playing, or set `skippable: true` on
+the document.",
+    },
+    CodeEntry {
+        code: code::SEQUENCE_SEEK_NO_PLAY,
+        severity: Severity::Error,
+        title: "there is no played sequence to seek",
+        explanation: "`sequence.seek` rewinds to the state the last `sequence.play` kept. The host keeps one such state: no
+`sequence.play` ran since the scene loaded, or the player named is not the one the last play returned.
+Nothing changed.
+
+Fix: run `sequence.play` and seek the player it returned.",
+    },
+    CodeEntry {
         code: code::PAIRED_UNKNOWN,
         severity: Severity::Error,
         title: "no paired document loads at that path",
@@ -15350,6 +15376,8 @@ mod tests {
         code::SEQUENCES_NOT_ENABLED,
         code::SEQUENCE_PREVIEW_DOC,
         code::SEQUENCE_PREVIEW_BIND,
+        code::SEQUENCE_SKIP_REFUSED,
+        code::SEQUENCE_SEEK_NO_PLAY,
         code::PAIRED_UNKNOWN,
         code::PAIRED_CAST_INVALID,
         code::PAIRED_SCALE_MISMATCH,

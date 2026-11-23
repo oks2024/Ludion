@@ -336,6 +336,28 @@ pub enum ResponseBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         last_restore: Option<CheckpointRestore>,
     },
+
+    /// Result of `sequence.play` and `sequence.seek` — the sequence player.
+    Sequence {
+        /// The player entity; `sequence.seek` and `sequence.skip` take it back.
+        player: EntityId,
+        /// How the player ended by the seek's last tick. Omitted while it is still playing, and
+        /// always omitted by `sequence.play`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ended: Option<SequenceEndKind>,
+    },
+}
+
+/// How a sequence player ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SequenceEndKind {
+    /// The playhead reached the document's length.
+    Completed,
+    /// `sequence.skip` cut it to its end state.
+    Skipped,
+    /// It was cancelled, or its document vanished.
+    Cancelled,
 }
 
 /// One behaviour machine in an `ai.describe` reply.
@@ -771,6 +793,9 @@ mod tests {
                 culling: None,
                 skin: None,
                 extract: None,
+                assembly: None,
+                exposure: None,
+                checkpoints: None,
                 samples: None,
             }),
         };

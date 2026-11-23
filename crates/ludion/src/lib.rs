@@ -2641,6 +2641,9 @@ mod budget_quality_tests {
             culling: None,
             skin: None,
             extract: None,
+            assembly: None,
+            exposure: None,
+            checkpoints: None,
             samples: None,
         }
     }

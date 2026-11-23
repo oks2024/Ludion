@@ -158,10 +158,11 @@
     for every dialogue key, so the key degrades with `L4353` as this decision says rather than refusing the doc.
 40. **Codes.** `L4355` (`SEQUENCE_PREVIEW_DOC`): the doc is not under the scene's folder, unreadable or not
     `kind: sequence`. `L4356` (`SEQUENCE_PREVIEW_BIND`): a `--bind` entity name matches no entity, or several.
-41. **The wire design (R14).** `sequence.play { sequence, bindings: {role: entity ref} } -> { player }`;
+41. **The wire design (R14; shipped in R14, T10-C2b).** `sequence.play { sequence, bindings: {role: entity ref} } -> { player }`;
     `sequence.skip { player }`; `sequence.seek { player, tick }`, which restores the snapshot captured at play and
     steps `tick + 1` ticks with the preview's auto-release, so a seek frame equals the CLI frame. Each is a
     ≤10-line `dispatch.rs` arm into `sequences`; it moves the protocol schema hash, so it ships in R14.
+    Replies: `Sequence { player, ended? }` (`SequenceEndKind`), `Ack` for a skip. A seek of an ended player works.
 
 42. **`sequence_trace` (testkit).** `ludion_testkit::sequence::sequence_trace(&mut Engine, ticks) -> Vec<String>`
     steps the engine and logs, per tick, every `SequenceEvents` entry in order and then the wait transitions by
@@ -180,6 +181,16 @@
 44. **`GoldenTest::with_sequence`.** A scene golden of a previewed tick, exactly `ludion render --sequence --bind
     --at` (`render_sequence_preview`). It refuses a replay, a builder, `view`, `debug_view`, `debug_draw`, `frames`
     and a model document with `SCENE_OVERRIDE_INVALID`; no new code. Its outcome warnings are ignored.
+45. **The wire's stash (R14, T10-C2b).** One stash per host (the request did not say): the last `sequence.play`'s
+    `(player, snapshot)`, the snapshot taken once, right after the player spawned. A seek of another player is `L4358`
+    (`SEQUENCE_SEEK_NO_PLAY`). `scene.load` clears it; a later play replaces it; it survives the seek's own restore,
+    `sequence.skip`, the player ending and checkpoint restores. It rides `SnapshotDoc.sequence_seek` (filled only by
+    `snapshot::capture`, never inside the stash or a slot, never hashed; a keyframe clones the stored document, it
+    never re-captures), so a replay seek landing on a later keyframe still seeks. The seek is a session restore of the
+    stash (the engine's stash and checkpoint slots kept across it, accepted by the Planner, the scene path kept, `scene.changed` `restore`) then
+    `tick + 1` times release + one tick, `preview::run`'s loop. `L4357` (`SEQUENCE_SKIP_REFUSED`): a skip of a dead or
+    `skippable: false` player. A dead bound entity is `L0002` at `/params/bindings/<role>`, checked before anything
+    spawns; `tick + 1` over `MAX_STEP_TICKS` is `L3057` at `/params/tick`.
 
 ## Waves
 
@@ -200,7 +211,7 @@
 - **W4a (mechanized):** built-in schedule placement and `ludion render --sequence --bind --at` (decisions 37–40).
 - **W4b (mechanized, blesses owed):** testkit `sequence_trace`, the `sequence-beat` gallery scene,
   `sequences/demo.yaml`, three-tick `--sequence` render goldens (decisions 42–44).
-- **Wire (R14):** `sequence.play/seek/skip` (decision 41; a protocol schema move).
+- **Wire (R14, shipped T10-C2b):** `sequence.play/seek/skip` (decisions 41, 45; a protocol schema move).
 
 ## Out of scope
 

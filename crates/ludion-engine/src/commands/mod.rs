@@ -14,6 +14,7 @@ pub(crate) mod perf;
 pub(crate) mod prefab;
 pub(crate) mod render;
 pub(crate) mod scene;
+pub(crate) mod sequence;
 pub(crate) mod sim;
 pub(crate) mod stream;
 

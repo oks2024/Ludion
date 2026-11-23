@@ -253,3 +253,73 @@ fn the_preview_world_matches_the_driven_world_at_each_golden_tick() {
         }
     }
 }
+
+/// `sequence.seek` over the wire lands on the world `ludion render --sequence --at` previews, seeking
+/// the later tick first so the second seek proves the rewind. Both ticks stay before the dialogue key
+/// at 50: the preview runs no dialogue (decision 39), so the two worlds agree only up to it.
+#[test]
+fn a_wire_seek_equals_the_cli_preview_forward_and_back() {
+    use ludion_protocol::command::{SequencePlayParams, SequenceSeekParams};
+
+    let ticks = &common::SEQUENCE_GOLDEN_TICKS[..2];
+    let roles = [
+        ("cam", "camera"),
+        ("hero", "hero"),
+        ("crate", "crate"),
+        ("drone", "drone"),
+    ];
+    let mut engine = load();
+    let bindings = roles
+        .iter()
+        .map(|(role, name)| ((*role).to_owned(), named(engine.world(), name)))
+        .collect();
+    let player = match engine
+        .execute(Command::SequencePlay(SequencePlayParams {
+            sequence: common::SEQUENCE_DOC.to_owned(),
+            bindings,
+        }))
+        .expect("the beat plays over the wire")
+        .body
+    {
+        ResponseBody::Sequence { player, .. } => player,
+        other => panic!("expected a sequence reply, got {other:?}"),
+    };
+
+    for at in [ticks[1], ticks[0]] {
+        let preview = SequencePreview {
+            doc: gallery_root().join(common::SEQUENCE_DOC),
+            bindings: roles
+                .iter()
+                .map(|(role, name)| ((*role).to_owned(), (*name).to_owned()))
+                .collect(),
+            at,
+        };
+        let run = ludion_engine::sequence_preview_world(
+            &builtin_registry(),
+            &scene_path(),
+            &[],
+            &preview,
+        )
+        .unwrap_or_else(|d| panic!("{d:?}"));
+        engine
+            .execute(Command::SequenceSeek(SequenceSeekParams {
+                player,
+                tick: at,
+            }))
+            .unwrap_or_else(|d| panic!("seek {at}: {d:?}"));
+        for wanted in ["camera", "crate", "drone", "hero"] {
+            let previewed = run
+                .driver
+                .world()
+                .get::<Transform>(named(run.driver.world(), wanted))
+                .unwrap()
+                .copied();
+            let sought = engine
+                .world()
+                .get::<Transform>(named(engine.world(), wanted))
+                .unwrap()
+                .copied();
+            assert_eq!(sought, previewed, "{wanted} at tick {at}");
+        }
+    }
+}

@@ -25,6 +25,7 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::engine::{Engine, PreparedWorld, Rebuild, RestoredWorld};
+use crate::perf_live::{CheckpointKey, CheckpointSample, Span};
 use crate::run_save::BuildStamp;
 use crate::snapshot::StructuredSnapshot;
 
@@ -150,6 +151,10 @@ pub(crate) struct CheckpointState {
     /// The last disk write or load failure.
     pub(crate) disk_error: Option<Diagnostic>,
     pub(crate) stamp: BuildStamp,
+    /// Timed boundary captures and in-memory restores while an offline profiler is armed; `None`
+    /// is disarmed, one `Option` test per operation. Host state, never hashed or snapshotted. Disk
+    /// loads, persists and discards are not timed.
+    pub(crate) timing: Option<Vec<CheckpointSample>>,
 }
 
 /// What a restore request asks for; the last one in a frame wins.
@@ -618,6 +623,7 @@ impl Engine {
             disk,
             disk_error: None,
             stamp: self.build_stamp(),
+            timing: None,
         });
         self.install_checkpoints(StoreRow::Keep);
     }
@@ -758,8 +764,11 @@ impl Engine {
             }
         }
         for name in captures {
+            let span = self.checkpoint_span();
             // Reported by `capture_slot` itself; nothing more to do on a refusal.
-            self.capture_slot(&name, frame).ok();
+            if self.capture_slot(&name, frame).is_ok() {
+                self.file_checkpoint_sample(CheckpointKey::Capture, span, frame);
+            }
         }
         if discard_disk {
             self.discard_disk_slot();
@@ -953,6 +962,56 @@ impl Engine {
         })
     }
 
+    /// Arms or disarms the offline profiler's checkpoint timing; a no-op without a store. Arming
+    /// starts from an empty sample list.
+    pub(crate) fn set_checkpoint_timing(&mut self, armed: bool) {
+        if let Some(state) = self.checkpoints.as_mut() {
+            state.timing = armed.then(Vec::new);
+        }
+    }
+
+    /// Takes the samples gathered since arming, leaving the timing armed and empty.
+    pub(crate) fn take_checkpoint_samples(&mut self) -> Vec<CheckpointSample> {
+        self.checkpoints
+            .as_mut()
+            .and_then(|state| state.timing.as_mut())
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// Opens the span a timed operation closes, when either profiler is armed: no clock is read
+    /// otherwise.
+    fn checkpoint_span(&self) -> Option<Span> {
+        let offline = self
+            .checkpoints
+            .as_ref()
+            .is_some_and(|state| state.timing.is_some());
+        (offline || self.perf.is_some()).then(Span::start)
+    }
+
+    /// Files the operation `span` timed with whichever profilers are armed.
+    fn file_checkpoint_sample(
+        &mut self,
+        key: CheckpointKey,
+        span: Option<Span>,
+        frame: FrameIndex,
+    ) {
+        let Some(span) = span else {
+            return;
+        };
+        let ms = span.ms();
+        if let Some(timing) = self
+            .checkpoints
+            .as_mut()
+            .and_then(|state| state.timing.as_mut())
+        {
+            timing.push(CheckpointSample { key, ms, frame });
+        }
+        if let Some(perf) = self.perf.as_mut() {
+            perf.record_checkpoint(frame, key, ms);
+        }
+    }
+
     /// Performs the restore stashed by [`drain_checkpoints`](Engine::drain_checkpoints), or refuses
     /// it. Returns whether the world was replaced, so the boundary skips the scene switch: a restore
     /// wins over one requested the same frame.
@@ -965,7 +1024,14 @@ impl Engine {
             return false;
         };
         match request {
-            RestoreRequest::Slot(name) => self.restore_named(name, frame).is_ok(),
+            RestoreRequest::Slot(name) => {
+                let span = self.checkpoint_span();
+                let restored = self.restore_named(name, frame).is_ok();
+                if restored {
+                    self.file_checkpoint_sample(CheckpointKey::Restore, span, frame);
+                }
+                restored
+            }
             RestoreRequest::Disk => self.load_disk_slot(frame),
         }
     }

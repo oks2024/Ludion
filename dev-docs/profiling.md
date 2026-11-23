@@ -18,7 +18,7 @@ layer measures is `frame-streaming`; the determinism guarantees the profiler mus
 ## Layout
 
 - `crates/ludion-protocol/src/perf.rs` — the report types both producers fill: `ProfileReport`
-  (`sim` / `gpu` / `transport` / optional `samples`), `ProfileWindowData` (+ `into_report`),
+  (`sim` / `gpu` / `transport` / optional sections, among them `assembly`, `exposure` and `checkpoints`, / `samples`), `ProfileWindowData` (+ `into_report`),
   `ProfileSamples`, `ProfileCaptureParams`, `DEFAULT_CAPTURE_FRAMES` (60), `MAX_CAPTURE_FRAMES`
   (3600, the absolute cap) and `MAX_CAPTURE_WALL_SECONDS` (60, the wall-clock bound).
 - `crates/ludion-engine/src/profile.rs` — the **offline** driver: `profile_scene` loads a scene,

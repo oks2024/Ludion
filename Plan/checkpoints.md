@@ -1,6 +1,6 @@
 # In-memory checkpoints — capture and restore the world from a system
 
-> **Status:** Waves 1 and 2 mechanized (2026-11-18); W4a shipped (Lore 2450); W4b mechanized (measured medians owed); W3 shipped in R14; W5 (the wire verbs) shipped in R14 (T10-C2a). The Status section at the end
+> **Status:** Waves 1 and 2 mechanized (2026-11-18); W4a shipped (Lore 2450); W4b mechanized (measured medians owed); W3 shipped in R14; W5 (the wire verbs) shipped in R14 (T10-C2a); the W4b-3 profiler keys and `checkpoints` report section shipped in R14 (T10-C3). The Status section at the end
 > records what shipped as each wave closes.
 >
 > Neon Shroud request 0012 (`engine-requests/0012-in-memory-checkpoints.md`, filed 2026-11-17, audited
@@ -165,8 +165,8 @@ scene text, and held slots refuse arming, `L4207`).
 - **W4a — structured slots** (shipped, Lore 2450; decisions W4-1..7). In-memory slots as erased column clones plus a
   typed `SnapshotDoc`; disk slots keep the JSON envelope.
 - **W4b — budgets** (0012-04). The capture ≤ 4 ms / restore ≤ 50 ms budgets, measured by a bench or test that
-  reads no new wire field; a `ProfileReport` `checkpoints` section and the `checkpoint_capture` /
-  `checkpoint_restore` profiler keys would be R14 items.
+  reads no new wire field; the `ProfileReport` `checkpoints` section and the `checkpoint_capture` /
+  `checkpoint_restore` profiler keys shipped in R14 (W4b-3).
 - **W5 — wire commands** (shipped in R14, T10-C2a; decisions W5-1..4). `checkpoint.*`, designed in W4-6.
 
 ## Wave 3 decisions — the store rides the snapshot
@@ -233,7 +233,9 @@ scene text, and held slots refuse arming, `L4207`).
   `restore_ms`), the image-stats / reflection-parity precedent; the ceilings are the request's fixed targets
   (capture 4 ms, restore 50 ms), not 2x tripwires. Measured medians are owed to the pinned boxes.
 - **W4b-3** The `checkpoint_capture` / `checkpoint_restore` profiler keys and a `ProfileReport` `checkpoints`
-  section stay R14.
+  section (`CheckpointProfile`: per key `count`, `median_ms`, `max_ms`, `max_frame`) shipped in R14. They time the
+  in-memory boundary capture and restore only (disk load, persist and discard are not timed), offline in `--profile`
+  and `--profile-replay` (replay: ticks inside `[from, to]`) and on a live profiler window.
 - **W4b-4** "Memory per slot <= 2x live component bytes" is not gated: the column heap size is not observable
   without per-type size hooks. Trigger: a game reporting slot memory pressure.
 

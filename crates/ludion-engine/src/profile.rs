@@ -34,16 +34,18 @@ use ludion_ecs::ScheduleObserver;
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
 use ludion_protocol::perf::{
-    AssetLoadCounters, CullViewProfile, CullingProfile, ExtractPhaseTiming, ExtractProfile,
-    LoadProfile, LodRadiusProfile, ProfileSamples, SkinProfile,
+    AssemblyProfile, AssetLoadCounters, CheckpointProfile, CullViewProfile, CullingProfile,
+    ExposureProfile, ExtractPhaseTiming, ExtractProfile, LoadProfile, LodRadiusProfile,
+    ProfileSamples, SkinProfile,
 };
-use ludion_renderer::{CullViewCount, LodRadii};
+use ludion_renderer::{CullViewCount, LodRadii, MeterReading};
 use ludion_sim::RunState;
 use serde::Deserialize;
 
 use crate::commands::collapse;
-use crate::extract_observer::{ExtractObserver, ExtractPhase, SkinCounts};
+use crate::extract_observer::{AssemblyCounts, ExtractObserver, ExtractPhase, SkinCounts};
 use crate::load_observer::{LoadKind, LoadObserver, LoadPhase};
+use crate::perf_live::{CheckpointSample, reduce_checkpoints};
 use crate::replay::{
     DriveHook, Keyframes, PlainDrive, drive_actions_with, prepare_replay, require_monotonic_frames,
     resolve_window, total_frames,
@@ -170,12 +172,12 @@ pub fn profile_engine(
         ]);
     }
     let load = measure_load(engine)?;
-    let (sim, samples, skin, extract) = profile_sim(engine, frames, warmup);
+    let (sim, samples, sections) = profile_sim(engine, frames, warmup);
     let cluster = profile_cluster(engine, frames, warmup).map_err(|d| vec![d])?;
     let local_shadows = profile_local_shadows(engine).map_err(|d| vec![d])?;
     let sun_cascades = profile_sun_cascades(engine).map_err(|d| vec![d])?;
     let decals = profile_decals(engine).map_err(|d| vec![d])?;
-    let (gpu, culling) = profile_gpu(engine, frames, warmup).map_err(|d| vec![d])?;
+    let (gpu, culling, exposure) = profile_gpu(engine, frames, warmup).map_err(|d| vec![d])?;
 
     Ok(ProfileReport {
         scene,
@@ -197,8 +199,11 @@ pub fn profile_engine(
         load,
         probes: engine.probe_profile(),
         culling,
-        skin,
-        extract,
+        skin: sections.skin,
+        extract: sections.extract,
+        assembly: sections.assembly,
+        exposure,
+        checkpoints: sections.checkpoints,
         samples: Some(samples),
     })
 }
@@ -509,12 +514,7 @@ fn profile_sim(
     engine: &mut Engine,
     frames: u64,
     warmup: u64,
-) -> (
-    SimProfile,
-    ProfileSamples,
-    Option<SkinProfile>,
-    Option<ExtractProfile>,
-) {
+) -> (SimProfile, ProfileSamples, SimSections) {
     let mut observer = TimingObserver::default();
 
     for _ in 0..warmup {
@@ -533,6 +533,7 @@ fn profile_sim(
     let clock = ExtractClock::default();
     let previous = engine.take_extract_observer();
     engine.set_extract_observer(Some(Box::new(clock.clone())));
+    engine.set_checkpoint_timing(true);
 
     for _ in 0..frames {
         observer.frame.clear();
@@ -551,10 +552,23 @@ fn profile_sim(
     }
 
     engine.set_extract_observer(previous);
+    let checkpoints = reduce_checkpoints(&engine.take_checkpoint_samples());
+    engine.set_checkpoint_timing(false);
     // Extract is index 1 of `SEQUENTIAL_NAMES`.
-    let (skin, extract) = clock.into_profiles(&per_sequential[1]);
+    let mut sections = clock.into_profiles(&per_sequential[1]);
+    sections.checkpoints = checkpoints;
     let (sim, samples) = reduce_sim(systems, per_sequential, frame_totals, frame_indices);
-    (sim, samples, skin, extract)
+    (sim, samples, sections)
+}
+
+/// The report sections [`profile_sim`] fills beside the sim columns: the extract walk's, and the
+/// checkpoint timings of the measured ticks.
+#[derive(Default)]
+struct SimSections {
+    skin: Option<SkinProfile>,
+    extract: Option<ExtractProfile>,
+    assembly: Option<AssemblyProfile>,
+    checkpoints: Option<CheckpointProfile>,
 }
 
 /// One extract's wall time per phase, split pieces summed.
@@ -568,6 +582,7 @@ struct ExtractSamples {
     row: PhaseRow,
     rows: Vec<PhaseRow>,
     counts: Vec<SkinCounts>,
+    assembly: Vec<AssemblyCounts>,
 }
 
 /// An [`ExtractObserver`] that times every phase and keeps the `Skin` counters. Cloned so the
@@ -584,13 +599,11 @@ impl ExtractClock {
         samples.open = None;
     }
 
-    /// The `skin` and `extract` sections over the collected extracts. `extract_spans` are the
-    /// whole-extract wall times, one per row; `skin` is `None` when no extract drew a skinned
-    /// instance and `extract` when none was measured.
-    fn into_profiles(
-        self,
-        extract_spans: &[Duration],
-    ) -> (Option<SkinProfile>, Option<ExtractProfile>) {
+    /// The `skin`, `extract` and `assembly` sections over the collected extracts. `extract_spans`
+    /// are the whole-extract wall times, one per row; `skin` is `None` when no extract drew a
+    /// skinned instance, `assembly` when none posed an assembly, and `extract` when none was
+    /// measured.
+    fn into_profiles(self, extract_spans: &[Duration]) -> SimSections {
         let samples = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let phase_column = |phase: ExtractPhase| -> Vec<Duration> {
             let index = ExtractPhase::ALL
@@ -636,7 +649,27 @@ impl ExtractClock {
                 joints_sampled_median: column(|c| c.joints_sampled as f64),
             }
         });
-        (skin, extract)
+        let assembly = (!samples.assembly.iter().all(|c| c.instances == 0)).then(|| {
+            let column = |f: fn(&AssemblyCounts) -> u32| -> f64 {
+                let mut values: Vec<f64> =
+                    samples.assembly.iter().map(|c| f64::from(f(c))).collect();
+                median_f64(&mut values)
+            };
+            AssemblyProfile {
+                sampled_frames: samples.assembly.len() as u64,
+                instances_median: column(|c| c.instances),
+                parts_posed_median: column(|c| c.parts_posed),
+                layers_sampled_median: column(|c| c.layers_sampled),
+                ik_chains_solved_median: column(|c| c.ik_chains_solved),
+                ik_ground_casts_median: column(|c| c.ik_ground_casts),
+            }
+        });
+        SimSections {
+            skin,
+            extract,
+            assembly,
+            checkpoints: None,
+        }
     }
 }
 
@@ -667,6 +700,14 @@ impl ExtractObserver for ExtractClock {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .counts
+            .push(counts);
+    }
+
+    fn assembly(&mut self, counts: AssemblyCounts) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .assembly
             .push(counts);
     }
 }
@@ -880,7 +921,15 @@ pub(crate) fn profile_replay_engine(
         frame_totals: Vec::new(),
         frame_indices: Vec::new(),
     };
-    drive_actions_with(&mut engine, actions, &mut hook)?;
+    engine.set_checkpoint_timing(true);
+    let driven = drive_actions_with(&mut engine, actions, &mut hook);
+    let timed = engine.take_checkpoint_samples();
+    engine.set_checkpoint_timing(false);
+    driven?;
+    let in_window: Vec<CheckpointSample> = timed
+        .into_iter()
+        .filter(|sample| in_produced_window(sample, from, to))
+        .collect();
 
     if hook.frame_indices.is_empty() {
         return Err(Diagnostic::new(
@@ -925,9 +974,18 @@ pub(crate) fn profile_replay_engine(
         culling: None,
         skin: None,
         extract: None,
+        assembly: None,
+        exposure: None,
+        checkpoints: reduce_checkpoints(&in_window),
         samples: Some(samples),
     };
     Ok((report, engine))
+}
+
+/// Whether a checkpoint sample belongs to the replay window `[from, to]`, which counts *produced*
+/// frames: a sample carries the tick's pre-advance frame, and the tick produces the next one.
+fn in_produced_window(sample: &CheckpointSample, from: u64, to: u64) -> bool {
+    (from..=to).contains(&(sample.frame.as_u64() + 1))
 }
 
 /// The [`DriveHook`] behind [`profile_replay`]: plain ticks outside the window, an observed and timed
@@ -1147,7 +1205,7 @@ fn profile_gpu(
     engine: &mut Engine,
     frames: u64,
     warmup: u64,
-) -> Result<(GpuProfile, Option<CullingProfile>), Diagnostic> {
+) -> Result<(GpuProfile, Option<CullingProfile>, Option<ExposureProfile>), Diagnostic> {
     let (width, height) = PROFILE_SIZE;
     let size = engine.frame_size(width, height)?;
     let scene = engine
@@ -1172,7 +1230,7 @@ fn profile_gpu(
                 frame_median_ms: None,
                 frame_tail: None,
             };
-            return Ok((gpu, None));
+            return Ok((gpu, None, None));
         }
         Err(diag) => return Err(diag),
     };
@@ -1182,6 +1240,8 @@ fn profile_gpu(
     }
 
     renderer.set_cull_stats(true);
+    renderer.set_meter_readback(true);
+    let mut meter_readings: Vec<MeterReading> = Vec::new();
     let mut cull_samples: Vec<Vec<CullViewCount>> = Vec::new();
     let mut timestamps_supported = true;
     let mut names: Vec<String> = Vec::new();
@@ -1193,6 +1253,7 @@ fn profile_gpu(
     for position in 0..frames {
         let raw = parse_raw_timings(&renderer.dump_timings_json(&scene, size)?)?;
         cull_samples.extend(renderer.collect_cull_stats(false));
+        meter_readings.extend(renderer.collect_meter_readings(false));
         timestamps_supported = raw.timestamps_supported;
         if let Some(span) = raw.frame_gpu_time_ms {
             spans.push(span);
@@ -1215,6 +1276,9 @@ fn profile_gpu(
 
     cull_samples.extend(renderer.collect_cull_stats(true));
     renderer.set_cull_stats(false);
+    meter_readings.extend(renderer.collect_meter_readings(true));
+    renderer.set_meter_readback(false);
+    let exposure = reduce_exposure(&meter_readings);
     let mut culling = reduce_culling(&cull_samples, u64::from(renderer.cull_over_cap_views()));
     if let Some(culling) = &mut culling {
         culling.lod_radii = lod_radii;
@@ -1264,7 +1328,27 @@ fn profile_gpu(
         frame_median_ms,
         frame_tail,
     };
-    Ok((gpu, culling))
+    Ok((gpu, culling, exposure))
+}
+
+/// The `exposure` section over the metered readings of the measured renders: medians, and how many
+/// readings sat on the authored range's end. `None` when nothing was metered (a manual-exposure
+/// scene).
+fn reduce_exposure(readings: &[MeterReading]) -> Option<ExposureProfile> {
+    if readings.is_empty() {
+        return None;
+    }
+    let mut correction: Vec<f64> = readings
+        .iter()
+        .map(|r| f64::from(r.correction_ev))
+        .collect();
+    let mut mean_log2: Vec<f64> = readings.iter().map(|r| f64::from(r.mean_log2)).collect();
+    Some(ExposureProfile {
+        sampled_frames: readings.len() as u64,
+        correction_ev_median: median_f64(&mut correction),
+        mean_log2_median: median_f64(&mut mean_log2),
+        clamped_frames: readings.iter().filter(|r| r.clamped).count() as u64,
+    })
 }
 
 /// A renderer timings payload, or `L2005` if it does not follow the schema.
@@ -2181,6 +2265,104 @@ mod tests {
             .collect()
     }
 
+    /// An engine that captures `a` at frame 5 and restores it at frame 8, once each.
+    fn checkpointing_engine() -> Engine {
+        let restored = std::sync::atomic::AtomicBool::new(false);
+        Engine::builder()
+            .checkpoints(crate::CheckpointConfig { max_slots: 2 })
+            .components(|reg| reg.register::<Counter>("Counter"))
+            .system("bump", bump)
+            .system("director", move |world, ctx| {
+                let frame = ctx.frame.as_u64();
+                let checkpoints = world.resource_mut::<crate::Checkpoints>().unwrap();
+                if frame == 5 {
+                    checkpoints.capture("a");
+                } else if frame == 8 && !restored.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    checkpoints.restore("a");
+                }
+            })
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn profile_sim_reports_checkpoint_timings_over_the_measured_window() {
+        let mut engine = checkpointing_engine();
+        engine.load_inline_scene(SCENE).unwrap();
+        let (_, _, sections) = profile_sim(&mut engine, 12, 1);
+        let timings = sections
+            .checkpoints
+            .expect("the window captured and restored")
+            .timings;
+        let names: Vec<&str> = timings.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["checkpoint_capture", "checkpoint_restore"]);
+        for timing in &timings {
+            assert_eq!(timing.count, 1);
+            assert!(timing.median_ms >= 0.0 && timing.max_ms >= timing.median_ms);
+        }
+        assert!(
+            engine.take_checkpoint_samples().is_empty(),
+            "profile_sim disarms the timing"
+        );
+    }
+
+    #[test]
+    fn checkpoint_timing_is_off_unless_armed_and_never_moves_the_hash() {
+        let mut disarmed = checkpointing_engine();
+        disarmed.load_inline_scene(SCENE).unwrap();
+        let mut armed = checkpointing_engine();
+        armed.load_inline_scene(SCENE).unwrap();
+        armed.set_checkpoint_timing(true);
+        for _ in 0..12 {
+            disarmed.advance_live();
+            armed.advance_live();
+        }
+        assert!(disarmed.take_checkpoint_samples().is_empty());
+        let samples = armed.take_checkpoint_samples();
+        assert_eq!(samples.len(), 2, "one capture and one restore");
+        assert_eq!(disarmed.world_hash().unwrap(), armed.world_hash().unwrap());
+    }
+
+    #[test]
+    fn profile_sim_has_no_checkpoint_section_without_a_store() {
+        let mut engine = counter_engine();
+        engine.load_inline_scene(SCENE).unwrap();
+        let (_, _, sections) = profile_sim(&mut engine, 3, 1);
+        assert!(sections.checkpoints.is_none());
+    }
+
+    #[test]
+    fn the_replay_window_counts_produced_frames_for_checkpoint_samples() {
+        let at = |frame| CheckpointSample {
+            key: crate::perf_live::CheckpointKey::Capture,
+            ms: 1.0,
+            frame: ludion_core::time::FrameIndex::new(frame),
+        };
+        // The tick that starts at frame 4 produces frame 5.
+        assert!(in_produced_window(&at(4), 5, 7));
+        assert!(in_produced_window(&at(6), 5, 7));
+        assert!(!in_produced_window(&at(3), 5, 7));
+        assert!(!in_produced_window(&at(7), 5, 7));
+    }
+
+    #[test]
+    fn reduce_exposure_takes_medians_and_counts_clamps() {
+        let reading = |correction_ev: f32, clamped| MeterReading {
+            correction_ev,
+            mean_log2: -2.0,
+            weight: 1.0,
+            clamped,
+        };
+        assert!(reduce_exposure(&[]).is_none());
+        let profile =
+            reduce_exposure(&[reading(-1.0, false), reading(3.0, true), reading(1.0, true)])
+                .expect("readings reduce");
+        assert_eq!(profile.sampled_frames, 3);
+        assert_eq!(profile.correction_ev_median, 1.0);
+        assert_eq!(profile.mean_log2_median, -2.0);
+        assert_eq!(profile.clamped_frames, 2);
+    }
+
     #[test]
     fn observer_does_not_change_world_hash() {
         // Drive one engine the ordinary way, another through the observed profile path; the hooked
@@ -2706,7 +2888,7 @@ entities:
 
         let mut profiled = counter_engine();
         profiled.load_inline_scene(SCENE).unwrap();
-        let (sim, samples, _, _) = profile_sim(&mut profiled, 40, 10);
+        let (sim, samples, _) = profile_sim(&mut profiled, 40, 10);
 
         assert_eq!(
             plain_hash,
@@ -2727,7 +2909,7 @@ entities:
     fn profiled_run_reports_the_sequential_section() {
         let mut engine = counter_engine();
         engine.load_inline_scene(SCENE).unwrap();
-        let (sim, _samples, _, _) = profile_sim(&mut engine, 8, 1);
+        let (sim, _samples, _) = profile_sim(&mut engine, 8, 1);
 
         let names: Vec<&str> = sim.sequential.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, SEQUENTIAL_NAMES);
@@ -2805,6 +2987,9 @@ entities:
             culling: None,
             skin: None,
             extract: None,
+            assembly: None,
+            exposure: None,
+            checkpoints: None,
             samples: None,
         };
 
@@ -2880,7 +3065,7 @@ entities:
         // here (see `profile_engine`'s end-to-end use); this is the sim-side driver unit.
         let mut engine = counter_engine();
         engine.load_inline_scene(SCENE).unwrap();
-        let (sim, samples, _, _) = profile_sim(&mut engine, 4, 1);
+        let (sim, samples, _) = profile_sim(&mut engine, 4, 1);
         let names: Vec<&str> = sim.systems.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["path_follow", "bump", "camera_rig"]);
         assert!(sim.frame_total_median_ms >= 0.0);
@@ -2899,7 +3084,7 @@ entities:
         engine
             .load_inline_scene(&source)
             .expect("the committed gallery scene validates");
-        let (sim, _samples, _, _) = profile_sim(&mut engine, 3, 1);
+        let (sim, _samples, _) = profile_sim(&mut engine, 3, 1);
         let names: Vec<&str> = sim.systems.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,
@@ -2950,8 +3135,10 @@ entities:
     #[test]
     fn profile_sim_reports_the_skin_section_for_a_skinned_scene() {
         let mut engine = skinned_engine();
-        let (_, _, skin, _) = profile_sim(&mut engine, 3, 1);
-        let skin = skin.expect("a scene with skinned instances reports a skin section");
+        let (_, _, sections) = profile_sim(&mut engine, 3, 1);
+        let skin = sections
+            .skin
+            .expect("a scene with skinned instances reports a skin section");
         assert_eq!(skin.sampled_frames, 3);
         assert_eq!(skin.instances_median, 3.0);
         assert_eq!(skin.palettes_sampled_median, 3.0);
@@ -2962,19 +3149,55 @@ entities:
         assert!(skin.pose_median_ms >= 0.0);
     }
 
+    const ONE_ASSEMBLY: &str = "format: 1
+seed: 1
+entities:
+  - name: figure
+    components:
+      Mesh:
+        shape:
+          assembly: voxels/humanoid.assembly.yaml
+";
+
+    #[test]
+    fn profile_sim_reports_the_assembly_section_for_an_assembly_scene() {
+        let gallery = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+        let mut engine = Engine::with_project_root(&gallery);
+        engine.load_inline_scene(ONE_ASSEMBLY).unwrap();
+        let (_, _, sections) = profile_sim(&mut engine, 3, 1);
+        let assembly = sections
+            .assembly
+            .expect("a scene with a posed assembly reports an assembly section");
+        assert_eq!(assembly.sampled_frames, 3);
+        assert_eq!(assembly.instances_median, 1.0);
+        assert_eq!(assembly.parts_posed_median, 10.0);
+        assert_eq!(assembly.layers_sampled_median, 0.0);
+        assert_eq!(assembly.ik_chains_solved_median, 0.0);
+        assert_eq!(assembly.ik_ground_casts_median, 0.0);
+    }
+
+    #[test]
+    fn profile_sim_has_no_assembly_section_without_assemblies() {
+        let mut engine = skinned_engine();
+        let (_, _, sections) = profile_sim(&mut engine, 3, 1);
+        assert!(sections.assembly.is_none());
+    }
+
     #[test]
     fn profile_sim_has_no_skin_section_without_skins() {
         let mut engine = counter_engine();
         engine.load_inline_scene(SCENE).unwrap();
-        let (_, _, skin, _) = profile_sim(&mut engine, 3, 1);
-        assert!(skin.is_none());
+        let (_, _, sections) = profile_sim(&mut engine, 3, 1);
+        assert!(sections.skin.is_none());
     }
 
     #[test]
     fn profile_sim_reports_every_extract_phase_in_walk_order() {
         let mut engine = skinned_engine();
-        let (_, _, _, extract) = profile_sim(&mut engine, 3, 1);
-        let extract = extract.expect("a measured extract reports a phase table");
+        let (_, _, sections) = profile_sim(&mut engine, 3, 1);
+        let extract = sections
+            .extract
+            .expect("a measured extract reports a phase table");
         assert_eq!(extract.sampled_frames, 3);
         let names: Vec<&str> = extract.phases.iter().map(|p| p.phase.as_str()).collect();
         let expected: Vec<&str> = ExtractPhase::ALL.iter().map(|p| p.name()).collect();
@@ -3038,7 +3261,7 @@ entities:
             .unwrap();
         engine.load_inline_scene(SCENE).unwrap();
 
-        let (sim, samples, _, _) = profile_sim(&mut engine, 6, 1);
+        let (sim, samples, _) = profile_sim(&mut engine, 6, 1);
 
         assert_eq!(samples.frames.len(), 6);
         // Ascending and contiguous: the driver's own tick counter, one tick per measured frame.
@@ -3353,6 +3576,37 @@ entities:
     /// The offline driver fills `culling` for a mesh scene — the camera tests no more than it draws
     /// from — and the same engine with culling off reports none.
     #[test]
+    fn needs_gpu_profile_engine_fills_the_exposure_section() {
+        let gallery = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+        let mut engine = Engine::with_project_root(&gallery);
+        engine
+            .load_inline_scene(
+                &std::fs::read_to_string(gallery.join("post-metered-exposure.yaml")).unwrap(),
+            )
+            .unwrap();
+        let report = profile_engine(&mut engine, "metered".to_string(), 4, 1).unwrap();
+        if !report.gpu.available {
+            return;
+        }
+        let exposure = report
+            .exposure
+            .expect("a metered scene reports its verdict");
+        assert!(exposure.sampled_frames > 0);
+        assert!(exposure.correction_ev_median.is_finite());
+        assert!(exposure.mean_log2_median.is_finite());
+
+        let mut manual = Engine::with_project_root(&gallery);
+        manual
+            .load_inline_scene(&std::fs::read_to_string(gallery.join("meshes.yaml")).unwrap())
+            .unwrap();
+        let report = profile_engine(&mut manual, "meshes".to_string(), 3, 1).unwrap();
+        assert!(
+            report.exposure.is_none(),
+            "a manual-exposure scene has nothing to meter"
+        );
+    }
+
+    #[test]
     fn needs_gpu_profile_engine_fills_the_culling_section() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/meshes.yaml");
         let mut engine = Engine::with_project_root(path.parent().unwrap());
@@ -3612,6 +3866,9 @@ entities:
             culling: None,
             skin: None,
             extract: None,
+            assembly: None,
+            exposure: None,
+            checkpoints: None,
             samples: None,
         }
     }

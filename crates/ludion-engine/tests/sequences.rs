@@ -1159,3 +1159,361 @@ fn a_game_without_sequences_schedules_no_sequence_update() {
         .unwrap();
     assert!(!system_names(&mut engine).contains(&"sequence_update".to_string()));
 }
+
+// --- The wire: sequence.play / sequence.seek / sequence.skip ----------------------------------
+
+mod wire {
+    use super::*;
+    use ludion_core::diagnostics::{Diagnostic, DiagnosticCode};
+    use ludion_engine::{CheckpointConfig, drive_hashes, replay_hashes_with};
+    use ludion_protocol::command::{
+        CheckpointNameParams, MAX_STEP_TICKS, SequencePlayParams, SequenceSeekParams,
+        SequenceSkipParams,
+    };
+    use ludion_protocol::response::SequenceEndKind;
+    use std::collections::BTreeMap;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    const STUCK: &str = "sequences/stuck.yaml";
+
+    fn wire_game(name: &str) -> EngineBuilder {
+        game(name).doc_text(
+            STUCK,
+            &beat("game").replace("length_ticks: 40", "length_ticks: 40\nskippable: false"),
+        )
+    }
+
+    fn wire_boot(name: &str) -> Beat {
+        scene(wire_game(name).build().expect("the docs are valid"))
+    }
+
+    fn roles(beat: &Beat) -> BTreeMap<String, EntityId> {
+        BTreeMap::from([
+            ("cam".to_string(), beat.cam),
+            ("actor".to_string(), beat.actor),
+            ("panel".to_string(), beat.panel),
+        ])
+    }
+
+    fn run(engine: &mut Engine, command: Command) -> Result<ResponseBody, Diagnostic> {
+        engine.execute(command).map(|dispatched| dispatched.body)
+    }
+
+    fn play_cmd(key: &str, bindings: BTreeMap<String, EntityId>) -> Command {
+        Command::SequencePlay(SequencePlayParams {
+            sequence: key.to_string(),
+            bindings,
+        })
+    }
+
+    fn seek_cmd(player: EntityId, tick: u64) -> Command {
+        Command::SequenceSeek(SequenceSeekParams { player, tick })
+    }
+
+    fn skip_cmd(player: EntityId) -> Command {
+        Command::SequenceSkip(SequenceSkipParams { player })
+    }
+
+    fn step_cmd(ticks: u64) -> Command {
+        Command::SimStep(SimStepParams { ticks, hash: false })
+    }
+
+    fn wire_play(beat: &mut Beat, key: &str) -> EntityId {
+        let command = play_cmd(key, roles(beat));
+        match run(&mut beat.engine, command).unwrap() {
+            ResponseBody::Sequence {
+                player,
+                ended: None,
+            } => player,
+            other => panic!("expected a sequence reply, got {other:?}"),
+        }
+    }
+
+    fn code_of(result: Result<ResponseBody, Diagnostic>) -> DiagnosticCode {
+        result.expect_err("the command is refused").code
+    }
+
+    fn hash(engine: &mut Engine) -> u64 {
+        engine.world_hash().unwrap().as_u64()
+    }
+
+    /// A fresh engine that played the beat and stepped `ticks`, releasing the player before each
+    /// (the latch is hashed): what a seek to `ticks - 1` must equal.
+    fn fresh_hash(name: &str, ticks: u64) -> u64 {
+        let mut beat = wire_boot(name);
+        let player = wire_play(&mut beat, BEAT);
+        for _ in 0..ticks {
+            sequences::release(beat.engine.world_mut(), SequenceHandle(player));
+            run(&mut beat.engine, step_cmd(1)).unwrap();
+        }
+        hash(&mut beat.engine)
+    }
+
+    #[test]
+    fn play_replies_the_player_and_it_is_live() {
+        let mut beat = wire_boot("wire-play");
+        let player = wire_play(&mut beat, BEAT);
+        assert!(sequences::is_playing(
+            beat.engine.world(),
+            SequenceHandle(player)
+        ));
+    }
+
+    #[test]
+    fn play_refuses_what_it_cannot_start_and_spawns_nothing() {
+        let mut beat = wire_boot("wire-play-errors");
+        let before = hash(&mut beat.engine);
+
+        let unknown = run(
+            &mut beat.engine,
+            play_cmd("sequences/none.yaml", BTreeMap::new()),
+        );
+        assert_eq!(code_of(unknown), code::SEQUENCE_UNKNOWN);
+
+        let undeclared = BTreeMap::from([("nobody".to_string(), beat.cam)]);
+        let refused = run(&mut beat.engine, play_cmd(BEAT, undeclared));
+        assert_eq!(code_of(refused), code::SEQUENCE_BIND_INVALID);
+
+        let ghost = BTreeMap::from([("cam".to_string(), EntityId::new(99, 0))]);
+        let dead = run(&mut beat.engine, play_cmd(BEAT, ghost)).unwrap_err();
+        assert_eq!(dead.code, code::DEAD_ENTITY);
+        assert_eq!(dead.path.as_deref(), Some("/params/bindings/cam"));
+
+        assert_eq!(hash(&mut beat.engine), before, "nothing spawned");
+    }
+
+    #[test]
+    fn skip_acks_and_the_next_tick_ends_skipped() {
+        let mut beat = wire_boot("wire-skip");
+        let player = wire_play(&mut beat, BEAT);
+        run(&mut beat.engine, step_cmd(3)).unwrap();
+        assert!(matches!(
+            run(&mut beat.engine, skip_cmd(player)).unwrap(),
+            ResponseBody::Ack
+        ));
+        let events = tick(&mut beat.engine);
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                SequenceEvent::Ended {
+                    end: SequenceEnd::Skipped,
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+        assert_eq!(
+            code_of(run(&mut beat.engine, skip_cmd(player))),
+            code::SEQUENCE_SKIP_REFUSED,
+            "an ended player cannot be skipped"
+        );
+    }
+
+    #[test]
+    fn skip_refuses_an_unknown_player_and_an_unskippable_document() {
+        let mut beat = wire_boot("wire-skip-refused");
+        assert_eq!(
+            code_of(run(&mut beat.engine, skip_cmd(beat.cam))),
+            code::SEQUENCE_SKIP_REFUSED
+        );
+        let player = wire_play(&mut beat, STUCK);
+        let refused = run(&mut beat.engine, skip_cmd(player)).unwrap_err();
+        assert_eq!(refused.code, code::SEQUENCE_SKIP_REFUSED);
+        assert!(refused.message.contains("skippable"), "{}", refused.message);
+    }
+
+    #[test]
+    fn seek_names_only_the_last_plays_player() {
+        let mut beat = wire_boot("wire-seek-stash");
+        assert_eq!(
+            code_of(run(&mut beat.engine, seek_cmd(EntityId::new(3, 0), 1))),
+            code::SEQUENCE_SEEK_NO_PLAY,
+            "no play yet"
+        );
+        let first = wire_play(&mut beat, BEAT);
+        let second = wire_play(&mut beat, BEAT);
+        assert_ne!(first, second);
+        assert_eq!(
+            code_of(run(&mut beat.engine, seek_cmd(first, 1))),
+            code::SEQUENCE_SEEK_NO_PLAY,
+            "a later play replaces the stash"
+        );
+        assert!(run(&mut beat.engine, seek_cmd(second, 1)).is_ok());
+
+        beat.engine
+            .load_inline_scene("format: 1\nseed: 1\nentities: []\n")
+            .unwrap();
+        assert_eq!(
+            code_of(run(&mut beat.engine, seek_cmd(second, 1))),
+            code::SEQUENCE_SEEK_NO_PLAY,
+            "a scene load clears the stash"
+        );
+    }
+
+    #[test]
+    fn seek_past_the_step_limit_is_refused_at_the_tick() {
+        let mut beat = wire_boot("wire-seek-limit");
+        let player = wire_play(&mut beat, BEAT);
+        let refused = run(&mut beat.engine, seek_cmd(player, MAX_STEP_TICKS)).unwrap_err();
+        assert_eq!(refused.code, code::SIM_STEP_TOO_LONG);
+        assert_eq!(refused.path.as_deref(), Some("/params/tick"));
+    }
+
+    #[test]
+    fn a_seek_equals_a_fresh_run_forward_past_the_end_and_back() {
+        let at_12 = fresh_hash("wire-fresh-12", 13);
+        let at_45 = fresh_hash("wire-fresh-45", 46);
+
+        let mut beat = wire_boot("wire-seek");
+        let player = wire_play(&mut beat, BEAT);
+        run(&mut beat.engine, step_cmd(60)).unwrap();
+
+        let reply = run(&mut beat.engine, seek_cmd(player, 12)).unwrap();
+        assert!(
+            matches!(reply, ResponseBody::Sequence { ended: None, .. }),
+            "{reply:?}"
+        );
+        assert_eq!(hash(&mut beat.engine), at_12);
+
+        let reply = run(&mut beat.engine, seek_cmd(player, 45)).unwrap();
+        assert!(
+            matches!(
+                reply,
+                ResponseBody::Sequence {
+                    ended: Some(SequenceEndKind::Completed),
+                    ..
+                }
+            ),
+            "{reply:?}"
+        );
+        assert_eq!(hash(&mut beat.engine), at_45);
+
+        run(&mut beat.engine, seek_cmd(player, 12)).unwrap();
+        assert_eq!(
+            hash(&mut beat.engine),
+            at_12,
+            "the rewind lands on the same world"
+        );
+    }
+
+    #[test]
+    fn every_verb_needs_sequences() {
+        let mut engine = Engine::builder().build().unwrap();
+        let player = EntityId::new(0, 0);
+        for command in [
+            play_cmd(BEAT, BTreeMap::new()),
+            seek_cmd(player, 0),
+            skip_cmd(player),
+        ] {
+            assert_eq!(
+                code_of(run(&mut engine, command)),
+                code::SEQUENCES_NOT_ENABLED
+            );
+        }
+    }
+
+    fn stash_of(snapshot: &Value) -> &Value {
+        &snapshot["sequence_seek"]["snapshot"]
+    }
+
+    #[test]
+    fn a_snapshot_carries_the_play_time_stash_unchanged_and_a_restore_can_seek() {
+        let at_12 = fresh_hash("wire-carry-ref", 13);
+        let mut beat = wire_boot("wire-carry");
+        let player = wire_play(&mut beat, BEAT);
+        let at_play = snapshot_of(&mut beat.engine);
+        assert!(stash_of(&at_play).is_object());
+        run(&mut beat.engine, step_cmd(7)).unwrap();
+        let later = snapshot_of(&mut beat.engine);
+        let again = snapshot_of(&mut beat.engine);
+        assert_ne!(later["frame"], at_play["frame"], "the world moved on");
+        assert_eq!(stash_of(&later), stash_of(&at_play));
+        assert_eq!(stash_of(&again), stash_of(&at_play));
+
+        let mut fresh = wire_boot("wire-carry-fresh");
+        restore(&mut fresh.engine, later);
+        run(&mut fresh.engine, seek_cmd(player, 12)).unwrap();
+        assert_eq!(hash(&mut fresh.engine), at_12);
+    }
+
+    #[test]
+    fn a_seek_keeps_the_checkpoint_slots_and_checkpoint_restores_keep_the_stash() {
+        let mut beat = scene(
+            wire_game("wire-checkpoints")
+                .checkpoints(CheckpointConfig { max_slots: 2 })
+                .build()
+                .unwrap(),
+        );
+        let player = wire_play(&mut beat, BEAT);
+        run(&mut beat.engine, step_cmd(5)).unwrap();
+        let slot = || CheckpointNameParams { name: "a".into() };
+        run(&mut beat.engine, Command::CheckpointCapture(slot())).unwrap();
+        run(&mut beat.engine, step_cmd(5)).unwrap();
+        run(&mut beat.engine, Command::CheckpointRestore(slot())).unwrap();
+        run(&mut beat.engine, step_cmd(1)).unwrap();
+        run(&mut beat.engine, seek_cmd(player, 3)).unwrap();
+        match run(&mut beat.engine, Command::CheckpointList).unwrap() {
+            ResponseBody::Checkpoints { slots, .. } => {
+                assert_eq!(slots.len(), 1);
+                assert_eq!(slots[0].name, "a");
+            }
+            other => panic!("expected the store, got {other:?}"),
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    const NAMED: &str = "format: 1
+seed: 1
+entities:
+  - name: cam
+  - name: actor
+  - name: panel
+";
+
+    #[test]
+    fn a_recorded_play_seek_and_skip_session_replays_to_the_same_trace() {
+        let dir = fresh_dir("wire-replay");
+        let sink = Sink::default();
+        let mut engine = wire_game("wire-replay-live").build().unwrap();
+        engine.load_inline_scene(NAMED).unwrap();
+        engine.set_recording(sink.clone()).unwrap();
+        let ids = BTreeMap::from([
+            ("cam".to_string(), EntityId::new(0, 0)),
+            ("actor".to_string(), EntityId::new(1, 0)),
+            ("panel".to_string(), EntityId::new(2, 0)),
+        ]);
+        let player = EntityId::new(3, 0);
+        let live = drive_hashes(
+            &mut engine,
+            vec![
+                step_cmd(2),
+                play_cmd(BEAT, ids),
+                step_cmd(9),
+                seek_cmd(player, 4),
+                step_cmd(3),
+                skip_cmd(player),
+                step_cmd(3),
+                seek_cmd(player, 12),
+                step_cmd(2),
+            ],
+        )
+        .unwrap();
+        engine.stop_recording().unwrap();
+        let bytes = sink.0.lock().unwrap().clone();
+        let replayed = replay_hashes_with(wire_game("wire-replay-again"), &bytes, &dir).unwrap();
+        assert_eq!(replayed, live);
+    }
+}
