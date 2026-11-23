@@ -22,7 +22,11 @@ fn steer(world: &mut World, _ctx: &SystemCtx) {
 
 `is_held` is level; `was_pressed`/`was_released` are one-frame edges (one sim tick; under a hold, see `ludion docs game-clock`). `Key` is physical and positional, the whole keyboard:
 `A`–`Z`, `Digit0`–`Digit9`, `Up`/`Down`/`Left`/`Right`, `Space`, `Enter`, `Escape`, `Shift`, `Ctrl`, `Alt` (folded —
-left and right are one key, held while either is down; Cmd/Super is not mapped).
+left and right are one key, held while either is down; Cmd/Super is not mapped), `Tab`, `Backspace`,
+`CapsLock`, `F1`–`F12`, `Minus`, `Equal`, `BracketLeft`, `BracketRight`, `Backslash`, `Semicolon`, `Quote`,
+`Backquote`, `Comma`, `Period`, `Slash`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`,
+`Numpad0`–`Numpad9`, `NumpadAdd`, `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `NumpadDecimal`,
+`NumpadEnter`. Keys left unnamed (PrintScreen, NumLock, Fn, media keys) are ignored by the window host.
 
 ## Mouse — `input.mouse()`
 
@@ -31,7 +35,7 @@ left and right are one key, held while either is down; Cmd/Super is not mapped).
 - `input.mouse().position()` — `[f32; 2]` in **render-target pixels, origin top-left, +Y down**
   (level: it persists until the next move). This is the pixel space the aim recipe below unprojects.
 - `input.mouse().is_held(MouseButton::Left)`, `was_pressed`, `was_released` — buttons, exactly like
-  keys (`MouseButton` is `Left` / `Right` / `Middle`).
+  keys (`MouseButton` is `Left` / `Right` / `Middle` / `Back` / `Forward`).
 - `input.mouse().wheel()` — `[f32; 2]`, this frame's accumulated scroll (an edge-like accumulator:
   it sums every wheel motion during the tick and resets to zero at the next tick).
 - `input.mouse().delta()` — `[f32; 2]`, this tick's raw mouse motion in device counts (unscaled,
@@ -177,10 +181,11 @@ Reads: `pressed` / `held` / `released` (buttons; `released` waits for the last h
 `held_ticks` and `hold_progress` (a `hold` binding's ticks down and its fraction of the threshold),
 `axis` (`axis1`), `axis2`. An unknown name reads inactive or zero and is reported once through
 `take_unknown()`; with the builder opt-in the engine reports each unknown name once as `L4270`.
-`Actions` is fresh after `scene.load` and `engine.restore`, and carried by a scene switch and a
-checkpoint. A fresh layer **latches** an input already held on its first tick (a trigger already at or
+`Actions` is fresh after `scene.load` and a run-save resume, carried by a scene switch and a
+checkpoint, and continued by `engine.restore` and a replay seek (the snapshot carries its gesture state and
+overrides). A fresh layer **latches** an input already held on its first tick (a trigger already at or
 above `press` too): it fires nothing, reads inactive and contributes no `held_ticks` until released, so
-after a load or restore a held input needs a fresh press. A binding names one source; the source must fit the action's kind:
+after a load or a run-save resume a held input needs a fresh press. A binding names one source; the source must fit the action's kind:
 
 | kind | sources |
 |---|---|
@@ -206,8 +211,9 @@ within `double_tap_window` after a tap and is level while held. When an input ha
 binding its tap is deferred: it fires `double_tap_window` ticks after the release, unless the second
 press cancels it — that latency is the cost of telling the two apart. Thresholds are sim ticks
 (seconds rounded half up at the tick rate, minimum 1), never `game_dt`: a `GameClock` hold or slow
-motion never stretches one. `Actions::state()` and `restore_state()` carry a mid-gesture state; the
-engine's snapshot does not yet, so a restore starts the layer fresh (the latch above).
+motion never stretches one. `Actions::state()` and `restore_state()` carry a mid-gesture state, and the
+engine's snapshot carries it (the `actions` field), so `engine.restore` and a replay seek continue a hold or a
+pending tap exactly; only a load and a run-save resume start the layer fresh (the latch above).
 
 ### Rebinding
 
@@ -241,9 +247,10 @@ lenient and the game always boots: a bad action is dropped with `L4273`/`L4274` 
 file that cannot be honored (`L1636` envelope, bad YAML, a newer `format`) is renamed to
 `input-bindings.yaml.bak.<hash>`, the defaults apply and `engine.boot_warnings()` holds one `L4277`.
 
-The file is read once, at build, as the **overrides at start**; every fresh `Actions` (a build, a load, a
-restore) starts from them, a carried one (a scene switch, a checkpoint) keeps its own. A restore after a
-mid-session rebind therefore reverts to the overrides at start. Without the switch a test, a replay or
+The file is read once, at build, as the **overrides at start**; every fresh `Actions` (a build, a load) starts
+from them, a carried one (a scene switch, a checkpoint) keeps its own. A snapshot carries the mid-session
+overrides when they differ from the ones at start (`input_bindings`), so `engine.restore` and a replay seek
+keep a rebind; a run-save resume keeps the machine's own overrides instead. Without the switch a test, a replay or
 `--check-docs` never reads or writes the file. A recording carries the overrides at start in its header
 (`save_docs`, omitted when there are none) and a replay installs those, so it reproduces on a machine whose
 file differs or is absent. The example `cargo run -p ludion --example rebind_menu` is a controls screen:

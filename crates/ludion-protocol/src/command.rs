@@ -217,6 +217,28 @@ pub enum Command {
     /// `profile` channel is the way to watch cost continuously instead; the two coexist.
     #[serde(rename = "profile.capture")]
     ProfileCapture(crate::perf::ProfileCaptureParams),
+
+    /// `ai.describe` — the behaviour machines and their agents: the same `machines` list the `ai`
+    /// key of `engine.describe` carries. `machines: []` before any machine has ticked.
+    #[serde(rename = "ai.describe")]
+    AiDescribe,
+
+    /// `checkpoint.list` — the named checkpoint slots, the disk slot and the last restore outcome.
+    /// Refused with `L4210` when the engine was built without checkpoints.
+    #[serde(rename = "checkpoint.list")]
+    CheckpointList,
+    /// `checkpoint.capture` — capture the world into the named slot, replacing a slot of that name.
+    /// Replies with the store after the capture.
+    #[serde(rename = "checkpoint.capture")]
+    CheckpointCapture(CheckpointNameParams),
+    /// `checkpoint.restore` — replace the world with the named slot's capture. Replies with the
+    /// store after the restore.
+    #[serde(rename = "checkpoint.restore")]
+    CheckpointRestore(CheckpointNameParams),
+    /// `checkpoint.discard` — drop the named slot; an unknown name is not an error. Replies with
+    /// the store after the discard.
+    #[serde(rename = "checkpoint.discard")]
+    CheckpointDiscard(CheckpointNameParams),
 }
 
 impl Command {
@@ -269,6 +291,11 @@ impl Command {
             Command::EngineRestore(_) => "engine.restore",
             Command::EngineShutdown => "engine.shutdown",
             Command::ProfileCapture(_) => "profile.capture",
+            Command::AiDescribe => "ai.describe",
+            Command::CheckpointList => "checkpoint.list",
+            Command::CheckpointCapture(_) => "checkpoint.capture",
+            Command::CheckpointRestore(_) => "checkpoint.restore",
+            Command::CheckpointDiscard(_) => "checkpoint.discard",
         }
     }
 
@@ -309,6 +336,8 @@ impl Command {
             | Command::ComponentSet(_)
             | Command::ComponentRemove(_)
             | Command::EngineRestore(_) => true,
+            // Replaces the whole world with a captured one.
+            Command::CheckpointRestore(_) => true,
             // Runs ticks: the world has already moved by the time the reply is sent.
             Command::SimStep(_) => true,
             // Touches no entity, yet a reloaded mesh, texture or shader is drawn.
@@ -361,6 +390,12 @@ impl Command {
             Command::ProfileCapture(_) => false,
             // The host returns from its loop rather than rendering again.
             Command::EngineShutdown => false,
+            // A read of the behaviour trace, and the checkpoint store's own bookkeeping: a capture
+            // or discard copies or drops a slot and leaves the live world as it was.
+            Command::AiDescribe
+            | Command::CheckpointList
+            | Command::CheckpointCapture(_)
+            | Command::CheckpointDiscard(_) => false,
         }
     }
 
@@ -416,7 +451,35 @@ impl Command {
         "engine.restore",
         "engine.shutdown",
         "profile.capture",
+        "ai.describe",
+        "checkpoint.list",
+        "checkpoint.capture",
+        "checkpoint.restore",
+        "checkpoint.discard",
     ];
+}
+
+/// Parameters for `checkpoint.capture`, `checkpoint.restore` and `checkpoint.discard`.
+///
+/// # Example
+/// ```
+/// use ludion_protocol::Command;
+/// use ludion_protocol::command::CheckpointNameParams;
+///
+/// let cmd = Command::CheckpointCapture(CheckpointNameParams { name: "before-boss".into() });
+/// assert_eq!(
+///     serde_json::to_value(&cmd).unwrap(),
+///     serde_json::json!({
+///         "method": "checkpoint.capture",
+///         "params": { "name": "before-boss" },
+///     }),
+/// );
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointNameParams {
+    /// The slot name.
+    pub name: String,
 }
 
 /// Parameters for `scene.load`.
@@ -1482,7 +1545,7 @@ mod tests {
         // A tripwire, not a fact worth asserting for its own sake: the surface is deliberately small
         // and every addition is a protocol rev, so growing it should require editing this number and
         // saying so in the commit — not slip in unremarked.
-        assert_eq!(Command::METHODS.len(), 40);
+        assert_eq!(Command::METHODS.len(), 45);
     }
 
     /// One instance of every variant, in declaration order. The method-name assertion below is what
@@ -1593,6 +1656,11 @@ mod tests {
                 frames: 1,
                 include_samples: false,
             }),
+            Command::AiDescribe,
+            Command::CheckpointList,
+            Command::CheckpointCapture(CheckpointNameParams { name: "a".into() }),
+            Command::CheckpointRestore(CheckpointNameParams { name: "a".into() }),
+            Command::CheckpointDiscard(CheckpointNameParams { name: "a".into() }),
         ]
     }
 
@@ -1629,6 +1697,7 @@ mod tests {
                 "stream.subscribe",
                 "asset.reload",
                 "engine.restore",
+                "checkpoint.restore",
             ]
         );
     }
@@ -1964,6 +2033,8 @@ mod tests {
             Command::EngineDescribe,
             Command::EngineSnapshot,
             Command::EngineShutdown,
+            Command::AiDescribe,
+            Command::CheckpointList,
         ] {
             let value = serde_json::to_value(&cmd).unwrap();
             let obj = value.as_object().unwrap();

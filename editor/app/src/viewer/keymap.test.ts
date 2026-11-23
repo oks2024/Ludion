@@ -36,11 +36,17 @@ describe('codeToEngineKey', () => {
     }
   });
 
+  it('maps the appended keys by their identical DOM code', () => {
+    for (const code of ['Tab', 'Backspace', 'CapsLock', 'F1', 'F5', 'F12', 'Minus', 'Backquote',
+      'Slash', 'Insert', 'Delete', 'PageDown', 'Numpad0', 'Numpad9', 'NumpadAdd', 'NumpadEnter']) {
+      expect(codeToEngineKey(code)).toBe(code);
+    }
+  });
+
   it('returns null for keys the engine does not know', () => {
-    expect(codeToEngineKey('Tab')).toBeNull();
-    expect(codeToEngineKey('CapsLock')).toBeNull();
-    expect(codeToEngineKey('Numpad1')).toBeNull();
-    expect(codeToEngineKey('F5')).toBeNull();
+    for (const code of ['PrintScreen', 'NumLock', 'F13', 'F0', 'Numpad10', 'MetaLeft', 'ContextMenu']) {
+      expect(codeToEngineKey(code)).toBeNull();
+    }
   });
 });
 
@@ -68,8 +74,8 @@ describe('keyEdgeToInject', () => {
   });
 
   it('returns null for an unmapped key regardless of edge', () => {
-    expect(keyEdgeToInject({ code: 'Tab', type: 'keydown', repeat: false }, new HeldKeys())).toBeNull();
-    expect(keyEdgeToInject({ code: 'Tab', type: 'keyup', repeat: false }, new HeldKeys())).toBeNull();
+    expect(keyEdgeToInject({ code: 'PrintScreen', type: 'keydown', repeat: false }, new HeldKeys())).toBeNull();
+    expect(keyEdgeToInject({ code: 'PrintScreen', type: 'keyup', repeat: false }, new HeldKeys())).toBeNull();
   });
 
   it('folds two shift sides into one held key', () => {

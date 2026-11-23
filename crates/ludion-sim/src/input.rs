@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 
 /// A key on the keyboard, as an abstract, layout-independent name.
 ///
-/// This is the milestone-minimal set (letters, digits, arrows, the few control keys a
-/// Breakout/Sokoban-class game needs, and the folded modifiers); variants are appended as games require them. A new variant changes the
+/// This is the full keyboard (letters, digits, arrows, function keys, punctuation, editing and
+/// numpad keys, and the folded modifiers); variants are only ever appended. A new variant changes the
 /// replay content hash (it covers the input event schema), so every committed replay is re-recorded with it. The serde form
 /// is the variant name as a string (`"W"`, `"Left"`, `"Space"`), which is what appears in scripts
 /// and on the wire.
@@ -129,6 +129,102 @@ pub enum Key {
     Ctrl,
     /// Either Alt key (Option on macOS; left and right fold into one; held while either is down).
     Alt,
+    /// The tab key.
+    Tab,
+    /// The backspace key.
+    Backspace,
+    /// The caps lock key.
+    CapsLock,
+    /// The `F1` function key.
+    F1,
+    /// The `F2` function key.
+    F2,
+    /// The `F3` function key.
+    F3,
+    /// The `F4` function key.
+    F4,
+    /// The `F5` function key.
+    F5,
+    /// The `F6` function key.
+    F6,
+    /// The `F7` function key.
+    F7,
+    /// The `F8` function key.
+    F8,
+    /// The `F9` function key.
+    F9,
+    /// The `F10` function key.
+    F10,
+    /// The `F11` function key.
+    F11,
+    /// The `F12` function key.
+    F12,
+    /// The `-` key on the main row.
+    Minus,
+    /// The `=` key on the main row.
+    Equal,
+    /// The `[` key.
+    BracketLeft,
+    /// The `]` key.
+    BracketRight,
+    /// The `` key.
+    Backslash,
+    /// The `;` key.
+    Semicolon,
+    /// The `'` key.
+    Quote,
+    /// The `` ` `` key (backtick / tilde).
+    Backquote,
+    /// The `,` key.
+    Comma,
+    /// The `.` key.
+    Period,
+    /// The `/` key.
+    Slash,
+    /// The insert key.
+    Insert,
+    /// The forward delete key.
+    Delete,
+    /// The home key.
+    Home,
+    /// The end key.
+    End,
+    /// The page up key.
+    PageUp,
+    /// The page down key.
+    PageDown,
+    /// The `0` key on the numeric keypad.
+    Numpad0,
+    /// The `1` key on the numeric keypad.
+    Numpad1,
+    /// The `2` key on the numeric keypad.
+    Numpad2,
+    /// The `3` key on the numeric keypad.
+    Numpad3,
+    /// The `4` key on the numeric keypad.
+    Numpad4,
+    /// The `5` key on the numeric keypad.
+    Numpad5,
+    /// The `6` key on the numeric keypad.
+    Numpad6,
+    /// The `7` key on the numeric keypad.
+    Numpad7,
+    /// The `8` key on the numeric keypad.
+    Numpad8,
+    /// The `9` key on the numeric keypad.
+    Numpad9,
+    /// The `+` key on the numeric keypad.
+    NumpadAdd,
+    /// The `-` key on the numeric keypad.
+    NumpadSubtract,
+    /// The `*` key on the numeric keypad.
+    NumpadMultiply,
+    /// The `/` key on the numeric keypad.
+    NumpadDivide,
+    /// The `.` key on the numeric keypad.
+    NumpadDecimal,
+    /// The enter key on the numeric keypad.
+    NumpadEnter,
 }
 
 /// A mouse button, as an abstract name. The serde form is `snake_case`
@@ -145,6 +241,10 @@ pub enum MouseButton {
     Right,
     /// The middle button, often the scroll wheel click.
     Middle,
+    /// The back side button (browser back; usually the first thumb button).
+    Back,
+    /// The forward side button (browser forward; usually the second thumb button).
+    Forward,
 }
 
 /// A gamepad button, as an abstract, layout-independent name (the SDL/standard face, shoulder,
@@ -1755,5 +1855,79 @@ mod tests {
             .map(|name| serde_json::from_value(serde_json::json!(name)).unwrap())
             .collect();
         assert!(parsed.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn the_appended_keys_and_buttons_round_trip_in_order_after_the_old_set() {
+        let keys = [
+            "Tab",
+            "Backspace",
+            "CapsLock",
+            "F1",
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6",
+            "F7",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
+            "Minus",
+            "Equal",
+            "BracketLeft",
+            "BracketRight",
+            "Backslash",
+            "Semicolon",
+            "Quote",
+            "Backquote",
+            "Comma",
+            "Period",
+            "Slash",
+            "Insert",
+            "Delete",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+            "Numpad0",
+            "Numpad1",
+            "Numpad2",
+            "Numpad3",
+            "Numpad4",
+            "Numpad5",
+            "Numpad6",
+            "Numpad7",
+            "Numpad8",
+            "Numpad9",
+            "NumpadAdd",
+            "NumpadSubtract",
+            "NumpadMultiply",
+            "NumpadDivide",
+            "NumpadDecimal",
+            "NumpadEnter",
+        ];
+        assert_eq!(keys.len(), 48);
+        let mut previous = Key::Alt;
+        for name in keys {
+            let key: Key = serde_json::from_value(serde_json::json!(name)).unwrap();
+            assert!(previous < key, "{name} is not appended in order");
+            assert_eq!(serde_json::to_value(key).unwrap(), serde_json::json!(name));
+            previous = key;
+        }
+        for (name, button) in [
+            ("back", MouseButton::Back),
+            ("forward", MouseButton::Forward),
+        ] {
+            let parsed: MouseButton = serde_json::from_value(serde_json::json!(name)).unwrap();
+            assert_eq!(parsed, button);
+            assert!(MouseButton::Middle < parsed);
+            assert_eq!(
+                serde_json::to_value(parsed).unwrap(),
+                serde_json::json!(name)
+            );
+        }
     }
 }

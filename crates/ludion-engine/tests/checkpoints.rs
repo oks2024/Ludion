@@ -1229,3 +1229,139 @@ fn persisting_a_slot_with_a_non_finite_value_reports_l4208_and_the_slot_still_re
         "the slot restores in memory"
     );
 }
+
+// ---- the wire verbs (`checkpoint.*`) ----
+
+fn named(name: &str) -> ludion_protocol::command::CheckpointNameParams {
+    ludion_protocol::command::CheckpointNameParams { name: name.into() }
+}
+
+fn step(ticks: u64) -> Command {
+    Command::SimStep(ludion_protocol::command::SimStepParams { ticks, hash: false })
+}
+
+fn wire_slots(engine: &mut Engine, command: Command) -> Vec<(String, u64)> {
+    match engine.execute(command).unwrap().body {
+        ResponseBody::Checkpoints { slots, .. } => {
+            slots.into_iter().map(|s| (s.name, s.frame)).collect()
+        }
+        other => panic!("expected checkpoints, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_wire_verbs_capture_restore_and_discard_through_the_drain_code() {
+    let dir = fresh_dir("wire");
+    let mut engine = boot(game(&dir, 2, script(&[])));
+    let captured = hash(&engine);
+    assert_eq!(
+        wire_slots(&mut engine, Command::CheckpointCapture(named("a"))),
+        [("a".to_string(), 0)]
+    );
+    engine.execute(step(7)).unwrap();
+    assert_ne!(hash(&engine), captured);
+    let reply = engine
+        .execute(Command::CheckpointRestore(named("a")))
+        .unwrap();
+    assert_eq!(reply.frame.as_u64(), 7, "the frame does not move back");
+    assert_eq!(hash(&engine), captured, "the world is the capture");
+    match reply.body {
+        ResponseBody::Checkpoints {
+            slots,
+            last_restore:
+                Some(ludion_protocol::response::CheckpointRestore::Restored { name, frame }),
+            ..
+        } => {
+            assert_eq!(slots.len(), 1);
+            assert_eq!((name.as_str(), frame), ("a", 0));
+        }
+        other => panic!("expected a restored outcome, got {other:?}"),
+    }
+    match engine.execute(Command::CheckpointList).unwrap().body {
+        ResponseBody::Checkpoints { last_restore, .. } => assert!(last_restore.is_some()),
+        other => panic!("expected checkpoints, got {other:?}"),
+    }
+    assert_eq!(
+        wire_slots(&mut engine, Command::CheckpointDiscard(named("nothing"))).len(),
+        1,
+        "an unknown discard is not an error"
+    );
+    assert!(wire_slots(&mut engine, Command::CheckpointDiscard(named("a"))).is_empty());
+}
+
+#[test]
+fn the_wire_verbs_refuse_with_the_drain_diagnostics() {
+    let dir = fresh_dir("wire-refuse");
+    let mut engine = boot(game(&dir, 1, script(&[])));
+    let err = |engine: &mut Engine, command| engine.execute(command).unwrap_err().code;
+    assert_eq!(
+        err(&mut engine, Command::CheckpointRestore(named("nothing"))),
+        code::CHECKPOINT_NO_SLOT
+    );
+    assert_eq!(
+        err(&mut engine, Command::CheckpointCapture(named("bad name"))),
+        code::CHECKPOINT_NAME_INVALID
+    );
+    assert_eq!(
+        err(&mut engine, Command::CheckpointRestore(named(""))),
+        code::CHECKPOINT_NAME_INVALID
+    );
+    engine
+        .execute(Command::CheckpointCapture(named("one")))
+        .unwrap();
+    assert_eq!(
+        err(&mut engine, Command::CheckpointCapture(named("two"))),
+        code::CHECKPOINT_SLOTS_FULL
+    );
+    match engine.execute(Command::CheckpointList).unwrap().body {
+        ResponseBody::Checkpoints {
+            last_restore: Some(ludion_protocol::response::CheckpointRestore::Refused { name, .. }),
+            ..
+        } => assert_eq!(name, "nothing"),
+        other => panic!("expected a refused outcome, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_wire_verbs_need_an_engine_with_checkpoints() {
+    let mut engine = Engine::new();
+    engine
+        .load_inline_scene("format: 1\nentities: []\n")
+        .unwrap();
+    for command in [
+        Command::CheckpointList,
+        Command::CheckpointCapture(named("a")),
+        Command::CheckpointRestore(named("a")),
+        Command::CheckpointDiscard(named("a")),
+    ] {
+        assert_eq!(
+            engine.execute(command).unwrap_err().code,
+            code::CHECKPOINTS_NOT_ENABLED
+        );
+    }
+}
+
+#[test]
+fn a_wire_capture_and_restore_session_replays_to_the_same_trace() {
+    let dir = fresh_dir("wire-replay");
+    let sink = SharedSink::default();
+    let mut engine = boot(game(&dir, 2, script(&[])));
+    engine.set_recording(sink.clone()).unwrap();
+    let live = ludion_engine::drive_hashes(
+        &mut engine,
+        vec![
+            step(5),
+            Command::CheckpointCapture(named("a")),
+            step(20),
+            Command::CheckpointRestore(named("a")),
+            step(20),
+            Command::CheckpointDiscard(named("a")),
+            step(3),
+        ],
+    )
+    .unwrap();
+    engine.stop_recording().unwrap();
+    let bytes = sink.0.lock().unwrap().clone();
+    let replayed = replay_hashes_with(game(&dir, 2, script(&[])), &bytes, &dir).unwrap();
+    assert_eq!(replayed, live);
+}

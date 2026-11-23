@@ -14,7 +14,9 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::FrameIndex;
 use ludion_protocol::{Command, ResponseBody};
 
-use crate::commands::{asset, engine_cmds, entity, perf, prefab, render, scene, sim, stream};
+use crate::commands::{
+    ai, asset, checkpoint, engine_cmds, entity, perf, prefab, render, scene, sim, stream,
+};
 use crate::engine::Engine;
 
 /// A dispatched command's result: the success body and the frames it applied at.
@@ -92,6 +94,11 @@ pub fn dispatch(engine: &mut Engine, command: Command) -> Result<Dispatched, Dia
         Command::EngineRestore(params) => engine_cmds::restore(engine, params)?,
         Command::EngineShutdown => engine_cmds::shutdown(engine)?,
         Command::ProfileCapture(params) => perf::capture(engine, params)?,
+        Command::AiDescribe => ai::describe(engine)?,
+        Command::CheckpointList => checkpoint::list(engine)?,
+        Command::CheckpointCapture(params) => checkpoint::capture(engine, params)?,
+        Command::CheckpointRestore(params) => checkpoint::restore(engine, params)?,
+        Command::CheckpointDiscard(params) => checkpoint::discard(engine, params)?,
     };
     Ok(Dispatched {
         body,

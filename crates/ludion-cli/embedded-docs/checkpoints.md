@@ -67,6 +67,16 @@ A snapshot document carries the slots (and `last_restore`, which a game reads to
 
 The `WorldHash` folds in the slot **metadata** (name, frames, scene, clock) while any slot is held, and the `GameClock` while it has excluded time. A restore rebases the clock, so the hash after a restore is not the hash at the capture; compare world content, not the hash, when a test claims "the restore is the capture".
 
+## Over the wire
+
+An engine built with `.checkpoints(..)` answers four verbs; each applies at the boundary it is dispatched at, through the code the `Checkpoints` requests drain into, and replies `{"kind":"checkpoints","slots":[{name,frame,game_frame,scene}],"disk"?,"last_restore"?}` (the store after the verb; `last_restore` is `{outcome:"restored",name,frame}` or `{outcome:"refused",name,reason}`).
+
+- `checkpoint.list` — read; recorded nowhere.
+- `checkpoint.capture {name}`, `checkpoint.restore {name}`, `checkpoint.discard {name}` — recorded as commands, so a replay re-dispatches them (a live command during playback is refused). A refused capture or restore is an error carrying the diagnostic below (`L4200`-`L4204`); discarding an unknown name is not an error.
+- Without `.checkpoints(..)` every verb, `list` included, is `L4210`.
+- A restore emits `scene.changed` with kind `checkpoint_restore` (a game's `Checkpoints::restore` and `load_disk` do too); `engine.restore` still emits `restore`.
+- `persist` and `load_disk` have no wire verb.
+
 ## Refusals
 
 Every refusal is a warning on both sinks and leaves the world untouched.
@@ -81,6 +91,7 @@ Every refusal is a warning on both sinks and leaves the world untouched.
 | `L4204` | the slot could not be restored |
 | `L4208` | the disk slot could not be written or removed (an error; the previous file stays) |
 | `L4209` | a disk load was refused (see Disk slot) |
+| `L4210` | a `checkpoint.*` command on an engine built without `.checkpoints(..)` (an error) |
 
 ## Disk slot
 

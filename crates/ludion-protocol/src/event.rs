@@ -136,6 +136,9 @@ pub enum SceneChangeKind {
     Restore,
     /// A game-driven scene switch or restart.
     Switch,
+    /// A checkpoint restore replaced the world (`checkpoint.restore` or a game's
+    /// `Checkpoints::restore`/`load_disk`).
+    CheckpointRestore,
 }
 
 /// The payload of a `scene.changed` event.

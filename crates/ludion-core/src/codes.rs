@@ -410,6 +410,8 @@ pub mod code {
     /// `L4209` — a disk checkpoint was not loaded; the file was backed up (or kept, while a recording
     /// is open) and the world is untouched. A warning.
     pub const CHECKPOINT_DISK_LOAD_REFUSED: DiagnosticCode = DiagnosticCode::new("L4209");
+    /// `L4210` — a `checkpoint.*` command reached an engine that did not opt in with `.checkpoints()`.
+    pub const CHECKPOINTS_NOT_ENABLED: DiagnosticCode = DiagnosticCode::new("L4210");
     /// `L4260` — a `GameClock::scale` value was non-finite, `<= 0` or `> 1` and was ignored. A warning.
     pub const GAME_SCALE_INVALID: DiagnosticCode = DiagnosticCode::new("L4260");
     /// `L1403` — the `run_recordings` builder config is invalid (zero keyframe interval, bad dir).
@@ -6488,6 +6490,16 @@ This is a **warning**.
 Fix: start a new game, or load the backup with the build that wrote it.",
     },
     CodeEntry {
+        code: code::CHECKPOINTS_NOT_ENABLED,
+        severity: Severity::Error,
+        title: "checkpoints are not enabled",
+        explanation: "\
+A `checkpoint.list`, `checkpoint.capture`, `checkpoint.restore` or `checkpoint.discard` command reached
+an engine that did not opt in, so there is no checkpoint store to read or change.
+
+Fix: build the engine with `.checkpoints(CheckpointConfig::default())`.",
+    },
+    CodeEntry {
         code: code::GAME_SCALE_INVALID,
         severity: Severity::Warning,
         title: "game clock scale value ignored",
@@ -11978,7 +11990,11 @@ is recorded.
 
 Fix: match the input-event shape above. The valid key names are the variants of the engine's `Key`
 type (letters `A`–`Z`, digits `Digit0`–`Digit9`, `Up`/`Down`/`Left`/`Right`, `Space`, `Enter`,
-`Escape`); check the spelling and that `kind` is `key_down` or `key_up`. For a past `frame`, omit
+`Escape`, `Shift`/`Ctrl`/`Alt`, `Tab`, `Backspace`, `CapsLock`, `F1`–`F12`, the punctuation keys
+`Minus`/`Equal`/`BracketLeft`/`BracketRight`/`Backslash`/`Semicolon`/`Quote`/`Backquote`/`Comma`/
+`Period`/`Slash`, `Insert`/`Delete`/`Home`/`End`/`PageUp`/`PageDown`, and the numpad keys
+`Numpad0`–`Numpad9`, `NumpadAdd`/`NumpadSubtract`/`NumpadMultiply`/`NumpadDivide`/`NumpadDecimal`/
+`NumpadEnter`); check the spelling and that `kind` is `key_down` or `key_up`. For a past `frame`, omit
 `frame` to apply at the next tick, or address the current frame or later.",
     },
     CodeEntry {
@@ -14834,6 +14850,7 @@ mod tests {
         code::CHECKPOINT_SWITCH_DROPPED,
         code::CHECKPOINT_DISK_WRITE_FAILED,
         code::CHECKPOINT_DISK_LOAD_REFUSED,
+        code::CHECKPOINTS_NOT_ENABLED,
         code::GAME_SCALE_INVALID,
         code::RUN_RECORDING_CONFIG_INVALID,
         code::REPLAY_GAME_MISMATCH,

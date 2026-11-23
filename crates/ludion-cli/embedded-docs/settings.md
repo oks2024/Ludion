@@ -66,8 +66,9 @@ Unset optional fields are omitted. The writer is canonical (stable order, shorte
   changed bus, logged); AA and quality apply at the next render; a window mode goes to the host channel
   `set_window_mode_sender`, once per change. NaN volumes are ignored; others are clamped.
 - **`SettingsView` is deterministic** — all but `live_window_mode()`: the file at start plus the sim's own requests, never a host flag.
-  It lives on the engine, so a rebuild or `engine.restore` does not roll it back. Settings are never
-  hashed, snapshotted or on the wire; a `WorldHash` trace is the same with or without requests.
+  It lives on the engine, so a rebuild or a run-save resume does not roll it back. A snapshot carries the
+  view when it is not the defaults, so `engine.restore` and a replay seek install the snapshot's view (never
+  quality, anti-aliasing, the window or the file). Settings are never hashed or on the wire; a `WorldHash` trace is the same with or without requests.
 - **Precedence.** Quality: host flag (`pin_quality`) → file or request → full. AA: `Settings` request →
   `--aa` → file → builder. Volumes: the file is the `User` layer.
 - **Sink seed.** `set_audio_sender` sends one `User` `BusGain` per saved bus that is not `1.0`, unlogged.

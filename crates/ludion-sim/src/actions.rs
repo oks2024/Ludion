@@ -284,7 +284,9 @@ fn is_false(value: &bool) -> bool {
 // ───────────────────────────── compiled map ─────────────────────────────
 
 /// A physical input the resolver tracks gestures for. `Ord` so tables are canonical.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub enum PhysicalInput {
     /// A keyboard key.
     Key(Key),
@@ -884,7 +886,7 @@ impl ActionName {
 }
 
 /// The gesture state of one physical input between ticks.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct InputGesture {
     down: bool,

@@ -38,7 +38,7 @@ export function sceneChangeOutcome(
     }
     return { resetEditState: false, clearDirty: false, savePath: null, ownSaveId: null };
   }
-  // The save path follows the world; a switch or restore with no path clears it so Ctrl+S cannot
+  // The save path follows the world; a switch, restore or checkpoint restore with no path clears it so Ctrl+S cannot
   // write the old file over a world that no longer comes from it. Only a pathless load keeps it.
   const savePath = path ?? (data.kind === 'load' ? null : '');
   return { resetEditState: true, clearDirty: true, savePath, ownSaveId: null };

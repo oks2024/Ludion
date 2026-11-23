@@ -1,7 +1,7 @@
 //! `Engine::builder().input_actions()`: the `kind: input-actions` document becomes an `Actions`
 //! resource the game reads. Gestures reach a hashed `Stance` component, a bad document refuses the
-//! build under its re-pathed code, an unknown name reports `L4270` once, a restore latches held
-//! inputs, a scene switch carries a hold, and the hash is thread-count invariant.
+//! build under its re-pathed code, an unknown name reports `L4270` once, a restore continues a
+//! held gesture, a scene switch carries a hold, and the hash is thread-count invariant.
 
 use ludion_core::codes::code;
 use ludion_core::par;
@@ -275,32 +275,53 @@ fn restore(engine: &mut Engine, snapshot: Value) {
     }
 }
 
-/// The documented latch, not continuation: an input held across a restore fires nothing until it
-/// is released and pressed again.
+/// A hold in flight across `engine.restore` continues: the stance and the hash match a twin engine
+/// that was never interrupted, tick for tick.
 #[test]
-fn a_restore_latches_a_held_input_until_a_fresh_press() {
-    let mut engine = booted("restore");
+fn a_restore_continues_a_held_gesture() {
+    let mut twin = booted("continue-twin");
+    inject(&mut twin, Some(1), pad("gamepad_button_down", "east"));
+    for _ in 0..4 {
+        twin.advance_live();
+    }
+    let mut engine = booted("continue");
     inject(&mut engine, Some(1), pad("gamepad_button_down", "east"));
     for _ in 0..4 {
         engine.advance_live();
     }
     let snapshot = snapshot_of(&mut engine);
+    assert!(
+        snapshot.get("actions").is_some(),
+        "the gesture state is captured"
+    );
     restore(&mut engine, snapshot);
 
-    // Held well past the hold threshold: an uninterrupted run would have gone prone by now.
+    for tick in 0..HOLD_TICKS + 10 {
+        twin.advance_live();
+        engine.advance_live();
+        assert_eq!(stance_of(&engine), stance_of(&twin), "tick {tick}");
+        assert_eq!(
+            engine.world_hash().unwrap(),
+            twin.world_hash().unwrap(),
+            "tick {tick}"
+        );
+    }
+    assert_eq!(stance_of(&engine), PRONE_STANCE, "the hold fired");
+}
+
+/// A scene load is a fresh session: nothing held carries across it.
+#[test]
+fn a_load_starts_the_layer_fresh() {
+    let mut engine = booted("load-fresh");
+    inject(&mut engine, Some(1), pad("gamepad_button_down", "east"));
+    for _ in 0..4 {
+        engine.advance_live();
+    }
+    engine.load_inline_scene(SCENE).unwrap();
     for _ in 0..HOLD_TICKS + 10 {
         engine.advance_live();
         assert_eq!(stance_of(&engine), STAND);
     }
-    inject(&mut engine, None, pad("gamepad_button_up", "east"));
-    engine.advance_live();
-    assert_eq!(stance_of(&engine), STAND, "the latched release is silent");
-
-    inject(&mut engine, None, pad("gamepad_button_down", "east"));
-    engine.advance_live();
-    inject(&mut engine, None, pad("gamepad_button_up", "east"));
-    engine.advance_live();
-    assert_eq!(stance_of(&engine), CROUCHING, "a fresh tap fires");
 }
 
 const THREAD_COUNTS: [usize; 3] = [1, 2, 8];

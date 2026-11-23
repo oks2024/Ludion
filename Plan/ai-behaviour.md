@@ -1,6 +1,6 @@
 # Plan: Agent behaviour — HFSM, timers, squads (`ludion-ai`)
 
-> **Wave 1 shipped; Waves 2–3 not started.** Driven by Neon Shroud request 0003 (an AI behaviour
+> **Wave 1 shipped; `ai.describe` shipped in R14; Waves 2–3 not started.** Driven by Neon Shroud request 0003 (an AI behaviour
 > framework). Game-facing doc: `ludion docs ai`.
 
 ## Design decisions
@@ -56,9 +56,11 @@
     and one settled right after the start, is `chain`. A no-op `Go` and a capped transition record
     nothing. A tick the game held records nothing, so a held frame prints no ai lines.
 14. **Live introspection rides `engine.describe`'s `ai` key**, present only when an `AiRoster` exists
-    (a machine has ticked), so a world without ai describes byte-identically. There is no `ai.describe`
-    command: a new `Command` variant moves `replay_schema_hash` and would refuse every committed `.lrp`
-    (`L3010`), a corpus re-record.
+    (a machine has ticked), so a world without ai describes byte-identically. **`ai.describe`** (no
+    params, shipped in R14) returns the same machines typed on the wire (`ResponseBody::AiDescribe`,
+    `machines: []` before any machine has ticked); the `ai` key stays, built from the same structs
+    (`crates/ludion-engine/src/ai.rs::machines`). The new `Command` variant moved `replay_schema_hash`,
+    which the corpus re-record absorbed.
 15. **The squad scene is an engine test fixture, not a gallery scene.** The gallery is a builtin-only
     sweep (`ludion test` and `committed_scene_spelling.rs` load every `examples/gallery/*.yaml` with a
     plain `Engine::builder()`), so a scene bearing `GuardMind` fails there and a new scene owes pinned
@@ -121,8 +123,8 @@
   `validate.rs`, `instantiate.rs`) and `ludion-engine` (`collapse.rs`, `transition.rs`, `prefab_ops.rs`,
   `commands/entity.rs`): a cross-cutting subtask of its own, with request 0001's memory as the natural
   trigger. Not built here.
-- Accepted, scheduled (R14 re-record round). **An `ai.describe` command.** It rides the next replay-corpus re-record, because a `Command` variant
-  moves `replay_schema_hash`; until then `engine.describe`'s `ai` key serves.
+- Accepted, shipped in R14 (T10-C2a). **An `ai.describe` command.** It moved `replay_schema_hash`, which the
+  R14 corpus re-record absorbs; `engine.describe`'s `ai` key stays beside it.
 - Proposed — owner ruling owed: `MemberLeft` via an opt-in `GroupRoster` that names the member, instead of
   the request's previous-membership count on `Group`.
 - Accepted. **Gallery placement of the squad scene.** A gallery scene needs a game-registered machine in the

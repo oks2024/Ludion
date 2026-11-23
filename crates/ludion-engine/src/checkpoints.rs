@@ -565,6 +565,22 @@ impl CheckpointsDoc {
     }
 }
 
+/// The slots, disk slot and last restore outcome a `checkpoint.*` reply reports.
+pub(crate) type CheckpointView = (
+    Vec<CheckpointInfo>,
+    Option<CheckpointInfo>,
+    Option<RestoreOutcome>,
+);
+
+/// The refusal for a `checkpoint.*` command on an engine built without checkpoints.
+fn not_enabled() -> Diagnostic {
+    Diagnostic::new(
+        code::CHECKPOINTS_NOT_ENABLED,
+        "checkpoints are not enabled on this engine",
+    )
+    .with_help("build the engine with `.checkpoints(CheckpointConfig::default())`")
+}
+
 /// `Ok` for a usable checkpoint name, else the reason.
 fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
@@ -742,7 +758,8 @@ impl Engine {
             }
         }
         for name in captures {
-            self.capture_slot(&name, frame);
+            // Reported by `capture_slot` itself; nothing more to do on a refusal.
+            self.capture_slot(&name, frame).ok();
         }
         if discard_disk {
             self.discard_disk_slot();
@@ -757,7 +774,9 @@ impl Engine {
                         state.pending_restore = Some(RestoreRequest::Slot(name));
                     }
                 }
-                Err(reason) => self.invalid_name(&name, &reason, frame),
+                Err(reason) => {
+                    self.invalid_name(&name, &reason, frame);
+                }
             },
             Some(RestoreRequest::Disk) => {
                 if let Some(state) = self.checkpoints.as_mut() {
@@ -843,22 +862,26 @@ impl Engine {
         }
     }
 
-    fn invalid_name(&mut self, name: &str, reason: &str, frame: FrameIndex) {
+    fn invalid_name(&mut self, name: &str, reason: &str, frame: FrameIndex) -> Diagnostic {
         let diagnostic = Diagnostic::new(
             code::CHECKPOINT_NAME_INVALID,
             format!("checkpoint name {name:?} is invalid: {reason}"),
         )
         .with_help("use a short name such as `b_to_c`: 1 to 64 of letters, digits, `_`, `.`, `-`");
-        self.report_checkpoint(format!("{name}@{}", frame.as_u64()), diagnostic);
+        self.report_checkpoint(format!("{name}@{}", frame.as_u64()), diagnostic.clone());
+        diagnostic
     }
 
-    fn capture_slot(&mut self, name: &str, frame: FrameIndex) {
+    /// Captures the world into slot `name`.
+    ///
+    /// # Errors
+    /// The diagnostic already reported for a refusal: `L4202`, `L4201` or `L4203`.
+    fn capture_slot(&mut self, name: &str, frame: FrameIndex) -> Result<(), Diagnostic> {
         if let Err(reason) = validate_name(name) {
-            self.invalid_name(name, &reason, frame);
-            return;
+            return Err(self.invalid_name(name, &reason, frame));
         }
         let Some(state) = self.checkpoints.as_ref() else {
-            return;
+            return Err(not_enabled());
         };
         if !state.slots.contains_key(name) && state.slots.len() >= state.config.max_slots as usize {
             let max = state.config.max_slots;
@@ -869,14 +892,15 @@ impl Engine {
             .with_help(
                 "`discard` a slot first, or raise `CheckpointConfig::max_slots` (at most 64)",
             );
-            self.report_checkpoint(format!("{name}@{}", frame.as_u64()), diagnostic);
-            return;
+            self.report_checkpoint(format!("{name}@{}", frame.as_u64()), diagnostic.clone());
+            return Err(diagnostic);
         }
         match self.build_slot(name) {
             Ok(slot) => {
                 if let Some(state) = self.checkpoints.as_mut() {
                     state.slots.insert(name.to_string(), slot);
                 }
+                Ok(())
             }
             Err(error) => {
                 let diagnostic = Diagnostic::new(
@@ -887,7 +911,8 @@ impl Engine {
                     ),
                 )
                 .with_help("the previous slot of that name, if any, is kept");
-                self.report_checkpoint(format!("{name}@{}", frame.as_u64()), diagnostic);
+                self.report_checkpoint(format!("{name}@{}", frame.as_u64()), diagnostic.clone());
+                Err(diagnostic)
             }
         }
     }
@@ -940,13 +965,16 @@ impl Engine {
             return false;
         };
         match request {
-            RestoreRequest::Slot(name) => self.restore_named(name, frame),
+            RestoreRequest::Slot(name) => self.restore_named(name, frame).is_ok(),
             RestoreRequest::Disk => self.load_disk_slot(frame),
         }
     }
 
     /// Restores held slot `name`, or refuses it.
-    fn restore_named(&mut self, name: String, frame: FrameIndex) -> bool {
+    ///
+    /// # Errors
+    /// The diagnostic already reported for a refusal (`L4200`, `L4204`); the world is untouched.
+    fn restore_named(&mut self, name: String, frame: FrameIndex) -> Result<(), Diagnostic> {
         let key = format!("{name}@{}", frame.as_u64());
         let slot = self
             .checkpoints
@@ -961,8 +989,8 @@ impl Engine {
             .with_help("capture it first; a scene load, `engine.restore` or run-save resume clears every slot");
             let reason = format!("no slot named `{name}`");
             self.refuse_restore(name, reason);
-            self.report_checkpoint(key, diagnostic);
-            return false;
+            self.report_checkpoint(key, diagnostic.clone());
+            return Err(diagnostic);
         };
         let switch_pending = self
             .world()
@@ -985,12 +1013,12 @@ impl Engine {
             )
             .with_help("the world is untouched");
             self.refuse_restore(name, error.message);
-            self.report_checkpoint(key, diagnostic);
-            return false;
+            self.report_checkpoint(key, diagnostic.clone());
+            return Err(diagnostic);
         }
         self.set_current_scene_path(slot.scene_path.clone());
         self.push_event(Event::SceneChanged(SceneChangedData {
-            kind: SceneChangeKind::Restore,
+            kind: SceneChangeKind::CheckpointRestore,
             path: slot.scene_path.clone(),
             request_id: self.current_request(),
         }));
@@ -1002,7 +1030,7 @@ impl Engine {
             .with_help("request the switch on a later frame, or restore without switching");
             self.report_checkpoint(key, diagnostic);
         }
-        true
+        Ok(())
     }
 
     /// Loads the disk slot: reads it strictly, files it in the store and restores it. Every refusal
@@ -1062,7 +1090,7 @@ impl Engine {
         }
         let info = slot.info.clone();
         let replaced = state.slots.insert(name.clone(), slot);
-        if self.restore_named(name.clone(), frame) {
+        if self.restore_named(name.clone(), frame).is_ok() {
             if let Some(state) = self.checkpoints.as_mut() {
                 state.disk = Some(info);
                 state.disk_error = None;
@@ -1131,6 +1159,67 @@ impl Engine {
             state.last_restore = Some(RestoreOutcome::Refused { name, reason });
         }
         self.refresh_checkpoints_mirror();
+    }
+
+    /// `checkpoint.capture`: captures slot `name` at the current frame, through the code the
+    /// `Checkpoints` request drain runs.
+    ///
+    /// # Errors
+    /// `L4210` without checkpoints; else the refusal `capture_slot` reported.
+    pub(crate) fn wire_capture(&mut self, name: &str) -> Result<(), Diagnostic> {
+        self.require_checkpoints()?;
+        let frame = self.frame();
+        self.capture_slot(name, frame)?;
+        self.refresh_checkpoints_mirror();
+        Ok(())
+    }
+
+    /// `checkpoint.restore`: restores slot `name` now; the world is replaced before this returns.
+    ///
+    /// # Errors
+    /// `L4210` without checkpoints; `L4202`, `L4200` or `L4204` for a refusal (reported too).
+    pub(crate) fn wire_restore(&mut self, name: &str) -> Result<(), Diagnostic> {
+        self.require_checkpoints()?;
+        let frame = self.frame();
+        if let Err(reason) = validate_name(name) {
+            return Err(self.invalid_name(name, &reason, frame));
+        }
+        self.restore_named(name.to_string(), frame)?;
+        self.refresh_checkpoints_mirror();
+        Ok(())
+    }
+
+    /// `checkpoint.discard`: drops slot `name`; an unknown name is ignored.
+    ///
+    /// # Errors
+    /// `L4210` without checkpoints.
+    pub(crate) fn wire_discard(&mut self, name: &str) -> Result<(), Diagnostic> {
+        self.require_checkpoints()?;
+        if let Some(state) = self.checkpoints.as_mut() {
+            state.slots.remove(name);
+        }
+        self.refresh_checkpoints_mirror();
+        Ok(())
+    }
+
+    /// The store as `checkpoint.*` replies report it: the slots by name, the disk slot a replay does
+    /// not see, and the last restore outcome.
+    ///
+    /// # Errors
+    /// `L4210` without checkpoints.
+    pub(crate) fn checkpoint_view(&self) -> Result<CheckpointView, Diagnostic> {
+        let state = self.checkpoints.as_ref().ok_or_else(not_enabled)?;
+        let slots = state.slots.values().map(|slot| slot.info.clone()).collect();
+        let disk = state.disk.clone().filter(|_| !self.is_playback());
+        Ok((slots, disk, state.last_restore.clone()))
+    }
+
+    fn require_checkpoints(&self) -> Result<(), Diagnostic> {
+        if self.checkpoints.is_some() {
+            Ok(())
+        } else {
+            Err(not_enabled())
+        }
     }
 
     /// Installs a world rebuilt by [`crate::snapshot::restore_checkpoint`]: the

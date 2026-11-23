@@ -19,8 +19,9 @@
    opt-in. 0021 W2's `input-bindings.yaml` reuses `open_envelope` and these helpers.
 3. **Requests and view.** `Settings` is the write-only request resource, `SettingsView` the read-only
    resource. Both are installed at every world build; the drain at the frame boundary stores values on
-   the Engine, so they outlive rebuilds and a restore does not roll them back. Host state: never hashed,
-   snapshotted, recorded or on the wire.
+   the Engine, so they outlive rebuilds and a run-save resume does not roll them back. A snapshot carries the
+   view when it is not the defaults, so `engine.restore` and a replay seek install the snapshot's view (never
+   quality, anti-aliasing, the window or the file). Host state: never hashed or on the wire.
 4. **Precedence.** Quality: flag → env → file → packaged → full (a pinned quality persists a request but
    does not apply it). AA: game `Settings` request → `--aa` → file → builder. Window: flag → env → file →
    builder. Volumes: the file *is* the `User` mix layer.
@@ -93,12 +94,18 @@ protocol schema moved.
 (decision 13). The window host reports its mode over a channel on start, after a chord, a request and a resize. No
 `replay_content_hash`, `WorldHash`, replay, golden or schema snapshot moved. Live smoke owed to a human, with W2's.
 
+**R14:** `SnapshotDoc` gains `settings`, canonical `kind: settings` text present only when the engine's settings differ from
+the defaults, filled by `capture()` and never in a checkpoint slot. `engine.restore` and a replay seek adopt it as the
+view only; a run-save resume and a checkpoint restore keep the machine's. A malformed value defaults and is reported,
+never an error. No `WorldHash` term (settings are host state). `replay_content_hash` and the snapshot schema move; the
+corpus re-record is owed to the round's final wave.
+
 ## Owner rulings (2026-11-19)
 
 - Shipped (R13). The chord stays temporary, keeping the Clockout 0023 ruling; the settings view reports the live window mode instead (Waves). The window chord writes `display.window` (reverses the Clockout 0023 ruling; W2 ships it
   non-persisting).
 - Shipped (R13). Fold `RenderSettings::request_anti_aliasing` into `Settings` (breaking).
-- Accepted, scheduled (R14 re-record round). A snapshot field so keyframes carry the view (moves `replay_content_hash`; the corpus is re-recorded).
+- Shipped (R14). A snapshot field so keyframes carry the view (moves `replay_content_hash`; the corpus is re-recorded in the round's final wave).
 - Accepted. `mute_unfocused`.
 - Accepted. Inline quality override objects in the file.
 - Accepted. Amendments to `Plan/audio-ambience.md` decision 6, `Plan/scalability.md` / `docs/quality.md`

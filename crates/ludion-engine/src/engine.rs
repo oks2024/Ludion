@@ -3298,9 +3298,7 @@ impl Engine {
             state.pending = None;
             state.last_resume = Some(ResumeOutcome::Resumed { frame });
         }
-        if let Err(diagnostic) =
-            crate::snapshot::restore_into(self, &snapshot, crate::snapshot::DriftPolicy::Refuse)
-        {
+        if let Err(diagnostic) = crate::snapshot::resume_into(self, &snapshot) {
             self.refuse_consumed(path, parked.as_deref(), diagnostic.message);
             return;
         }
@@ -4764,6 +4762,73 @@ impl Engine {
             None => &self.input_bindings_at_start,
         };
         (!overrides.actions.is_empty()).then(|| crate::input_bindings::emit(overrides))
+    }
+
+    /// The canonical text of the world's input overrides for a snapshot: present only when the
+    /// world holds `Actions` whose overrides differ from the at-start ones (what a fresh `Actions`
+    /// already gets), so an untouched session's snapshot is unchanged.
+    pub(crate) fn input_bindings_snapshot_text(&self) -> Option<String> {
+        let actions = self
+            .driver
+            .world()
+            .resource::<ludion_sim::actions::Actions>()?;
+        (actions.overrides() != &self.input_bindings_at_start)
+            .then(|| crate::input_bindings::emit(actions.overrides()))
+    }
+
+    /// The canonical text of the settings view for a snapshot: present only when it differs from
+    /// the defaults.
+    pub(crate) fn settings_snapshot_text(&self) -> Option<String> {
+        (self.settings != crate::settings::SettingsDoc::default()).then(|| self.settings.emit())
+    }
+
+    /// The overrides of the world's `Actions` for a resume to carry across the rebuild; `None`
+    /// without `Actions`.
+    pub(crate) fn live_input_overrides(&self) -> Option<ludion_sim::actions::InputBindingsDoc> {
+        self.driver
+            .world()
+            .resource::<ludion_sim::actions::Actions>()
+            .map(|actions| actions.overrides().clone())
+    }
+
+    /// Puts a restored snapshot's overrides and gesture state onto the fresh world's `Actions`:
+    /// the overrides first (they may rebuild the map, which filters state), then the gestures. A
+    /// gesture state the map cannot continue (`L4271`) is reported and the layer stays fresh.
+    fn restore_actions(
+        &mut self,
+        overrides: Option<ludion_sim::actions::InputBindingsDoc>,
+        state: ludion_sim::actions::ActionState,
+        frame: FrameIndex,
+    ) {
+        let mut reports = Vec::new();
+        let Some(actions) = self
+            .driver
+            .world_mut()
+            .resource_mut::<ludion_sim::actions::Actions>()
+        else {
+            return;
+        };
+        if let Some(doc) = overrides {
+            reports.extend(
+                actions
+                    .apply_overrides(&doc)
+                    .into_iter()
+                    .map(|d| ("/input_bindings", d)),
+            );
+        }
+        if !state.is_idle()
+            && let Err(d) = actions.restore_state(state)
+        {
+            reports.push(("/actions", d));
+        }
+        for (path, diagnostic) in reports {
+            let key = format!(
+                "restore@{} {path} {}",
+                frame.as_u64(),
+                diagnostic.code.as_str()
+            );
+            crate::diagnostics::report_full(self.driver.world_mut(), key, diagnostic);
+        }
     }
 
     /// The last failed input bindings write (`L4278`); `None` if the last write succeeded or none
@@ -8898,6 +8963,15 @@ impl Subscriptions {
     }
 }
 
+/// The player preferences a restore installs. A `None` field leaves what the engine already holds.
+#[derive(Default)]
+pub(crate) struct Preferences {
+    /// The input overrides to apply over the at-start ones; `None` keeps the at-start overrides.
+    pub input_bindings: Option<ludion_sim::actions::InputBindingsDoc>,
+    /// The settings view to adopt; `None` keeps the engine's own.
+    pub settings: Option<crate::settings::SettingsDoc>,
+}
+
 /// The exact pieces a snapshot restores into an [`Engine`] — used by [`crate::snapshot`].
 pub(crate) struct RestoredWorld {
     pub driver: SimDriver,
@@ -8933,6 +9007,11 @@ pub(crate) struct RestoredWorld {
     /// predating the field. Installed on the restored driver, so an `input.inject` for a later frame
     /// still fires.
     pub pending_input: ludion_sim::InputScript,
+    /// The snapshot's `Actions` gesture state — idle for a snapshot without any, a resume or a
+    /// checkpoint. Restored into the world's `Actions` once the overrides are in.
+    pub actions: ludion_sim::actions::ActionState,
+    /// The preferences the restore installs; none for a checkpoint.
+    pub preferences: Preferences,
     /// Whether the snapshot was taken on the boundary a scene restart landed at: installed onto the
     /// restored `SceneSwitch`, so the next tick sees the same fact the live session did.
     pub arrived_by_restart: bool,
@@ -8993,6 +9072,8 @@ pub(crate) enum Rebuild {
         game_clock: GameClock,
         input: Box<InputState>,
         pending_input: ludion_sim::InputScript,
+        actions: ludion_sim::actions::ActionState,
+        preferences: Box<Preferences>,
         profile: Option<String>,
         arrived_by_restart: bool,
         render_extent: Option<(u32, u32)>,
@@ -9045,6 +9126,8 @@ impl Engine {
                 game_clock: restored.game_clock,
                 input: Box::new(restored.input),
                 pending_input: restored.pending_input,
+                actions: restored.actions,
+                preferences: Box::new(restored.preferences),
                 profile: restored.profile,
                 arrived_by_restart: restored.arrived_by_restart,
                 render_extent: restored.render_extent,
@@ -9182,6 +9265,11 @@ impl Engine {
         self.install_shutdown();
         self.install_cursor_lock();
         self.install_rumble();
+        if let Rebuild::Restore { preferences, .. } = &mut kind
+            && let Some(settings) = preferences.settings.take()
+        {
+            self.settings = settings;
+        }
         self.install_settings();
         self.install_debug_draw();
         // A restore resumes the gameplay time it captured, not a clock level with the frame counter.
@@ -9192,6 +9280,18 @@ impl Engine {
             Rebuild::Load { .. } | Rebuild::Switch { .. } => GameClock::default(),
         });
         self.install_diagnostics(diagnostics);
+        if let Rebuild::Restore {
+            actions,
+            preferences,
+            ..
+        } = &mut kind
+        {
+            self.restore_actions(
+                preferences.input_bindings.take(),
+                std::mem::take(actions),
+                self.driver.frame(),
+            );
+        }
         self.install_render_extent();
         self.install_plane();
         self.install_animation_library();

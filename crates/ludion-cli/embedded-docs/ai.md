@@ -144,6 +144,9 @@ impl Machine for Guard {
 initial}], agents:[{entity, name, path, entered, ticks_in, inbox, dropped}]}]}`. `ticks_in[i]` is
 `game_tick - entered[i]`.
 
+`ai.describe` (no params) returns the same list as `{"kind":"ai_describe","machines":[...]}`, typed on
+the wire; `machines` is `[]` while no machine has ticked.
+
 ## Gotchas
 
 - Register the blackboard yourself; `register_machine` registers only the mind and the squad

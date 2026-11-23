@@ -235,6 +235,37 @@ entities: []
 }
 
 #[test]
+fn a_checkpoint_restore_delivers_its_own_scene_changed_kind() {
+    let mut engine = Engine::builder()
+        .project_root(temp_project())
+        .checkpoints(ludion_engine::CheckpointConfig::default())
+        .build()
+        .unwrap();
+    engine
+        .load_inline_scene("format: 1\nentities: []\n")
+        .unwrap();
+    let session = Session::start(engine, true);
+    let _sub = session.subscribe(Channel::SceneChanged);
+
+    session.send(Command::CheckpointCapture(
+        ludion_protocol::command::CheckpointNameParams { name: "a".into() },
+    ));
+    session.send(Command::CheckpointRestore(
+        ludion_protocol::command::CheckpointNameParams { name: "a".into() },
+    ));
+    match session
+        .recv_any(Duration::from_secs(5))
+        .expect("a scene.changed event arrives")
+    {
+        Egress::Event(event) => match event.message.event {
+            Event::SceneChanged(data) => assert_eq!(data.kind, SceneChangeKind::CheckpointRestore),
+            other => panic!("expected SceneChanged, got {other:?}"),
+        },
+        Egress::Frame(_) => panic!("expected an event, got a frame"),
+    }
+}
+
+#[test]
 fn a_save_event_names_its_kind_path_and_request_id() {
     let root = temp_project();
     let session = Session::start(Engine::with_project_root(&root), true);

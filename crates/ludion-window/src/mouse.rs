@@ -94,12 +94,14 @@ pub fn mouse_motion_event(delta: [f32; 2]) -> serde_json::Value {
 }
 
 /// Maps a winit mouse button to the engine's abstract name, or `None` for a button the engine's
-/// milestone-minimal [`MouseButton`](ludion_sim's) set has no name for (`Back`/`Forward`/`Other`).
+/// [`MouseButton`](ludion_sim's) set has no name for (`Other`).
 fn button_name(button: MouseButton) -> Option<&'static str> {
     match button {
         MouseButton::Left => Some("left"),
         MouseButton::Right => Some("right"),
         MouseButton::Middle => Some("middle"),
+        MouseButton::Back => Some("back"),
+        MouseButton::Forward => Some("forward"),
         _ => None,
     }
 }
@@ -290,9 +292,21 @@ mod tests {
     }
 
     #[test]
+    fn the_side_buttons_map_to_back_and_forward() {
+        let mut buttons = MouseButtons::default();
+        assert_eq!(
+            buttons.map(MouseButton::Back, ElementState::Pressed),
+            Some(serde_json::json!({"kind": "mouse_down", "button": "back"}))
+        );
+        assert_eq!(
+            buttons.map(MouseButton::Forward, ElementState::Pressed),
+            Some(serde_json::json!({"kind": "mouse_down", "button": "forward"}))
+        );
+    }
+
+    #[test]
     fn unmapped_buttons_are_ignored_and_untracked() {
         let mut buttons = MouseButtons::default();
-        assert_eq!(buttons.map(MouseButton::Back, ElementState::Pressed), None);
         assert_eq!(
             buttons.map(MouseButton::Other(4), ElementState::Pressed),
             None

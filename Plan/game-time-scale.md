@@ -78,7 +78,8 @@ pitch handed to request 0023 (OQ5). **One clock, no per-entity dilation** (OQ6).
 their signatures. New `GameClock` fields are omitted from serde at identity, so snapshots and replays of
 a game that never scales do not move. `GameClock` was out of `WorldHash`; since R14 it has a term
 written only while the clock is non-identity (owner ruling (a), `ludion_engine::game_clock::digest`,
-a rule-6 resource digest), so an identity clock hashes as before.
+a rule-6 resource digest), so an identity clock hashes as before. The term covers the mode (holding,
+step, pending), not the accumulated counters, so a frozen world's hash is constant.
 
 **9. Scale state stays out of the snapshot schema.** *Superseded in R14: the fields are in the schema.*
 The scale state was serialized but outside the typed snapshot schema, so `replay_content_hash` and the

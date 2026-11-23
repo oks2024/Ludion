@@ -85,7 +85,7 @@ its `path` naming the field (`/params/hsh`) and its `help` suggesting the neares
 than being ignored. `sim.step` runs synchronously, so `ticks` above 216000 (an hour at 60 Hz) is
 refused with `L3057`; step in smaller batches.
 
-A `scene.changed` event's `data` has `kind` (`load`, `save`, `restore`, `switch`), the `path` when
+A `scene.changed` event's `data` has `kind` (`load`, `save`, `restore`, `switch`, `checkpoint_restore`), the `path` when
 known, and `request_id`, the `id` of the request that caused it. Ids are chosen per connection, so
 another client's request may share the number; it is absent for a game-driven switch.
 

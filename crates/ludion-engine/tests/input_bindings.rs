@@ -5,7 +5,7 @@
 //! at-start overrides.
 
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Engine, EngineBuilder, replay_hashes_with};
+use ludion_engine::{Engine, EngineBuilder, ResumeOutcome, RunSave, replay_hashes_with};
 use ludion_protocol::command::{EngineRestoreParams, InputInjectParams};
 use ludion_protocol::replay::ReplayReader;
 use ludion_protocol::{Command, ResponseBody};
@@ -378,12 +378,33 @@ fn a_recording_without_overrides_has_no_save_docs() {
     );
 }
 
+fn scan_key(engine: &Engine) -> Option<Key> {
+    engine
+        .world()
+        .resource::<Actions>()
+        .unwrap()
+        .bindings("scan")
+        .unwrap()[0]
+        .key
+}
+
+fn snapshot_of(engine: &mut Engine) -> Value {
+    match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    }
+}
+
 #[test]
-fn a_restore_reverts_to_the_at_start_overrides() {
+fn a_restore_keeps_the_mid_session_overrides() {
     let root = fresh_dir("restore");
     write_file(&root, &overrides_file("  scan:\n    - key: F\n"));
     let mut engine = booted(builder(&root, true, false));
     engine.advance_live();
+    assert!(
+        snapshot_of(&mut engine).get("input_bindings").is_none(),
+        "the at-start overrides are not carried"
+    );
     engine
         .world_mut()
         .resource_mut::<Actions>()
@@ -393,26 +414,88 @@ fn a_restore_reverts_to_the_at_start_overrides() {
     tap(&mut engine, "M");
     assert_eq!(scans(&engine), 1, "mid-session the player is back on M");
 
-    let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
-        ResponseBody::Snapshot { snapshot } => snapshot,
-        other => panic!("expected a snapshot, got {other:?}"),
-    };
+    let snapshot = snapshot_of(&mut engine);
+    assert!(snapshot.get("input_bindings").is_some());
     engine
         .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
         .unwrap();
-    let bindings = engine
-        .world()
-        .resource::<Actions>()
+    assert_eq!(scan_key(&engine), Some(Key::M), "the rebind survives");
+    tap(&mut engine, "M");
+    assert_eq!(scans(&engine), 2, "and M still scans");
+}
+
+#[test]
+fn a_restore_of_an_older_snapshot_returns_to_the_at_start_overrides() {
+    let root = fresh_dir("restore-at-start");
+    write_file(&root, &overrides_file("  scan:\n    - key: F\n"));
+    let mut engine = booted(builder(&root, true, false));
+    engine.advance_live();
+    let snapshot = snapshot_of(&mut engine);
+    engine
+        .world_mut()
+        .resource_mut::<Actions>()
         .unwrap()
-        .bindings("scan")
-        .unwrap()[0]
-        .key;
+        .reset("scan")
+        .unwrap();
+    assert_eq!(scan_key(&engine), Some(Key::M));
+    engine
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
     assert_eq!(
-        bindings,
+        scan_key(&engine),
         Some(Key::F),
-        "the restore reapplies the file's rebind"
+        "the snapshot had no override text"
     );
     let _ = trace_of(&mut engine, 1);
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Default, Clone, Debug, PartialEq)]
+struct Save {
+    runs: u32,
+}
+
+#[test]
+fn a_run_save_resume_keeps_the_machines_overrides() {
+    let root = fresh_dir("resume");
+    write_file(&root, &overrides_file("  scan:\n    - key: F\n"));
+    let game = |root: &Path| {
+        builder(root, true, false)
+            .profile::<Save>()
+            .persist_profile()
+            .run_save()
+    };
+    let mut a = booted(game(&root));
+    a.advance_live();
+    a.world_mut()
+        .resource_mut::<Actions>()
+        .unwrap()
+        .reset("scan")
+        .unwrap();
+    a.world_mut().resource_mut::<RunSave>().unwrap().suspend();
+    a.advance_live();
+    assert!(
+        root.join("save/suspend.json").exists(),
+        "the run was suspended"
+    );
+
+    // The machine's own file says F; the suspended run was on M.
+    let mut b = booted(game(&root));
+    for _ in 0..2 {
+        b.advance_live();
+    }
+    b.world_mut().resource_mut::<RunSave>().unwrap().resume();
+    b.advance_live();
+    assert_eq!(
+        b.world()
+            .resource::<RunSave>()
+            .unwrap()
+            .last_resume()
+            .cloned(),
+        Some(ResumeOutcome::Resumed {
+            frame: ludion_core::time::FrameIndex::new(2)
+        })
+    );
+    assert_eq!(scan_key(&b), Some(Key::F), "the machine's overrides stay");
 }
 
 #[test]

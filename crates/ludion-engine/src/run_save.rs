@@ -354,6 +354,7 @@ pub(crate) fn read_resume(
     if let Some(object) = snapshot.as_object_mut() {
         object.remove("input");
         object.remove("pending_input");
+        object.remove("actions");
     }
     Ok((FrameIndex::new(frame), snapshot))
 }

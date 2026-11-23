@@ -5,7 +5,9 @@
 //! [`ResponseBody`](ludion_protocol::ResponseBody) or a [`Diagnostic`]. `dispatch.rs` contains no
 //! logic; it only destructures params and calls these (architecture §2).
 
+pub(crate) mod ai;
 pub(crate) mod asset;
+pub(crate) mod checkpoint;
 pub(crate) mod engine_cmds;
 pub(crate) mod entity;
 pub(crate) mod perf;

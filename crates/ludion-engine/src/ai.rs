@@ -8,6 +8,7 @@
 use ludion_ai::{AiFaults, AiRoster};
 use ludion_core::diagnostics::Diagnostic;
 use ludion_ecs::World;
+use ludion_protocol::response::{AiAgent, AiMachine, AiState};
 use serde_json::{Value, json};
 
 use crate::components::Name;
@@ -31,12 +32,19 @@ pub(crate) fn report_faults(world: &mut World) {
 /// `entered`, `inbox`, `dropped`). `None` while no machine has ticked, so a world without ai
 /// describes byte-identically to one before this key existed.
 pub(crate) fn describe_section(world: &World) -> Option<Value> {
+    let machines = machines(world)?;
+    Some(json!({ "machines": machines }))
+}
+
+/// The typed machines behind both `engine.describe`'s `ai` key and `ai.describe`; `None` while no
+/// machine has ticked.
+pub(crate) fn machines(world: &World) -> Option<Vec<AiMachine>> {
     let roster = world.resource::<AiRoster>()?;
-    let machines: Vec<Value> = roster
+    let machines = roster
         .machines
         .iter()
         .map(|machine| {
-            let agents: Vec<Value> = machine
+            let agents = machine
                 .agents(world)
                 .into_iter()
                 .map(|agent| {
@@ -44,35 +52,44 @@ pub(crate) fn describe_section(world: &World) -> Option<Value> {
                         Ok(Some(name)) => Some(name.0.clone()),
                         _ => None,
                     };
-                    let ticks_in: Vec<u64> = agent
+                    let ticks_in = agent
                         .entered
                         .iter()
                         .map(|entered| machine.game_tick.saturating_sub(*entered))
                         .collect();
-                    json!({
-                        "entity": agent.entity,
-                        "name": name,
-                        "path": agent.path,
-                        "entered": agent.entered,
-                        "ticks_in": ticks_in,
-                        "inbox": agent.inbox,
-                        "dropped": agent.dropped,
-                    })
+                    AiAgent {
+                        entity: agent.entity,
+                        name,
+                        path: agent.path,
+                        entered: agent.entered,
+                        ticks_in,
+                        inbox: agent.inbox as u64,
+                        dropped: agent.dropped,
+                    }
                 })
                 .collect();
-            json!({
-                "machine": machine.machine,
-                "component": machine.component,
-                "root": machine.root,
-                "leaf_first": machine.leaf_first,
-                "inbox_capacity": machine.inbox_capacity,
-                "game_tick": machine.game_tick,
-                "states": machine.states,
-                "agents": agents,
-            })
+            let states = machine
+                .states
+                .iter()
+                .map(|s| AiState {
+                    state: s.state.clone(),
+                    parent: s.parent.clone(),
+                    initial: s.initial.clone(),
+                })
+                .collect();
+            AiMachine {
+                machine: machine.machine.to_string(),
+                component: machine.component.clone(),
+                root: machine.root.clone(),
+                leaf_first: machine.leaf_first,
+                inbox_capacity: machine.inbox_capacity as u64,
+                game_tick: machine.game_tick,
+                states,
+                agents,
+            }
         })
         .collect();
-    Some(json!({ "machines": machines }))
+    Some(machines)
 }
 
 #[cfg(test)]

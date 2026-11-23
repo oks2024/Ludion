@@ -882,3 +882,118 @@ fn a_saved_aa_request_beats_the_host_this_session_and_sits_below_it_at_the_next_
         "the file sits below --aa"
     );
 }
+
+// --- R14: a snapshot carries the settings view ----------------------------------------------------
+
+fn snapshot_of(engine: &mut Engine) -> serde_json::Value {
+    match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    }
+}
+
+fn restore(engine: &mut Engine, snapshot: serde_json::Value) {
+    engine
+        .execute(Command::EngineRestore(
+            ludion_protocol::command::EngineRestoreParams { snapshot },
+        ))
+        .unwrap();
+}
+
+fn requesting_engine(root: &Path) -> Engine {
+    let mut engine = Engine::builder()
+        .components(|reg| reg.register::<Heard>("Heard"))
+        .system("hear", hear)
+        .project_root(root.join("content"))
+        .save_root(root)
+        .build()
+        .unwrap();
+    engine.load_inline_scene(SCENE).unwrap();
+    engine
+}
+
+#[test]
+fn a_restore_installs_the_snapshots_view_and_leaves_render_state() {
+    let root = root("restore-view");
+    let mut engine = requesting_engine(&root);
+    engine
+        .world_mut()
+        .resource_mut::<Settings>()
+        .unwrap()
+        .request_bus_volume(Bus::Music, 0.4);
+    engine.advance_live();
+    let snapshot = snapshot_of(&mut engine);
+    assert!(snapshot.get("settings").is_some());
+
+    let settings = engine.world_mut().resource_mut::<Settings>().unwrap();
+    settings.request_bus_volume(Bus::Music, 0.9);
+    settings.request_quality(QualityPreset::High);
+    settings.request_anti_aliasing(AntiAliasing::Off);
+    engine.advance_live();
+    engine.advance_live();
+    assert_eq!(heard_of(&mut engine), 0.9);
+
+    restore(&mut engine, snapshot);
+    let view = engine.world().resource::<SettingsView>().unwrap();
+    assert_eq!(view.volume(Bus::Music), 0.4, "the snapshot's view");
+    assert_eq!(
+        engine.quality().label,
+        "high",
+        "render quality is untouched"
+    );
+    assert_eq!(engine.anti_aliasing(), AntiAliasing::Off);
+    engine.advance_live();
+    assert_eq!(
+        heard_of(&mut engine),
+        0.4,
+        "the game reads the restored view"
+    );
+}
+
+#[test]
+fn default_settings_leave_the_snapshot_without_a_settings_key() {
+    let root = root("default-snapshot");
+    let mut engine = requesting_engine(&root);
+    engine.advance_live();
+    assert!(snapshot_of(&mut engine).get("settings").is_none());
+}
+
+#[test]
+fn a_replay_seek_keyframe_carries_the_view_after_a_mid_session_request() {
+    let root = root("seek-view");
+    let mut live = Engine::builder()
+        .components(|reg| reg.register::<Heard>("Heard"))
+        .system("hear", hear)
+        .system("request_music", request_music)
+        .project_root(root.join("content"))
+        .save_root(&root)
+        .build()
+        .unwrap();
+    live.load_inline_scene(SCENE).unwrap();
+    let path = root.join("seek.lrp");
+    record_session(&mut live, &path);
+    let live_view = live.world().resource::<SettingsView>().unwrap().clone();
+    assert_eq!(live_view.volume(Bus::Music), 0.7);
+
+    let bytes = std::fs::read(&path).unwrap();
+    let seek = ReplayReader::new(&bytes)
+        .unwrap()
+        .seek(live.frame())
+        .unwrap();
+    let (_, snapshot) = seek.keyframe.expect("the closing keyframe");
+    let mut fresh = requesting_engine(&root);
+    assert_eq!(
+        fresh
+            .world()
+            .resource::<SettingsView>()
+            .unwrap()
+            .volume(Bus::Music),
+        1.0
+    );
+    restore(&mut fresh, snapshot);
+    assert_eq!(
+        fresh.world().resource::<SettingsView>().unwrap(),
+        &live_view,
+        "identical SettingsView at the keyframe"
+    );
+}

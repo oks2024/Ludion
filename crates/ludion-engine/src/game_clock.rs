@@ -8,22 +8,16 @@ use ludion_ecs::World;
 use xxhash_rust::xxh3::Xxh3;
 
 /// The clock's `WorldHash` term (rule 6): `None` while it has excluded nothing, so a game that
-/// never holds or scales hashes as it did before the term existed. Only the fields the snapshot
-/// carries count — the latched rejected request is reported and drained at the boundary.
+/// never holds or scales hashes as it did before the term existed. It covers the clock's mode
+/// only (holding, step, pending), never the accumulated `held`/`slowed` counters: those are a pure
+/// function of the mode history, so hashing them would make a frozen world's hash drift every frame.
 pub(crate) fn digest(clock: &GameClock) -> Option<u64> {
     let pending = clock.pending_q16();
-    if clock.held() == 0
-        && !clock.is_holding()
-        && clock.slowed_q16() == 0
-        && pending.is_none()
-        && !clock.is_scaling()
-    {
+    if !clock.is_holding() && !clock.is_scaling() && pending.is_none() {
         return None;
     }
     let mut hasher = Xxh3::new();
-    hasher.update(&clock.held().to_le_bytes());
     hasher.update(&[u8::from(clock.is_holding())]);
-    hasher.update(&clock.slowed_q16().to_le_bytes());
     match pending {
         Some(q) => {
             hasher.update(&[1]);

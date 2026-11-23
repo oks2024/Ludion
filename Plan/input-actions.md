@@ -43,12 +43,12 @@
 8. **Axes combine by first non-zero binding in binding order.** A stick goes through the radial
    deadzone (default 0.2), then `scale` and the inverts; a key cluster is the `move_vector` digital
    rule (1/√2 diagonals); `mouse_delta` is the tick's raw motion times `scale`.
-9. **The full key set waits for W3.** A new `Key` or `MouseButton` variant changes the `InputEvent`
+9. **The full key set (shipped R14).** A new `Key` or `MouseButton` variant changes the `InputEvent`
    schema, which `replay_content_hash` covers, so every committed `.lrp` would fail `L3010` until
    re-recorded. Wave 1a therefore binds only today's keys and ships a guard test (a serialized script of
-   every existing key and button against a checked-in literal, plus pinned names and order). W3 appends
-   the whole keyboard (and `MouseButton::Back`/`Forward`) beside the connection events, with one corpus
-   re-record (accepted 2026-11-19, scheduled (R14 re-record round)).
+   every existing key and button against a checked-in literal, plus pinned names and order). R14 appended
+   the whole keyboard (and `MouseButton::Back`/`Forward`) after `Alt`; the guard test is unchanged and
+   a second literal pins the new tail.
 10. **The gesture state is part of the resource, not the hash.** `Actions::state()` /
     `restore_state` carry it for a snapshot (Wave 1b), so a hold continues across a restore on the same
     tick.
@@ -106,9 +106,10 @@
     the read and the write, and needs `input_actions()`. Tests, replays and `--check-docs` leave it off; the
     facade's live boot chains it. Without it `save()` is consumed silently.
 25. **At-start overrides.** With the switch on, the file is read at build into the engine's at-start overrides,
-    applied to every **fresh** `Actions` (a build, a load, a restore); a carried one (a switch, a checkpoint)
-    keeps its own. So a restore after a mid-session rebind reverts to the at-start overrides; exact
-    continuation is the snapshot field (accepted 2026-11-19, scheduled (R14 re-record round)). The apply warnings reach `boot_warnings` once, at build.
+    applied to every **fresh** `Actions` (a build, a load); a carried one (a switch, a checkpoint)
+    keeps its own. A snapshot carries the mid-session overrides (`input_bindings`, present only when they differ
+    from the at-start ones) and the gesture state (`actions`), so `engine.restore` and a replay seek continue
+    exactly; a run-save resume keeps the machine's own overrides (shipped R14). The apply warnings reach `boot_warnings` once, at build.
 26. **Recording and replay.** A recording's `ReplayHeader` carries the at-start overrides as canonical text in
     the generic `save_docs` map (key `input-bindings`), omitted when empty. `save_docs` is outside
     `replay_content_hash` and the protocol schema hash, so no pinned artifact moves; it is the one header slot
@@ -165,7 +166,7 @@
   (`kind: input-bindings`, loaded leniently through `open_envelope` + `backup_file` and `apply_overrides`),
   the save drain, `ReplayHeader.save_docs["input-bindings"]` (outside `replay_content_hash`), replay
   installing it and never reading or writing the file, the doc walk skipping `<save_root>/save`, the `rebind_menu` example; `L1636`, `L4277`, `L4278`.
-- **W3 — devices, glyphs and the full key set:** the whole keyboard appended after `Alt` plus `Back`/`Forward` (one corpus re-record), the window keymap and mouse mapping for them, recorded `gamepad_connected{family}` / `gamepad_disconnected`,
+- **W3 — devices, glyphs and the full key set:** the full key set shipped in R14 (the whole keyboard after `Alt` plus `Back`/`Forward`, the window keymap and mouse mapping for them, the editor maps); still to come: recorded `gamepad_connected{family}` / `gamepad_disconnected`,
   `last_device` / `device_changed`, `Actions::source`, a glyph table (`glyph_name`), a focus event
   (accepted 2026-11-19, scheduled (W3)).
 - **W4 — rumble (shipped):** the outbox, the validator, the pad-thread mixer and the gilrs backend on Windows (decisions 27–31); macOS is silent without W4b.
@@ -219,6 +220,16 @@ Windows `clippy --workspace --all-features` run to prove the feature inert there
 
 **R13:** `UiNav.back` ships (`Escape`/`East`, `ui_back`); no pinned artifact moved.
 
+**R14:** `SnapshotDoc` gains `actions` (the `Actions` gesture state, omitted when idle), `input_bindings` (canonical
+`kind: input-bindings` text, present only when the overrides differ from the at-start ones) and `settings`
+(see `Plan/settings.md`), filled by `capture()` and never in a checkpoint slot. `engine.restore` and a replay seek
+install them (a hold keeps going, a mid-session rebind survives; an uncontinuable state is reported `L4271` and
+the layer stays fresh); a run-save resume (`RestoreMode::Resume`) keeps the machine's overrides and clears
+gestures with the held input. No `WorldHash` term: the state is a resource (decision 10) and any divergence
+reaches the hash through the components systems write next tick. `Key` gains 48 keys and `MouseButton` `Back`/`Forward`,
+appended; the window host and the editor viewer map them. `replay_content_hash`, the snapshot schema and the
+protocol schema hash move; the corpus re-record is owed to the round's final wave.
+
 ## Owner rulings (2026-11-19)
 
 - Shipped (W4b). **A macOS rumble backend** (GameController / CHHaptics) behind the `apple-rumble` cargo feature.
@@ -227,15 +238,13 @@ Windows `clippy --workspace --all-features` run to prove the feature inert there
 
 - Shipped (R13). **`UiNav.back` (breaking).** `UiNav` is built by struct literal in games and docs, so a new field breaks
   every one. `from_actions` reads `ui_back` into it.
-- Accepted, scheduled (R14 re-record round). **Overrides in snapshot keyframes.** Mid-session overrides need a `SnapshotDoc` field, which moves
-  `snapshot_schema()` and rides W3's one corpus re-record, like `ActionState`.
+- Shipped (R14). **Overrides in snapshot keyframes.** Mid-session overrides are a `SnapshotDoc` field, which moves
+  `snapshot_schema()`, like `ActionState`.
 
-- Accepted, scheduled (R14 re-record round). **A snapshot field for `ActionState`** (exact mid-gesture continuation across `engine.restore`, a
+- Shipped (R14). **A snapshot field for `ActionState`** (exact mid-gesture continuation across `engine.restore`, a
   replay seek and a bisect keyframe). A new `SnapshotDoc` field changes `snapshot_schema()`, which
-  `replay_content_hash` covers, so it rides W3's one corpus re-record. Until then a restore installs a
-  fresh `Actions` and the latch rule applies; a plain linear replay never restores, so it is exact.
-  `Actions::state()` / `restore_state()` stay for it.
-- Accepted, scheduled (R14 re-record round). **One corpus re-record in W3** for the full key set: new `Key`/`MouseButton` variants move `replay_content_hash`, so every committed replay is re-recorded once, last, after the schema snapshot.
+  `replay_content_hash` covers. A load and a run-save resume still install a fresh `Actions` under the latch rule.
+- Shipped (R14). **One corpus re-record** for the full key set: new `Key`/`MouseButton` variants move `replay_content_hash`, so every committed replay is re-recorded once, last, after the schema snapshot.
 - Accepted. **Promote remapping and rumble out of `Plan/phase-13-input.md`'s out-of-scope list** (request
   amendments 1–2). Wave 1a builds none of rebinding or rumble; it is the sim side they stand on.
 - Accepted. **Sensitivity and invert are binding modifiers** (`scale`, `invert_x`, `invert_y`), so they persist
@@ -255,8 +264,8 @@ Windows `clippy --workspace --all-features` run to prove the feature inert there
 - **Per-binding gesture thresholds** — trigger: a game needing a different hold time for one action.
 - **Live `asset.reload` of the map** — `Actions` compiles at world build and is not rebuilt by a
   reload; trigger: tuning an action map in the editor.
-- **Keys beyond today's set in bindings** — trigger: W3 (needs the re-record above).
+- **Keys beyond today's set in bindings** — shipped (R14).
 - **Keyboard-layout labels** (what the key at a physical position says on this layout) — trigger: glyphs
   for non-QWERTY players; arrives with W3's glyph table.
 - **Gyro** and **multiple pads** — triggers as in `Plan/phase-13-input.md`.
-- **The editor's `keymap.ts` forwarding of the new keys** — a hand mirror; trigger: W3's keys landing.
+- **The editor's `keymap.ts` forwarding of the new keys** — shipped (R14); a hand mirror.

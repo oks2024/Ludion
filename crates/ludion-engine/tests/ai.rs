@@ -381,6 +381,39 @@ fn describe_carries_the_machine_and_its_live_agents() {
     assert_eq!(agents[0]["name"], "leader");
 }
 
+#[test]
+fn ai_describe_is_the_describe_ai_key_and_empty_without_ai() {
+    let mut engine = boot();
+    trace(&mut engine, 40);
+    let description = match engine.execute(Command::EngineDescribe).unwrap().body {
+        ResponseBody::EngineDescription { description } => description,
+        other => panic!("expected a description, got {other:?}"),
+    };
+    let machines = match engine.execute(Command::AiDescribe).unwrap().body {
+        ResponseBody::AiDescribe { machines } => machines,
+        other => panic!("expected ai_describe, got {other:?}"),
+    };
+    assert_eq!(
+        serde_json::to_value(&machines).unwrap(),
+        description["ai"]["machines"],
+        "one source: the typed wire list serializes to the describe key byte for byte"
+    );
+    assert_eq!(machines[0].machine, "Guard");
+    assert_eq!(machines[0].agents.len(), 3);
+
+    let mut bare = Engine::new();
+    bare.load_inline_scene(
+        "format: 1
+entities: []
+",
+    )
+    .unwrap();
+    match bare.execute(Command::AiDescribe).unwrap().body {
+        ResponseBody::AiDescribe { machines } => assert!(machines.is_empty()),
+        other => panic!("expected ai_describe, got {other:?}"),
+    }
+}
+
 // ---- ref-carrying events and the opt-in group roster ----
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

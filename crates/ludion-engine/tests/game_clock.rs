@@ -534,6 +534,25 @@ fn a_held_or_scaled_clock_moves_the_world_hash_and_an_identity_clock_does_not() 
         "a scaled clock is hashed"
     );
     assert_ne!(scaled.world_hash().unwrap(), held.world_hash().unwrap());
+
+    // The term is the clock's mode, not its accumulated counters: a frozen world's hash is constant.
+    let frozen = held.world_hash().unwrap();
+    advance(&mut held, 2);
+    assert_eq!(
+        held.world_hash().unwrap(),
+        frozen,
+        "two more held frames leave the hash alone"
+    );
+    // A clock that held and then released is back to identity, so it hashes like one that never held.
+    let to_release = HOLD_TO + 2 - held.frame().as_u64();
+    advance(&mut held, to_release);
+    let behind = held.frame().as_u64() - plain.frame().as_u64();
+    advance(&mut plain, behind);
+    assert_eq!(
+        held.world_hash().unwrap(),
+        plain.world_hash().unwrap(),
+        "a released clock hashes like the identity clock"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

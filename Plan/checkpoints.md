@@ -1,6 +1,6 @@
 # In-memory checkpoints — capture and restore the world from a system
 
-> **Status:** Waves 1 and 2 mechanized (2026-11-18); W4a shipped (Lore 2450); W4b mechanized (measured medians owed); W3 shipped in R14 except (c), which rides the wire wave; W5 not started. The Status section at the end
+> **Status:** Waves 1 and 2 mechanized (2026-11-18); W4a shipped (Lore 2450); W4b mechanized (measured medians owed); W3 shipped in R14; W5 (the wire verbs) shipped in R14 (T10-C2a). The Status section at the end
 > records what shipped as each wave closes.
 >
 > Neon Shroud request 0012 (`engine-requests/0012-in-memory-checkpoints.md`, filed 2026-11-17, audited
@@ -77,7 +77,7 @@ of one name in one frame restores what was just captured.
 store refuses with `L4207`. Wave 3 lifts both. *Lifted in R14 (W3): keyframes and `engine.snapshot` carry
 the store, the skip and the refusal are gone, and `L4206`/`L4207` are retired.*
 
-**7. Event:** `Event::SceneChanged { kind: SceneChangeKind::Restore, path }` with the slot's scene path.
+**7. Event:** `Event::SceneChanged { kind: SceneChangeKind::CheckpointRestore, path }` with the slot's scene path (amended in R14: it was `Restore`; `engine.restore` keeps that).
 A dedicated kind would move the wire schema hash (accepted 2026-11-19, scheduled (R14 re-record round)).
 
 **8. RNG rewinds to the slot.** No `restore(name, keep)`. Other game resources reset to fresh, as on every
@@ -159,15 +159,15 @@ scene text, and held slots refuse arming, `L4207`).
   `save/checkpoint.json` envelope with a `BuildStamp`, kept on load; strict refusal with a `.bak.<hash>`
   backup (`L4209`); `load_disk` refused while a recording is open; the frame jumps forward to a slot ahead of
   it; `L4208` write failures.
-- **W3 — the store rides the snapshot** (shipped in R14 except (c), which rides the wire wave; decisions
-  W3-1, W3-2). A `checkpoints` snapshot field lifts the keyframe skip and the arm refusal (re-records the
-  replay corpus); the slot digest joins `WorldHash`; `SceneChangeKind::CheckpointRestore` (wire wave).
+- **W3 — the store rides the snapshot** (shipped in R14; decisions W3-1, W3-2). A `checkpoints` snapshot
+  field lifts the keyframe skip and the arm refusal (re-records the replay corpus); the slot digest joins
+  `WorldHash`; `SceneChangeKind::CheckpointRestore` (shipped with W5).
 - **W4a — structured slots** (shipped, Lore 2450; decisions W4-1..7). In-memory slots as erased column clones plus a
   typed `SnapshotDoc`; disk slots keep the JSON envelope.
 - **W4b — budgets** (0012-04). The capture ≤ 4 ms / restore ≤ 50 ms budgets, measured by a bench or test that
   reads no new wire field; a `ProfileReport` `checkpoints` section and the `checkpoint_capture` /
   `checkpoint_restore` profiler keys would be R14 items.
-- **W5 — wire commands** (R14). `checkpoint.*`, designed in W4-6.
+- **W5 — wire commands** (shipped in R14, T10-C2a; decisions W5-1..4). `checkpoint.*`, designed in W4-6.
 
 ## Wave 3 decisions — the store rides the snapshot
 
@@ -209,6 +209,21 @@ scene text, and held slots refuse arming, `L4207`).
   `replay_content_hash`.
 - **W4-7** Budgets in W4b, on the fixture "5 000 entities with physics".
 
+## Wave 5 decisions — the wire verbs
+
+- **W5-1** Shapes. `checkpoint.list` (no params) and `checkpoint.capture` / `.restore` / `.discard {name}` all
+  reply `ResponseBody::Checkpoints { slots: [{name, frame, game_frame, scene}], disk?, last_restore? }`;
+  `last_restore` is `{outcome: restored, name, frame}` or `{outcome: refused, name, reason}`.
+- **W5-2** Each mutating verb applies at the boundary it is dispatched at (dispatch runs between ticks),
+  through the code the `Checkpoints` request drain runs (`capture_slot`, `restore_named`), and the reply is the
+  store after it applied. A refused capture or restore is an `Err` carrying the diagnostic the drain reports
+  (`L4200`-`L4204`); discarding an unknown name is not an error, as in the game API.
+- **W5-3** `L4210` `CHECKPOINTS_NOT_ENABLED` for every verb, `list` included, on an engine built without
+  `.checkpoints()`.
+- **W5-4** Recording: `list` is a read and leaves no record; capture, restore and discard are recorded as
+  commands, so a replay re-dispatches them, and a live command during playback is refused through
+  `record_kind`. `persist` and `load_disk` have no wire verb.
+
 ## Wave 4b decisions — budgets
 
 - **W4b-1** Measured by an `#[ignore]` release bench (`crates/ludion-engine/tests/checkpoint_bench.rs`), by the
@@ -226,7 +241,7 @@ scene text, and held slots refuse arming, `L4207`).
 
 - Accepted, shipped in R14 (T10-A1); the corpus re-record is the final re-record wave. **(a)** W3's replay corpus re-record (the snapshot gains a field).
 - Accepted, shipped in R14 (T10-A1). **(b)** The slot digest joining `WorldHash` (additive term only when the store is non-empty).
-- Accepted, scheduled (R14 re-record round). **(c)** `SceneChangeKind::CheckpointRestore` (moves the wire schema hash).
+- Accepted, shipped in R14 (T10-C2a). **(c)** `SceneChangeKind::CheckpointRestore` (moves the wire schema hash).
 - Accepted. **(d)** `Plan/phase-16-profile.md` decision 7 exception: a checkpoint keeps the live profile. Wave 1
   ships this behaviour; the decision text is amended only by a note pointing here.
 - Accepted. **(e)** `carry_resource` resources crossing a checkpoint restore, and the matching
@@ -267,5 +282,8 @@ scene text, and held slots refuse arming, `L4207`).
   clock move with the final re-record wave.
   Bench after W3 (RTX 3090 box, quiet, plain frame 0.50 ms, 3 runs): capture median 3.909 / 3.919 / 3.935 ms
   against the 4 ms target, restore 6.224 / 6.259 / 6.365 ms against 50 ms.
-- **W5:** not started.
+- **W5 shipped in R14 (T10-C2a):** the four `checkpoint.*` commands, `L4210`, ruling (c)
+  (`CheckpointRestore`, also for a game's `restore` and `load_disk`), `ai.describe` beside them; decisions
+  W5-1..4. The protocol schema snapshot, `replay_schema_hash`, `replay_content_hash`, the replay corpus and the
+  editor's generated types move with the final re-record wave.
 - M4 (2026-11-22): the W4b medians are measured on the pinned Apple M4, recorded in `budgets/checkpoints-macos.toml`'s MEASURED line: capture 1.31 ms and restore 2.08 ms, against the 4 ms and 50 ms targets. The RTX 3090 box's medians are still owed.

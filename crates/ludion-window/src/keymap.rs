@@ -1,7 +1,7 @@
 //! Mapping a winit keyboard event to the engine's abstract key name.
 //!
 //! The sim's input model (`ludion_sim::Key`, mirrored here without a dependency on that crate) is
-//! deliberately small and layout-independent: a key is an abstract name (`"W"`, `"Left"`, `"Space"`,
+//! deliberately layout-independent: a key is an abstract name (`"W"`, `"Left"`, `"Space"`,
 //! `"Digit1"`) and an event is `{"kind": "key_down" | "key_up", "key": "<name>"}`. winit reports the
 //! *physical* key as a [`KeyCode`] — the same layout-independent identity — so this maps `KeyCode`,
 //! never the produced character. Keys the engine has no name for are ignored, and OS auto-repeat is
@@ -122,8 +122,8 @@ impl KeyMapper {
 }
 
 /// Maps a winit [`KeyCode`] to the engine's abstract key name, or `None` if the engine's
-/// milestone-minimal key set has no such key. Covers the four families the set defines: `KeyA`–`KeyZ`,
-/// `Digit0`–`Digit9`, the four arrows, and Space/Enter/Escape. Modifiers go through [`KeyMapper`].
+/// key set has no such key. Covers the whole keyboard the set defines: letters, digits, arrows,
+/// function keys, punctuation, the editing block and the numpad. Modifiers go through [`KeyMapper`].
 fn key_name(code: KeyCode) -> Option<&'static str> {
     let name = match code {
         KeyCode::KeyA => "A",
@@ -169,6 +169,54 @@ fn key_name(code: KeyCode) -> Option<&'static str> {
         KeyCode::Space => "Space",
         KeyCode::Enter => "Enter",
         KeyCode::Escape => "Escape",
+        KeyCode::Tab => "Tab",
+        KeyCode::Backspace => "Backspace",
+        KeyCode::CapsLock => "CapsLock",
+        KeyCode::F1 => "F1",
+        KeyCode::F2 => "F2",
+        KeyCode::F3 => "F3",
+        KeyCode::F4 => "F4",
+        KeyCode::F5 => "F5",
+        KeyCode::F6 => "F6",
+        KeyCode::F7 => "F7",
+        KeyCode::F8 => "F8",
+        KeyCode::F9 => "F9",
+        KeyCode::F10 => "F10",
+        KeyCode::F11 => "F11",
+        KeyCode::F12 => "F12",
+        KeyCode::Minus => "Minus",
+        KeyCode::Equal => "Equal",
+        KeyCode::BracketLeft => "BracketLeft",
+        KeyCode::BracketRight => "BracketRight",
+        KeyCode::Backslash => "Backslash",
+        KeyCode::Semicolon => "Semicolon",
+        KeyCode::Quote => "Quote",
+        KeyCode::Backquote => "Backquote",
+        KeyCode::Comma => "Comma",
+        KeyCode::Period => "Period",
+        KeyCode::Slash => "Slash",
+        KeyCode::Insert => "Insert",
+        KeyCode::Delete => "Delete",
+        KeyCode::Home => "Home",
+        KeyCode::End => "End",
+        KeyCode::PageUp => "PageUp",
+        KeyCode::PageDown => "PageDown",
+        KeyCode::Numpad0 => "Numpad0",
+        KeyCode::Numpad1 => "Numpad1",
+        KeyCode::Numpad2 => "Numpad2",
+        KeyCode::Numpad3 => "Numpad3",
+        KeyCode::Numpad4 => "Numpad4",
+        KeyCode::Numpad5 => "Numpad5",
+        KeyCode::Numpad6 => "Numpad6",
+        KeyCode::Numpad7 => "Numpad7",
+        KeyCode::Numpad8 => "Numpad8",
+        KeyCode::Numpad9 => "Numpad9",
+        KeyCode::NumpadAdd => "NumpadAdd",
+        KeyCode::NumpadSubtract => "NumpadSubtract",
+        KeyCode::NumpadMultiply => "NumpadMultiply",
+        KeyCode::NumpadDivide => "NumpadDivide",
+        KeyCode::NumpadDecimal => "NumpadDecimal",
+        KeyCode::NumpadEnter => "NumpadEnter",
         _ => return None,
     };
     Some(name)
@@ -383,13 +431,24 @@ mod tests {
 
     #[test]
     fn unmapped_keys_are_ignored() {
-        for code in [
-            KeyCode::Tab,
-            KeyCode::F1,
-            KeyCode::CapsLock,
-            KeyCode::NumpadEnter,
-        ] {
+        for code in [KeyCode::PrintScreen, KeyCode::NumLock, KeyCode::Fn] {
             assert_eq!(down(code), None);
+        }
+    }
+
+    #[test]
+    fn the_appended_keys_map_to_their_engine_names() {
+        for (code, name) in [
+            (KeyCode::Tab, "Tab"),
+            (KeyCode::F1, "F1"),
+            (KeyCode::F12, "F12"),
+            (KeyCode::CapsLock, "CapsLock"),
+            (KeyCode::Backquote, "Backquote"),
+            (KeyCode::PageDown, "PageDown"),
+            (KeyCode::Numpad0, "Numpad0"),
+            (KeyCode::NumpadEnter, "NumpadEnter"),
+        ] {
+            assert_eq!(down(code), edge("key_down", name));
         }
     }
 

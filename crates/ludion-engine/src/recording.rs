@@ -112,7 +112,9 @@ pub(crate) fn record_kind(command: &Command) -> Option<RecordKind> {
         | Command::EngineDescribe
         | Command::EngineSnapshot
         | Command::EngineShutdown
-        | Command::ProfileCapture(_) => None,
+        | Command::ProfileCapture(_)
+        | Command::AiDescribe
+        | Command::CheckpointList => None,
 
         // A mid-session load is its own record kind: it carries the text it resolved, so a replay
         // never re-reads the path off disk (see `write_delta`).
@@ -135,7 +137,10 @@ pub(crate) fn record_kind(command: &Command) -> Option<RecordKind> {
         | Command::SimResume
         | Command::SimStep(_)
         | Command::SimSetSpeed(_)
-        | Command::EngineRestore(_) => Some(RecordKind::Command),
+        | Command::EngineRestore(_)
+        | Command::CheckpointCapture(_)
+        | Command::CheckpointRestore(_)
+        | Command::CheckpointDiscard(_) => Some(RecordKind::Command),
     }
 }
 

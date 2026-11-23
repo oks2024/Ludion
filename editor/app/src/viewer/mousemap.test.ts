@@ -24,15 +24,16 @@ describe('f32Bits', () => {
 });
 
 describe('pointerButtonName', () => {
-  it('maps the three named buttons by DOM index', () => {
+  it('maps the named buttons by DOM index', () => {
     expect(pointerButtonName(0)).toBe('left');
     expect(pointerButtonName(1)).toBe('middle');
     expect(pointerButtonName(2)).toBe('right');
+    expect(pointerButtonName(3)).toBe('back');
+    expect(pointerButtonName(4)).toBe('forward');
   });
 
   it('returns null for buttons the engine has no name for', () => {
-    expect(pointerButtonName(3)).toBeNull(); // back
-    expect(pointerButtonName(4)).toBeNull(); // forward
+    expect(pointerButtonName(5)).toBeNull(); // eraser
     expect(pointerButtonName(-1)).toBeNull(); // a move's "no button"
   });
 });

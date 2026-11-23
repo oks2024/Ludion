@@ -316,6 +316,136 @@ pub enum ResponseBody {
         // through the whole reply path. `Box` is invisible on the wire and in the schema.
         report: Box<crate::perf::ProfileReport>,
     },
+
+    /// Result of `ai.describe` — every behaviour machine a tick has run, with its hierarchy and
+    /// live agents. The same list `engine.describe`'s `ai` key carries; empty before any machine
+    /// has ticked.
+    AiDescribe {
+        /// The machines, in first-run order.
+        machines: Vec<AiMachine>,
+    },
+
+    /// Result of every `checkpoint.*` verb — the store after the verb applied.
+    Checkpoints {
+        /// The named in-memory slots, in capture order.
+        slots: Vec<CheckpointSlot>,
+        /// The disk slot, when one is loaded. Omitted when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        disk: Option<CheckpointSlot>,
+        /// The latest restore attempt's outcome. Omitted before any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_restore: Option<CheckpointRestore>,
+    },
+}
+
+/// One behaviour machine in an `ai.describe` reply.
+///
+/// # Example
+/// ```
+/// use ludion_protocol::response::AiMachine;
+///
+/// let m = AiMachine {
+///     machine: "Guard".into(),
+///     component: "GuardMind".into(),
+///     root: "root".into(),
+///     leaf_first: false,
+///     inbox_capacity: 8,
+///     game_tick: 0,
+///     states: vec![],
+///     agents: vec![],
+/// };
+/// assert_eq!(serde_json::to_value(&m).unwrap()["component"], "GuardMind");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AiMachine {
+    /// The machine's name.
+    pub machine: String,
+    /// The component name, `"{machine}Mind"`.
+    pub component: String,
+    /// The root state's name.
+    pub root: String,
+    /// Whether dispatch walks the active path leaf first.
+    pub leaf_first: bool,
+    /// Events an inbox holds before the oldest is dropped.
+    pub inbox_capacity: u64,
+    /// The gameplay tick of the machine's latest tick.
+    pub game_tick: u64,
+    /// Every state, in declaration order.
+    pub states: Vec<AiState>,
+    /// The live agents, ascending entity order.
+    pub agents: Vec<AiAgent>,
+}
+
+/// A state of an [`AiMachine`] and its place in the hierarchy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AiState {
+    /// The state's name.
+    pub state: String,
+    /// Its parent; `null` for the root.
+    pub parent: Option<String>,
+    /// The child entered after it; `null` for a leaf.
+    pub initial: Option<String>,
+}
+
+/// One live agent of an [`AiMachine`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AiAgent {
+    /// The agent.
+    #[schemars(with = "crate::schema_proxy::EntityIdSchema")]
+    pub entity: EntityId,
+    /// The entity's `Name`, or `null`.
+    pub name: Option<String>,
+    /// The active path, root first; empty before the agent starts.
+    pub path: Vec<String>,
+    /// The gameplay tick each active level was entered, root to leaf.
+    pub entered: Vec<u64>,
+    /// The machine's `game_tick` minus each `entered`.
+    pub ticks_in: Vec<u64>,
+    /// Events waiting in the inbox.
+    pub inbox: u64,
+    /// Events that overflowed the inbox since the agent was created.
+    pub dropped: u32,
+}
+
+/// One checkpoint slot in a `checkpoint.*` reply.
+///
+/// # Example
+/// ```
+/// use ludion_protocol::response::CheckpointSlot;
+///
+/// let s = CheckpointSlot { name: "a".into(), frame: 3, game_frame: 3, scene: None };
+/// assert_eq!(serde_json::to_value(&s).unwrap()["frame"], 3);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CheckpointSlot {
+    /// The slot name.
+    pub name: String,
+    /// The engine frame the slot was captured at.
+    pub frame: u64,
+    /// The gameplay frame the slot was captured at.
+    pub game_frame: u64,
+    /// The scene path the world was loaded from, when it had one.
+    pub scene: Option<String>,
+}
+
+/// The outcome of the latest checkpoint restore attempt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum CheckpointRestore {
+    /// The world was replaced by the named slot.
+    Restored {
+        /// The slot restored.
+        name: String,
+        /// The engine frame the restore applied at.
+        frame: u64,
+    },
+    /// The restore was refused; the world is unchanged.
+    Refused {
+        /// The slot asked for.
+        name: String,
+        /// Why it was refused.
+        reason: String,
+    },
 }
 
 /// A descendant destroyed with its ancestor by `entity.destroy`: its old id and component state.

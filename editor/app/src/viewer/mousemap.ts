@@ -5,14 +5,14 @@
 // `{"kind": "mouse_move", "position_bits": [<u32>, <u32>]}` where each component is the IEEE-754 bit
 // pattern of the `f32` position (analog input must replay bit-exact, so it never crosses serde as a
 // JSON number), and a button edge is `{"kind": "mouse_down" | "mouse_up", "button": "left" | "right"
-// | "middle"}`. The client→render-target coordinate mapping is NOT here: it is `picking.ts`'s
+// | "middle" | "back" | "forward"}`. The client→render-target coordinate mapping is NOT here: it is `picking.ts`'s
 // `clientToEnginePoint`, reused verbatim so the game's cursor lands on the same pixel a pick would.
 
 import type { InputInjectParams } from '@ludion/protocol';
 import type { Point } from './picking';
 
 /** The mouse button names the engine accepts (mirrors `ludion_sim::MouseButton`'s snake_case serde). */
-export type EngineMouseButton = 'left' | 'right' | 'middle';
+export type EngineMouseButton = 'left' | 'right' | 'middle' | 'back' | 'forward';
 
 // A one-element f32 view whose bytes we reinterpret as a u32 — the JS equivalent of Rust's
 // `f32::to_bits`, so the position matches the window host's `position[0].to_bits()` byte-for-byte.
@@ -26,7 +26,7 @@ export function f32Bits(x: number): number {
 }
 
 /** Maps a DOM `PointerEvent.button` index to the engine's button name, or `null` for a button the
- *  milestone-minimal set has no name for (`0` left, `1` middle, `2` right; back/forward/eraser drop). */
+ *  engine has no name for (`0` left, `1` middle, `2` right, `3` back, `4` forward; eraser drops). */
 export function pointerButtonName(button: number): EngineMouseButton | null {
   switch (button) {
     case 0:
@@ -35,6 +35,10 @@ export function pointerButtonName(button: number): EngineMouseButton | null {
       return 'middle';
     case 2:
       return 'right';
+    case 3:
+      return 'back';
+    case 4:
+      return 'forward';
     default:
       return null;
   }

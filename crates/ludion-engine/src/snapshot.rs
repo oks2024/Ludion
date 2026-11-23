@@ -110,6 +110,7 @@ use ludion_protocol::command::RenderSizeParams;
 use ludion_protocol::replay::{ReplayExtent, SceneRef};
 use ludion_protocol::restore::{RestoreEntry, RestoreReport};
 use ludion_scene::{SceneLayer, ScenePhysics, ScenePhysicsSpace, validate_physics};
+use ludion_sim::actions::{ActionState, InputGesture, PhysicalInput};
 use ludion_sim::{DriverRestore, InputScript, InputState, RunState, Speed};
 use ludion_spatial::SpatialIndex;
 use schemars::JsonSchema;
@@ -238,6 +239,24 @@ struct SnapshotDoc {
     /// with no pending events. Never hashed.
     #[serde(default, skip_serializing_if = "InputScript::is_empty")]
     pending_input: InputScript,
+    /// The live `Actions` gesture state — every input mid-hold, mid-double-tap or latched. Restored
+    /// by `engine.restore` and a replay seek (the `input` precedent), so a hold keeps going instead
+    /// of latching until a fresh press. Omitted when idle, so a snapshot of a session with no
+    /// gesture in flight is byte-identical to before this field existed, and an older document
+    /// restores idle. Never in a checkpoint slot, never hashed: the state is a resource.
+    #[serde(default, skip_serializing_if = "ActionState::is_idle")]
+    #[schemars(with = "Vec<(PhysicalInput, InputGesture)>")]
+    actions: ActionState,
+    /// The player's input-binding overrides as canonical `kind: input-bindings` text, present only
+    /// when they differ from the at-start overrides (the `profile` precedent). Absent restores the
+    /// at-start overrides. Never in a checkpoint slot, never hashed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_bindings: Option<String>,
+    /// The settings the `SettingsView` shows as canonical `kind: settings` text, present only when
+    /// they differ from the defaults. A restore installs the view only — never quality,
+    /// anti-aliasing, the window or the disk. Never in a checkpoint slot, never hashed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settings: Option<String>,
     /// The live entities, in ascending slot-index order, with their components.
     entities: Vec<EntityDoc>,
     /// The full generational-allocator state (dead-slot generations + free-list order), present
@@ -495,6 +514,13 @@ pub(crate) fn snapshot_schema() -> Value {
 pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
     let mut doc = capture_doc(engine, true)?;
     doc.checkpoints = engine.checkpoints_doc()?;
+    doc.actions = engine
+        .world()
+        .resource::<ludion_sim::actions::Actions>()
+        .map(ludion_sim::actions::Actions::state)
+        .unwrap_or_default();
+    doc.input_bindings = engine.input_bindings_snapshot_text();
+    doc.settings = engine.settings_snapshot_text();
     snapshot_value(&doc)
 }
 
@@ -566,6 +592,9 @@ fn capture_doc(engine: &Engine, components: bool) -> Result<SnapshotDoc, Diagnos
             .cloned()
             .unwrap_or_default(),
         pending_input: engine.pending_input(),
+        actions: ActionState::default(),
+        input_bindings: None,
+        settings: None,
         entities,
         allocator: engine.world().allocator_state(),
         spawn_order: engine.world().spawn_order(),
@@ -1070,13 +1099,26 @@ pub(crate) fn restore_into(
     restore_with(engine, value, RestoreMode::Session(policy))
 }
 
+/// Restores a run-save snapshot into the live session ([`Session`](RestoreMode::Session) under
+/// [`DriftPolicy::Refuse`], keeping the engine's own settings and input overrides).
+///
+/// # Errors
+/// The same document errors as [`restore_into`], plus `L1401` for drift.
+pub(crate) fn resume_into(engine: &mut Engine, value: &Value) -> Result<RestoreReport, Diagnostic> {
+    restore_with(engine, value, RestoreMode::Resume)
+}
+
 /// How [`restore_with`] installs the world it decoded.
 enum RestoreMode<'a> {
     /// An exact continuation of a snapshotted session ([`restore_into`]).
     Session(DriftPolicy),
+    /// A run-save resume: a strict [`Session`](RestoreMode::Session) that keeps the engine's own
+    /// settings and input overrides — player preferences are per machine and may have changed since
+    /// the suspend — so the snapshot's `settings` and `input_bindings` are never read.
+    Resume,
     /// A checkpoint slot inside the live session: the driver is built at the engine's own frame, run
     /// state and speed, and the world goes in through [`Engine::install_checkpoint`]. The slot's
-    /// frame, input, profile and render extent are never read. Strict, like a run-save resume.
+    /// frame, input, gesture state, input overrides, settings, profile and render extent are never read. Strict, like a run-save resume.
     Checkpoint(&'a crate::checkpoints::Slot),
 }
 
@@ -1129,7 +1171,7 @@ fn restore_decoded(
 ) -> Result<RestoreReport, Diagnostic> {
     let policy = match &mode {
         RestoreMode::Session(policy) => *policy,
-        RestoreMode::Checkpoint(_) => DriftPolicy::Refuse,
+        RestoreMode::Resume | RestoreMode::Checkpoint(_) => DriftPolicy::Refuse,
     };
 
     if doc.format != SNAPSHOT_FORMAT {
@@ -1255,6 +1297,33 @@ fn restore_decoded(
         });
     }
     let mut invalid: Vec<Diagnostic> = Vec::new();
+    // A preference never refuses a snapshot: what cannot be honored defaults and is reported.
+    let preferences = match &mode {
+        RestoreMode::Session(_) => crate::engine::Preferences {
+            input_bindings: doc.input_bindings.take().map(|text| {
+                let (parsed, warnings) = crate::input_bindings::parse_text(&text);
+                invalid.extend(warnings);
+                parsed
+            }),
+            settings: Some(match doc.settings.take() {
+                Some(text) => {
+                    let (parsed, warnings) = crate::settings::parse_text(&text);
+                    invalid.extend(warnings);
+                    parsed
+                }
+                None => crate::settings::SettingsDoc::default(),
+            }),
+        },
+        RestoreMode::Resume => crate::engine::Preferences {
+            input_bindings: engine.live_input_overrides(),
+            settings: None,
+        },
+        RestoreMode::Checkpoint(_) => crate::engine::Preferences::default(),
+    };
+    let actions = match &mode {
+        RestoreMode::Session(_) => std::mem::take(&mut doc.actions),
+        RestoreMode::Resume | RestoreMode::Checkpoint(_) => ActionState::default(),
+    };
     let listed = doc
         .entities
         .iter()
@@ -1361,7 +1430,9 @@ fn restore_decoded(
     // schedule is engine configuration that must survive it (the same fix as `scene.load`).
     let schedule = engine.build_schedule(scene_physics.as_ref());
     let (driver_frame, driver_run_state, driver_speed) = match &mode {
-        RestoreMode::Session(_) => (FrameIndex::new(doc.frame), doc.run_state, speed),
+        RestoreMode::Session(_) | RestoreMode::Resume => {
+            (FrameIndex::new(doc.frame), doc.run_state, speed)
+        }
         // A disk slot can be ahead of a fresh boot; the frame never moves back.
         RestoreMode::Checkpoint(slot) => (
             engine.frame().max(slot.info.frame),
@@ -1425,12 +1496,14 @@ fn restore_decoded(
 
     // A slot's own document has no store; only a session restore installs one.
     let checkpoints = match (&mode, doc.checkpoints.take()) {
-        (RestoreMode::Session(_), Some(store)) => Some(store.into_store().map_err(|reason| {
-            Diagnostic::new(
-                code::PROTOCOL_SNAPSHOT_INVALID,
-                format!("snapshot document is not a valid engine snapshot: {reason}"),
-            )
-        })?),
+        (RestoreMode::Session(_) | RestoreMode::Resume, Some(store)) => {
+            Some(store.into_store().map_err(|reason| {
+                Diagnostic::new(
+                    code::PROTOCOL_SNAPSHOT_INVALID,
+                    format!("snapshot document is not a valid engine snapshot: {reason}"),
+                )
+            })?)
+        }
         _ => None,
     };
 
@@ -1447,12 +1520,14 @@ fn restore_decoded(
         game_clock: doc.game_clock,
         input: doc.input,
         pending_input: doc.pending_input,
+        actions,
+        preferences,
         arrived_by_restart: doc.arrived_by_restart,
         render_extent,
         checkpoints,
     };
     match mode {
-        RestoreMode::Session(_) => engine.install_restored(restored),
+        RestoreMode::Session(_) | RestoreMode::Resume => engine.install_restored(restored),
         RestoreMode::Checkpoint(slot) => engine.install_checkpoint(restored, slot),
     }
     .map_err(crate::commands::collapse)?;
@@ -1581,6 +1656,16 @@ mod clock_and_store_schema_tests {
     fn the_snapshot_schema_names_the_clock_scale_fields_and_the_store() {
         let schema = super::snapshot_schema().to_string();
         for name in ["slowed_q16", "pending_q16", "step_q16", "checkpoints"] {
+            assert!(schema.contains(name), "{name} is in the schema");
+        }
+    }
+
+    /// The gesture state, the input overrides and the settings view are part of what
+    /// `replay_content_hash` covers.
+    #[test]
+    fn the_snapshot_schema_names_the_actions_overrides_and_settings() {
+        let schema = super::snapshot_schema().to_string();
+        for name in ["\"actions\"", "\"input_bindings\"", "\"settings\""] {
             assert!(schema.contains(name), "{name} is in the schema");
         }
     }

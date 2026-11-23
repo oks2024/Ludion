@@ -1,11 +1,10 @@
 // Maps a browser keyboard event to an `input.inject` command payload.
 //
-// The engine's input model (ludion-sim's `InputEvent` / `Key`) is deliberately small and
-// layout-independent: `{"kind": "key_down" | "key_up", "key": "<name>"}` where the key name is the
+// The engine's input model (ludion-sim's `InputEvent` / `Key`) is layout-independent: `{"kind": "key_down" | "key_up", "key": "<name>"}` where the key name is the
 // abstract variant name (`"W"`, `"Left"`, `"Space"`, `"Digit1"`). The browser reports physical keys
 // via `KeyboardEvent.code` (`"KeyW"`, `"ArrowLeft"`, `"Space"`, `"Digit1"`), which is exactly the
 // layout-independent identity we want — so this maps `code`, never `key`. Unmapped keys return
-// `null` (the engine only knows the milestone-minimal set), and OS auto-repeat is suppressed so a
+// `null` (the engine has no name for it), and OS auto-repeat is suppressed so a
 // held key produces exactly one `key_down` edge, mirroring the engine's own no-repeat semantics.
 //
 // Shift, Ctrl and Alt are folded: left and right are one engine key, held while either side is down.
@@ -22,7 +21,16 @@ export type EngineKey =
   | 'Digit5' | 'Digit6' | 'Digit7' | 'Digit8' | 'Digit9'
   | 'Up' | 'Down' | 'Left' | 'Right'
   | 'Space' | 'Enter' | 'Escape'
-  | 'Shift' | 'Ctrl' | 'Alt';
+  | 'Shift' | 'Ctrl' | 'Alt'
+  | 'Tab' | 'Backspace' | 'CapsLock'
+  | 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'F7' | 'F8' | 'F9' | 'F10' | 'F11' | 'F12'
+  | 'Minus' | 'Equal' | 'BracketLeft' | 'BracketRight' | 'Backslash' | 'Semicolon' | 'Quote'
+  | 'Backquote' | 'Comma' | 'Period' | 'Slash'
+  | 'Insert' | 'Delete' | 'Home' | 'End' | 'PageUp' | 'PageDown'
+  | 'Numpad0' | 'Numpad1' | 'Numpad2' | 'Numpad3' | 'Numpad4'
+  | 'Numpad5' | 'Numpad6' | 'Numpad7' | 'Numpad8' | 'Numpad9'
+  | 'NumpadAdd' | 'NumpadSubtract' | 'NumpadMultiply' | 'NumpadDivide' | 'NumpadDecimal'
+  | 'NumpadEnter';
 
 const ARROWS: Readonly<Record<string, EngineKey>> = {
   ArrowUp: 'Up',
@@ -41,18 +49,46 @@ const NAMED: Readonly<Record<string, EngineKey>> = {
   ControlRight: 'Ctrl',
   AltLeft: 'Alt',
   AltRight: 'Alt',
+  Tab: 'Tab',
+  Backspace: 'Backspace',
+  CapsLock: 'CapsLock',
+  Minus: 'Minus',
+  Equal: 'Equal',
+  BracketLeft: 'BracketLeft',
+  BracketRight: 'BracketRight',
+  Backslash: 'Backslash',
+  Semicolon: 'Semicolon',
+  Quote: 'Quote',
+  Backquote: 'Backquote',
+  Comma: 'Comma',
+  Period: 'Period',
+  Slash: 'Slash',
+  Insert: 'Insert',
+  Delete: 'Delete',
+  Home: 'Home',
+  End: 'End',
+  PageUp: 'PageUp',
+  PageDown: 'PageDown',
+  NumpadAdd: 'NumpadAdd',
+  NumpadSubtract: 'NumpadSubtract',
+  NumpadMultiply: 'NumpadMultiply',
+  NumpadDivide: 'NumpadDivide',
+  NumpadDecimal: 'NumpadDecimal',
+  NumpadEnter: 'NumpadEnter',
 };
 
 /**
  * Translates a `KeyboardEvent.code` to the engine's abstract key name, or `null` if the engine has
- * no such key. Handles the four families the milestone set covers: `KeyA`–`KeyZ`, `Digit0`–`Digit9`,
- * the four arrows, Space/Enter/Escape, and either side of Shift/Ctrl/Alt (folded by `HeldKeys`).
+ * no such key. Handles the whole keyboard: `KeyA`–`KeyZ`, `Digit0`–`Digit9`, `F1`–`F12`,
+ * `Numpad0`–`Numpad9`, the four arrows, the named keys (punctuation, editing block, numpad
+ * operators), and either side of Shift/Ctrl/Alt (folded by `HeldKeys`). DOM `code` names equal the
+ * engine's, arrows aside.
  */
 export function codeToEngineKey(code: string): EngineKey | null {
   if (/^Key[A-Z]$/.test(code)) {
     return code.slice(3) as EngineKey;
   }
-  if (/^Digit[0-9]$/.test(code)) {
+  if (/^(Digit[0-9]|Numpad[0-9]|F([1-9]|1[0-2]))$/.test(code)) {
     return code as EngineKey;
   }
   return ARROWS[code] ?? NAMED[code] ?? null;
