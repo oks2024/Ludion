@@ -42,6 +42,15 @@ describe('sceneChangeOutcome', () => {
     });
   });
 
+  it('a checkpoint restore with no path resets and clears the Save path', () => {
+    expect(sceneChangeOutcome({ kind: 'checkpoint_restore', path: null }, none, 'a.yaml')).toEqual({
+      resetEditState: true,
+      clearDirty: true,
+      savePath: '',
+      ownSaveId: null,
+    });
+  });
+
   it('a load is a replaced world', () => {
     expect(sceneChangeOutcome({ kind: 'load', path: 'main.yaml' }, none, '')).toEqual({
       resetEditState: true,

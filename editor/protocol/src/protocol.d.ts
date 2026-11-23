@@ -227,6 +227,44 @@ export type Command =
       method: 'profile.capture';
       params: ProfileCaptureParams;
       [k: string]: unknown;
+    }
+  | {
+      method: 'ai.describe';
+      [k: string]: unknown;
+    }
+  | {
+      method: 'checkpoint.list';
+      [k: string]: unknown;
+    }
+  | {
+      method: 'checkpoint.capture';
+      params: CheckpointNameParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'checkpoint.restore';
+      params: CheckpointNameParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'checkpoint.discard';
+      params: CheckpointNameParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'sequence.play';
+      params: SequencePlayParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'sequence.seek';
+      params: SequenceSeekParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'sequence.skip';
+      params: SequenceSkipParams;
+      [k: string]: unknown;
     };
 /**
  * Which axis `map.spawn` mirrors the room across; the same spelling as `generate-map --mirror`.
@@ -270,11 +308,19 @@ export type GiRebakeMode = 'auto' | 'hold';
 export type CullFrom = 'view' | 'game' | 'frozen';
 /**
  * A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,
- * the local-light shadow atlas, or the lit frame tinted by sun cascade.
+ * the local-light shadow atlas, the lit frame tinted by sun cascade, the diffuse irradiance, the
+ * exposure meter's histogram, or the rain occlusion map.
  * The spelling matches `ludion render --debug-view`.
  */
 export type RenderDebugView =
-  'ssr_confidence' | 'ssr_footprint' | 'probe_index' | 'local_shadow_atlas' | 'sun_cascades';
+  | 'ssr_confidence'
+  | 'ssr_footprint'
+  | 'probe_index'
+  | 'local_shadow_atlas'
+  | 'sun_cascades'
+  | 'irradiance'
+  | 'exposure_meter'
+  | 'rain_occlusion';
 /**
  * The event envelope: one [`Event`] (its `event` name + `data`), plus `sub`, `seq`, and an optional
  * `frame`.
@@ -564,6 +610,44 @@ export type Request1 =
   | {
       method: 'profile.capture';
       params: ProfileCaptureParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'ai.describe';
+      [k: string]: unknown;
+    }
+  | {
+      method: 'checkpoint.list';
+      [k: string]: unknown;
+    }
+  | {
+      method: 'checkpoint.capture';
+      params: CheckpointNameParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'checkpoint.restore';
+      params: CheckpointNameParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'checkpoint.discard';
+      params: CheckpointNameParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'sequence.play';
+      params: SequencePlayParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'sequence.seek';
+      params: SequenceSeekParams;
+      [k: string]: unknown;
+    }
+  | {
+      method: 'sequence.skip';
+      params: SequenceSkipParams;
       [k: string]: unknown;
     };
 /**
@@ -982,6 +1066,40 @@ export type Response1 =
             kind: 'profile_report';
             report: ProfileReport;
             [k: string]: unknown;
+          }
+        | {
+            kind: 'ai_describe';
+            /**
+             * The machines, in first-run order.
+             */
+            machines: AiMachine[];
+            [k: string]: unknown;
+          }
+        | {
+            /**
+             * The disk slot, when one is loaded. Omitted when absent.
+             */
+            disk?: CheckpointSlot | null;
+            kind: 'checkpoints';
+            /**
+             * The latest restore attempt's outcome. Omitted before any.
+             */
+            last_restore?: CheckpointRestore | null;
+            /**
+             * The named in-memory slots, in capture order.
+             */
+            slots: CheckpointSlot[];
+            [k: string]: unknown;
+          }
+        | {
+            /**
+             * How the player ended by the seek's last tick. Omitted while it is still playing, and
+             * always omitted by `sequence.play`.
+             */
+            ended?: SequenceEndKind | null;
+            kind: 'sequence';
+            player: EntityId3;
+            [k: string]: unknown;
           };
       [k: string]: unknown;
     }
@@ -1062,6 +1180,38 @@ export type RestoreEntry =
       kind: 'snapshot_field_unknown';
       [k: string]: unknown;
     };
+/**
+ * The outcome of the latest checkpoint restore attempt.
+ */
+export type CheckpointRestore =
+  | {
+      /**
+       * The engine frame the restore applied at.
+       */
+      frame: number;
+      /**
+       * The slot restored.
+       */
+      name: string;
+      outcome: 'restored';
+      [k: string]: unknown;
+    }
+  | {
+      /**
+       * The slot asked for.
+       */
+      name: string;
+      outcome: 'refused';
+      /**
+       * Why it was refused.
+       */
+      reason: string;
+      [k: string]: unknown;
+    };
+/**
+ * How a sequence player ended.
+ */
+export type SequenceEndKind = 'completed' | 'skipped' | 'cancelled';
 /**
  * The success payload of a command response, tagged by `kind`.
  *
@@ -1458,6 +1608,40 @@ export type ResponseBody =
   | {
       kind: 'profile_report';
       report: ProfileReport;
+      [k: string]: unknown;
+    }
+  | {
+      kind: 'ai_describe';
+      /**
+       * The machines, in first-run order.
+       */
+      machines: AiMachine[];
+      [k: string]: unknown;
+    }
+  | {
+      /**
+       * The disk slot, when one is loaded. Omitted when absent.
+       */
+      disk?: CheckpointSlot | null;
+      kind: 'checkpoints';
+      /**
+       * The latest restore attempt's outcome. Omitted before any.
+       */
+      last_restore?: CheckpointRestore | null;
+      /**
+       * The named in-memory slots, in capture order.
+       */
+      slots: CheckpointSlot[];
+      [k: string]: unknown;
+    }
+  | {
+      /**
+       * How the player ended by the seek's last tick. Omitted while it is still playing, and
+       * always omitted by `sequence.play`.
+       */
+      ended?: SequenceEndKind | null;
+      kind: 'sequence';
+      player: EntityId3;
       [k: string]: unknown;
     };
 
@@ -2009,6 +2193,13 @@ export interface RenderScreenshotParams {
    */
   height?: number | null;
   /**
+   * Render the named `RenderView`'s image at its own `size` (what `ludion render --view` draws)
+   * instead of the main frame. `width`/`height` still size the extract's main extent; `camera`
+   * does not apply to a view, which renders through its own `Camera`. An unknown, disabled or
+   * over-budget name is `L2379`.
+   */
+  view?: string | null;
+  /**
    * Optional output width in pixels.
    */
   width?: number | null;
@@ -2024,6 +2215,12 @@ export interface RenderBoundsParams {
    * Which camera to project the screen rects through; omit for the scene's own.
    */
   camera?: 'scene' | 'view';
+  /**
+   * Project through the named `RenderView`'s camera at its own `size`; `render_size` in the reply
+   * is that size. `camera` does not apply to a view. Every renderable is reported (no layer
+   * filtering). An unknown, disabled or over-budget name is `L2379`.
+   */
+  view?: string | null;
 }
 /**
  * Parameters for `render.gi_rebake`.
@@ -2364,6 +2561,103 @@ export interface ProfileCaptureParams {
   include_samples?: boolean;
 }
 /**
+ * Parameters for `checkpoint.capture`, `checkpoint.restore` and `checkpoint.discard`.
+ *
+ * # Example
+ * ```
+ * use ludion_protocol::Command;
+ * use ludion_protocol::command::CheckpointNameParams;
+ *
+ * let cmd = Command::CheckpointCapture(CheckpointNameParams { name: "before-boss".into() });
+ * assert_eq!(
+ *     serde_json::to_value(&cmd).unwrap(),
+ *     serde_json::json!({
+ *         "method": "checkpoint.capture",
+ *         "params": { "name": "before-boss" },
+ *     }),
+ * );
+ * ```
+ */
+export interface CheckpointNameParams {
+  /**
+   * The slot name.
+   */
+  name: string;
+}
+/**
+ * Parameters for `sequence.play`.
+ *
+ * # Example
+ * ```
+ * use std::collections::BTreeMap;
+ * use ludion_core::ids::EntityId;
+ * use ludion_protocol::Command;
+ * use ludion_protocol::command::SequencePlayParams;
+ *
+ * let cmd = Command::SequencePlay(SequencePlayParams {
+ *     sequence: "sequences/intro.yaml".into(),
+ *     bindings: BTreeMap::from([("hero".to_string(), EntityId::new(3, 0))]),
+ * });
+ * assert_eq!(cmd.method(), "sequence.play");
+ * assert_eq!(
+ *     serde_json::to_value(&cmd).unwrap()["params"]["sequence"],
+ *     "sequences/intro.yaml",
+ * );
+ * ```
+ */
+export interface SequencePlayParams {
+  /**
+   * Role name → the entity playing it. A role the document does not declare is `L4351`.
+   */
+  bindings?: {
+    [k: string]: EntityId;
+  };
+  /**
+   * The document's content-root path, as the sequence store keys it.
+   */
+  sequence: string;
+}
+/**
+ * Mirrors the derived serde shape of [`EntityId`].
+ */
+export interface EntityId {
+  generation: number;
+  index: number;
+  [k: string]: unknown;
+}
+/**
+ * Parameters for `sequence.seek`.
+ */
+export interface SequenceSeekParams {
+  player: EntityId1;
+  /**
+   * The playhead tick to land on: the world right after the update whose playhead is `tick`.
+   */
+  tick: number;
+}
+/**
+ * Mirrors the derived serde shape of [`EntityId`].
+ */
+export interface EntityId1 {
+  generation: number;
+  index: number;
+  [k: string]: unknown;
+}
+/**
+ * Parameters for `sequence.skip`.
+ */
+export interface SequenceSkipParams {
+  player: EntityId2;
+}
+/**
+ * Mirrors the derived serde shape of [`EntityId`].
+ */
+export interface EntityId2 {
+  generation: number;
+  index: number;
+  [k: string]: unknown;
+}
+/**
  * The payload of a `log` event.
  */
 export interface LogEvent {
@@ -2417,7 +2711,7 @@ export interface SceneChangedData {
   /**
    * What happened.
    */
-  kind: 'load' | 'save' | 'restore' | 'switch';
+  kind: 'load' | 'save' | 'restore' | 'switch' | 'checkpoint_restore';
   /**
    * The content-root-relative scene path of the scene concerned; absent for an `engine.restore`,
    * or a restart with no known path.
@@ -2452,9 +2746,22 @@ export interface AssetReloadedData {
  */
 export interface ProfileWindowData {
   /**
+   * Assembly posing counters. Offline-only, as on the report: the live profiler leaves it
+   * `None`, for `cluster`'s reason.
+   */
+  assembly?: AssemblyProfile | null;
+  /**
    * Whether this window answers a capture request rather than the rolling stream.
    */
   capture: boolean;
+  /**
+   * Checkpoint capture and restore timings over the window; absent when it had none.
+   */
+  checkpoints?: CheckpointProfile | null;
+  /**
+   * The metered exposure verdict. Offline-only; the live profiler leaves it `None`.
+   */
+  exposure?: ExposureProfile | null;
   /**
    * The frame the window's first sample ticked as.
    */
@@ -2492,6 +2799,97 @@ export interface ProfileWindowData {
    * window's frames reached no subscriber.
    */
   transport?: TransportProfile | null;
+  [k: string]: unknown;
+}
+/**
+ * Voxel-assembly posing inside extract: the per-extract work counters, as medians.
+ *
+ * Deterministic shape, like `SkinProfile`'s counters. Counts the drawn assemblies once each.
+ */
+export interface AssemblyProfile {
+  /**
+   * Median IK goals solved (look-ats and point chains) per extract.
+   */
+  ik_chains_solved_median: number;
+  /**
+   * Median ground ray casts the IK feet cast per extract.
+   */
+  ik_ground_casts_median: number;
+  /**
+   * Median assembly instances posed per extract.
+   */
+  instances_median: number;
+  /**
+   * Median animation layers sampled per extract.
+   */
+  layers_sampled_median: number;
+  /**
+   * Median parts posed per extract.
+   */
+  parts_posed_median: number;
+  /**
+   * Measured extracts the medians are over.
+   */
+  sampled_frames: number;
+  [k: string]: unknown;
+}
+/**
+ * Wall time of checkpoint captures and in-memory restores. Disk loads, persists and discards are
+ * not timed.
+ */
+export interface CheckpointProfile {
+  /**
+   * One entry per key that occurred, capture first.
+   */
+  timings: CheckpointTiming[];
+  [k: string]: unknown;
+}
+/**
+ * One checkpoint operation key's timing over the measured window.
+ */
+export interface CheckpointTiming {
+  /**
+   * Operations timed.
+   */
+  count: number;
+  /**
+   * The produced-frame index the slowest operation ran in.
+   */
+  max_frame: number;
+  /**
+   * Slowest operation.
+   */
+  max_ms: number;
+  /**
+   * Median wall time.
+   */
+  median_ms: number;
+  /**
+   * `checkpoint_capture` or `checkpoint_restore`.
+   */
+  name: string;
+  [k: string]: unknown;
+}
+/**
+ * The metered exposure verdict (`ExposureMode::Metered`), reduced over the measured frames.
+ */
+export interface ExposureProfile {
+  /**
+   * Readings whose correction hit the clamp.
+   */
+  clamped_frames: number;
+  /**
+   * Median exposure correction in EV.
+   */
+  correction_ev_median: number;
+  /**
+   * Median log2 mean luminance the meter saw.
+   */
+  mean_log2_median: number;
+  /**
+   * Readings the medians are over.
+   */
+  sampled_frames: number;
   [k: string]: unknown;
 }
 /**
@@ -3072,6 +3470,17 @@ export interface EntityIdSchema17 {
  */
 export interface ProfileReport {
   /**
+   * Deterministic counters of voxel-assembly posing inside extract. Filled by the **offline**
+   * driver; absent when no measured extract posed an assembly, and for a live capture, for
+   * `cluster`'s reason.
+   */
+  assembly?: AssemblyProfile | null;
+  /**
+   * Wall time of checkpoint captures and in-memory restores inside the measured window. Absent
+   * when the window captured nothing and restored nothing. Filled offline and by a live capture.
+   */
+  checkpoints?: CheckpointProfile | null;
+  /**
    * Clustered-forward light binning: what the frame's cluster tables cost to build and how
    * crowded they came out. Filled by the **offline** driver and absent for a live capture — the
    * mirror image of `transport`, and for the mirror-image reason: the live host builds its
@@ -3091,6 +3500,11 @@ export interface ProfileReport {
    * absent otherwise and for a live capture, for `cluster`'s reason.
    */
   decals?: DecalProfile | null;
+  /**
+   * The metered exposure verdict read back during the GPU loop. Filled by the **offline**
+   * driver; absent for a manual-exposure scene, with no adapter, and for a live capture.
+   */
+  exposure?: ExposureProfile | null;
   /**
    * Median wall time of every extract phase, and the extract time outside all of them. Filled by
    * the **offline** driver and absent for a live capture, for `cluster`'s reason. Read beside
@@ -3834,6 +4248,156 @@ export interface SunCascadeSliceProfile {
    * World metres per shadow texel.
    */
   texel: number;
+  [k: string]: unknown;
+}
+/**
+ * One behaviour machine in an `ai.describe` reply.
+ *
+ * # Example
+ * ```
+ * use ludion_protocol::response::AiMachine;
+ *
+ * let m = AiMachine {
+ *     machine: "Guard".into(),
+ *     component: "GuardMind".into(),
+ *     root: "root".into(),
+ *     leaf_first: false,
+ *     inbox_capacity: 8,
+ *     game_tick: 0,
+ *     states: vec![],
+ *     agents: vec![],
+ * };
+ * assert_eq!(serde_json::to_value(&m).unwrap()["component"], "GuardMind");
+ * ```
+ */
+export interface AiMachine {
+  /**
+   * The live agents, ascending entity order.
+   */
+  agents: AiAgent[];
+  /**
+   * The component name, `"{machine}Mind"`.
+   */
+  component: string;
+  /**
+   * The gameplay tick of the machine's latest tick.
+   */
+  game_tick: number;
+  /**
+   * Events an inbox holds before the oldest is dropped.
+   */
+  inbox_capacity: number;
+  /**
+   * Whether dispatch walks the active path leaf first.
+   */
+  leaf_first: boolean;
+  /**
+   * The machine's name.
+   */
+  machine: string;
+  /**
+   * The root state's name.
+   */
+  root: string;
+  /**
+   * Every state, in declaration order.
+   */
+  states: AiState[];
+  [k: string]: unknown;
+}
+/**
+ * One live agent of an [`AiMachine`].
+ */
+export interface AiAgent {
+  /**
+   * Events that overflowed the inbox since the agent was created.
+   */
+  dropped: number;
+  /**
+   * The gameplay tick each active level was entered, root to leaf.
+   */
+  entered: number[];
+  entity: EntityIdSchema18;
+  /**
+   * Events waiting in the inbox.
+   */
+  inbox: number;
+  /**
+   * The entity's `Name`, or `null`.
+   */
+  name?: string | null;
+  /**
+   * The active path, root first; empty before the agent starts.
+   */
+  path: string[];
+  /**
+   * The machine's `game_tick` minus each `entered`.
+   */
+  ticks_in: number[];
+  [k: string]: unknown;
+}
+/**
+ * Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ "index": u32, "generation": u32 }`.
+ */
+export interface EntityIdSchema18 {
+  generation: number;
+  index: number;
+  [k: string]: unknown;
+}
+/**
+ * A state of an [`AiMachine`] and its place in the hierarchy.
+ */
+export interface AiState {
+  /**
+   * The child entered after it; `null` for a leaf.
+   */
+  initial?: string | null;
+  /**
+   * Its parent; `null` for the root.
+   */
+  parent?: string | null;
+  /**
+   * The state's name.
+   */
+  state: string;
+  [k: string]: unknown;
+}
+/**
+ * One checkpoint slot in a `checkpoint.*` reply.
+ *
+ * # Example
+ * ```
+ * use ludion_protocol::response::CheckpointSlot;
+ *
+ * let s = CheckpointSlot { name: "a".into(), frame: 3, game_frame: 3, scene: None };
+ * assert_eq!(serde_json::to_value(&s).unwrap()["frame"], 3);
+ * ```
+ */
+export interface CheckpointSlot {
+  /**
+   * The engine frame the slot was captured at.
+   */
+  frame: number;
+  /**
+   * The gameplay frame the slot was captured at.
+   */
+  game_frame: number;
+  /**
+   * The slot name.
+   */
+  name: string;
+  /**
+   * The scene path the world was loaded from, when it had one.
+   */
+  scene?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * Mirrors the derived serde shape of [`EntityId`].
+ */
+export interface EntityId3 {
+  generation: number;
+  index: number;
   [k: string]: unknown;
 }
 /**

@@ -65,6 +65,20 @@
           }
         ]
       },
+      "CheckpointNameParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `checkpoint.capture`, `checkpoint.restore` and `checkpoint.discard`.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::CheckpointNameParams;\n\nlet cmd = Command::CheckpointCapture(CheckpointNameParams { name: \"before-boss\".into() });\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({\n        \"method\": \"checkpoint.capture\",\n        \"params\": { \"name\": \"before-boss\" },\n    }),\n);\n```",
+        "properties": {
+          "name": {
+            "description": "The slot name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "ComponentGetParams": {
         "additionalProperties": false,
         "description": "Parameters for `component.get`.",
@@ -170,6 +184,26 @@
         },
         "required": [
           "entity"
+        ],
+        "type": "object"
+      },
+      "EntityId": {
+        "description": "Mirrors the derived serde shape of [`EntityId`].",
+        "properties": {
+          "generation": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "index": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "generation"
         ],
         "type": "object"
       },
@@ -640,6 +674,13 @@
           "camera": {
             "$ref": "#/$defs/CameraChoice",
             "description": "Which camera to project the screen rects through; omit for the scene's own."
+          },
+          "view": {
+            "description": "Project through the named `RenderView`'s camera at its own `size`; `render_size` in the reply\nis that size. `camera` does not apply to a view. Every renderable is reported (no layer\nfiltering). An unknown, disabled or over-budget name is `L2379`.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -673,7 +714,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, or the lit frame tinted by sun cascade.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, the lit frame tinted by sun cascade, the diffuse irradiance, the\nexposure meter's histogram, or the rain occlusion map.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -698,6 +739,21 @@
           {
             "const": "sun_cascades",
             "description": "Each mesh fragment tinted by the sun cascade that shades it.",
+            "type": "string"
+          },
+          {
+            "const": "irradiance",
+            "description": "Diffuse irradiance per mesh fragment, `sRGB(E/4)`: saturates at E=4 (`ludion docs light-exposure`).",
+            "type": "string"
+          },
+          {
+            "const": "exposure_meter",
+            "description": "The metered frame dimmed, with its 64-bin luminance histogram drawn over it.",
+            "type": "string"
+          },
+          {
+            "const": "rain_occlusion",
+            "description": "Every opaque mesh fragment inside the rain occlusion map tinted: blue where rain reaches it,\norange where it is covered. Needs a `Rain`.",
             "type": "string"
           }
         ]
@@ -739,6 +795,13 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "view": {
+            "description": "Render the named `RenderView`'s image at its own `size` (what `ludion render --view` draws)\ninstead of the main frame. `width`/`height` still size the extract's main extent; `camera`\ndoes not apply to a view, which renders through its own `Camera`. An unknown, disabled or\nover-budget name is `L2379`.",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -866,6 +929,63 @@
         },
         "required": [
           "path"
+        ],
+        "type": "object"
+      },
+      "SequencePlayParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `sequence.play`.\n\n# Example\n```\nuse std::collections::BTreeMap;\nuse ludion_core::ids::EntityId;\nuse ludion_protocol::Command;\nuse ludion_protocol::command::SequencePlayParams;\n\nlet cmd = Command::SequencePlay(SequencePlayParams {\n    sequence: \"sequences/intro.yaml\".into(),\n    bindings: BTreeMap::from([(\"hero\".to_string(), EntityId::new(3, 0))]),\n});\nassert_eq!(cmd.method(), \"sequence.play\");\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap()[\"params\"][\"sequence\"],\n    \"sequences/intro.yaml\",\n);\n```",
+        "properties": {
+          "bindings": {
+            "additionalProperties": {
+              "$ref": "#/$defs/EntityId"
+            },
+            "default": {},
+            "description": "Role name → the entity playing it. A role the document does not declare is `L4351`.",
+            "type": "object"
+          },
+          "sequence": {
+            "description": "The document's content-root path, as the sequence store keys it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence"
+        ],
+        "type": "object"
+      },
+      "SequenceSeekParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `sequence.seek`.",
+        "properties": {
+          "player": {
+            "$ref": "#/$defs/EntityId",
+            "description": "The player the last `sequence.play` returned."
+          },
+          "tick": {
+            "description": "The playhead tick to land on: the world right after the update whose playhead is `tick`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "player",
+          "tick"
+        ],
+        "type": "object"
+      },
+      "SequenceSkipParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `sequence.skip`.",
+        "properties": {
+          "player": {
+            "$ref": "#/$defs/EntityId",
+            "description": "The player to skip."
+          }
+        },
+        "required": [
+          "player"
         ],
         "type": "object"
       },
@@ -1668,12 +1788,185 @@
           "params"
         ],
         "type": "object"
+      },
+      {
+        "description": "`ai.describe` — the behaviour machines and their agents: the same `machines` list the `ai`\nkey of `engine.describe` carries. `machines: []` before any machine has ticked.",
+        "properties": {
+          "method": {
+            "const": "ai.describe",
+            "type": "string"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`checkpoint.list` — the named checkpoint slots, the disk slot and the last restore outcome.\nRefused with `L4210` when the engine was built without checkpoints.",
+        "properties": {
+          "method": {
+            "const": "checkpoint.list",
+            "type": "string"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`checkpoint.capture` — capture the world into the named slot, replacing a slot of that name.\nReplies with the store after the capture.",
+        "properties": {
+          "method": {
+            "const": "checkpoint.capture",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CheckpointNameParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`checkpoint.restore` — replace the world with the named slot's capture. Replies with the\nstore after the restore.",
+        "properties": {
+          "method": {
+            "const": "checkpoint.restore",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CheckpointNameParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`checkpoint.discard` — drop the named slot; an unknown name is not an error. Replies with\nthe store after the discard.",
+        "properties": {
+          "method": {
+            "const": "checkpoint.discard",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CheckpointNameParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`sequence.play` — start a `kind: sequence` document with each role bound to an entity.\nReplies with the player; the host keeps the play's starting state so `sequence.seek` can\nrewind to it. Refused with `L4354` when the engine was built without sequences.",
+        "properties": {
+          "method": {
+            "const": "sequence.play",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SequencePlayParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`sequence.seek` — put the world where the last `sequence.play` left it, then run `tick + 1`\nticks, so the world is the one `ludion render --sequence ... --at tick` renders.",
+        "properties": {
+          "method": {
+            "const": "sequence.seek",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SequenceSeekParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`sequence.skip` — cut the player to its end state at the next tick. `L4357` when the player\nis not live or its document is not skippable.",
+        "properties": {
+          "method": {
+            "const": "sequence.skip",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SequenceSkipParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
       }
     ],
     "title": "Command"
   },
   "event": {
     "$defs": {
+      "AssemblyProfile": {
+        "description": "Voxel-assembly posing inside extract: the per-extract work counters, as medians.\n\nDeterministic shape, like `SkinProfile`'s counters. Counts the drawn assemblies once each.",
+        "properties": {
+          "ik_chains_solved_median": {
+            "description": "Median IK goals solved (look-ats and point chains) per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "ik_ground_casts_median": {
+            "description": "Median ground ray casts the IK feet cast per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "instances_median": {
+            "description": "Median assembly instances posed per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "layers_sampled_median": {
+            "description": "Median animation layers sampled per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "parts_posed_median": {
+            "description": "Median parts posed per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "sampled_frames": {
+            "description": "Measured extracts the medians are over.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sampled_frames",
+          "instances_median",
+          "parts_posed_median",
+          "layers_sampled_median",
+          "ik_chains_solved_median",
+          "ik_ground_casts_median"
+        ],
+        "type": "object"
+      },
       "AssetReloadedData": {
         "description": "The payload of an `asset.reloaded` event.",
         "properties": {
@@ -1689,6 +1982,95 @@
         "required": [
           "path",
           "hash"
+        ],
+        "type": "object"
+      },
+      "CheckpointProfile": {
+        "description": "Wall time of checkpoint captures and in-memory restores. Disk loads, persists and discards are\nnot timed.",
+        "properties": {
+          "timings": {
+            "description": "One entry per key that occurred, capture first.",
+            "items": {
+              "$ref": "#/$defs/CheckpointTiming"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "timings"
+        ],
+        "type": "object"
+      },
+      "CheckpointTiming": {
+        "description": "One checkpoint operation key's timing over the measured window.",
+        "properties": {
+          "count": {
+            "description": "Operations timed.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_frame": {
+            "description": "The produced-frame index the slowest operation ran in.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_ms": {
+            "description": "Slowest operation.",
+            "format": "double",
+            "type": "number"
+          },
+          "median_ms": {
+            "description": "Median wall time.",
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "description": "`checkpoint_capture` or `checkpoint_restore`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "count",
+          "median_ms",
+          "max_ms",
+          "max_frame"
+        ],
+        "type": "object"
+      },
+      "ExposureProfile": {
+        "description": "The metered exposure verdict (`ExposureMode::Metered`), reduced over the measured frames.",
+        "properties": {
+          "clamped_frames": {
+            "description": "Readings whose correction hit the clamp.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "correction_ev_median": {
+            "description": "Median exposure correction in EV.",
+            "format": "double",
+            "type": "number"
+          },
+          "mean_log2_median": {
+            "description": "Median log2 mean luminance the meter saw.",
+            "format": "double",
+            "type": "number"
+          },
+          "sampled_frames": {
+            "description": "Readings the medians are over.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sampled_frames",
+          "correction_ev_median",
+          "mean_log2_median",
+          "clamped_frames"
         ],
         "type": "object"
       },
@@ -1917,9 +2299,42 @@
       "ProfileWindowData": {
         "description": "One closed window of live frames: the medians, and the raw samples they were taken over.\n\nThe payload of a `profile` subscription event — one per window, so a stream of them reads as\nroughly 1 Hz at the default tick rate.",
         "properties": {
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AssemblyProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Assembly posing counters. Offline-only, as on the report: the live profiler leaves it\n`None`, for `cluster`'s reason."
+          },
           "capture": {
             "description": "Whether this window answers a capture request rather than the rolling stream.",
             "type": "boolean"
+          },
+          "checkpoints": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CheckpointProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Checkpoint capture and restore timings over the window; absent when it had none."
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ExposureProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The metered exposure verdict. Offline-only; the live profiler leaves it `None`."
           },
           "first_frame": {
             "description": "The frame the window's first sample ticked as.",
@@ -2025,6 +2440,11 @@
           {
             "const": "switch",
             "description": "A game-driven scene switch or restart.",
+            "type": "string"
+          },
+          {
+            "const": "checkpoint_restore",
+            "description": "A checkpoint restore replaced the world (`checkpoint.restore` or a game's\n`Checkpoints::restore`/`load_disk`).",
             "type": "string"
           }
         ]
@@ -2528,6 +2948,20 @@
           }
         ]
       },
+      "CheckpointNameParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `checkpoint.capture`, `checkpoint.restore` and `checkpoint.discard`.\n\n# Example\n```\nuse ludion_protocol::Command;\nuse ludion_protocol::command::CheckpointNameParams;\n\nlet cmd = Command::CheckpointCapture(CheckpointNameParams { name: \"before-boss\".into() });\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap(),\n    serde_json::json!({\n        \"method\": \"checkpoint.capture\",\n        \"params\": { \"name\": \"before-boss\" },\n    }),\n);\n```",
+        "properties": {
+          "name": {
+            "description": "The slot name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "ComponentGetParams": {
         "additionalProperties": false,
         "description": "Parameters for `component.get`.",
@@ -2633,6 +3067,26 @@
         },
         "required": [
           "entity"
+        ],
+        "type": "object"
+      },
+      "EntityId": {
+        "description": "Mirrors the derived serde shape of [`EntityId`].",
+        "properties": {
+          "generation": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "index": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "generation"
         ],
         "type": "object"
       },
@@ -3103,6 +3557,13 @@
           "camera": {
             "$ref": "#/$defs/CameraChoice",
             "description": "Which camera to project the screen rects through; omit for the scene's own."
+          },
+          "view": {
+            "description": "Project through the named `RenderView`'s camera at its own `size`; `render_size` in the reply\nis that size. `camera` does not apply to a view. Every renderable is reported (no layer\nfiltering). An unknown, disabled or over-budget name is `L2379`.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -3136,7 +3597,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, or the lit frame tinted by sun cascade.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, the lit frame tinted by sun cascade, the diffuse irradiance, the\nexposure meter's histogram, or the rain occlusion map.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -3161,6 +3622,21 @@
           {
             "const": "sun_cascades",
             "description": "Each mesh fragment tinted by the sun cascade that shades it.",
+            "type": "string"
+          },
+          {
+            "const": "irradiance",
+            "description": "Diffuse irradiance per mesh fragment, `sRGB(E/4)`: saturates at E=4 (`ludion docs light-exposure`).",
+            "type": "string"
+          },
+          {
+            "const": "exposure_meter",
+            "description": "The metered frame dimmed, with its 64-bin luminance histogram drawn over it.",
+            "type": "string"
+          },
+          {
+            "const": "rain_occlusion",
+            "description": "Every opaque mesh fragment inside the rain occlusion map tinted: blue where rain reaches it,\norange where it is covered. Needs a `Rain`.",
             "type": "string"
           }
         ]
@@ -3202,6 +3678,13 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "view": {
+            "description": "Render the named `RenderView`'s image at its own `size` (what `ludion render --view` draws)\ninstead of the main frame. `width`/`height` still size the extract's main extent; `camera`\ndoes not apply to a view, which renders through its own `Camera`. An unknown, disabled or\nover-budget name is `L2379`.",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -3335,6 +3818,63 @@
         },
         "required": [
           "path"
+        ],
+        "type": "object"
+      },
+      "SequencePlayParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `sequence.play`.\n\n# Example\n```\nuse std::collections::BTreeMap;\nuse ludion_core::ids::EntityId;\nuse ludion_protocol::Command;\nuse ludion_protocol::command::SequencePlayParams;\n\nlet cmd = Command::SequencePlay(SequencePlayParams {\n    sequence: \"sequences/intro.yaml\".into(),\n    bindings: BTreeMap::from([(\"hero\".to_string(), EntityId::new(3, 0))]),\n});\nassert_eq!(cmd.method(), \"sequence.play\");\nassert_eq!(\n    serde_json::to_value(&cmd).unwrap()[\"params\"][\"sequence\"],\n    \"sequences/intro.yaml\",\n);\n```",
+        "properties": {
+          "bindings": {
+            "additionalProperties": {
+              "$ref": "#/$defs/EntityId"
+            },
+            "default": {},
+            "description": "Role name → the entity playing it. A role the document does not declare is `L4351`.",
+            "type": "object"
+          },
+          "sequence": {
+            "description": "The document's content-root path, as the sequence store keys it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence"
+        ],
+        "type": "object"
+      },
+      "SequenceSeekParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `sequence.seek`.",
+        "properties": {
+          "player": {
+            "$ref": "#/$defs/EntityId",
+            "description": "The player the last `sequence.play` returned."
+          },
+          "tick": {
+            "description": "The playhead tick to land on: the world right after the update whose playhead is `tick`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "player",
+          "tick"
+        ],
+        "type": "object"
+      },
+      "SequenceSkipParams": {
+        "additionalProperties": false,
+        "description": "Parameters for `sequence.skip`.",
+        "properties": {
+          "player": {
+            "$ref": "#/$defs/EntityId",
+            "description": "The player to skip."
+          }
+        },
+        "required": [
+          "player"
         ],
         "type": "object"
       },
@@ -4137,6 +4677,134 @@
           "params"
         ],
         "type": "object"
+      },
+      {
+        "description": "`ai.describe` — the behaviour machines and their agents: the same `machines` list the `ai`\nkey of `engine.describe` carries. `machines: []` before any machine has ticked.",
+        "properties": {
+          "method": {
+            "const": "ai.describe",
+            "type": "string"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`checkpoint.list` — the named checkpoint slots, the disk slot and the last restore outcome.\nRefused with `L4210` when the engine was built without checkpoints.",
+        "properties": {
+          "method": {
+            "const": "checkpoint.list",
+            "type": "string"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`checkpoint.capture` — capture the world into the named slot, replacing a slot of that name.\nReplies with the store after the capture.",
+        "properties": {
+          "method": {
+            "const": "checkpoint.capture",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CheckpointNameParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`checkpoint.restore` — replace the world with the named slot's capture. Replies with the\nstore after the restore.",
+        "properties": {
+          "method": {
+            "const": "checkpoint.restore",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CheckpointNameParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`checkpoint.discard` — drop the named slot; an unknown name is not an error. Replies with\nthe store after the discard.",
+        "properties": {
+          "method": {
+            "const": "checkpoint.discard",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CheckpointNameParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`sequence.play` — start a `kind: sequence` document with each role bound to an entity.\nReplies with the player; the host keeps the play's starting state so `sequence.seek` can\nrewind to it. Refused with `L4354` when the engine was built without sequences.",
+        "properties": {
+          "method": {
+            "const": "sequence.play",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SequencePlayParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`sequence.seek` — put the world where the last `sequence.play` left it, then run `tick + 1`\nticks, so the world is the one `ludion render --sequence ... --at tick` renders.",
+        "properties": {
+          "method": {
+            "const": "sequence.seek",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SequenceSeekParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "`sequence.skip` — cut the player to its end state at the next tick. `L4357` when the player\nis not live or its document is not skippable.",
+        "properties": {
+          "method": {
+            "const": "sequence.skip",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SequenceSkipParams"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
       }
     ],
     "properties": {
@@ -4160,6 +4828,198 @@
   },
   "response": {
     "$defs": {
+      "AiAgent": {
+        "description": "One live agent of an [`AiMachine`].",
+        "properties": {
+          "dropped": {
+            "description": "Events that overflowed the inbox since the agent was created.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "entered": {
+            "description": "The gameplay tick each active level was entered, root to leaf.",
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "entity": {
+            "$ref": "#/$defs/EntityIdSchema",
+            "description": "The agent."
+          },
+          "inbox": {
+            "description": "Events waiting in the inbox.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The entity's `Name`, or `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The active path, root first; empty before the agent starts.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ticks_in": {
+            "description": "The machine's `game_tick` minus each `entered`.",
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entity",
+          "path",
+          "entered",
+          "ticks_in",
+          "inbox",
+          "dropped"
+        ],
+        "type": "object"
+      },
+      "AiMachine": {
+        "description": "One behaviour machine in an `ai.describe` reply.\n\n# Example\n```\nuse ludion_protocol::response::AiMachine;\n\nlet m = AiMachine {\n    machine: \"Guard\".into(),\n    component: \"GuardMind\".into(),\n    root: \"root\".into(),\n    leaf_first: false,\n    inbox_capacity: 8,\n    game_tick: 0,\n    states: vec![],\n    agents: vec![],\n};\nassert_eq!(serde_json::to_value(&m).unwrap()[\"component\"], \"GuardMind\");\n```",
+        "properties": {
+          "agents": {
+            "description": "The live agents, ascending entity order.",
+            "items": {
+              "$ref": "#/$defs/AiAgent"
+            },
+            "type": "array"
+          },
+          "component": {
+            "description": "The component name, `\"{machine}Mind\"`.",
+            "type": "string"
+          },
+          "game_tick": {
+            "description": "The gameplay tick of the machine's latest tick.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inbox_capacity": {
+            "description": "Events an inbox holds before the oldest is dropped.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "leaf_first": {
+            "description": "Whether dispatch walks the active path leaf first.",
+            "type": "boolean"
+          },
+          "machine": {
+            "description": "The machine's name.",
+            "type": "string"
+          },
+          "root": {
+            "description": "The root state's name.",
+            "type": "string"
+          },
+          "states": {
+            "description": "Every state, in declaration order.",
+            "items": {
+              "$ref": "#/$defs/AiState"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "machine",
+          "component",
+          "root",
+          "leaf_first",
+          "inbox_capacity",
+          "game_tick",
+          "states",
+          "agents"
+        ],
+        "type": "object"
+      },
+      "AiState": {
+        "description": "A state of an [`AiMachine`] and its place in the hierarchy.",
+        "properties": {
+          "initial": {
+            "description": "The child entered after it; `null` for a leaf.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent": {
+            "description": "Its parent; `null` for the root.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "The state's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "AssemblyProfile": {
+        "description": "Voxel-assembly posing inside extract: the per-extract work counters, as medians.\n\nDeterministic shape, like `SkinProfile`'s counters. Counts the drawn assemblies once each.",
+        "properties": {
+          "ik_chains_solved_median": {
+            "description": "Median IK goals solved (look-ats and point chains) per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "ik_ground_casts_median": {
+            "description": "Median ground ray casts the IK feet cast per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "instances_median": {
+            "description": "Median assembly instances posed per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "layers_sampled_median": {
+            "description": "Median animation layers sampled per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "parts_posed_median": {
+            "description": "Median parts posed per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "sampled_frames": {
+            "description": "Measured extracts the medians are over.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sampled_frames",
+          "instances_median",
+          "parts_posed_median",
+          "layers_sampled_median",
+          "ik_chains_solved_median",
+          "ik_ground_casts_median"
+        ],
+        "type": "object"
+      },
       "AssetLoadCounters": {
         "description": "How many assets of one kind a load decoded or reused.",
         "properties": {
@@ -4198,6 +5058,148 @@
           "decoded",
           "reused",
           "bytes_read"
+        ],
+        "type": "object"
+      },
+      "CheckpointProfile": {
+        "description": "Wall time of checkpoint captures and in-memory restores. Disk loads, persists and discards are\nnot timed.",
+        "properties": {
+          "timings": {
+            "description": "One entry per key that occurred, capture first.",
+            "items": {
+              "$ref": "#/$defs/CheckpointTiming"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "timings"
+        ],
+        "type": "object"
+      },
+      "CheckpointRestore": {
+        "description": "The outcome of the latest checkpoint restore attempt.",
+        "oneOf": [
+          {
+            "description": "The world was replaced by the named slot.",
+            "properties": {
+              "frame": {
+                "description": "The engine frame the restore applied at.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "description": "The slot restored.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "restored",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "name",
+              "frame"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The restore was refused; the world is unchanged.",
+            "properties": {
+              "name": {
+                "description": "The slot asked for.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "refused",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why it was refused.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "name",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "CheckpointSlot": {
+        "description": "One checkpoint slot in a `checkpoint.*` reply.\n\n# Example\n```\nuse ludion_protocol::response::CheckpointSlot;\n\nlet s = CheckpointSlot { name: \"a\".into(), frame: 3, game_frame: 3, scene: None };\nassert_eq!(serde_json::to_value(&s).unwrap()[\"frame\"], 3);\n```",
+        "properties": {
+          "frame": {
+            "description": "The engine frame the slot was captured at.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "game_frame": {
+            "description": "The gameplay frame the slot was captured at.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The slot name.",
+            "type": "string"
+          },
+          "scene": {
+            "description": "The scene path the world was loaded from, when it had one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "frame",
+          "game_frame"
+        ],
+        "type": "object"
+      },
+      "CheckpointTiming": {
+        "description": "One checkpoint operation key's timing over the measured window.",
+        "properties": {
+          "count": {
+            "description": "Operations timed.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_frame": {
+            "description": "The produced-frame index the slowest operation ran in.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_ms": {
+            "description": "Slowest operation.",
+            "format": "double",
+            "type": "number"
+          },
+          "median_ms": {
+            "description": "Median wall time.",
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "description": "`checkpoint_capture` or `checkpoint_restore`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "count",
+          "median_ms",
+          "max_ms",
+          "max_frame"
         ],
         "type": "object"
       },
@@ -4452,6 +5454,26 @@
         ],
         "type": "object"
       },
+      "EntityId": {
+        "description": "Mirrors the derived serde shape of [`EntityId`].",
+        "properties": {
+          "generation": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "index": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "type": "object"
+      },
       "EntityIdSchema": {
         "description": "Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ \"index\": u32, \"generation\": u32 }`.",
         "properties": {
@@ -4498,6 +5520,40 @@
         },
         "required": [
           "entity"
+        ],
+        "type": "object"
+      },
+      "ExposureProfile": {
+        "description": "The metered exposure verdict (`ExposureMode::Metered`), reduced over the measured frames.",
+        "properties": {
+          "clamped_frames": {
+            "description": "Readings whose correction hit the clamp.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "correction_ev_median": {
+            "description": "Median exposure correction in EV.",
+            "format": "double",
+            "type": "number"
+          },
+          "mean_log2_median": {
+            "description": "Median log2 mean luminance the meter saw.",
+            "format": "double",
+            "type": "number"
+          },
+          "sampled_frames": {
+            "description": "Readings the medians are over.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sampled_frames",
+          "correction_ev_median",
+          "mean_log2_median",
+          "clamped_frames"
         ],
         "type": "object"
       },
@@ -4915,6 +5971,28 @@
       "ProfileReport": {
         "description": "One profiling run's result: the input, the frame counts, and the timing sections.\n\n[`Deserialize`] as well as [`Serialize`]: a report is an artifact tooling reads back — a\ncommitted baseline JSON compared against a later run, an Amdahl split computed off it — not only\nsomething a host prints once. Every optional section defaults to `None`, so a report written\nbefore that section existed still parses; which of them a given report carries depends on which\nhost produced it, and each field below says so.",
         "properties": {
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AssemblyProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Deterministic counters of voxel-assembly posing inside extract. Filled by the **offline**\ndriver; absent when no measured extract posed an assembly, and for a live capture, for\n`cluster`'s reason."
+          },
+          "checkpoints": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CheckpointProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Wall time of checkpoint captures and in-memory restores inside the measured window. Absent\nwhen the window captured nothing and restored nothing. Filled offline and by a live capture."
+          },
           "cluster": {
             "anyOf": [
               {
@@ -4947,6 +6025,17 @@
               }
             ],
             "description": "Projected decals of the frame: how many of each blend mode and how many draws and receiver\nmeshes the projector pass plans. Filled by the **offline** driver for a scene with a decal;\nabsent otherwise and for a live capture, for `cluster`'s reason."
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ExposureProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The metered exposure verdict read back during the GPU loop. Filled by the **offline**\ndriver; absent for a manual-exposure scene, with no adapter, and for a live capture."
           },
           "extract": {
             "anyOf": [
@@ -5311,7 +6400,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, or the lit frame tinted by sun cascade.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, the lit frame tinted by sun cascade, the diffuse irradiance, the\nexposure meter's histogram, or the rain occlusion map.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -5336,6 +6425,21 @@
           {
             "const": "sun_cascades",
             "description": "Each mesh fragment tinted by the sun cascade that shades it.",
+            "type": "string"
+          },
+          {
+            "const": "irradiance",
+            "description": "Diffuse irradiance per mesh fragment, `sRGB(E/4)`: saturates at E=4 (`ludion docs light-exposure`).",
+            "type": "string"
+          },
+          {
+            "const": "exposure_meter",
+            "description": "The metered frame dimmed, with its 64-bin luminance histogram drawn over it.",
+            "type": "string"
+          },
+          {
+            "const": "rain_occlusion",
+            "description": "Every opaque mesh fragment inside the rain occlusion map tinted: blue where rain reaches it,\norange where it is covered. Needs a `Rain`.",
             "type": "string"
           }
         ]
@@ -6116,6 +7220,99 @@
               "report"
             ],
             "type": "object"
+          },
+          {
+            "description": "Result of `ai.describe` — every behaviour machine a tick has run, with its hierarchy and\nlive agents. The same list `engine.describe`'s `ai` key carries; empty before any machine\nhas ticked.",
+            "properties": {
+              "kind": {
+                "const": "ai_describe",
+                "type": "string"
+              },
+              "machines": {
+                "description": "The machines, in first-run order.",
+                "items": {
+                  "$ref": "#/$defs/AiMachine"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "machines"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Result of every `checkpoint.*` verb — the store after the verb applied.",
+            "properties": {
+              "disk": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CheckpointSlot"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The disk slot, when one is loaded. Omitted when absent."
+              },
+              "kind": {
+                "const": "checkpoints",
+                "type": "string"
+              },
+              "last_restore": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CheckpointRestore"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The latest restore attempt's outcome. Omitted before any."
+              },
+              "slots": {
+                "description": "The named in-memory slots, in capture order.",
+                "items": {
+                  "$ref": "#/$defs/CheckpointSlot"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "slots"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Result of `sequence.play` and `sequence.seek` — the sequence player.",
+            "properties": {
+              "ended": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SequenceEndKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "How the player ended by the seek's last tick. Omitted while it is still playing, and\nalways omitted by `sequence.play`."
+              },
+              "kind": {
+                "const": "sequence",
+                "type": "string"
+              },
+              "player": {
+                "$ref": "#/$defs/EntityId",
+                "description": "The player entity; `sequence.seek` and `sequence.skip` take it back."
+              }
+            },
+            "required": [
+              "kind",
+              "player"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -6297,6 +7494,26 @@
           "h"
         ],
         "type": "object"
+      },
+      "SequenceEndKind": {
+        "description": "How a sequence player ended.",
+        "oneOf": [
+          {
+            "const": "completed",
+            "description": "The playhead reached the document's length.",
+            "type": "string"
+          },
+          {
+            "const": "skipped",
+            "description": "`sequence.skip` cut it to its end state.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "It was cancelled, or its document vanished.",
+            "type": "string"
+          }
+        ]
       },
       "SeveritySchema": {
         "description": "Mirrors [`ludion_core::diagnostics::Severity`]'s serde form: the lowercase strings `\"error\"`\nand `\"warning\"`.",
@@ -6816,6 +8033,198 @@
   },
   "response_body": {
     "$defs": {
+      "AiAgent": {
+        "description": "One live agent of an [`AiMachine`].",
+        "properties": {
+          "dropped": {
+            "description": "Events that overflowed the inbox since the agent was created.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "entered": {
+            "description": "The gameplay tick each active level was entered, root to leaf.",
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "entity": {
+            "$ref": "#/$defs/EntityIdSchema",
+            "description": "The agent."
+          },
+          "inbox": {
+            "description": "Events waiting in the inbox.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The entity's `Name`, or `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The active path, root first; empty before the agent starts.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ticks_in": {
+            "description": "The machine's `game_tick` minus each `entered`.",
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entity",
+          "path",
+          "entered",
+          "ticks_in",
+          "inbox",
+          "dropped"
+        ],
+        "type": "object"
+      },
+      "AiMachine": {
+        "description": "One behaviour machine in an `ai.describe` reply.\n\n# Example\n```\nuse ludion_protocol::response::AiMachine;\n\nlet m = AiMachine {\n    machine: \"Guard\".into(),\n    component: \"GuardMind\".into(),\n    root: \"root\".into(),\n    leaf_first: false,\n    inbox_capacity: 8,\n    game_tick: 0,\n    states: vec![],\n    agents: vec![],\n};\nassert_eq!(serde_json::to_value(&m).unwrap()[\"component\"], \"GuardMind\");\n```",
+        "properties": {
+          "agents": {
+            "description": "The live agents, ascending entity order.",
+            "items": {
+              "$ref": "#/$defs/AiAgent"
+            },
+            "type": "array"
+          },
+          "component": {
+            "description": "The component name, `\"{machine}Mind\"`.",
+            "type": "string"
+          },
+          "game_tick": {
+            "description": "The gameplay tick of the machine's latest tick.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inbox_capacity": {
+            "description": "Events an inbox holds before the oldest is dropped.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "leaf_first": {
+            "description": "Whether dispatch walks the active path leaf first.",
+            "type": "boolean"
+          },
+          "machine": {
+            "description": "The machine's name.",
+            "type": "string"
+          },
+          "root": {
+            "description": "The root state's name.",
+            "type": "string"
+          },
+          "states": {
+            "description": "Every state, in declaration order.",
+            "items": {
+              "$ref": "#/$defs/AiState"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "machine",
+          "component",
+          "root",
+          "leaf_first",
+          "inbox_capacity",
+          "game_tick",
+          "states",
+          "agents"
+        ],
+        "type": "object"
+      },
+      "AiState": {
+        "description": "A state of an [`AiMachine`] and its place in the hierarchy.",
+        "properties": {
+          "initial": {
+            "description": "The child entered after it; `null` for a leaf.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent": {
+            "description": "Its parent; `null` for the root.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "The state's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "AssemblyProfile": {
+        "description": "Voxel-assembly posing inside extract: the per-extract work counters, as medians.\n\nDeterministic shape, like `SkinProfile`'s counters. Counts the drawn assemblies once each.",
+        "properties": {
+          "ik_chains_solved_median": {
+            "description": "Median IK goals solved (look-ats and point chains) per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "ik_ground_casts_median": {
+            "description": "Median ground ray casts the IK feet cast per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "instances_median": {
+            "description": "Median assembly instances posed per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "layers_sampled_median": {
+            "description": "Median animation layers sampled per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "parts_posed_median": {
+            "description": "Median parts posed per extract.",
+            "format": "double",
+            "type": "number"
+          },
+          "sampled_frames": {
+            "description": "Measured extracts the medians are over.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sampled_frames",
+          "instances_median",
+          "parts_posed_median",
+          "layers_sampled_median",
+          "ik_chains_solved_median",
+          "ik_ground_casts_median"
+        ],
+        "type": "object"
+      },
       "AssetLoadCounters": {
         "description": "How many assets of one kind a load decoded or reused.",
         "properties": {
@@ -6854,6 +8263,148 @@
           "decoded",
           "reused",
           "bytes_read"
+        ],
+        "type": "object"
+      },
+      "CheckpointProfile": {
+        "description": "Wall time of checkpoint captures and in-memory restores. Disk loads, persists and discards are\nnot timed.",
+        "properties": {
+          "timings": {
+            "description": "One entry per key that occurred, capture first.",
+            "items": {
+              "$ref": "#/$defs/CheckpointTiming"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "timings"
+        ],
+        "type": "object"
+      },
+      "CheckpointRestore": {
+        "description": "The outcome of the latest checkpoint restore attempt.",
+        "oneOf": [
+          {
+            "description": "The world was replaced by the named slot.",
+            "properties": {
+              "frame": {
+                "description": "The engine frame the restore applied at.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "description": "The slot restored.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "restored",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "name",
+              "frame"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The restore was refused; the world is unchanged.",
+            "properties": {
+              "name": {
+                "description": "The slot asked for.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "refused",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why it was refused.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "name",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "CheckpointSlot": {
+        "description": "One checkpoint slot in a `checkpoint.*` reply.\n\n# Example\n```\nuse ludion_protocol::response::CheckpointSlot;\n\nlet s = CheckpointSlot { name: \"a\".into(), frame: 3, game_frame: 3, scene: None };\nassert_eq!(serde_json::to_value(&s).unwrap()[\"frame\"], 3);\n```",
+        "properties": {
+          "frame": {
+            "description": "The engine frame the slot was captured at.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "game_frame": {
+            "description": "The gameplay frame the slot was captured at.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The slot name.",
+            "type": "string"
+          },
+          "scene": {
+            "description": "The scene path the world was loaded from, when it had one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "frame",
+          "game_frame"
+        ],
+        "type": "object"
+      },
+      "CheckpointTiming": {
+        "description": "One checkpoint operation key's timing over the measured window.",
+        "properties": {
+          "count": {
+            "description": "Operations timed.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_frame": {
+            "description": "The produced-frame index the slowest operation ran in.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_ms": {
+            "description": "Slowest operation.",
+            "format": "double",
+            "type": "number"
+          },
+          "median_ms": {
+            "description": "Median wall time.",
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "description": "`checkpoint_capture` or `checkpoint_restore`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "count",
+          "median_ms",
+          "max_ms",
+          "max_frame"
         ],
         "type": "object"
       },
@@ -7108,6 +8659,26 @@
         ],
         "type": "object"
       },
+      "EntityId": {
+        "description": "Mirrors the derived serde shape of [`EntityId`].",
+        "properties": {
+          "generation": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "index": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "generation"
+        ],
+        "type": "object"
+      },
       "EntityIdSchema": {
         "description": "Mirrors [`ludion_core::ids::EntityId`]'s serde form: `{ \"index\": u32, \"generation\": u32 }`.",
         "properties": {
@@ -7154,6 +8725,40 @@
         },
         "required": [
           "entity"
+        ],
+        "type": "object"
+      },
+      "ExposureProfile": {
+        "description": "The metered exposure verdict (`ExposureMode::Metered`), reduced over the measured frames.",
+        "properties": {
+          "clamped_frames": {
+            "description": "Readings whose correction hit the clamp.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "correction_ev_median": {
+            "description": "Median exposure correction in EV.",
+            "format": "double",
+            "type": "number"
+          },
+          "mean_log2_median": {
+            "description": "Median log2 mean luminance the meter saw.",
+            "format": "double",
+            "type": "number"
+          },
+          "sampled_frames": {
+            "description": "Readings the medians are over.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sampled_frames",
+          "correction_ev_median",
+          "mean_log2_median",
+          "clamped_frames"
         ],
         "type": "object"
       },
@@ -7571,6 +9176,28 @@
       "ProfileReport": {
         "description": "One profiling run's result: the input, the frame counts, and the timing sections.\n\n[`Deserialize`] as well as [`Serialize`]: a report is an artifact tooling reads back — a\ncommitted baseline JSON compared against a later run, an Amdahl split computed off it — not only\nsomething a host prints once. Every optional section defaults to `None`, so a report written\nbefore that section existed still parses; which of them a given report carries depends on which\nhost produced it, and each field below says so.",
         "properties": {
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AssemblyProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Deterministic counters of voxel-assembly posing inside extract. Filled by the **offline**\ndriver; absent when no measured extract posed an assembly, and for a live capture, for\n`cluster`'s reason."
+          },
+          "checkpoints": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CheckpointProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Wall time of checkpoint captures and in-memory restores inside the measured window. Absent\nwhen the window captured nothing and restored nothing. Filled offline and by a live capture."
+          },
           "cluster": {
             "anyOf": [
               {
@@ -7603,6 +9230,17 @@
               }
             ],
             "description": "Projected decals of the frame: how many of each blend mode and how many draws and receiver\nmeshes the projector pass plans. Filled by the **offline** driver for a scene with a decal;\nabsent otherwise and for a live capture, for `cluster`'s reason."
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ExposureProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The metered exposure verdict read back during the GPU loop. Filled by the **offline**\ndriver; absent for a manual-exposure scene, with no adapter, and for a live capture."
           },
           "extract": {
             "anyOf": [
@@ -7967,7 +9605,7 @@
         "type": "object"
       },
       "RenderDebugView": {
-        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, or the lit frame tinted by sun cascade.\nThe spelling matches `ludion render --debug-view`.",
+        "description": "A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,\nthe local-light shadow atlas, the lit frame tinted by sun cascade, the diffuse irradiance, the\nexposure meter's histogram, or the rain occlusion map.\nThe spelling matches `ludion render --debug-view`.",
         "oneOf": [
           {
             "const": "ssr_confidence",
@@ -7992,6 +9630,21 @@
           {
             "const": "sun_cascades",
             "description": "Each mesh fragment tinted by the sun cascade that shades it.",
+            "type": "string"
+          },
+          {
+            "const": "irradiance",
+            "description": "Diffuse irradiance per mesh fragment, `sRGB(E/4)`: saturates at E=4 (`ludion docs light-exposure`).",
+            "type": "string"
+          },
+          {
+            "const": "exposure_meter",
+            "description": "The metered frame dimmed, with its 64-bin luminance histogram drawn over it.",
+            "type": "string"
+          },
+          {
+            "const": "rain_occlusion",
+            "description": "Every opaque mesh fragment inside the rain occlusion map tinted: blue where rain reaches it,\norange where it is covered. Needs a `Rain`.",
             "type": "string"
           }
         ]
@@ -8174,6 +9827,26 @@
           "h"
         ],
         "type": "object"
+      },
+      "SequenceEndKind": {
+        "description": "How a sequence player ended.",
+        "oneOf": [
+          {
+            "const": "completed",
+            "description": "The playhead reached the document's length.",
+            "type": "string"
+          },
+          {
+            "const": "skipped",
+            "description": "`sequence.skip` cut it to its end state.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "It was cancelled, or its document vanished.",
+            "type": "string"
+          }
+        ]
       },
       "SeveritySchema": {
         "description": "Mirrors [`ludion_core::diagnostics::Severity`]'s serde form: the lowercase strings `\"error\"`\nand `\"warning\"`.",
@@ -9399,6 +11072,99 @@
         "required": [
           "kind",
           "report"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Result of `ai.describe` — every behaviour machine a tick has run, with its hierarchy and\nlive agents. The same list `engine.describe`'s `ai` key carries; empty before any machine\nhas ticked.",
+        "properties": {
+          "kind": {
+            "const": "ai_describe",
+            "type": "string"
+          },
+          "machines": {
+            "description": "The machines, in first-run order.",
+            "items": {
+              "$ref": "#/$defs/AiMachine"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "machines"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Result of every `checkpoint.*` verb — the store after the verb applied.",
+        "properties": {
+          "disk": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CheckpointSlot"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The disk slot, when one is loaded. Omitted when absent."
+          },
+          "kind": {
+            "const": "checkpoints",
+            "type": "string"
+          },
+          "last_restore": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CheckpointRestore"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest restore attempt's outcome. Omitted before any."
+          },
+          "slots": {
+            "description": "The named in-memory slots, in capture order.",
+            "items": {
+              "$ref": "#/$defs/CheckpointSlot"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "slots"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Result of `sequence.play` and `sequence.seek` — the sequence player.",
+        "properties": {
+          "ended": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SequenceEndKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the player ended by the seek's last tick. Omitted while it is still playing, and\nalways omitted by `sequence.play`."
+          },
+          "kind": {
+            "const": "sequence",
+            "type": "string"
+          },
+          "player": {
+            "$ref": "#/$defs/EntityId",
+            "description": "The player entity; `sequence.seek` and `sequence.skip` take it back."
+          }
+        },
+        "required": [
+          "kind",
+          "player"
         ],
         "type": "object"
       }

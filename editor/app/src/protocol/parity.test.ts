@@ -174,13 +174,13 @@ describe('protocol parity audit', () => {
     expect(generatedMethods.has('prefab.despawn')).toBe(true);
   });
 
-  it('has exactly the settled protocol surface: 40 methods', () => {
+  it('has exactly the settled protocol surface: 48 methods', () => {
     // Not a magic number: this is the full method count of the generated union (Phase 6's 25 +
     // engine.shutdown + profile.capture + render.gi_rebake + render.size + render.view + render.debug + entity.reparent + prefab.spawn + prefab.create + prefab.apply + prefab.revert + prefab.unpack + prefab.overrides + map.spawn + prefab.despawn). A silent surface change
     // (a method added or dropped without anyone noticing) would slip past every other assertion in
     // this file, since they all key off `generatedMethods` itself -- this makes that drift loud.
     // Update this count *deliberately* the next time the protocol grows or shrinks a method.
-    expect(generatedMethods.size).toBe(40);
+    expect(generatedMethods.size).toBe(48);
   });
 
   it('uses only methods that exist in the generated protocol union', () => {
