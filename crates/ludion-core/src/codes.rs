@@ -1506,6 +1506,8 @@ pub mod code {
     /// `L1245` — `ludion sync` refused an `[[import]]` table: a `from` that matches nothing, two sources
     /// sharing a stem, or a `to` holding files it does not own.
     pub const IMPORT_SYNC_REFUSED: DiagnosticCode = DiagnosticCode::new("L1245");
+    /// `L1246` — a document says `kind: character`, which was merged into `kind: assembly`.
+    pub const CHARACTER_KIND_MERGED: DiagnosticCode = DiagnosticCode::new("L1246");
 
     /// `L1206` — an imported animation clip, after key reduction, strays from the source motion by
     /// more than the model-space error bound on some joint. The clip is refused (never downgraded
@@ -8385,6 +8387,20 @@ Fix: correct `from`, rename one of the colliding sources, or delete `to` by hand
 For a link, replace it with the files, or move it out of the glTF's directory.",
     },
     CodeEntry {
+        code: code::CHARACTER_KIND_MERGED,
+        severity: Severity::Error,
+        title: "`kind: character` was merged into `kind: assembly`",
+        explanation: "\
+A document says `kind: character`. That kind no longer exists: a skinned model and its clips are now a
+`kind: assembly` document whose body is `mesh:` (the skinned mesh document's path) instead of the voxel
+`size`, `palette` and `parts`. The keys `name`, `mesh`, `clips`, `masks` and `blends` carry over unchanged,
+in the same order, and a clip entry keeps its `{ clip, speed, events }` mapping form.
+
+The diagnostic's JSON Pointer is `/kind`.
+
+Fix: change the line to `kind: assembly`.",
+    },
+    CodeEntry {
         code: code::IMPORT_CLIP_ERROR_BOUND,
         severity: Severity::Error,
         title: "imported animation clip exceeds its model-space error bound",
@@ -14964,6 +14980,7 @@ mod tests {
         code::MESH_GRID_ORIENT,
         code::MESH_GRID_ANIMATED_SHAPE,
         code::IMPORT_SYNC_REFUSED,
+        code::CHARACTER_KIND_MERGED,
         code::IMPORT_CLIP_ERROR_BOUND,
         code::IMPORT_CLIP_EXTRAS_INVALID,
         code::IMPORT_CLIP_AT_REST,

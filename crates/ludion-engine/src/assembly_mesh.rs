@@ -368,6 +368,19 @@ pub(crate) fn load_documents(
         ]
     })?;
     let assembly = ludion_scene::check_assembly(source)?;
+    if assembly.mesh.is_some() {
+        return Err(vec![
+            Diagnostic::new(
+                code::ASSEMBLY_DATA_CONSISTENCY,
+                format!(
+                    "`{rel}` is a skinned assembly; `Mesh.shape: {{ assembly: … }}` draws voxel \
+                     assemblies"
+                ),
+            )
+            .with_path("/mesh")
+            .with_help("draw it with `Mesh.shape: { character: <path> }`"),
+        ]);
+    }
 
     let mut diagnostics = Vec::new();
     let mut parts = Vec::with_capacity(assembly.parts.len());
@@ -749,6 +762,8 @@ mod tests {
         AssemblyClip {
             name: name.to_string(),
             file: format!("anims/{name}.anim.yaml"),
+            speed: 1.0,
+            events: Vec::new(),
         }
     }
 
@@ -777,6 +792,7 @@ mod tests {
     fn assembly_doc(size: [u32; 3], parts: Vec<AssemblyPartEntry>) -> AssemblyDocument {
         AssemblyDocument {
             name: Some("fixture".to_string()),
+            mesh: None,
             size,
             palette: vec![entry("A", RED), entry("B", GREEN)],
             parts,
@@ -1565,6 +1581,26 @@ tracks:
                     && d.message.contains("body")),
             "expected an L1138 naming the glyph and the part: {errors:?}"
         );
+    }
+
+    /// A skinned assembly (`mesh:`) is refused by the voxel loader, not meshed to nothing.
+    #[test]
+    fn a_skinned_assembly_is_refused_by_the_voxel_loader() {
+        let root = fresh_dir("load-skinned-assembly");
+        write(
+            &root,
+            "models/goblin.assembly.yaml",
+            "format: 1\nkind: assembly\nmesh: goblin.mesh.yaml\n",
+        );
+
+        let errors = load(
+            ludion_assets::AssetRoot::content(&root),
+            "models/goblin.assembly.yaml",
+        )
+        .expect_err("a skinned body has no voxel parts");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, code::ASSEMBLY_DATA_CONSISTENCY);
+        assert_eq!(errors[0].path.as_deref(), Some("/mesh"));
     }
 
     /// A missing assembly file is the ordinary asset-read diagnostic, before any part is looked at.

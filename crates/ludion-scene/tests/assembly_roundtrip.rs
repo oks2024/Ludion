@@ -13,10 +13,11 @@
 
 use ludion_core::diagnostics::Diagnostic;
 use ludion_scene::{
-    AssemblyClip, AssemblyDocument, AssemblyJoint, AssemblyJointKind, AssemblyPartEntry,
-    PaletteEntry, PartDocument, assembly_assembled_grid, assembly_overlap_lint,
-    assembly_parent_indices, assembly_part_voxel, check_assembly, check_assembly_parts,
-    emit_assembly, parse_assembly, validate_assembly,
+    AnimationDocument, AssemblyClip, AssemblyDocument, AssemblyJoint, AssemblyJointKind,
+    AssemblyPartEntry, PaletteEntry, PartDocument, assembly_assembled_grid, assembly_overlap_lint,
+    assembly_parent_indices, assembly_part_voxel, check_animation, check_assembly,
+    check_assembly_mesh_clips, check_assembly_parts, emit_assembly, parse_assembly,
+    validate_assembly,
 };
 use proptest::prelude::*;
 #[path = "support/deterministic.rs"]
@@ -140,10 +141,13 @@ fn assembly_doc() -> impl Strategy<Value = AssemblyDocument> {
                 .map(|name| AssemblyClip {
                     name: name.to_string(),
                     file: format!("anims/{name}.anim.yaml"),
+                    speed: 1.0,
+                    events: Vec::new(),
                 })
                 .collect();
             AssemblyDocument {
                 name,
+                mesh: None,
                 size,
                 palette,
                 parts,
@@ -339,6 +343,7 @@ clips: {}
 fn empty_collections_use_flow_empties() {
     let doc = AssemblyDocument {
         name: None,
+        mesh: None,
         size: [1, 1, 1],
         palette: Vec::new(),
         parts: Vec::new(),
@@ -2023,4 +2028,172 @@ fn a_point_clip_without_the_sync_event_is_l1138() {
 fn a_part_named_root_track_is_l1138() {
     let source = MINIMAL.replace("- name: body", "- name: $root");
     assert!(has_code_at(&errors_for(&source), "L1138", "/parts/0/name"));
+}
+
+// --- The skinned body (`mesh:`, `Plan/character-assembly-merge.md` W1) -------------------------
+
+const SKINNED: &str = "\
+format: 1
+kind: assembly
+name: goblin
+mesh: goblin.mesh.yaml
+clips:
+  idle: \"../clips/idle.anim.yaml\"
+  run:
+    clip: \"../clips/run.anim.yaml\"
+    speed: 1.5
+    events:
+      - t: 0.2
+        name: footstep
+      - t: 0.5
+        name: footstep
+";
+
+fn has(diagnostics: &[Diagnostic], code: &str, pointer: &str) -> bool {
+    diagnostics
+        .iter()
+        .any(|d| d.code.as_str() == code && d.path.as_deref() == Some(pointer))
+}
+
+fn skinned_clip(events: &str, duration: f64, target: &str) -> AnimationDocument {
+    let source = format!(
+        "format: 1\nkind: animation\nduration: {duration}\nloop: true\n{events}tracks:\n  {target}:\n    rotation:\n      - t: 0.0\n        v:\n          - 0.0\n          - 0.0\n          - 0.0\n      - t: 0.1\n        v:\n          - 10.0\n          - 0.0\n          - 0.0\n"
+    );
+    check_animation(&source).expect("the clip is valid")
+}
+
+#[test]
+fn a_skinned_assembly_is_a_canonical_fixed_point() {
+    let doc = check_assembly(SKINNED).expect("valid");
+    assert_eq!(doc.mesh.as_deref(), Some("goblin.mesh.yaml"));
+    assert_eq!(emit_assembly(&doc), SKINNED);
+    assert_eq!(
+        check_assembly(&emit_assembly(&doc)).expect("re-parses"),
+        doc
+    );
+}
+
+#[test]
+fn a_long_form_clip_without_overlay_canonicalizes_to_the_scalar() {
+    let doc = check_assembly(
+        "format: 1\nkind: assembly\nmesh: a.mesh.yaml\nclips:\n  idle:\n    clip: idle.anim.yaml\n    speed: 1.0\n",
+    )
+    .expect("valid");
+    assert_eq!(
+        emit_assembly(&doc),
+        "format: 1\nkind: assembly\nmesh: a.mesh.yaml\nclips:\n  idle: idle.anim.yaml\n"
+    );
+}
+
+#[test]
+fn kind_character_is_exactly_l1246() {
+    let errors = parse_assembly(&SKINNED.replace("kind: assembly", "kind: character"))
+        .expect_err("the kind was merged");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(has(&errors, "L1246", "/kind"));
+}
+
+#[test]
+fn mesh_with_parts_or_ik_is_l1137() {
+    let with_parts = format!("{SKINNED}size:\n  - 1\n  - 1\n  - 1\npalette: {{}}\nparts: []\n");
+    let errors = parse_assembly(&with_parts).expect_err("both bodies");
+    assert!(has(&errors, "L1137", "/mesh"), "{errors:?}");
+
+    let with_ik = format!("{SKINNED}ik:\n  arm:\n    kind: look_at\n");
+    let errors = parse_assembly(&with_ik).expect_err("ik binds parts");
+    assert!(has(&errors, "L1137", "/ik"), "{errors:?}");
+}
+
+#[test]
+fn a_skinned_assembly_needs_no_voxel_keys_but_a_voxel_one_does() {
+    let doc = parse_assembly("format: 1\nkind: assembly\nmesh: a.mesh.yaml\n").expect("parses");
+    assert!(validate_assembly(&doc).is_empty());
+
+    let errors =
+        parse_assembly("format: 1\nkind: assembly\nname: x\n").expect_err("no body at all");
+    for key in ["size", "palette", "parts"] {
+        assert!(
+            errors
+                .iter()
+                .any(|d| d.code.as_str() == "L1137" && d.message.contains(&format!("`{key}`"))),
+            "{key}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn the_overlay_is_skinned_only_and_speed_is_positive() {
+    let voxel = ASSEMBLY_WITH_CLIP.replace("  walk: anims/walk.anim.yaml\n", "  walk:\n    clip: anims/walk.anim.yaml\n    events:\n      - t: 0.1\n        name: step\n");
+    let doc = parse_assembly(&voxel).expect("well-shaped");
+    let errors = validate_assembly(&doc);
+    assert!(has(&errors, "L1138", "/clips/walk/events"), "{errors:?}");
+
+    let doc = parse_assembly(&SKINNED.replace("speed: 1.5", "speed: 0")).expect("well-shaped");
+    assert!(has(&validate_assembly(&doc), "L1138", "/clips/run/speed"));
+}
+
+const ASSEMBLY_WITH_CLIP: &str = "\
+format: 1
+kind: assembly
+size:
+  - 1
+  - 1
+  - 1
+palette:
+  A:
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+parts:
+  - name: body
+    file: parts/body.part.yaml
+    place:
+      - 0
+      - 0
+      - 0
+clips:
+  walk: anims/walk.anim.yaml
+";
+
+#[test]
+fn mesh_clips_flag_overlay_against_own_events() {
+    let doc = check_assembly(SKINNED).expect("valid");
+    let clips = [
+        skinned_clip("", 1.0, "hip"),
+        skinned_clip("events:\n  - t: 0.1\n    name: x\n", 1.0, "hip"),
+    ];
+    let errors = check_assembly_mesh_clips(&doc, &clips, &["hip"]);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(has(&errors, "L1138", "/clips/run/events"));
+}
+
+#[test]
+fn mesh_clips_bound_overlay_events_by_duration() {
+    let doc = check_assembly(SKINNED).expect("valid");
+    let clips = [skinned_clip("", 1.0, "hip"), skinned_clip("", 0.4, "hip")];
+    let errors = check_assembly_mesh_clips(&doc, &clips, &["hip"]);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(has(&errors, "L1198", "/clips/run/events/1/t"));
+}
+
+#[test]
+fn mesh_clips_flag_an_unknown_joint_with_the_nearest() {
+    let doc = check_assembly(SKINNED).expect("valid");
+    let clips = [skinned_clip("", 1.0, "hipp"), skinned_clip("", 1.0, "hip")];
+    let errors = check_assembly_mesh_clips(&doc, &clips, &["hip", "knee"]);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(has(&errors, "L1138", "/clips/idle/clip"));
+    assert!(errors[0].help.as_deref().unwrap_or("").contains("`hip`"));
+}
+
+#[test]
+fn mesh_clips_flag_an_unknown_mask_joint() {
+    let source = format!("{SKINNED}masks:\n  upper:\n    joints:\n      - torsoo\n");
+    let doc = check_assembly(&source).expect("valid");
+    let clips = [skinned_clip("", 1.0, "hip"), skinned_clip("", 1.0, "hip")];
+    let errors = check_assembly_mesh_clips(&doc, &clips, &["hip", "torso"]);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(has(&errors, "L1138", "/masks/upper/joints/0"));
 }

@@ -68,8 +68,11 @@ use ludion_core::paths::sibling_refusal;
 use ludion_core::suggest;
 use serde_json::Value;
 
-use crate::animation::AnimationDocument;
+use crate::animation::{
+    AnimationDocument, AnimationEvent, emit_events, parse_events, validate_event_list,
+};
 use crate::envelope;
+use crate::fields::parse_number;
 use crate::part::PartDocument;
 use crate::rig_blend::{
     BlendSpace, check_blend_points, emit_blends, parse_blends, validate_blends,
@@ -87,10 +90,11 @@ pub const ASSEMBLY_FORMAT_VERSION: u64 = 1;
 /// assembly's palette reads identically to a voxel model's.
 const EMPTY_GLYPH: char = '.';
 
-const ASSEMBLY_KEYS: [&str; 12] = [
-    "format", "kind", "name", "size", "palette", "parts", "clips", "joints", "masks", "blends",
-    "ik", "ground",
+const ASSEMBLY_KEYS: [&str; 13] = [
+    "format", "kind", "name", "mesh", "size", "palette", "parts", "clips", "joints", "masks",
+    "blends", "ik", "ground",
 ];
+const CLIP_ENTRY_KEYS: [&str; 3] = ["clip", "speed", "events"];
 const PART_ENTRY_KEYS: [&str; 6] = ["name", "file", "parent", "place", "pivot", "mirror"];
 const ASSEMBLY_JOINT_KEYS: [&str; 4] = ["kind", "axis", "limits", "break_impulse"];
 
@@ -213,8 +217,9 @@ pub enum AssemblyJointKind {
     Fixed,
 }
 
-/// One clip binding: the short name game code selects by, and the clip document's path.
-#[derive(Clone, Debug, PartialEq, Default)]
+/// One clip binding: the short name game code selects by, the clip document's path, and the
+/// playback overlay a skinned assembly may carry.
+#[derive(Clone, Debug, PartialEq)]
 pub struct AssemblyClip {
     /// The short name (`walk`, `attack`) — model-agnostic, so a clip is reusable across assemblies
     /// sharing a part-naming convention.
@@ -222,6 +227,23 @@ pub struct AssemblyClip {
     /// The clip document's path, relative to the assembly file. Stored verbatim, like
     /// [`AssemblyPartEntry::file`].
     pub file: String,
+    /// The playback speed multiplier (1.0 is authored speed). Only a skinned assembly may set it
+    /// to anything else.
+    pub speed: f64,
+    /// Events for an imported clip that carries none of its own, time-strictly-ascending as
+    /// authored. Empty means absent; only a skinned assembly may carry them.
+    pub events: Vec<AnimationEvent>,
+}
+
+impl Default for AssemblyClip {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            file: String::new(),
+            speed: 1.0,
+            events: Vec::new(),
+        }
+    }
 }
 
 /// A parsed, structurally valid assembly document.
@@ -229,6 +251,9 @@ pub struct AssemblyClip {
 pub struct AssemblyDocument {
     /// Optional human-readable model name.
     pub name: Option<String>,
+    /// The skinned mesh document's path, relative to the assembly file. `Some` makes this a
+    /// skinned assembly: no `size`, `palette` or `parts`, and no `joints`, `ik` or `ground`.
+    pub mesh: Option<String>,
     /// The assembled bounding grid in cells, rest pose: `[x, y, z]`.
     pub size: [u32; 3],
     /// The one palette every part's glyphs resolve against, in sorted-glyph order (the canonical
@@ -301,6 +326,10 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
     let mut size_seen = false;
     let mut palette_seen = false;
     let mut parts_seen = false;
+    let mut mesh_seen = false;
+    let mut joints_seen = false;
+    let mut ik_seen = false;
+    let mut ground_seen = false;
 
     for entry in &entries {
         match entry.key.as_str() {
@@ -319,11 +348,36 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
             }
             "kind" => {
                 kind_seen = true;
-                envelope::check_kind(
-                    entry,
+                if matches!(&entry.node.value, NodeValue::Scalar(Value::String(s)) if s == "character")
+                {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            code::CHARACTER_KIND_MERGED,
+                            "`kind: character` was merged into `kind: assembly`",
+                        )
+                        .with_path("/kind")
+                        .with_help(
+                            "change the line to `kind: assembly`; `mesh`, `clips`, `masks` and \
+                             `blends` carry over unchanged",
+                        ),
+                    );
+                } else {
+                    envelope::check_kind(
+                        entry,
+                        code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                        "assembly",
+                        "an assembly document",
+                        &mut diagnostics,
+                    );
+                }
+            }
+            "mesh" => {
+                mesh_seen = true;
+                doc.mesh = envelope::expect_string(
+                    &entry.node,
+                    "/mesh",
+                    "`mesh`",
                     code::ASSEMBLY_DOCUMENT_STRUCTURE,
-                    "assembly",
-                    "an assembly document",
                     &mut diagnostics,
                 );
             }
@@ -359,14 +413,10 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
                 doc.parts = parse_parts(entry, &mut diagnostics);
             }
             "clips" => {
-                doc.clips = envelope::parse_clips(
-                    entry,
-                    code::ASSEMBLY_DOCUMENT_STRUCTURE,
-                    "anims/humanoid-walk.anim.yaml",
-                    &mut diagnostics,
-                );
+                doc.clips = parse_clip_bindings(entry, &mut diagnostics);
             }
             "joints" => {
+                joints_seen = true;
                 doc.joints = parse_joints(entry, &mut diagnostics);
             }
             "masks" => {
@@ -377,9 +427,11 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
                     parse_blends(entry, code::ASSEMBLY_DOCUMENT_STRUCTURE, &mut diagnostics);
             }
             "ik" => {
+                ik_seen = true;
                 doc.ik = parse_ik(entry, &mut diagnostics);
             }
             "ground" => {
+                ground_seen = true;
                 doc.ground = parse_ground(entry, &mut diagnostics);
             }
             unknown => diagnostics.push(envelope::unknown_key(
@@ -399,24 +451,72 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
     if !kind_seen {
         diagnostics.push(missing_key("kind", "add `kind: assembly`"));
     }
-    if !size_seen {
-        diagnostics.push(missing_key(
-            "size",
-            "add a `size` of three positive integers: the assembled grid's width (x), height (y), \
-             and depth (z)",
-        ));
-    }
-    if !palette_seen {
-        diagnostics.push(missing_key(
-            "palette",
-            "add a `palette`: the one glyph-to-color mapping every part's glyphs resolve against",
-        ));
-    }
-    if !parts_seen {
-        diagnostics.push(missing_key(
-            "parts",
-            "add `parts`: one entry per part file, each with `name`, `file`, and `place`",
-        ));
+    if mesh_seen {
+        if size_seen || palette_seen || parts_seen {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                    "an assembly is either voxel parts (`size`, `palette`, `parts`) or a skinned \
+                     `mesh`, not both",
+                )
+                .with_path("/mesh")
+                .with_help(
+                    "remove `mesh` for a voxel assembly, or remove `size`, `palette` and `parts` \
+                     for a skinned one",
+                ),
+            );
+        }
+        for (seen, key, help) in [
+            (
+                joints_seen,
+                "joints",
+                "`joints` binds voxel parts for the ragdoll switch; a skinned model ragdolls \
+                 through a prefab's `$skin`",
+            ),
+            (
+                ik_seen,
+                "ik",
+                "`ik` chains bind voxel parts; a skinned assembly has no parts",
+            ),
+            (
+                ground_seen,
+                "ground",
+                "`ground` bounds `ik` chains, which bind voxel parts; a skinned assembly has no \
+                 parts",
+            ),
+        ] {
+            if seen {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                        format!("a skinned assembly (`mesh`) cannot have `{key}`"),
+                    )
+                    .with_path(format!("/{key}"))
+                    .with_help(help),
+                );
+            }
+        }
+    } else {
+        if !size_seen {
+            diagnostics.push(missing_key(
+                "size",
+                "add a `size` of three positive integers: the assembled grid's width (x), height \
+                 (y), and depth (z)",
+            ));
+        }
+        if !palette_seen {
+            diagnostics.push(missing_key(
+                "palette",
+                "add a `palette`: the one glyph-to-color mapping every part's glyphs resolve \
+                 against",
+            ));
+        }
+        if !parts_seen {
+            diagnostics.push(missing_key(
+                "parts",
+                "add `parts`: one entry per part file, each with `name`, `file`, and `place`",
+            ));
+        }
     }
 
     if diagnostics.is_empty() {
@@ -424,6 +524,135 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
     } else {
         Err(diagnostics)
     }
+}
+
+/// Parses `clips`: a mapping of short name to clip entry, returned sorted by short name (the
+/// canonical order [`emit`] writes). An entry is a scalar path or a `{ clip, speed, events }`
+/// mapping. A duplicate short name is already rejected as `L1007` by the shared YAML layer.
+fn parse_clip_bindings(entry: &MapEntry, diagnostics: &mut Vec<Diagnostic>) -> Vec<AssemblyClip> {
+    let NodeValue::Mapping(entries) = &entry.node.value else {
+        diagnostics.push(
+            Diagnostic::new(
+                code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                format!(
+                    "`clips` must be a mapping of clip name to clip entry, found {} (line {})",
+                    entry.node.value.type_phrase(),
+                    entry.node.line
+                ),
+            )
+            .with_path("/clips")
+            .with_help(
+                "write one binding per line:\n  clips:\n    walk: anims/humanoid-walk.anim.yaml",
+            ),
+        );
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(entries.len());
+    for sub in entries {
+        let pointer = format!("/clips/{}", pointer_token(&sub.key));
+        let binding = if matches!(sub.node.value, NodeValue::Mapping(_)) {
+            parse_clip_mapping(sub, &pointer, diagnostics)
+        } else {
+            envelope::expect_string(
+                &sub.node,
+                &pointer,
+                "a clip binding",
+                code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                diagnostics,
+            )
+            .map(|file| AssemblyClip {
+                name: sub.key.clone(),
+                file,
+                ..AssemblyClip::default()
+            })
+        };
+        out.extend(binding);
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Parses one mapping-form clip entry: a required `clip` and optional `speed`/`events`.
+fn parse_clip_mapping(
+    sub: &MapEntry,
+    pointer: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<AssemblyClip> {
+    let NodeValue::Mapping(fields) = &sub.node.value else {
+        return None;
+    };
+    let mut file = None;
+    let mut speed = 1.0;
+    let mut events = Vec::new();
+    for field in fields {
+        let field_pointer = format!("{pointer}/{}", field.key);
+        match field.key.as_str() {
+            "clip" => {
+                file = envelope::expect_string(
+                    &field.node,
+                    &field_pointer,
+                    "a clip's `clip`",
+                    code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                    diagnostics,
+                );
+            }
+            "speed" => {
+                if let Some(value) = parse_number(
+                    &field.node,
+                    &field_pointer,
+                    "`speed`",
+                    code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                    diagnostics,
+                ) {
+                    speed = value;
+                }
+            }
+            "events" => {
+                events = parse_events(
+                    &field.node,
+                    &field_pointer,
+                    code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                    diagnostics,
+                );
+                if events.is_empty() && matches!(field.node.value, NodeValue::Sequence(_)) {
+                    diagnostics.push(
+                        Diagnostic::new(
+                            code::ANIMATION_EVENT_INVALID,
+                            "`events` is declared but has zero entries",
+                        )
+                        .with_path(field_pointer)
+                        .with_help(
+                            "add at least one `{t, name}` event, or remove the `events` key",
+                        ),
+                    );
+                }
+            }
+            unknown => diagnostics.push(envelope::unknown_key(
+                unknown,
+                field,
+                pointer,
+                "a clip entry",
+                CLIP_ENTRY_KEYS,
+                code::ASSEMBLY_DOCUMENT_STRUCTURE,
+            )),
+        }
+    }
+    if file.is_none() {
+        diagnostics.push(
+            Diagnostic::new(
+                code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                "a clip entry is missing its required `clip`",
+            )
+            .with_path(pointer.to_string())
+            .with_help("add `clip`: the animation document's path, relative to this file"),
+        );
+    }
+    Some(AssemblyClip {
+        name: sub.key.clone(),
+        file: file?,
+        speed,
+        events,
+    })
 }
 
 /// Parses a part entry's `place`: a sequence of exactly three non-negative integers.
@@ -1214,6 +1443,54 @@ fn missing_key(key: &str, help: &str) -> Diagnostic {
 /// programmatically — so this is the one place those invariants are enforced. A part `file` or clip
 /// path may climb with `..` but is refused when absolute, drive-prefixed or a Windows device.
 pub(crate) fn validate(doc: &AssemblyDocument) -> Vec<Diagnostic> {
+    let mut diagnostics = match &doc.mesh {
+        Some(mesh) => validate_mesh_path(mesh),
+        None => validate_voxel_body(doc),
+    };
+    validate_clip_bindings(doc, &mut diagnostics);
+    if doc.mesh.is_none() {
+        validate_joints(doc, &mut diagnostics);
+    }
+    validate_mask_names(
+        &doc.masks,
+        code::ASSEMBLY_DATA_CONSISTENCY,
+        &mut diagnostics,
+    );
+    if doc.mesh.is_none() {
+        validate_mask_parts(doc, &mut diagnostics);
+    }
+    let names: Vec<&str> = doc.clips.iter().map(|clip| clip.name.as_str()).collect();
+    validate_blends(
+        &doc.blends,
+        &names,
+        code::ASSEMBLY_DATA_CONSISTENCY,
+        &mut diagnostics,
+    );
+    if doc.mesh.is_none() {
+        validate_ik(doc, &mut diagnostics);
+    }
+    diagnostics
+}
+
+/// The skinned body's `mesh` rule (`L1138`): non-blank and a sibling path.
+fn validate_mesh_path(mesh: &str) -> Vec<Diagnostic> {
+    let help = "point `mesh` at the skinned mesh document, relative to this file";
+    let message = if mesh.trim().is_empty() {
+        "`mesh` is empty".to_string()
+    } else if let Some(refusal) = sibling_refusal(mesh) {
+        format!("`mesh` (`{mesh}`) {}", refusal.describe())
+    } else {
+        return Vec::new();
+    };
+    vec![
+        Diagnostic::new(code::ASSEMBLY_DATA_CONSISTENCY, message)
+            .with_path("/mesh")
+            .with_help(help),
+    ]
+}
+
+/// The voxel body's rules: palette, `size`, parts and their hierarchy (`L1138`).
+fn validate_voxel_body(doc: &AssemblyDocument) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     crate::voxel::validate_palette(
         &doc.palette,
@@ -1376,7 +1653,13 @@ pub(crate) fn validate(doc: &AssemblyDocument) -> Vec<Diagnostic> {
     }
 
     validate_hierarchy(doc, &mut diagnostics);
+    diagnostics
+}
 
+/// The clip bindings' rules, shared by both bodies: names, paths, and the overlay (`speed`,
+/// `events`), which only a skinned assembly may use.
+fn validate_clip_bindings(doc: &AssemblyDocument, diagnostics: &mut Vec<Diagnostic>) {
+    let skinned = doc.mesh.is_some();
     for clip in &doc.clips {
         let pointer = format!("/clips/{}", pointer_token(&clip.name));
         if clip.name.is_empty() {
@@ -1398,7 +1681,7 @@ pub(crate) fn validate(doc: &AssemblyDocument) -> Vec<Diagnostic> {
                     code::ASSEMBLY_DATA_CONSISTENCY,
                     format!("the clip binding `{}` has an empty file path", clip.name),
                 )
-                .with_path(pointer)
+                .with_path(pointer.clone())
                 .with_help(
                     "point the binding at the clip document, relative to this assembly file",
                 ),
@@ -1409,30 +1692,52 @@ pub(crate) fn validate(doc: &AssemblyDocument) -> Vec<Diagnostic> {
                     code::ASSEMBLY_DATA_CONSISTENCY,
                     format!("`{}` (`{}`) {}", clip.name, clip.file, refusal.describe()),
                 )
-                .with_path(pointer)
+                .with_path(pointer.clone())
                 .with_help(
                     "point the binding at the clip document, relative to this assembly file",
                 ),
             );
         }
+        if !clip.speed.is_finite() || clip.speed <= 0.0 {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::ASSEMBLY_DATA_CONSISTENCY,
+                    format!(
+                        "the clip binding `{}` has `speed` {}, which must be finite and greater \
+                         than zero",
+                        clip.name, clip.speed
+                    ),
+                )
+                .with_path(format!("{pointer}/speed"))
+                .with_help("`speed` multiplies playback rate; 1.0 is authored speed"),
+            );
+        } else if !skinned && clip.speed != 1.0 {
+            diagnostics.push(overlay_refusal(&clip.name, "speed", &pointer));
+        }
+        if !skinned && !clip.events.is_empty() {
+            diagnostics.push(overlay_refusal(&clip.name, "events", &pointer));
+        }
+        validate_event_list(
+            &clip.events,
+            &format!("{pointer}/events"),
+            None,
+            false,
+            diagnostics,
+        );
     }
+}
 
-    validate_joints(doc, &mut diagnostics);
-    validate_mask_names(
-        &doc.masks,
+/// The `L1138` for a clip overlay key on a voxel assembly (decision 5).
+fn overlay_refusal(clip: &str, key: &str, pointer: &str) -> Diagnostic {
+    Diagnostic::new(
         code::ASSEMBLY_DATA_CONSISTENCY,
-        &mut diagnostics,
-    );
-    validate_mask_parts(doc, &mut diagnostics);
-    let names: Vec<&str> = doc.clips.iter().map(|clip| clip.name.as_str()).collect();
-    validate_blends(
-        &doc.blends,
-        &names,
-        code::ASSEMBLY_DATA_CONSISTENCY,
-        &mut diagnostics,
-    );
-    validate_ik(doc, &mut diagnostics);
-    diagnostics
+        format!("the clip binding `{clip}` sets `{key}`, which only a skinned assembly may"),
+    )
+    .with_path(format!("{pointer}/{key}"))
+    .with_help(
+        "put events in the clip document and scale playback with `Animation.speed`; the overlay is \
+         for clips imported onto a skinned mesh",
+    )
 }
 
 /// The `masks` parts check (`L1138`): every listed name is a part of this assembly.
@@ -2328,11 +2633,153 @@ pub fn overlap_lint(
     diagnostics
 }
 
+/// Checks a skinned assembly against its resolved clip documents and its mesh's joint names. Pure
+/// and IO-free.
+///
+/// `clips` is aligned by index with [`AssemblyDocument::clips`]; `joints` is the assembly mesh's
+/// joint names. Raises `L1138` when the overlay and the clip both carry events, `L1198` when an
+/// overlay event's `t` exceeds the clip's `duration` (or sits at it on a looping clip), and `L1138`
+/// for every clip track or mask joint that names a joint the mesh lacks, each pointing into the
+/// *assembly* document.
+///
+/// # Panics
+/// If the assembly has no `mesh`, or `clips` is not the same length as [`AssemblyDocument::clips`].
+pub(crate) fn check_mesh_clips(
+    doc: &AssemblyDocument,
+    clips: &[AnimationDocument],
+    joints: &[&str],
+) -> Vec<Diagnostic> {
+    assert!(
+        doc.mesh.is_some(),
+        "`check_mesh_clips` checks a skinned assembly; this one has no `mesh`"
+    );
+    assert_eq!(
+        doc.clips.len(),
+        clips.len(),
+        "`clips` must be aligned by index with the assembly's clip bindings"
+    );
+    let mut diagnostics = Vec::new();
+    for mask in &doc.masks {
+        for (index, joint) in mask.joints.iter().enumerate() {
+            if joints.contains(&joint.as_str()) {
+                continue;
+            }
+            let help = match suggest::nearest(joint, joints.iter().copied()) {
+                Some(candidate) => format!("nearest joint is `{candidate}`"),
+                None => "a mask's joints must be joints of the assembly's mesh".to_string(),
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::ASSEMBLY_DATA_CONSISTENCY,
+                    format!(
+                        "the mask `{}` lists `{joint}`, which is not a joint of the assembly's \
+                         mesh",
+                        mask.name
+                    ),
+                )
+                .with_path(format!(
+                    "/masks/{}/joints/{index}",
+                    pointer_token(&mask.name)
+                ))
+                .with_help(help),
+            );
+        }
+    }
+    let names: Vec<&str> = doc.clips.iter().map(|clip| clip.name.as_str()).collect();
+    check_blend_points(
+        &doc.blends,
+        &names,
+        clips,
+        |slot| {
+            if clips[slot].events.is_empty() {
+                &doc.clips[slot].events
+            } else {
+                &clips[slot].events
+            }
+        },
+        code::ASSEMBLY_DATA_CONSISTENCY,
+        &mut diagnostics,
+    );
+    for (binding, clip) in doc.clips.iter().zip(clips) {
+        let pointer = format!("/clips/{}", pointer_token(&binding.name));
+        if !binding.events.is_empty() && !clip.events.is_empty() {
+            diagnostics.push(
+                Diagnostic::new(
+                    code::ASSEMBLY_DATA_CONSISTENCY,
+                    format!(
+                        "the clip binding `{}` carries `events`, but its clip document has its \
+                         own",
+                        binding.name
+                    ),
+                )
+                .with_path(format!("{pointer}/events"))
+                .with_help(
+                    "a clip's events live in one place: remove the overlay `events`, or the ones \
+                     in the clip document",
+                ),
+            );
+        }
+        for (index, event) in binding.events.iter().enumerate() {
+            if event.t.is_finite() && event.t > clip.duration {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::ANIMATION_EVENT_INVALID,
+                        format!(
+                            "event `t` = {} is outside the clip's [0, {}] duration",
+                            format_float(event.t),
+                            format_float(clip.duration)
+                        ),
+                    )
+                    .with_path(format!("{pointer}/events/{index}/t"))
+                    .with_help("keep every event's `t` within [0, duration]"),
+                );
+            } else if clip.looped && event.t == clip.duration {
+                diagnostics.push(
+                    Diagnostic::new(
+                        code::ANIMATION_EVENT_INVALID,
+                        format!(
+                            "event `t` = {} is at the end of a looping clip, which is the same \
+                             instant as its start",
+                            format_float(event.t)
+                        ),
+                    )
+                    .with_path(format!("{pointer}/events/{index}/t"))
+                    .with_help("a loop's duration is its 0: move the event to `t: 0`"),
+                );
+            }
+        }
+        for track in &clip.tracks {
+            if joints.contains(&track.target.as_str()) {
+                continue;
+            }
+            let help = match suggest::nearest(&track.target, joints.iter().copied()) {
+                Some(candidate) => format!("nearest joint is `{candidate}`"),
+                None => "a track's target must be a joint of the assembly's mesh".to_string(),
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::ASSEMBLY_DATA_CONSISTENCY,
+                    format!(
+                        "the clip binding `{}` animates `{}`, which is not a joint of the \
+                         assembly's mesh",
+                        binding.name, track.target
+                    ),
+                )
+                .with_path(format!("{pointer}/clip"))
+                .with_help(help),
+            );
+        }
+    }
+    diagnostics
+}
+
 // --- Canonical writer ---------------------------------------------------------------------------
 
-/// Writes `doc` in canonical form: `format`, `kind`, `name` (optional), `size`, `palette`, `parts`
-/// (in authored order, each `name`, `file`, `parent?`, `place`, `pivot?`, `mirror?`), `clips`
-/// (sorted by short name, omitted when empty) — the assembly analog of [`crate::voxel::emit`].
+/// Writes `doc` in canonical form: `format`, `kind`, `name` (optional), then `mesh` for a skinned
+/// body or `size`, `palette`, `parts` (in authored order, each `name`, `file`, `parent?`, `place`,
+/// `pivot?`, `mirror?`) for a voxel one, then `clips` (sorted by short name, omitted when empty; a
+/// scalar path when `speed` is 1 and `events` is empty, else a `clip`/`speed?`/`events?` mapping) —
+/// the assembly analog of [`crate::voxel::emit`].
 ///
 /// A pivot equal to the part-local origin and an unset mirror are the *absence* of their keys, so
 /// each meaning has exactly one spelling (the `ease: linear` rule in [`crate::animation`]).
@@ -2346,48 +2793,54 @@ pub(crate) fn emit(doc: &AssemblyDocument) -> String {
         out.push('\n');
     }
 
-    out.push_str("size:\n");
-    for dim in doc.size {
-        out.push_str("  - ");
-        out.push_str(&dim.to_string());
+    if let Some(mesh) = &doc.mesh {
+        out.push_str("mesh: ");
+        out.push_str(&scalar_string(mesh));
         out.push('\n');
-    }
-
-    crate::voxel::emit_palette(&mut out, &doc.palette);
-
-    if doc.parts.is_empty() {
-        out.push_str("parts: []\n");
     } else {
-        out.push_str("parts:\n");
-        for part in &doc.parts {
-            out.push_str("  - name: ");
-            out.push_str(&scalar_string(&part.name));
-            out.push_str("\n    file: ");
-            out.push_str(&scalar_string(&part.file));
+        out.push_str("size:\n");
+        for dim in doc.size {
+            out.push_str("  - ");
+            out.push_str(&dim.to_string());
             out.push('\n');
-            if let Some(parent) = &part.parent {
-                out.push_str("    parent: ");
-                out.push_str(&scalar_string(parent));
+        }
+
+        crate::voxel::emit_palette(&mut out, &doc.palette);
+
+        if doc.parts.is_empty() {
+            out.push_str("parts: []\n");
+        } else {
+            out.push_str("parts:\n");
+            for part in &doc.parts {
+                out.push_str("  - name: ");
+                out.push_str(&scalar_string(&part.name));
+                out.push_str("\n    file: ");
+                out.push_str(&scalar_string(&part.file));
                 out.push('\n');
-            }
-            out.push_str("    place:\n");
-            for component in part.place {
-                out.push_str("      - ");
-                out.push_str(&component.to_string());
-                out.push('\n');
-            }
-            if part.pivot != [0.0, 0.0, 0.0] {
-                out.push_str("    pivot:\n");
-                for component in part.pivot {
-                    out.push_str("      - ");
-                    out.push_str(&format_float(component));
+                if let Some(parent) = &part.parent {
+                    out.push_str("    parent: ");
+                    out.push_str(&scalar_string(parent));
                     out.push('\n');
                 }
-            }
-            if part.mirror_x {
-                out.push_str("    mirror: ");
-                out.push_str(MIRROR_AXIS);
-                out.push('\n');
+                out.push_str("    place:\n");
+                for component in part.place {
+                    out.push_str("      - ");
+                    out.push_str(&component.to_string());
+                    out.push('\n');
+                }
+                if part.pivot != [0.0, 0.0, 0.0] {
+                    out.push_str("    pivot:\n");
+                    for component in part.pivot {
+                        out.push_str("      - ");
+                        out.push_str(&format_float(component));
+                        out.push('\n');
+                    }
+                }
+                if part.mirror_x {
+                    out.push_str("    mirror: ");
+                    out.push_str(MIRROR_AXIS);
+                    out.push('\n');
+                }
             }
         }
     }
@@ -2399,9 +2852,21 @@ pub(crate) fn emit(doc: &AssemblyDocument) -> String {
         for clip in &clips {
             out.push_str("  ");
             out.push_str(&scalar_string(&clip.name));
-            out.push_str(": ");
-            out.push_str(&scalar_string(&clip.file));
-            out.push('\n');
+            if clip.speed == 1.0 && clip.events.is_empty() {
+                out.push_str(": ");
+                out.push_str(&scalar_string(&clip.file));
+                out.push('\n');
+            } else {
+                out.push_str(":\n    clip: ");
+                out.push_str(&scalar_string(&clip.file));
+                out.push('\n');
+                if clip.speed != 1.0 {
+                    out.push_str("    speed: ");
+                    out.push_str(&format_float(clip.speed));
+                    out.push('\n');
+                }
+                emit_events(&mut out, &clip.events, "    ");
+            }
         }
     }
 

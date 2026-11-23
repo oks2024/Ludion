@@ -2253,6 +2253,41 @@ pub fn check_assembly_blends(
     assembly::check_blends(assembly, clips)
 }
 
+/// Checks a skinned assembly (one with `mesh:`) against its resolved clip documents and its mesh's
+/// joint names: overlay `events` on a clip that has its own (`L1138`), an overlay event past the
+/// clip's `duration` or at it on a looping clip (`L1198`), a clip track or mask joint naming a joint
+/// the mesh lacks (`L1138`, naming the nearest joint).
+///
+/// `clips` is aligned by index with [`AssemblyDocument::clips`]. Pure and IO-free; every diagnostic
+/// points into the *assembly* document.
+///
+/// # Panics
+/// If the assembly has no `mesh`, or `clips` is not the same length as [`AssemblyDocument::clips`].
+///
+/// # Example
+/// ```
+/// use ludion_scene::{check_animation, check_assembly, check_assembly_mesh_clips};
+///
+/// let assembly = check_assembly(
+///     "format: 1\nkind: assembly\nmesh: goblin.mesh.yaml\nclips:\n  idle: idle.anim.yaml\n",
+/// )
+/// .unwrap();
+/// let clip = check_animation(
+///     "format: 1\nkind: animation\nduration: 1.0\nloop: true\ntracks:\n  tail:\n    rotation:\n      - t: 0.0\n        v:\n          - 0.0\n          - 0.0\n          - 0.0\n",
+/// )
+/// .unwrap();
+/// let diagnostics = check_assembly_mesh_clips(&assembly, &[clip], &["hips", "spine"]);
+/// assert_eq!(diagnostics.len(), 1);
+/// assert_eq!(diagnostics[0].code.as_str(), "L1138");
+/// ```
+pub fn check_assembly_mesh_clips(
+    doc: &AssemblyDocument,
+    clips: &[AnimationDocument],
+    joints: &[&str],
+) -> Vec<Diagnostic> {
+    assembly::check_mesh_clips(doc, clips, joints)
+}
+
 /// The voxel document the engine meshes for one part of an assembly: the assembly's palette over
 /// that part's own grid, named by the part entry.
 ///

@@ -188,6 +188,8 @@ pub(crate) fn parse_clips(
             out.push(AssemblyClip {
                 name: sub.key.clone(),
                 file,
+                speed: 1.0,
+                events: Vec::new(),
             });
         }
     }

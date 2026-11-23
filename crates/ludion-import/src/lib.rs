@@ -536,6 +536,8 @@ fn part_clip_bindings(clips: &[ClipArtifact]) -> Vec<AssemblyClip> {
         .map(|clip| AssemblyClip {
             name: clip.doc.name.clone().expect("an imported clip is named"),
             file: clip.rel_path.clone(),
+            speed: 1.0,
+            events: Vec::new(),
         })
         .collect();
     bindings.sort_by(|a, b| a.name.cmp(&b.name));
