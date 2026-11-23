@@ -10,7 +10,9 @@
 //! (`scenes/paths/lane.path.yaml`) curves up a ramp, crosses a pit, drops to a belt and ends on an exit
 //! pad: a [`LaneSwitch`] sensor engages the hero's `LaneConstraint`, a [`Checkpoint`] sensor inside
 //! makes the pit's respawn land on the lane, and a second switch releases it. Beside it, off the lane, are a 0.4 m
-//! step, a 55° slope the motor refuses, a path platform over a pit, a turntable and a press.
+//! step, a 55° slope the motor refuses, a path platform over a pit, a turntable and a press. Past the exit
+//! pad a chase section (x 52..68) has a [`CameraGate`] switch the rig to a collision-aware `chase` boom,
+//! which a pillar and a low porch pull in.
 //!
 //! **Play it** (`Left`/`Right`/`Up`/`Down` or `A`/`D`/`W`/`S`, the left stick; `Space` or the south
 //! button jumps, release early to cut the jump; hold `C` or the east button to crouch):

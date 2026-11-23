@@ -152,6 +152,21 @@ fn the_route_clears_every_element_of_the_lane() {
     assert!(last.1[0] >= 50.0, "the route ends at x = {}", last.1[0]);
 }
 
+/// The chase section past the exit pad: the route walks the hero under the porch (x 61..65) and stops
+/// beyond it, still on the chase floor.
+#[test]
+fn the_route_ends_past_the_chase_porch() {
+    let records = run();
+    let hero = hero(&records);
+    let last = hero.last().unwrap();
+    assert!(
+        last.feet[0] > 64.0,
+        "the route ends at x = {}",
+        last.feet[0]
+    );
+    assert!(last.feet[1] > 1.0, "the hero left the chase floor");
+}
+
 /// The lane section: engage, hold, the death in the pit, the respawn back on the lane, the belt,
 /// the release.
 #[test]

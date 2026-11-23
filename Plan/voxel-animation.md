@@ -98,6 +98,7 @@ Game-side procedural writes remain legal and shipped (yaw-to-heading, pickup bob
    `Animation { clip, started, speed }` — ordinary hashed sim state, written by game systems
    (movement sets `walk`, combat sets `attack`). No data-driven state machine (a behavior DSL —
    pillar violation). Transitions are hard cuts in v1.
+   Amended R14: vigil's choice is now the `PLAYER_CLIPS` `AnimGraph` (`games/vigil/src/animation.rs`).
    Amended 2026-11-19 (owner): a Rust `AnimGraph` helper (code, not data) is admitted, see Plan/animation-layers.md d9.
    Amended 2026-11-19 (owner): agent state machines take the Rust-side `ludion-ai` `Machine` shape (code, not data), see Plan/ai-behaviour.md d1.
 7. **Clips are separate files bound by short name.** `kind: animation`, one clip per file; the

@@ -46,12 +46,12 @@ use ludion_core::ids::EntityId;
 use ludion_ecs::{SystemCtx, World};
 use ludion_engine::SkinBone;
 use ludion_engine::{
-    Animation, AnimationEvents, Engine, EngineBuilder, Mesh, PrefabInstance, Sprite,
+    AnimEdge, AnimGate, AnimGraph, AnimGraphState, AnimState, Animation, AnimationEvents, Engine,
+    EngineBuilder, Mesh, PrefabInstance, Sprite,
 };
 use ludion_engine::{
     AssemblyData, BlendIn, CameraRig, Framing, RigConfig, RigMode, TrackRig, add_look, add_trauma,
-    animation_events, crossfade, load_assembly, snap_rig, switch_skin_to_ragdoll,
-    switch_to_ragdoll,
+    animation_events, load_assembly, snap_rig, switch_skin_to_ragdoll, switch_to_ragdoll,
 };
 use std::sync::Arc;
 
@@ -62,55 +62,79 @@ pub const RUN_TICKS: u64 = 80;
 /// Seconds of the idle → run crossfade.
 pub const RUN_IN_FADE: f32 = 0.25;
 
-/// What ends a clip's turn.
-enum Leave {
-    /// This many ticks after the clip started.
-    After(u64),
-    /// The clip's implicit `end` event (a one-shot finishing).
-    OnEnd,
+/// The mannequin's states: three runs, so each `run` entry reads its own predecessor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pose {
+    Idle,
+    RunA,
+    Jump,
+    RunB,
+    Spin,
+    RunC,
 }
 
-/// `(clip, entered from, leaves on, next clip, fade seconds)`; a `None` origin matches any.
-/// Every entry into `run` is a crossfade, and `crossfade` keeps `Animation.from` after the fade
-/// ends, so `run` reads its predecessor there and the cycle needs no state of its own. A fade of
-/// `0.0` is a hard cut.
-const CYCLE: [(&str, Option<&str>, Leave, &str, f32); 6] = [
-    ("idle", None, Leave::After(IDLE_TICKS), "run", RUN_IN_FADE),
-    ("run", Some("idle"), Leave::After(RUN_TICKS), "jump", 0.1),
-    ("run", Some("jump"), Leave::After(RUN_TICKS), "spin", 0.0),
-    ("run", Some("spin"), Leave::After(RUN_TICKS), "idle", 0.3),
-    ("jump", None, Leave::OnEnd, "run", 0.15),
-    ("spin", None, Leave::OnEnd, "run", 0.15),
-];
+const fn state(
+    id: Pose,
+    name: &'static str,
+    plays: &'static str,
+    one_shot: bool,
+) -> AnimState<Pose> {
+    AnimState {
+        id,
+        name,
+        plays,
+        layers: &[],
+        one_shot,
+    }
+}
 
-/// Advances every `Animation` along [`CYCLE`], writing only on a switch and stamping with
-/// `ctx.game_frame`, so the component stays quiet in the hash between switches.
+const fn edge(from: Pose, to: Pose, gate: AnimGate, fade: f32) -> AnimEdge<Pose, ()> {
+    AnimEdge {
+        from: Some(from),
+        to,
+        when: |_| true,
+        fade,
+        gate,
+    }
+}
+
+/// The cycle as states and edges: idle, run, jump, run, spin, run, idle. A fade of `0.0` is a hard
+/// cut; the one-shots leave on their `end` events.
+pub static CYCLE_GRAPH: AnimGraph<Pose, ()> = AnimGraph {
+    states: &[
+        state(Pose::Idle, "idle", "idle", false),
+        state(Pose::RunA, "run_a", "run", false),
+        state(Pose::Jump, "jump", "jump", true),
+        state(Pose::RunB, "run_b", "run", false),
+        state(Pose::Spin, "spin", "spin", true),
+        state(Pose::RunC, "run_c", "run", false),
+    ],
+    edges: &[
+        edge(
+            Pose::Idle,
+            Pose::RunA,
+            AnimGate::MinTicks(IDLE_TICKS),
+            RUN_IN_FADE,
+        ),
+        edge(Pose::RunA, Pose::Jump, AnimGate::MinTicks(RUN_TICKS), 0.1),
+        edge(Pose::Jump, Pose::RunB, AnimGate::OnEvent("end"), 0.15),
+        edge(Pose::RunB, Pose::Spin, AnimGate::MinTicks(RUN_TICKS), 0.0),
+        edge(Pose::Spin, Pose::RunC, AnimGate::OnEvent("end"), 0.15),
+        edge(Pose::RunC, Pose::Idle, AnimGate::MinTicks(RUN_TICKS), 0.3),
+    ],
+};
+
+/// Steps [`CYCLE_GRAPH`] for every entity carrying an `AnimGraphState` (the scene authors it), so
+/// the `Animation` is written only on a switch and the hash stays quiet between switches.
 pub fn cycle_character(world: &mut World, ctx: &SystemCtx) {
-    let events = world
-        .resource::<AnimationEvents>()
-        .cloned()
-        .unwrap_or_default();
-    for (entity, (animation,)) in world.query_ids::<(&mut Animation,)>() {
-        let elapsed = ctx
-            .game_frame
-            .as_u64()
-            .saturating_sub(animation.started.as_u64());
-        let ended = events.fired(entity, &animation.clip, "end");
-        let next = CYCLE
-            .iter()
-            .find(|(clip, from, _, _, _)| {
-                *clip == animation.clip && from.is_none_or(|from| from == animation.from)
-            })
-            .and_then(|(_, _, leave, next, fade)| {
-                let due = match leave {
-                    Leave::After(ticks) => elapsed >= *ticks,
-                    Leave::OnEnd => ended,
-                };
-                due.then_some((*next, *fade))
-            });
-        if let Some((clip, fade)) = next {
-            crossfade(animation, clip, fade, ctx.game_frame);
-        }
+    let entities: Vec<EntityId> = world
+        .query_ids::<(&AnimGraphState,)>()
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in entities {
+        CYCLE_GRAPH
+            .step(world, entity, &(), ctx)
+            .expect("the cycle graph steps");
     }
 }
 
@@ -123,6 +147,7 @@ pub fn cycle_builder() -> EngineBuilder {
         .query::<(&Animation, &PrefabInstance)>()
         .system("cycle_character", cycle_character)
         .query::<(&mut Animation,)>()
+        .query::<(&mut AnimGraphState,)>()
 }
 
 /// The tick the running mannequin switches to its ragdoll.

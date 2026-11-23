@@ -6,7 +6,7 @@
 > the lane constraint (`LaneConstraint`, `ludion docs lane`): a lateral hold to a `kind: path` corridor, and the fifth the
 > track camera rig (`CameraRig`, `ludion-camera`, `ludion docs camera`), proved on the course's behind and side rigs. A first-person game's
 > request added the `first_person` mode (look deltas, pitch clamp, `aim()`) and post-aim kick, roll and FOV channels. `chase` and `follow` are
-> mechanized (Neon Shroud request 0010, W3a: decisions 29–32), as are the collision stage, the framing channel and the chase recenter (W3b: decisions 33–36), and the engine `CameraZone` with the occluder query (W3c: decisions 37–39); the gallery chase scene with `camera_relative` ignoring the framing yaw (W3d: decision 40; `camera-chase` and `camera-chase-driven` are blessed on both pinned machines, the macOS twins at r2455); decision 16 and the vigil migration remain open; `manual` is dropped (decision 12, amended).
+> mechanized (Neon Shroud request 0010, W3a: decisions 29–32), as are the collision stage, the framing channel and the chase recenter (W3b: decisions 33–36), and the engine `CameraZone` with the occluder query (W3c: decisions 37–39); the gallery chase scene with `camera_relative` ignoring the framing yaw (W3d: decision 40; `camera-chase` and `camera-chase-driven` are blessed on both pinned machines, the macOS twins at r2455); the course's own chase section shipped in R14 (`run.lrp` and the course goldens re-recorded in its final wave); decision 16 and the vigil migration remain open; `manual` is dropped (decision 12, amended).
 > Neon Shroud request 0006 (2026-11-18): N1 `suspend_character` / `resume_character` / `character_fit` is mechanized (decision 26); N2 postures and N3 carry are mechanized (decisions 27–28).
 > W1 holds mesh colliders, `kind: path` with its sampler queries, `PathFollower` (motion readout, wrap
 > teleports, `orient`) and world-space debug draw including the `colliders` category and `axes`. The
@@ -230,7 +230,7 @@ answer in this plan … decided when a slice asks for one"). The platformer asks
 21. **Proof vehicle:** `examples/character-course`.
     - A greybox course: a Blender-scripted trimesh with slopes past the limit, steps, gaps, a platform
       on a path, a track section and a chase section (the chase proof is the gallery's `camera-chase`
-      scene, decision 40: the course's own chase section is deferred, see W3).
+      scene, decision 40; the course's own chase section shipped in R14, see W3).
     - A run/jump **reference controller** drives it; it is the runnable example for motor and rigs.
     - The game crate starts after its GDD; it copies the pattern, not the code.
 22. **Sequencing and input:**
@@ -495,7 +495,7 @@ W3's remaining work splits (Neon Shroud request 0010): **W3a** `chase`, `follow`
 (mechanized, decisions 29–32); **W3b** the collision stage, the framing channel and the chase recenter (mechanized, decisions 33–36); **W3c** the engine
 `CameraZone` and the occluder query (mechanized, decisions 37–39); **W3d** (mechanized; the pinned blesses are owed): `examples/gallery/camera-chase.yaml` with its game half (`common::chase_builder`), CPU proofs (`tests/camera_chase.rs`: a per-tick `WorldHash` trace, 1/2/8-thread identity, snapshot rejoins, the scenario assertions), a driven golden and the `camera_chase` example, plus `camera_relative` unframed (decision 40).
 
-**The course's chase section is deferred.** Adding entities to `games/character-course/scenes/main.yaml` moves `run.lrp`'s hashes and the whole-course `goldens/<os>/main.png`, and a second course scene would fork the course only to repeat what the gallery scene proves. Trigger: the next owner-approved course re-record.
+**The course's chase section shipped in R14.** It was deferred because adding entities to `games/character-course/scenes/main.yaml` moves `run.lrp`'s hashes and the course goldens; the R14 re-record took it: a `CameraGate` past the exit pad (x 52..68) switches the rig to a collision-aware `chase` boom, a pillar and a low porch pull it in, the route walks it, and `tests/camera.rs` proves the switch, the pull-ins and a clear eye. `run.lrp` and the goldens are re-recorded in R14's final wave.
 
 **W3d blesses owed (the pinned 3090):** (1) the bare frame-0 golden, from the repo root: `cargo run -p ludion-cli --release -- test --dir examples/gallery --bless --filter camera-chase`; (2) the driven golden: `LUDION_BLESS=1 cargo nextest run -p ludion-testkit --test gallery -E 'test(/camera_chase_driven/)'`; (3) the cross-arch trace: `LUDION_BLESS=1 cargo nextest run -p ludion-testkit --test camera_chase -E 'test(/committed_cross_arch_trace/)'` (the M4 must reproduce it byte-identically); (4) the macOS twins of 1 and 2 on the M4.
 

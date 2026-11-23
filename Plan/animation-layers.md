@@ -448,11 +448,14 @@ share one driver shape.
 52. **Errors write nothing.** `L4290` (`ANIM_GRAPH_STATE_INVALID`): no `AnimGraphState`, an unknown state name (help:
     the nearest declared name and the declared list), no `Animation`, or a layer the entity lacks, checked before the
     first write. `L4291` (`ANIM_GRAPH_INVALID`): duplicate state names, duplicate state ids, or an edge naming an undeclared state.
-53. **The `CYCLE` swap is an R14 re-record item.** `common::cycle_builder` moving onto a graph puts a hashed
+53. **The `CYCLE` swap is an R14 re-record item (shipped in R14).** `common::cycle_builder` moving onto a graph puts a hashed
     `AnimGraphState` on the mannequin, which moves every `character-cycle.trace.txt` line and the `.lrp`
     (`ludion-sim/src/hash.rs` rule 4). W3 proves the port instead: `anim_graph_cycle.rs` runs `CYCLE` and a six-state
     graph port side by side and asserts an identical `Animation` every tick. Vigil's `animate_player` on the graph
-    (the request's acceptance) waits for the same round. **Trigger:** R14.
+    (the request's acceptance) waits for the same round. **Trigger:** R14. **Shipped in R14:** `cycle_builder` steps
+    the six-state graph (the scene authors `AnimGraphState`), the old table survives in `anim_graph_cycle.rs` as the
+    oracle, and vigil's `animate_player` and `trigger_attack` choose through a `PLAYER_CLIPS` graph; the trace and
+    `.lrp` are re-recorded in R14's final wave.
 54. **The bench is a runnable `#[ignore]` target over five arms** (`empty`, `clip`, `layers`, `ik`, `full`; the
     same 32 placements, each adding one feature), printing the extract median, p99 and delta over `empty` at 1
     and 8 threads. The `full` arm at one thread is gated in-file at 0.5 ms (decision 11, the owner's 2026-11-19
@@ -501,7 +504,8 @@ share one driver shape.
   (`model_sheet.rs` + CLI; decision 35).
 - **W2d (shipped).** The gallery humanoid, `assembly-layers.yaml` and two goldens (macOS twins owed).
 - **W3 (shipped 2026-11-20).** `AnimGraph` and `AnimGraphState` (decisions 9 and 50–53). Moving `CYCLE` and
-  vigil's `animate_player` onto the graph is an R14 re-record item (decision 53).
+  vigil's `animate_player` onto the graph shipped in R14 (decision 53); the trace and `.lrp` are re-recorded in
+  R14's final wave.
 - **W4a (shipped).** The `ik:` key, `IkTargets`, look-at and two-part IK in extract (decisions 36–39).
 - **W4b (shipped).** `check-scene` lists `ik:`, `render --model --look/--ik`, `GoldenTest.look`/`ik`, and the
   look-at-at-its-yaw-limit golden (decision 40; macOS twin owed).

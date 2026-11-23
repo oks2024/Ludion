@@ -1,8 +1,9 @@
 //! The camera rig on the course, tick by tick: the scripted route drives the hero while the test
-//! reads the camera's `CameraRig` and `Transform` each tick. The zone blends run a second, the eye
-//! never jumps but at the respawn snap, the lane section is watched from the lane's right, the
-//! respawn is the one trauma pulse, the main lane runs straight under `camera_relative`, and two
-//! runs hash identically per tick.
+//! reads the camera's `CameraRig` and `Transform` each tick. The gate blends run a second, the eye
+//! never jumps but at the respawn snap and a collision pull-in, the lane section is watched from the
+//! lane's right, the chase section pulls the boom in at its pillar and porch and keeps the eye clear
+//! of the course, the respawn is the one trauma pulse, the main lane runs straight under
+//! `camera_relative`, and two runs hash identically per tick.
 
 mod common;
 
@@ -18,6 +19,11 @@ use ludion_testkit::GameplayDriver;
 const MAX_EYE_STEP: f32 = 0.5;
 /// A blend runs one second of 60 Hz ticks, give or take the tick the zone's write lands on.
 const BLEND_TICKS: usize = 60;
+/// The chase gate's collision sphere, metres (`chase-enter`'s `collision.radius`).
+const CHASE_RADIUS: f32 = 0.3;
+/// The pillar's and the porch's x range, from the scene.
+const PILLAR_X: std::ops::RangeInclusive<f32> = 55.0..=60.0;
+const PORCH_X: std::ops::RangeInclusive<f32> = 59.0..=67.0;
 /// The farthest the hero's feet move in one tick without a respawn, metres.
 const TELEPORT: f32 = 1.0;
 
@@ -26,6 +32,8 @@ struct Tick {
     eye: [f32; 3],
     rig: CameraRig,
     hash: u64,
+    /// Whether a sphere at the eye touches no collider but the hero's own.
+    eye_clear: bool,
 }
 
 fn scenes() -> PathBuf {
@@ -57,15 +65,35 @@ fn run() -> Vec<Tick> {
                 .next()
                 .map(|(_, pose)| pose.translation)
                 .unwrap();
+            let hero = world
+                .query_ids::<(&character_course::Runner,)>()
+                .next()
+                .map(|(id, _)| id)
+                .unwrap();
             let (_, (pose, rig)) = world
                 .query_ids::<(&Transform, &CameraRig)>()
                 .next()
                 .unwrap();
+            let (eye, rig) = (pose.translation, rig.clone());
+            let physics = world
+                .resource::<PhysicsWorld>()
+                .expect("the course has physics");
+            let touching = physics
+                .overlap(
+                    &Shape::Sphere {
+                        radius: CHASE_RADIUS,
+                    },
+                    eye,
+                    [0.0, 0.0, 0.0, 1.0],
+                    &QueryFilter::new().exclude(hero),
+                )
+                .expect("the overlap query runs");
             Tick {
                 feet,
-                eye: pose.translation,
-                rig: rig.clone(),
+                eye,
+                rig,
                 hash,
+                eye_clear: touching.is_empty(),
             }
         })
         .collect()
@@ -106,7 +134,11 @@ fn blends(ticks: &[Tick]) -> Vec<(usize, usize)> {
 fn each_zone_blend_runs_a_second() {
     let ticks = run();
     let blends = blends(&ticks);
-    assert_eq!(blends.len(), 2, "the enter and the exit blend: {blends:?}");
+    assert_eq!(
+        blends.len(),
+        3,
+        "the lane enter, the lane exit and the chase blend: {blends:?}"
+    );
     for (from, to) in &blends {
         let len = to - from;
         assert!(
@@ -117,11 +149,12 @@ fn each_zone_blend_runs_a_second() {
 }
 
 #[test]
-fn the_eye_never_jumps_but_at_the_respawn_snap() {
+fn the_eye_never_jumps_but_at_the_respawn_snap_and_a_pull_in() {
     let ticks = run();
     let respawns = respawns(&ticks);
     assert_eq!(respawns.len(), 1, "one respawn: {respawns:?}");
     let mut worst: f32 = 0.0;
+    let mut pulled: f32 = 0.0;
     for i in 1..ticks.len() {
         let step = distance(ticks[i].eye, ticks[i - 1].eye);
         if respawns.contains(&i) {
@@ -129,12 +162,44 @@ fn the_eye_never_jumps_but_at_the_respawn_snap() {
                 ticks[i].rig.state.blend.is_none(),
                 "the snap leaves no blend"
             );
+        } else if ticks[i].rig.state.boom.is_some() || ticks[i - 1].rig.state.boom.is_some() {
+            // A collision pull-in is a deliberate fast move.
+            pulled = pulled.max(step);
         } else {
             worst = worst.max(step);
             assert!(step <= MAX_EYE_STEP, "tick {i}: the eye moved {step} m");
         }
     }
-    eprintln!("largest eye step {worst}");
+    eprintln!("largest eye step {worst}, largest pull-in step {pulled}");
+}
+
+#[test]
+fn the_chase_section_pulls_the_boom_in_and_keeps_the_eye_clear() {
+    let ticks = run();
+    let first_chase = ticks
+        .iter()
+        .position(|t| matches!(t.rig.rig.mode, RigMode::Chase(_)))
+        .expect("the chase gate switches the rig to chase");
+    assert!(
+        ticks[first_chase..]
+            .iter()
+            .all(|t| matches!(t.rig.rig.mode, RigMode::Chase(_))),
+        "the rig stays chase to the end of the route"
+    );
+    let pulled = |x: &std::ops::RangeInclusive<f32>| {
+        ticks[first_chase..]
+            .iter()
+            .any(|t| t.rig.state.boom.is_some() && x.contains(&t.eye[0]))
+    };
+    assert!(pulled(&PILLAR_X), "the pillar never pulled the boom in");
+    assert!(pulled(&PORCH_X), "the porch never pulled the boom in");
+    for (i, tick) in ticks.iter().enumerate().skip(first_chase) {
+        assert!(
+            tick.eye_clear,
+            "tick {i}: the eye at {:?} is in the course",
+            tick.eye
+        );
+    }
 }
 
 #[test]

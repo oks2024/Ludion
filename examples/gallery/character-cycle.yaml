@@ -2,7 +2,8 @@
 # (`characters/mannequin.character.yaml`, four Blender-keyed clips) sits at the origin playing `idle`.
 # Bare, this scene shows the rest pose at tick 0; the game half is
 # `crates/ludion-testkit/tests/common/mod.rs`, which crossfades idle -> run -> jump -> run -> spin ->
-# run -> idle on the clips' own `end` events (`ludion docs character-animation`).
+# run -> idle on the clips' own `end` events (`ludion docs character-animation`). `AnimGraphState` is the
+# game's `AnimGraph` entry: the cycle graph steps from `idle`.
 format: 1
 name: "character-cycle - the mannequin cycles idle, run, jump and spin under game code"
 seed: 1
@@ -67,3 +68,5 @@ entities:
         roughness: 0.8
       Animation:
         clip: idle
+      AnimGraphState:
+        state: idle
