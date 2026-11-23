@@ -404,11 +404,6 @@ pub mod code {
     /// `L4205` — a scene switch requested the same frame as a checkpoint restore was dropped; the
     /// restore wins. A warning.
     pub const CHECKPOINT_SWITCH_DROPPED: DiagnosticCode = DiagnosticCode::new("L4205");
-    /// `L4206` — a replay keyframe was skipped because checkpoint slots are held; a seek lands on the
-    /// last keyframe before the first capture. Reported once. A warning.
-    pub const CHECKPOINT_KEYFRAME_SKIP: DiagnosticCode = DiagnosticCode::new("L4206");
-    /// `L4207` — a run recording was not armed because checkpoint slots are held. A warning.
-    pub const CHECKPOINT_RECORDING_ARM_REFUSED: DiagnosticCode = DiagnosticCode::new("L4207");
     /// `L4208` — the checkpoint disk slot could not be written or removed. The previous whole file
     /// stays and the next request retries. An error.
     pub const CHECKPOINT_DISK_WRITE_FAILED: DiagnosticCode = DiagnosticCode::new("L4208");
@@ -6457,31 +6452,6 @@ switch is dropped. A slot captured in another district performs that switch itse
 This is a **warning**.
 
 Fix: request one or the other, or request the switch on a later frame.",
-    },
-    CodeEntry {
-        code: code::CHECKPOINT_KEYFRAME_SKIP,
-        severity: Severity::Warning,
-        title: "replay keyframe skipped while checkpoint slots are held",
-        explanation: "\
-A recording was due a keyframe while checkpoint slots were held. A snapshot cannot carry slots yet, so
-no keyframe is written; a seek lands on the last keyframe before the first capture. The replay itself
-is unaffected: replaying regenerates the slots.
-
-This is a **warning**, reported once per session.
-
-Fix: `discard` every slot before a recording needs keyframes, or accept the coarser seek.",
-    },
-    CodeEntry {
-        code: code::CHECKPOINT_RECORDING_ARM_REFUSED,
-        severity: Severity::Warning,
-        title: "recording not armed while checkpoint slots are held",
-        explanation: "\
-A run recording was started while checkpoint slots were held. A recording must start from a world its
-keyframes can reproduce, and a snapshot cannot carry slots yet, so it was not armed.
-
-This is a **warning**.
-
-Fix: start the recording before the first capture, or `discard` every slot first.",
     },
     CodeEntry {
         code: code::CHECKPOINT_DISK_WRITE_FAILED,
@@ -14636,6 +14606,14 @@ pub const RETIRED: &[(&str, &str)] = &[
         "L3012",
         "the refused acked subscribe mode, removed from the wire",
     ),
+    (
+        "L4206",
+        "a replay keyframe skipped while checkpoint slots are held; slots ride the snapshot since R14",
+    ),
+    (
+        "L4207",
+        "a recording refused while checkpoint slots are held; slots ride the snapshot since R14",
+    ),
 ];
 
 /// Why `code` was retired, if it is in [`RETIRED`].
@@ -14854,8 +14832,6 @@ mod tests {
         code::CHECKPOINT_CAPTURE_FAILED,
         code::CHECKPOINT_RESTORE_FAILED,
         code::CHECKPOINT_SWITCH_DROPPED,
-        code::CHECKPOINT_KEYFRAME_SKIP,
-        code::CHECKPOINT_RECORDING_ARM_REFUSED,
         code::CHECKPOINT_DISK_WRITE_FAILED,
         code::CHECKPOINT_DISK_LOAD_REFUSED,
         code::GAME_SCALE_INVALID,
@@ -15495,8 +15471,6 @@ mod tests {
             code::CHECKPOINT_CAPTURE_FAILED,
             code::CHECKPOINT_RESTORE_FAILED,
             code::CHECKPOINT_SWITCH_DROPPED,
-            code::CHECKPOINT_KEYFRAME_SKIP,
-            code::CHECKPOINT_RECORDING_ARM_REFUSED,
             code::CHECKPOINT_DISK_LOAD_REFUSED,
             code::GAME_SCALE_INVALID,
             code::REPLAY_PLAYBACK_FAILED,

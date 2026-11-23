@@ -56,18 +56,16 @@ At one boundary: every `discard`, then every `capture` in call order, then the *
 
 - A capture and a restore of one name in one frame restore what was just captured.
 - A restore wins over a scene switch requested the same frame: the switch is dropped and reported (`L4205`).
-- A `RunSave::resume` the same frame clears the store, so the restore is refused as no slot (`L4200`).
-- A scene load, an `engine.restore` and a `ludion dev` restart clear every slot; a scene switch keeps them.
+- A `RunSave::resume` the same frame replaces the store with the suspended one and the restore is refused (`L4204`).
+- A scene load clears every slot; a scene switch keeps them. An `engine.restore`, a `ludion dev` restart, a replay seek and a `RunSave` resume **install the slots the snapshot carries** (a snapshot taken with none installs none).
 
 ## Recording and replay
 
 A restore needs no record kind: replaying regenerates each capture and restore from the same hashed state. `RunRecording` and a session recording continue across a restore.
 
-A snapshot document cannot carry slots, so while any slot is held:
+A snapshot document carries the slots (and `last_restore`, which a game reads to reseed after a restore), so a keyframe taken while slots are held is a full keyframe: a seek lands inside a held window and the restores the game requests after it still reproduce the live run. A snapshot taken with no slot and no restore has no `checkpoints` field.
 
-- a recording writes **no keyframe** (`L4206`, once per session): a seek lands on the last keyframe before the first capture, and the replay itself is unaffected.
-
-A recording can only start at frame 0 of a freshly loaded scene, which holds no slots; `L4207` is the engine's guard if one is ever armed with slots held.
+The `WorldHash` folds in the slot **metadata** (name, frames, scene, clock) while any slot is held, and the `GameClock` while it has excluded time. A restore rebases the clock, so the hash after a restore is not the hash at the capture; compare world content, not the hash, when a test claims "the restore is the capture".
 
 ## Refusals
 
@@ -111,7 +109,7 @@ fn continue_logic(world: &mut World, _ctx: &SystemCtx) {
 - **The frame never moves back.** A Continue usually runs at a title-screen frame below the slot's: the frame jumps forward to the slot's, so `game_frame` equals the slot's. Input injected for frames in between is dropped; held input stays.
 - Disk only on a persisting host (`persist_profile`). Elsewhere `persist` only updates `disk()` and `load_disk()` is `Refused` ("this host keeps no saves"); tests and replays never touch disk.
 - **Strict refusal.** A garbled or newer-format file, one written by another build (engine version, component or data schemas, projectile pool), an invalid name, or a slot that no longer restores is `L4209`: the file is renamed to `checkpoint.json.bak.<hash>`, `disk()` becomes `None`, and the world is untouched. While a recording is open the load is refused (`L4209`) with the file **kept** and no backup: stop the recording first.
-- `disk()` is **disk input**, like `RunSave::pending()`: a replay and a playback see `None`. Read it on the title screen, before a recording starts. A continued run cannot be recorded from the loaded state (a recording starts from scene text, and holding slots refuses arming, `L4207`).
+- `disk()` is **disk input**, like `RunSave::pending()`: a replay and a playback see `None`. Read it on the title screen, before a recording starts. A continued run cannot be recorded from the loaded state (a recording starts from scene text).
 - A write is crash-durable, so a quit mid-write keeps the previous file. A failed write or delete is `L4208`; the next request retries.
 
 **Continue policy:** offer `RunSave::pending()` first (the exact quit moment); fall back to `disk()` (the last threshold). Quit versus suspend: a quit that wants the exact moment suspends; a game that only wants a threshold persists at the capture and needs nothing at quit.

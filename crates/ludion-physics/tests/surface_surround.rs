@@ -1,5 +1,5 @@
-//! `contact_surfaces` names the surface on each side of a contact event (an overlay answers for both,
-//! a stop answers none, a restore answers the same) and `surface_wireframe` tints every collider
+//! `ContactEvent::surface_a/b` name the surface on each side of a contact event (an overlay answers for both,
+//! a stop answers none, a restore carries them) and `surface_wireframe` tints every collider
 //! outline by the surface a hit there reports.
 
 mod common;
@@ -13,7 +13,6 @@ use ludion_ecs::{Schedule, World};
 use ludion_physics::{
     ColliderMeshes, ContactEvent, ContactPhase, NoParent, PhysicsSettings, PhysicsSpace,
     PhysicsWorld, SurfaceId, SurfaceOverlay, SurfaceTable, SurfaceTag, TriangleMesh, install,
-    sync_mesh_surfaces,
 };
 use ludion_spatial::{Body, Collider, RigidBody, Shape, Velocity};
 
@@ -129,7 +128,7 @@ fn a_ball_on_a_tagged_box_answers_floor_then_ball_and_a_stop_answers_none() {
     let mut schedule = stepped(None);
     let event = first_start(&mut world, &mut schedule, (floor, dropped));
     assert_eq!(
-        physics(&world).contact_surfaces(&event),
+        [event.surface_a, event.surface_b],
         [Some(GRATE), Some(WOOD)]
     );
 
@@ -144,7 +143,7 @@ fn a_ball_on_a_tagged_box_answers_floor_then_ball_and_a_stop_answers_none() {
         .iter()
         .find(|e| e.phase == ContactPhase::Stopped)
         .expect("a despawn stops the contact");
-    assert_eq!(physics(&world).contact_surfaces(&stop), [None, None]);
+    assert_eq!([stop.surface_a, stop.surface_b], [None, None]);
 }
 
 #[test]
@@ -155,7 +154,7 @@ fn an_untagged_pair_answers_the_default_surface() {
     let mut schedule = stepped(Some(CONCRETE));
     let event = first_start(&mut world, &mut schedule, (floor, dropped));
     assert_eq!(
-        physics(&world).contact_surfaces(&event),
+        [event.surface_a, event.surface_b],
         [Some(CONCRETE), Some(CONCRETE)]
     );
 }
@@ -219,7 +218,7 @@ fn a_ball_on_a_two_tag_mesh_answers_the_triangles_tag() {
         let mut schedule = stepped(None);
         let event = first_start(&mut world, &mut schedule, (floor, dropped));
         assert_eq!(
-            physics(&world).contact_surfaces(&event),
+            [event.surface_a, event.surface_b],
             [Some(expected), Some(WOOD)],
             "at x = {x}"
         );
@@ -264,27 +263,54 @@ fn a_ball_dropping_into_a_puddle_answers_the_overlay_on_both_sides() {
     let mut schedule = stepped(None);
     let event = first_start(&mut world, &mut schedule, (floor, dropped));
     assert_eq!(
-        physics(&world).contact_surfaces(&event),
+        [event.surface_a, event.surface_b],
         [Some(PUDDLE), Some(PUDDLE)]
     );
 }
 
 #[test]
-fn a_restore_after_the_contact_answers_the_same() {
+fn a_restore_carries_the_contact_surfaces() {
     let (mut world, floor) = mesh_world();
     let dropped = ball(&mut world, [1.5, 1.0, 0.0], Some("wood"));
     let mut schedule = stepped(None);
     let event = first_start(&mut world, &mut schedule, (floor, dropped));
-    let before = physics(&world).contact_surfaces(&event);
-    assert_eq!(before, [Some(GRATE), Some(WOOD)]);
+    assert_eq!(
+        [event.surface_a, event.surface_b],
+        [Some(GRATE), Some(WOOD)]
+    );
 
     let blob = physics(&world).to_bytes().unwrap();
-    let mut restored = PhysicsWorld::from_bytes(&blob, TickRate::DEFAULT).unwrap();
-    restored.sync_surface_tags(&world);
-    restored.apply_settings(&settings(None));
-    world.insert_resource(restored);
-    sync_mesh_surfaces(&mut world);
-    assert_eq!(physics(&world).contact_surfaces(&event), before);
+    let restored = PhysicsWorld::from_bytes(&blob, TickRate::DEFAULT).unwrap();
+    let carried = restored
+        .contact_events()
+        .iter()
+        .find(|e| (e.a, e.b) == (floor, dropped) && e.phase == ContactPhase::Started)
+        .expect("the start rides the blob");
+    assert_eq!(
+        [carried.surface_a, carried.surface_b],
+        [Some(GRATE), Some(WOOD)]
+    );
+}
+
+#[test]
+fn a_tag_edit_after_the_step_keeps_the_emitted_surfaces() {
+    let mut world = World::new();
+    let floor = box_floor(&mut world, Some("metal_grate"));
+    let dropped = ball(&mut world, [0.0, 1.0, 0.0], Some("wood"));
+    let mut schedule = stepped(None);
+    let event = first_start(&mut world, &mut schedule, (floor, dropped));
+    assert_eq!(event.surface_b, Some(WOOD));
+
+    world.insert(dropped, tag("concrete")).unwrap();
+    let mut physics = world.remove_resource::<PhysicsWorld>().unwrap();
+    physics.sync_surface_tags(&world);
+    assert_eq!(physics.surface_of(dropped), Some(CONCRETE));
+    let kept = physics
+        .contact_events()
+        .iter()
+        .find(|e| (e.a, e.b) == (floor, dropped) && e.phase == ContactPhase::Started)
+        .expect("the emitted event stays until the next step");
+    assert_eq!([kept.surface_a, kept.surface_b], [Some(GRATE), Some(WOOD)]);
 }
 
 fn segments(world: &World) -> Vec<(Option<SurfaceId>, [f32; 3], [f32; 3])> {

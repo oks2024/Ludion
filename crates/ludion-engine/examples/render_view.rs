@@ -114,9 +114,12 @@ fn main() -> ExitCode {
 
 /// `render.bounds` for the one mesh in [`SCENE`], projected through `camera`.
 fn mesh_screen_rect(engine: &mut Engine, camera: CameraChoice) -> Option<ScreenRect> {
-    match dispatch(engine, Command::RenderBounds(RenderBoundsParams { camera }))
-        .expect("render.bounds succeeds")
-        .body
+    match dispatch(
+        engine,
+        Command::RenderBounds(RenderBoundsParams { camera, view: None }),
+    )
+    .expect("render.bounds succeeds")
+    .body
     {
         ResponseBody::RenderBounds { entities, .. } => {
             entities

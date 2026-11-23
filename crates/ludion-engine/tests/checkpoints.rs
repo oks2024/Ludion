@@ -10,24 +10,27 @@
 //! same requests.
 
 use ludion_core::codes::code;
+use ludion_core::diagnostics::Diagnostic;
 use ludion_core::par;
 use ludion_core::rng::DeterministicRng;
 use ludion_core::time::{FrameIndex, GameClock};
-use ludion_ecs::{SystemCtx, World};
+use ludion_ecs::{Registry, SystemCtx, World};
 use ludion_engine::diagnostics::Diagnostics;
 use ludion_engine::{
     CheckpointConfig, Checkpoints, Engine, EngineBuilder, Profile, ProjectileConfig, ResidueStore,
-    RestoreOutcome, SceneSwitch, Transform, TransformHierarchy, projectiles_step,
+    RestoreOutcome, RunSave, SceneSwitch, Transform, TransformHierarchy, projectiles_step,
     replay_hashes_with, spawn_projectile,
 };
 use ludion_projectiles::ProjectileDesc;
 use ludion_protocol::command::{EngineRestoreParams, InputInjectParams};
+use ludion_protocol::replay::{ReplayReader, ReplayRecord};
 use ludion_protocol::{Command, ResponseBody};
 use ludion_sim::{InputState, Key, WorldHash};
 use ludion_spatial::spatial3d;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -158,6 +161,8 @@ enum Act {
     DiscardDisk,
     Switch,
     Hold,
+    Suspend,
+    Resume,
     Earn,
     Plant,
     /// Spawns an entity, despawns the last one and rewrites a component: the live world moves on.
@@ -212,6 +217,8 @@ fn director(script: Script) -> impl Fn(&mut World, &SystemCtx) + Send + Sync + '
                     Vec::new(),
                 ),
                 Act::Hold => world.resource_mut::<GameClock>().unwrap().hold(),
+                Act::Suspend => world.resource_mut::<RunSave>().unwrap().suspend(),
+                Act::Resume => world.resource_mut::<RunSave>().unwrap().resume(),
                 Act::Earn => {
                     world
                         .resource_mut::<Profile<Save>>()
@@ -298,11 +305,45 @@ fn fresh_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn hash(engine: &mut Engine) -> WorldHash {
+/// The engine's `WorldHash`, which also folds in the `GameClock` and the checkpoint store.
+fn full_hash(engine: &mut Engine) -> WorldHash {
     engine.world_hash().unwrap()
 }
 
-/// The hash after each of `n` more ticks.
+/// [`full_hash`] after each of `n` more ticks.
+fn full_trace(engine: &mut Engine, n: usize) -> Vec<WorldHash> {
+    (0..n)
+        .map(|_| {
+            engine.advance_live();
+            full_hash(engine)
+        })
+        .collect()
+}
+
+/// The hash of the world's content and the projectile pool, less the clock and store terms. A
+/// restore moves those on purpose (the clock rebases past the frames it gave up, the store holds a
+/// slot), so "the restore is the capture" is a claim about this hash.
+pub(crate) fn content_hash(
+    engine: &Engine,
+    extra: fn(&mut Registry) -> Result<(), Diagnostic>,
+) -> WorldHash {
+    let mut registry = ludion_components::builtin_registry();
+    registry.register::<Tally>("Tally").unwrap();
+    registry.register::<Wobble>("Wobble").unwrap();
+    extra(&mut registry).unwrap();
+    registry
+        .register_resource_digest::<ludion_engine::Projectiles>("projectiles", |p| {
+            Some(p.pool().digest())
+        })
+        .unwrap();
+    WorldHash::compute(engine.world(), &registry).unwrap()
+}
+
+fn hash(engine: &Engine) -> WorldHash {
+    content_hash(engine, |_| Ok(()))
+}
+
+/// The content hash after each of `n` more ticks.
 fn trace(engine: &mut Engine, n: usize) -> Vec<WorldHash> {
     (0..n)
         .map(|_| {
@@ -646,7 +687,7 @@ impl Write for SharedSink {
 }
 
 fn sample(engine: &mut Engine) -> (FrameIndex, WorldHash) {
-    (engine.frame(), hash(engine))
+    (engine.frame(), full_hash(engine))
 }
 
 fn recorded_acts() -> Script {
@@ -670,11 +711,6 @@ fn a_recording_with_deaths_replays_as_one_linear_run() {
         engine.advance_live();
         live.push(sample(&mut engine));
     }
-    assert_eq!(
-        reported(&engine, code::CHECKPOINT_KEYFRAME_SKIP),
-        1,
-        "keyframes were due while slots were held; one report"
-    );
     engine.stop_recording().unwrap();
 
     let bytes = sink.0.lock().unwrap().clone();
@@ -685,20 +721,169 @@ fn a_recording_with_deaths_replays_as_one_linear_run() {
         frames.windows(2).all(|w| w[1] == w[0] + 1),
         "one linear frame axis"
     );
+
+    // Slots no longer suppress keyframes: the one at 300 sits inside the held window.
+    let reader = ReplayReader::new(&bytes).unwrap();
+    let inside = reader.seek(FrameIndex::new(350)).unwrap();
+    let (keyframe_frame, _) = inside.keyframe.expect("a keyframe inside the held window");
+    assert_eq!(keyframe_frame.as_u64(), 300);
+}
+
+/// A seek lands on a keyframe between a capture and its restore; the slots ride that keyframe, so
+/// the restores the game requests after it still reproduce the live run.
+#[test]
+fn a_seek_inside_a_held_window_continues_to_the_live_trace() {
+    let dir = fresh_dir("seek");
+    let sink = SharedSink::default();
+    let mut engine = boot(game(&dir, 4, recorded_acts()));
+    engine.set_recording(sink.clone()).unwrap();
+    let mut live: BTreeMap<u64, u64> = BTreeMap::new();
+    live.insert(engine.frame().as_u64(), full_hash(&mut engine).as_u64());
+    for _ in 0..700 {
+        engine.advance_live();
+        live.insert(engine.frame().as_u64(), full_hash(&mut engine).as_u64());
+    }
+    engine.stop_recording().unwrap();
+    let bytes = sink.0.lock().unwrap().clone();
+
+    let reader = ReplayReader::new(&bytes).unwrap();
+    // Frame 300 holds slots `a` (captured at 10) and `b` (at 80); `b` restores at 320, `a` at 400.
+    let seek = reader.seek(FrameIndex::new(350)).unwrap();
+    let (keyframe_frame, snapshot) = seek.keyframe.expect("a keyframe at or before 350");
+    assert_eq!(keyframe_frame.as_u64(), 300);
+    let mut recon = boot(game(&dir, 4, recorded_acts()));
+    recon
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    assert_eq!(
+        checkpoints(&recon).slots().len(),
+        2,
+        "the slots rode the keyframe"
+    );
+    assert_eq!(full_hash(&mut recon).as_u64(), live[&300]);
+    let mut compared = 0;
+    for record in seek.deltas {
+        if let ReplayRecord::Command { command, .. } = record {
+            recon.execute(command).unwrap();
+            let frame = recon.frame().as_u64();
+            assert_eq!(
+                full_hash(&mut recon).as_u64(),
+                live[&frame],
+                "frame {frame}"
+            );
+            compared += 1;
+        }
+    }
+    assert!(
+        compared > 0 && recon.frame().as_u64() >= 600,
+        "drove past both restores (to the next keyframe)"
+    );
 }
 
 #[test]
-fn an_engine_restore_clears_the_store() {
-    let dir = fresh_dir("clear");
-    let mut engine = boot(game(&dir, 4, script(&[(2, Act::Capture("a"))])));
-    trace(&mut engine, 5);
+fn an_engine_restore_installs_the_snapshot_store() {
+    let dir = fresh_dir("install");
+    let acts = script(&[
+        (2, Act::Capture("a")),
+        (3, Act::Restore("a")),
+        (20, Act::Restore("a")),
+    ]);
+    let mut engine = boot(game(&dir, 4, acts.clone()));
+    trace(&mut engine, 8);
     assert_eq!(checkpoints(&engine).slots().len(), 1);
+    let slots = checkpoints(&engine).slots().to_vec();
+    let last = checkpoints(&engine).last_restore().cloned();
+    assert!(last.is_some(), "the restore at frame 3 ran");
     let snapshot = snapshot_of(&mut engine);
-    engine
+    let live = full_trace(&mut engine, 30);
+
+    let mut other = boot(game(&dir, 4, acts));
+    assert!(checkpoints(&other).slots().is_empty());
+    other
         .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
         .unwrap();
-    assert!(checkpoints(&engine).slots().is_empty());
-    assert!(checkpoints(&engine).last_restore().is_none());
+    assert_eq!(checkpoints(&other).slots(), slots.as_slice());
+    assert_eq!(checkpoints(&other).last_restore(), last.as_ref());
+    assert_eq!(
+        full_trace(&mut other, 30),
+        live,
+        "the restored store serves the restore at frame 20"
+    );
+}
+
+/// A run resume replaces the store with the suspended one, so a restore requested the same frame
+/// asks for a world that is gone: it is refused (`L4204`), and the resumed world is what runs on.
+#[test]
+fn a_restore_requested_with_a_run_resume_is_refused() {
+    let dir = fresh_dir("resume-restore");
+    let acts = script(&[
+        (2, Act::Capture("a")),
+        (4, Act::Suspend),
+        (10, Act::Capture("b")),
+        (12, Act::Resume),
+        (12, Act::Restore("b")),
+    ]);
+    let mut engine = boot(game(&dir, 4, acts).run_save().persist_profile());
+    trace(&mut engine, 14);
+    let names: Vec<_> = checkpoints(&engine)
+        .slots()
+        .iter()
+        .map(|slot| slot.name.as_str())
+        .collect();
+    assert_eq!(names, ["a"], "the suspended store replaced the live one");
+    assert!(
+        matches!(
+            checkpoints(&engine).last_restore(),
+            Some(RestoreOutcome::Refused { name, reason })
+                if name == "b" && reason.contains("replaced the world")
+        ),
+        "{:?}",
+        checkpoints(&engine).last_restore()
+    );
+    assert_eq!(reported(&engine, code::CHECKPOINT_RESTORE_FAILED), 1);
+}
+
+#[test]
+fn a_snapshot_without_slots_omits_the_field() {
+    let dir = fresh_dir("nofield");
+    let mut engine = boot(game(&dir, 4, script(&[])));
+    trace(&mut engine, 3);
+    assert!(snapshot_of(&mut engine).get("checkpoints").is_none());
+}
+
+/// The store adds a `WorldHash` term only while a slot is held.
+#[test]
+fn the_world_hash_covers_the_slot_metadata_only_while_a_slot_is_held() {
+    let dir = fresh_dir("hashterm");
+    let with = |acts: &[(u64, Act)]| {
+        let mut engine = boot(game(&dir, 4, script(acts)));
+        full_trace(&mut engine, 12)
+    };
+    let free = with(&[]);
+    // A capture at 5 that does not move the world: the hash differs from the slot-free run from
+    // the next frame, and a discard puts it back.
+    let held = with(&[(5, Act::Capture("a"))]);
+    assert_eq!(held[..5], free[..5]);
+    assert_ne!(held[6], free[6], "a held slot is in the hash");
+    let dropped = with(&[(5, Act::Capture("a")), (8, Act::Discard("a"))]);
+    assert_eq!(dropped[..5], free[..5]);
+    assert_ne!(dropped[6], free[6]);
+    assert_eq!(dropped[9..], free[9..], "an empty store adds no term");
+}
+
+/// A structured slot and the document a keyframe restore turns it into hash alike.
+#[test]
+fn a_structured_slot_and_its_document_twin_hash_alike() {
+    let dir = fresh_dir("twin");
+    let acts = script(&[(10, Act::Capture("a"))]);
+    let mut live = boot(game(&dir, 4, acts.clone()));
+    trace(&mut live, 20);
+    let snapshot = snapshot_of(&mut live);
+    let mut twin = boot(game(&dir, 4, acts));
+    twin.execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap();
+    assert_eq!(full_hash(&mut twin), full_hash(&mut live));
+    assert_eq!(full_trace(&mut twin, 5), full_trace(&mut live, 5));
 }
 
 #[test]

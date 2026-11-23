@@ -50,6 +50,16 @@ use crate::voxel_mesh::grid_box;
 /// `w` at the near distance, so only a degenerate projection reaches it.
 const BEHIND_CAMERA_W: f32 = 1e-6;
 
+/// The viewpoint a bounds query projects through.
+pub(crate) enum BoundsCamera<'a> {
+    /// The scene's own camera.
+    Scene,
+    /// The host's `render.view` free-camera pose.
+    Override(&'a ViewPose),
+    /// The `RenderView` with this name.
+    Named(&'a str),
+}
+
 /// Computes the render bounds of every renderable entity in `world`, at `render_size` pixels.
 ///
 /// Returns the render size (echoed so the rects are self-describing) and one [`EntityBounds`] per
@@ -61,29 +71,53 @@ const BEHIND_CAMERA_W: f32 = 1e-6;
 /// `size`, and each document-backed mesh, loaded through `cache` — and is the engine's own content
 /// root, so a bound is sized against the files a render would sample.
 ///
-/// `view` is the host's [`render.view`](crate::render_view) override, passed only when the request
-/// asked for `camera: "view"` and one is in force. It supplies the viewpoint itself, so a world with
-/// no camera answers rather than raising `L2102` — the reason that code exists (a rect projected
-/// against an invented viewpoint) does not apply to a viewpoint a client named.
+/// `camera` picks the viewpoint. [`Override`](BoundsCamera::Override) is the host's
+/// [`render.view`](crate::render_view) pose, passed only when the request asked for `camera: "view"`
+/// and one is in force: it supplies the viewpoint itself, so a world with no camera answers rather
+/// than raising `L2102` — the reason that code exists (a rect projected against an invented
+/// viewpoint) does not apply to a viewpoint a client named. [`Named`](BoundsCamera::Named) is a
+/// `RenderView`'s own camera and `size`, which replace `render_size` for the projection and the
+/// echo; it never consults the scene's main camera, and reports every renderable (no layer filter).
 ///
 /// # Errors
-/// - `L2101` if the world has more than one camera (identical to a render).
-/// - `L2102` if the world has no camera and no override (a screen rect needs a real viewpoint).
+/// - `L2101` if the world has more than one camera (identical to a render); not for a named view.
+/// - `L2102` if the world has no camera and no override (a screen rect needs a real viewpoint); not
+///   for a named view.
+/// - `L2370`/`L2371` if the views fail to extract; `L2379` if no enabled, in-budget view has the name.
 pub(crate) fn compute(
     world: &World,
     render_size: (u32, u32),
     project_root: AssetRoot<'_>,
     cache: &mut AssetCache,
-    view: Option<&ViewPose>,
+    camera: BoundsCamera<'_>,
 ) -> Result<([u32; 2], Vec<EntityBounds>), Diagnostic> {
     let ids: Vec<EntityId> = world
         .entities()
         .chain(world.presentation_entities())
         .collect();
-    let camera = match (view, single_camera(world, &ids)?) {
-        (Some(pose), scene) => crate::render_view::camera(world, scene, pose, render_size),
-        (None, Some(id)) => build_camera(world, &ids, id, render_size),
-        (None, None) => return Err(no_camera()),
+    let (camera, render_size) = match camera {
+        BoundsCamera::Named(name) => {
+            let (mut errors, mut degraded) = (Vec::new(), Vec::new());
+            let table =
+                crate::secondary_view::extract_views(world, &ids, None, &mut errors, &mut degraded);
+            if let Some(error) = errors.into_iter().next() {
+                return Err(error);
+            }
+            let index = crate::render::find_view(&table.views, name)?;
+            let view = &table.views[index];
+            (view.camera, view.size)
+        }
+        BoundsCamera::Override(pose) => {
+            let scene = single_camera(world, &ids)?;
+            (
+                crate::render_view::camera(world, scene, pose, render_size),
+                render_size,
+            )
+        }
+        BoundsCamera::Scene => match single_camera(world, &ids)? {
+            Some(id) => (build_camera(world, &ids, id, render_size), render_size),
+            None => return Err(no_camera()),
+        },
     };
 
     // Placement at the clip's first instant, the tick-0 rule `extract` (the three-argument wrapper)

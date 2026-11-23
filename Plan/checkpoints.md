@@ -1,6 +1,6 @@
 # In-memory checkpoints — capture and restore the world from a system
 
-> **Status:** Waves 1 and 2 mechanized (2026-11-18); W4a shipped (Lore 2450); W4b mechanized (measured medians owed); W3 and W5 not started. The Status section at the end
+> **Status:** Waves 1 and 2 mechanized (2026-11-18); W4a shipped (Lore 2450); W4b mechanized (measured medians owed); W3 shipped in R14 except (c), which rides the wire wave; W5 not started. The Status section at the end
 > records what shipped as each wave closes.
 >
 > Neon Shroud request 0012 (`engine-requests/0012-in-memory-checkpoints.md`, filed 2026-11-17, audited
@@ -55,22 +55,27 @@ are Wave 4. `SnapshotDoc` does not change (its schema feeds `replay_content_hash
 `GameClock::rebased(frames)` in `ludion-core` (saturating add). Frames are `engine.frame()` values.
 
 **4. The store lives on the engine** (`Option<CheckpointState>`, beside `run_save`), is a
-`BTreeMap<String, Slot>` (sorted, deterministic), **cleared on `Rebuild::Load` and `Rebuild::Restore`**
-(a fresh session: `RunRecording::start`, `engine.restore`, `ludion dev` restarts, RunSave resume) and
-**kept on `Switch` and `Checkpoint`**.
+`BTreeMap<String, Slot>` (sorted, deterministic), **cleared on `Rebuild::Load`** (a fresh session:
+`RunRecording::start`), **replaced on `Rebuild::Restore`** and **kept on `Switch` and `Checkpoint`**.
+*Amended in R14 (W3):* an `engine.restore`, a `ludion dev` restart, a replay seek and a RunSave resume
+install the store the snapshot document carries (the `checkpoints` field); a document without the field
+installs an empty store, the old clearing behaviour. So a RunSave suspend and resume carries the slots.
+The row is `StoreRow { Clear, Replace, Keep }` in `commit_world`.
 
 **5. Drain order.** `drain_checkpoints(frame)` runs right after `drain_profile`: it takes every request off
 the resource first, then applies discards, then captures (call order). The last restore requested wins and
 is stashed. `drain_checkpoint_restore(frame) -> bool` runs in the tail, before the scene switch: a quit
 wins; a restore wins over a switch requested the same frame (the switch is dropped, `L4205`); a RunSave
-resume the same frame clears the store, so the stashed restore is refused as no slot; capture then restore
+resume the same frame clears the store, so the stashed restore is refused as no slot (*R14: it replaces the
+store with the suspended one and the stashed restore is refused, `L4204`, "replaced the world the same frame"*); capture then restore
 of one name in one frame restores what was just captured.
 
 **6. Replays need no new record kind**: requests come from hashed state, so a replay regenerates the slots.
 **Conservative Wave 1 rule:** a snapshot cannot carry slots yet, so while the store is non-empty
 `keyframe_or_skip` writes no keyframe (it moves `last_keyframe` as the `L0007` skip does) and reports
 `L4206` once; a seek lands on the last keyframe before the first capture. `arm_recorder` with a non-empty
-store refuses with `L4207`. Wave 3 lifts both.
+store refuses with `L4207`. Wave 3 lifts both. *Lifted in R14 (W3): keyframes and `engine.snapshot` carry
+the store, the skip and the refusal are gone, and `L4206`/`L4207` are retired.*
 
 **7. Event:** `Event::SceneChanged { kind: SceneChangeKind::Restore, path }` with the slot's scene path.
 A dedicated kind would move the wire schema hash (accepted 2026-11-19, scheduled (R14 re-record round)).
@@ -107,7 +112,7 @@ No new camera API (request 0010 and the mixer, 0023, own theirs).
 full (never evicts) · `L4202` invalid name (empty, over 64 chars, outside `[A-Za-z0-9_.-]`) · `L4203`
 capture failed (old slot kept) · `L4204` restore failed (world untouched) · `L4205` switch dropped by a
 restore · `L4206` keyframe skipped while slots are held · `L4207` recording arm refused while slots are
-held. W2 adds `L4208` disk write failed (error; the previous file stays, the next request retries) ·
+held (both retired in R14, W3). W2 adds `L4208` disk write failed (error; the previous file stays, the next request retries) ·
 `L4209` disk load refused (the `L1401` sibling).
 
 ## Wave 2 decisions — the disk slot
@@ -154,15 +159,37 @@ scene text, and held slots refuse arming, `L4207`).
   `save/checkpoint.json` envelope with a `BuildStamp`, kept on load; strict refusal with a `.bak.<hash>`
   backup (`L4209`); `load_disk` refused while a recording is open; the frame jumps forward to a slot ahead of
   it; `L4208` write failures.
-- **W3 — the store rides the snapshot.** A `checkpoints` snapshot field lifts the keyframe skip and the arm
-  refusal (re-records the replay corpus); the slot digest joins `WorldHash`;
-  `SceneChangeKind::CheckpointRestore`.
+- **W3 — the store rides the snapshot** (shipped in R14 except (c), which rides the wire wave; decisions
+  W3-1, W3-2). A `checkpoints` snapshot field lifts the keyframe skip and the arm refusal (re-records the
+  replay corpus); the slot digest joins `WorldHash`; `SceneChangeKind::CheckpointRestore` (wire wave).
 - **W4a — structured slots** (shipped, Lore 2450; decisions W4-1..7). In-memory slots as erased column clones plus a
   typed `SnapshotDoc`; disk slots keep the JSON envelope.
 - **W4b — budgets** (0012-04). The capture ≤ 4 ms / restore ≤ 50 ms budgets, measured by a bench or test that
   reads no new wire field; a `ProfileReport` `checkpoints` section and the `checkpoint_capture` /
   `checkpoint_restore` profiler keys would be R14 items.
 - **W5 — wire commands** (R14). `checkpoint.*`, designed in W4-6.
+
+## Wave 3 decisions — the store rides the snapshot
+
+- **W3-1** The snapshot field is `checkpoints: Option<CheckpointsDoc>`, omitted with no slot and no
+  `last_restore`, so a checkpoint-free snapshot is byte-identical. `CheckpointsDoc { slots, last_restore }`;
+  a `SlotDoc` is the disk envelope's slot fields less `format`/`build` (`name`, `frame`, `game_frame`,
+  `scene`, `scene_path`, `authored_names`, `slot`: the slot's own snapshot document, never nesting a
+  store). `last_restore` rides because a game reads `Checkpoints::last_restore()` to reseed after a
+  restore; without it a seek would diverge. `disk` and `disk_error` are host facts and do not ride. Only
+  `snapshot::capture` fills the field; the slot capture does not, so slot capture cost is unchanged. A
+  structured slot's rendered document is cached on first use, so a recording renders each slot once.
+- **W3-2** The `WorldHash` term is a rule-6 resource digest over the slot **metadata**: per slot in name
+  order, the name, `frame`, `game_frame`, scene name, `scene_path`, `authored_names` and the slot's clock
+  fields; `None` (no bytes) for an empty store. Not the body: a body is a pure function of hashed state at
+  the capture frame, whose component content the per-frame hash already covers; it must hash equal whether
+  `Structured` or a `Document` (after a keyframe restore); and hashing a whole world per slot would break
+  the 4 ms capture budget. A body divergence surfaces as component divergence at the next restore. The
+  digest reader became `fn(&T) -> Option<u64>` so a resource in its identity state writes nothing; the
+  `GameClock` term (`Plan/game-time-scale.md` decision 8) uses the same seam.
+- **W3-3** A restore makes the `GameClock` non-identity (it rebases past the frames it gave up) and a held
+  slot is a store term, so the hash after a restore is not the hash at the capture. "The restore is the
+  capture" is a claim about world content, which the tests assert with a digest-free content hash.
 
 ## Wave 4 decisions — structured slots
 
@@ -197,8 +224,8 @@ scene text, and held slots refuse arming, `L4207`).
 
 ## Owner rulings (2026-11-19)
 
-- Accepted, scheduled (R14 re-record round). **(a)** W3's replay corpus re-record (the snapshot gains a field).
-- Accepted, scheduled (R14 re-record round). **(b)** The slot digest joining `WorldHash` (additive term only when the store is non-empty).
+- Accepted, shipped in R14 (T10-A1); the corpus re-record is the final re-record wave. **(a)** W3's replay corpus re-record (the snapshot gains a field).
+- Accepted, shipped in R14 (T10-A1). **(b)** The slot digest joining `WorldHash` (additive term only when the store is non-empty).
 - Accepted, scheduled (R14 re-record round). **(c)** `SceneChangeKind::CheckpointRestore` (moves the wire schema hash).
 - Accepted. **(d)** `Plan/phase-16-profile.md` decision 7 exception: a checkpoint keeps the live profile. Wave 1
   ships this behaviour; the decision text is amended only by a note pointing here.
@@ -231,5 +258,14 @@ scene text, and held slots refuse arming, `L4207`).
 - **W4b mechanized:** `checkpoint_bench.rs` (smoke test plus the ignored 5,001-entity bench),
   `budgets/checkpoints-{windows,macos}.toml` with the fixed targets, the corpus-test exclusion; the pinned
   medians are owed to the RTX 3090 box and the M4; decisions W4b-1..4.
-- **W3, W5:** not started.
+- **W3 shipped in R14 (T10-A1), except (c):** the `checkpoints` snapshot field (slots and `last_restore`), the
+  store installed on `engine.restore`, a replay seek and a RunSave resume (`StoreRow`), the `L4206` keyframe
+  skip and `L4207` arm refusal lifted and both codes retired, the slot-metadata and `GameClock` `WorldHash`
+  terms (`register_resource_digest` now takes `Option`), decisions W3-1..3. `SceneChangeKind::CheckpointRestore`
+  (ruling (c)) touches the protocol and the editor's `sceneChange.ts` and rides the wire wave. The
+  `replay_content_hash`, the committed replays and the WorldHash traces of sessions that held a slot or the
+  clock move with the final re-record wave.
+  Bench after W3 (RTX 3090 box, quiet, plain frame 0.50 ms, 3 runs): capture median 3.909 / 3.919 / 3.935 ms
+  against the 4 ms target, restore 6.224 / 6.259 / 6.365 ms against 50 ms.
+- **W5:** not started.
 - M4 (2026-11-22): the W4b medians are measured on the pinned Apple M4, recorded in `budgets/checkpoints-macos.toml`'s MEASURED line: capture 1.31 ms and restore 2.08 ms, against the 4 ms and 50 ms targets. The RTX 3090 box's medians are still owed.

@@ -93,10 +93,10 @@ engine answers from sim state, with the renderer's own formulas.
     pipeline-constant twin of the mesh scene pass (`IRRADIANCE_VIEW`, as `sun_cascades` is) and
     `irradiance_debug` blits the `scene` target in place of `composite`; the normal path is untouched.
     Blended meshes, sprites, decals, particles and the sky draw as usual.
-18. **Not on the wire.** A `RenderDebugView` variant feeds `replay_schema_hash`, which every committed
-    `.lrp` carries, so adding one re-records the corpus. The view is renderer, Rust and CLI only:
-    `render.debug` reports no view for it. **accepted 2026-11-19, scheduled (R14 re-record round)**, trigger: the next sanctioned
-    corpus re-record.
+18. **On the wire (shipped in R14).** `RenderDebugView::Irradiance` (`"irradiance"`) is a wire variant, so
+    `render.debug {"view": "irradiance"}` sets it and the reply reports it. A variant feeds `replay_schema_hash`,
+    which every committed `.lrp` carries, so the round's re-record of the corpus follows it. `exposure_meter` and
+    `rain_occlusion` went on the wire with it.
 19. **The gate's tolerances.** The request's, fixed constants, not a per-OS calibrated floor: both sides
     run one formula, so a floor would hide drift. A 32×32 grid of floor points of the gallery's
     `light-exposure` scene, rendered under the view at 512×512 (one sample per 16 px, half a metre),
@@ -143,5 +143,6 @@ engine answers from sim state, with the renderer's own formulas.
   `light-exposure` gallery scene with goldens `light-exposure.png` and `light-exposure-irradiance.png`
   blessed on the RTX 3090, and `light_exposure_agreement.rs`. On this box: clean 696 of 1024, max relative
   error 0.0167, max absolute error 0.0099, binary agreement 100 % (864 of 864 steady samples). Owed: the
-  M4 twins of both goldens and the agreement test green there; the wire variant (decision 18).
+  M4 twins of both goldens and the agreement test green there; the wire variant (decision 18) shipped in R14.
 - M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): `light_exposure_agreement` is green on Metal, and both macOS goldens pass.
+- R14 (Neon Shroud 0013, 2026-11-23): `RenderDebugView::Irradiance` is on the wire (decision 18); `render.debug` sets and reports `irradiance`. It moves the protocol schema hash and `replay_schema_hash`; the snapshot bless and the corpus re-record ride the round's final wave.

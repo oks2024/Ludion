@@ -111,7 +111,7 @@ the reference and records why each default is its number.
 - **Reading the exposure.** `ludion render` prints what the meter chose, so the EV is text:
   `(metered: +1.42 EV, mean log2 -4.05)`, with `, clamped` when the correction sits on an
   `exposure_range` end (the scene wanted more); a `--frames` strip prints
-  `(metered EV per frame: 0:+1.42 30:+0.88 …)`. `--debug-view exposure_meter` draws the metered
+  `(metered EV per frame: 0:+1.42 30:+0.88 …)`. `--debug-view exposure_meter` (or `render.debug {"view": "exposure_meter"}`) draws the metered
   frame dimmed with the 64-bin histogram over its bottom quarter: bars white inside the trimmed
   window and grey where `metering_clip` cut them, a green line at the trimmed mean, a yellow one at
   the 0.18 target, and a blue band over the means the correction does not clamp. On a `manual`

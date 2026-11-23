@@ -889,6 +889,12 @@ pub struct RenderScreenshotParams {
     /// Which camera to render through; omit for the scene's own (see [`CameraChoice`]).
     #[serde(default, skip_serializing_if = "CameraChoice::is_scene")]
     pub camera: CameraChoice,
+    /// Render the named `RenderView`'s image at its own `size` (what `ludion render --view` draws)
+    /// instead of the main frame. `width`/`height` still size the extract's main extent; `camera`
+    /// does not apply to a view, which renders through its own `Camera`. An unknown, disabled or
+    /// over-budget name is `L2379`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
 }
 
 /// Whether a host's global-illumination caches follow the world or hold the baseline they already
@@ -1213,7 +1219,8 @@ pub struct RenderDebugParams {
 }
 
 /// A debug view shown in place of the composite: the SSR trace at its own resolution, the probe map,
-/// the local-light shadow atlas, or the lit frame tinted by sun cascade.
+/// the local-light shadow atlas, the lit frame tinted by sun cascade, the diffuse irradiance, the
+/// exposure meter's histogram, or the rain occlusion map.
 /// The spelling matches `ludion render --debug-view`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1229,6 +1236,13 @@ pub enum RenderDebugView {
     LocalShadowAtlas,
     /// Each mesh fragment tinted by the sun cascade that shades it.
     SunCascades,
+    /// Diffuse irradiance per mesh fragment, `sRGB(E/4)`: saturates at E=4 (`ludion docs light-exposure`).
+    Irradiance,
+    /// The metered frame dimmed, with its 64-bin luminance histogram drawn over it.
+    ExposureMeter,
+    /// Every opaque mesh fragment inside the rain occlusion map tinted: blue where rain reaches it,
+    /// orange where it is covered. Needs a `Rain`.
+    RainOcclusion,
 }
 
 /// Reads an optional field as a *present* value, so an explicit `null` survives as `Some(None)`.
@@ -1248,12 +1262,17 @@ where
 ///
 /// One optional field, so the wire form a client sent before it existed — a `render.bounds` envelope
 /// with no `params` at all — still parses and still means the scene camera.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RenderBoundsParams {
     /// Which camera to project the screen rects through; omit for the scene's own.
     #[serde(default, skip_serializing_if = "CameraChoice::is_scene")]
     pub camera: CameraChoice,
+    /// Project through the named `RenderView`'s camera at its own `size`; `render_size` in the reply
+    /// is that size. `camera` does not apply to a view. Every renderable is reported (no layer
+    /// filtering). An unknown, disabled or over-budget name is `L2379`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for RenderBoundsParams {
@@ -1274,10 +1293,16 @@ impl<'de> Deserialize<'de> for RenderBoundsParams {
         struct Fields {
             #[serde(default)]
             camera: CameraChoice,
+            #[serde(default)]
+            view: Option<String>,
         }
         let fields = Option::<Fields>::deserialize(deserializer)?;
-        Ok(RenderBoundsParams {
-            camera: fields.map(|f| f.camera).unwrap_or_default(),
+        Ok(match fields {
+            Some(f) => RenderBoundsParams {
+                camera: f.camera,
+                view: f.view,
+            },
+            None => RenderBoundsParams::default(),
         })
     }
 }
@@ -1850,6 +1875,7 @@ mod tests {
             .unwrap(),
             Command::RenderBounds(RenderBoundsParams {
                 camera: CameraChoice::View,
+                view: None,
             }),
         );
 
@@ -1870,6 +1896,7 @@ mod tests {
                 width: Some(320),
                 height: Some(180),
                 camera: CameraChoice::Scene,
+                view: None,
             }),
         );
         assert_eq!(
@@ -1877,10 +1904,41 @@ mod tests {
                 width: None,
                 height: None,
                 camera: CameraChoice::View,
+                view: None,
             }))
             .unwrap(),
             serde_json::json!({ "method": "render.screenshot", "params": { "camera": "view" } }),
         );
+    }
+
+    /// A named view round-trips on both verbs and is the only thing that adds a `view` key.
+    #[test]
+    fn a_named_view_round_trips_on_screenshot_and_bounds() {
+        let shot = Command::RenderScreenshot(RenderScreenshotParams {
+            view: Some("radar".into()),
+            ..Default::default()
+        });
+        let value = serde_json::to_value(&shot).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "method": "render.screenshot", "params": { "view": "radar" } })
+        );
+        assert_eq!(serde_json::from_value::<Command>(value).unwrap(), shot);
+
+        let bounds = Command::RenderBounds(RenderBoundsParams {
+            view: Some("radar".into()),
+            ..Default::default()
+        });
+        let value = serde_json::to_value(&bounds).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "method": "render.bounds", "params": { "view": "radar" } })
+        );
+        assert_eq!(serde_json::from_value::<Command>(value).unwrap(), bounds);
+        // Absent params still default, with no view.
+        let bare: Command =
+            serde_json::from_value(serde_json::json!({ "method": "render.bounds" })).unwrap();
+        assert_eq!(bare, Command::RenderBounds(RenderBoundsParams::default()));
     }
 
     #[test]

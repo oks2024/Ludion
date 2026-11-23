@@ -19,8 +19,10 @@ use ludion_core::collections::StableSet;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::{FrameIndex, GameClock};
 use ludion_protocol::event::{Event, LogEvent, SceneChangeKind, SceneChangedData};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use xxhash_rust::xxh3::Xxh3;
 
 use crate::engine::{Engine, PreparedWorld, Rebuild, RestoredWorld};
 use crate::run_save::BuildStamp;
@@ -125,6 +127,16 @@ pub(crate) struct Slot {
     pub(crate) authored_names: StableSet<String>,
 }
 
+/// What a world rebuild does to the checkpoint store.
+pub(crate) enum StoreRow {
+    /// A scene load starts a fresh session with no slots.
+    Clear,
+    /// An `engine.restore` installs the snapshot's store; a snapshot without one has none.
+    Replace(Option<RestoredStore>),
+    /// A scene switch and a checkpoint restore stay in the session.
+    Keep,
+}
+
 /// The engine's persistent checkpoint state: it outlives every world rebuild, and the
 /// [`Checkpoints`] resource is a mirror of it reinstalled after each one.
 pub(crate) struct CheckpointState {
@@ -158,8 +170,8 @@ pub(crate) enum RestoreRequest {
 /// just captured. A restore wins over a scene switch requested the same frame (`L4205`). The disk
 /// slot rides the same boundary: `discard_disk` runs before `persist`, and `persist` after the
 /// captures, so it writes this frame's capture. `load_disk` is a restore request and shares the
-/// last-wins rule. Like [`RunSave`](crate::RunSave) it is a resource with no digest, invisible to
-/// the `WorldHash`.
+/// last-wins rule. While a slot is held the `WorldHash` folds in the store's slot metadata (names,
+/// frames, scene, clock; never the bodies), an empty store adds nothing.
 ///
 /// # Example
 /// ```
@@ -184,6 +196,8 @@ pub struct Checkpoints {
     disk_error: Option<Diagnostic>,
     pub(crate) persist: Option<String>,
     pub(crate) discard_disk: bool,
+    /// The `WorldHash` term of the held slots' metadata, `None` for an empty store.
+    pub(crate) digest: Option<u64>,
 }
 
 impl Checkpoints {
@@ -279,6 +293,58 @@ impl Checkpoints {
             disk_error: state.disk_error.clone().filter(|_| !replayed),
             persist: None,
             discard_disk: false,
+            digest: slots_digest(&state.slots),
+        }
+    }
+}
+
+/// The store's `WorldHash` term: XXH3 over each slot's metadata in name order, `None` when empty.
+/// The body is left out on purpose: it is a function of hashed state at the capture frame, it must
+/// hash the same as a structured slot and as the document a keyframe restore turns it into, and
+/// hashing a whole world would break the capture budget.
+fn slots_digest(slots: &BTreeMap<String, Slot>) -> Option<u64> {
+    if slots.is_empty() {
+        return None;
+    }
+    let mut hasher = Xxh3::new();
+    hasher.update(&(slots.len() as u64).to_le_bytes());
+    for slot in slots.values() {
+        hasher.update(b"S");
+        update_str(&mut hasher, &slot.info.name);
+        hasher.update(&slot.info.frame.as_u64().to_le_bytes());
+        hasher.update(&slot.info.game_frame.as_u64().to_le_bytes());
+        update_opt_str(&mut hasher, slot.info.scene.as_deref());
+        update_opt_str(&mut hasher, slot.scene_path.as_deref());
+        hasher.update(&(slot.authored_names.len() as u64).to_le_bytes());
+        for name in slot.authored_names.iter() {
+            update_str(&mut hasher, name);
+        }
+        let clock = &slot.clock;
+        hasher.update(&clock.held().to_le_bytes());
+        hasher.update(&[u8::from(clock.is_holding())]);
+        hasher.update(&clock.slowed_q16().to_le_bytes());
+        hasher.update(&clock.pending_q16().map_or([0; 5], |q| {
+            let b = q.to_le_bytes();
+            [1, b[0], b[1], b[2], b[3]]
+        }));
+        hasher.update(&clock.step_q16().to_le_bytes());
+    }
+    Some(hasher.digest())
+}
+
+fn update_str(hasher: &mut Xxh3, text: &str) {
+    hasher.update(&(text.len() as u64).to_le_bytes());
+    hasher.update(text.as_bytes());
+}
+
+fn update_opt_str(hasher: &mut Xxh3, text: Option<&str>) {
+    match text {
+        Some(text) => {
+            hasher.update(&[1]);
+            update_str(hasher, text);
+        }
+        None => {
+            hasher.update(&[0]);
         }
     }
 }
@@ -378,24 +444,125 @@ pub(crate) fn read_slot(path: &Path, current: &BuildStamp) -> Result<Option<Slot
     }
     validate_name(&file.name)
         .map_err(|reason| format!("the disk checkpoint has an invalid name: {reason}"))?;
-    let clock = match file.slot.get("game_clock") {
-        Some(value) => serde_json::from_value(value.clone())
-            .map_err(|e| format!("the disk checkpoint is unreadable: its clock: {e}"))?,
+    slot_from_parts(SlotParts {
+        name: file.name,
+        frame: file.frame,
+        scene: file.scene,
+        scene_path: file.scene_path,
+        authored_names: file.authored_names,
+        document: file.slot,
+    })
+    .map(Some)
+    .map_err(|e| format!("the disk checkpoint is unreadable: {e}"))
+}
+
+/// The fields a slot is rebuilt from, whether read off the disk envelope or a snapshot.
+struct SlotParts {
+    name: String,
+    frame: u64,
+    scene: Option<String>,
+    scene_path: Option<String>,
+    authored_names: Vec<String>,
+    document: Value,
+}
+
+/// A document-bodied [`Slot`]: the clock is the document's own and `game_frame` is recomputed from
+/// it, so no stored copy can disagree.
+fn slot_from_parts(parts: SlotParts) -> Result<Slot, String> {
+    let clock = match parts.document.get("game_clock") {
+        Some(value) => {
+            serde_json::from_value(value.clone()).map_err(|e| format!("its clock: {e}"))?
+        }
         None => GameClock::default(),
     };
-    let frame = FrameIndex::new(file.frame);
-    Ok(Some(Slot {
+    let frame = FrameIndex::new(parts.frame);
+    Ok(Slot {
         info: CheckpointInfo {
-            name: file.name,
+            name: parts.name,
             frame,
             game_frame: clock.game_frame(frame),
-            scene: file.scene,
+            scene: parts.scene,
         },
-        body: SlotBody::Document(Arc::new(file.slot)),
+        body: SlotBody::Document(Arc::new(parts.document)),
         clock,
-        scene_path: file.scene_path,
-        authored_names: file.authored_names.into_iter().collect(),
-    }))
+        scene_path: parts.scene_path,
+        authored_names: parts.authored_names.into_iter().collect(),
+    })
+}
+
+/// One held slot as a snapshot carries it: the disk envelope's slot fields.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct SlotDoc {
+    name: String,
+    frame: u64,
+    game_frame: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scene: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scene_path: Option<String>,
+    authored_names: Vec<String>,
+    /// The slot's own snapshot document.
+    slot: Value,
+}
+
+/// [`RestoreOutcome`] as a snapshot carries it.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub(crate) enum RestoreOutcomeDoc {
+    Restored { name: String, frame: u64 },
+    Refused { name: String, reason: String },
+}
+
+/// The checkpoint store as an engine snapshot carries it: the held slots and what the last restore
+/// did, which a game reads to reseed after one. The disk slot and its error are host facts and stay
+/// out.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct CheckpointsDoc {
+    slots: Vec<SlotDoc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_restore: Option<RestoreOutcomeDoc>,
+}
+
+/// A restored store: the slots and the last outcome, installed over the engine's own.
+pub(crate) type RestoredStore = (BTreeMap<String, Slot>, Option<RestoreOutcome>);
+
+impl CheckpointsDoc {
+    /// The store a restore installs.
+    ///
+    /// # Errors
+    /// The reason a slot is unusable: an invalid or repeated name, or an unreadable clock.
+    pub(crate) fn into_store(self) -> Result<RestoredStore, String> {
+        let mut slots = BTreeMap::new();
+        for doc in self.slots {
+            validate_name(&doc.name).map_err(|reason| {
+                format!(
+                    "the snapshot's checkpoint {:?} is invalid: {reason}",
+                    doc.name
+                )
+            })?;
+            let name = doc.name.clone();
+            let slot = slot_from_parts(SlotParts {
+                name: doc.name,
+                frame: doc.frame,
+                scene: doc.scene,
+                scene_path: doc.scene_path,
+                authored_names: doc.authored_names,
+                document: doc.slot,
+            })
+            .map_err(|e| format!("the snapshot's checkpoint {name:?} is unreadable: {e}"))?;
+            if slots.insert(name.clone(), slot).is_some() {
+                return Err(format!("the snapshot holds checkpoint {name:?} twice"));
+            }
+        }
+        let last_restore = self.last_restore.map(|outcome| match outcome {
+            RestoreOutcomeDoc::Restored { name, frame } => RestoreOutcome::Restored {
+                name,
+                frame: FrameIndex::new(frame),
+            },
+            RestoreOutcomeDoc::Refused { name, reason } => RestoreOutcome::Refused { name, reason },
+        });
+        Ok((slots, last_restore))
+    }
 }
 
 /// `Ok` for a usable checkpoint name, else the reason.
@@ -436,23 +603,90 @@ impl Engine {
             disk_error: None,
             stamp: self.build_stamp(),
         });
-        self.install_checkpoints(false);
+        self.install_checkpoints(StoreRow::Keep);
     }
 
     /// (Re)installs the [`Checkpoints`] resource from the engine's state; a no-op without
-    /// [`checkpoints`](crate::EngineBuilder::checkpoints). Called after every world (re)build.
-    /// `clear` drops the slots first: a scene load and an `engine.restore` start a fresh session.
-    pub(crate) fn install_checkpoints(&mut self, clear: bool) {
+    /// [`checkpoints`](crate::EngineBuilder::checkpoints). Called after every world (re)build; `row`
+    /// says what happens to the store first.
+    pub(crate) fn install_checkpoints(&mut self, row: StoreRow) {
         let replayed = self.is_playback();
         let Some(state) = self.checkpoints.as_mut() else {
             return;
         };
-        if clear {
-            state.slots.clear();
-            state.last_restore = None;
+        let mut stashed = None;
+        match row {
+            StoreRow::Keep => {}
+            StoreRow::Clear => {
+                state.slots.clear();
+                state.last_restore = None;
+                stashed = state.pending_restore.take();
+            }
+            StoreRow::Replace(store) => {
+                (state.slots, state.last_restore) = store.unwrap_or_default();
+                stashed = state.pending_restore.take();
+            }
         }
         let mirror = Checkpoints::mirror(state, replayed);
         self.world_mut().insert_resource(mirror);
+        // A restore stashed this boundary asked for a world that is gone: it happened first, so
+        // its refusal is the later outcome and replaces the installed `last_restore`.
+        if let Some(request) = stashed {
+            let name = match request {
+                RestoreRequest::Slot(name) => name,
+                RestoreRequest::Disk => self.disk_refusal_name(),
+            };
+            let reason = "a run resume or engine restore replaced the world the same frame";
+            self.refuse_restore(name.clone(), reason.to_string());
+            let frame = self.frame();
+            let diagnostic = Diagnostic::new(
+                code::CHECKPOINT_RESTORE_FAILED,
+                format!("checkpoint `{name}` could not be restored: {reason}"),
+            )
+            .with_help("request the restore on a later frame; the world is untouched by it");
+            self.report_checkpoint(format!("{name}@{}", frame.as_u64()), diagnostic);
+        }
+    }
+
+    /// The store as an engine snapshot carries it: `None` with no slot and no last restore, so a
+    /// checkpoint-free snapshot is unchanged. A structured slot is rendered once and cached.
+    ///
+    /// # Errors
+    /// `L0007` for a slot holding a non-finite float, which JSON cannot store.
+    pub(crate) fn checkpoints_doc(&self) -> Result<Option<CheckpointsDoc>, Diagnostic> {
+        let Some(state) = self.checkpoints.as_ref() else {
+            return Ok(None);
+        };
+        if state.slots.is_empty() && state.last_restore.is_none() {
+            return Ok(None);
+        }
+        let mut slots = Vec::with_capacity(state.slots.len());
+        for slot in state.slots.values() {
+            let document = self.slot_document(slot)?;
+            slots.push(SlotDoc {
+                name: slot.info.name.clone(),
+                frame: slot.info.frame.as_u64(),
+                game_frame: slot.info.game_frame.as_u64(),
+                scene: slot.info.scene.clone(),
+                scene_path: slot.scene_path.clone(),
+                authored_names: slot.authored_names.iter().cloned().collect(),
+                slot: Value::clone(&document),
+            });
+        }
+        let last_restore = state.last_restore.as_ref().map(|outcome| match outcome {
+            RestoreOutcome::Restored { name, frame } => RestoreOutcomeDoc::Restored {
+                name: name.clone(),
+                frame: frame.as_u64(),
+            },
+            RestoreOutcome::Refused { name, reason } => RestoreOutcomeDoc::Refused {
+                name: name.clone(),
+                reason: reason.clone(),
+            },
+        });
+        Ok(Some(CheckpointsDoc {
+            slots,
+            last_restore,
+        }))
     }
 
     /// Re-syncs the mirrored slot list, outcome and disk slot into the live resource, keeping its
@@ -468,6 +702,7 @@ impl Engine {
             resource.last_restore = fresh.last_restore;
             resource.disk = fresh.disk;
             resource.disk_error = fresh.disk_error;
+            resource.digest = fresh.digest;
         }
     }
 
@@ -665,7 +900,9 @@ impl Engine {
     pub(crate) fn slot_document(&self, slot: &Slot) -> Result<Arc<Value>, Diagnostic> {
         match &slot.body {
             SlotBody::Document(doc) => Ok(Arc::clone(doc)),
-            SlotBody::Structured(s) => crate::snapshot::structured_document(self, s).map(Arc::new),
+            SlotBody::Structured(s) => {
+                s.rendered_or_else(|| crate::snapshot::structured_document(self, s).map(Arc::new))
+            }
         }
     }
 
@@ -934,41 +1171,6 @@ impl Engine {
             },
         });
         Ok(())
-    }
-
-    /// Whether any slot is held.
-    fn holds_checkpoints(&self) -> bool {
-        self.checkpoints
-            .as_ref()
-            .is_some_and(|state| !state.slots.is_empty())
-    }
-
-    /// The `L4206` a keyframe is skipped with while slots are held. A snapshot cannot carry slots
-    /// yet, so a keyframe taken now could not reproduce a later restore. The message is constant so
-    /// the diagnostics latch reports it once per session.
-    pub(crate) fn checkpoint_keyframe_skip(&self) -> Option<Diagnostic> {
-        self.holds_checkpoints().then(|| {
-            Diagnostic::new(
-                code::CHECKPOINT_KEYFRAME_SKIP,
-                "replay keyframes are skipped while checkpoint slots are held; a seek lands on the \
-                 last keyframe before the first capture",
-            )
-            .with_help("the replay itself is unaffected; `discard` every slot to resume keyframes")
-        })
-    }
-
-    /// The `L4207` that refuses arming a recording while slots are held.
-    pub(crate) fn checkpoint_arm_refusal(&self) -> Option<Diagnostic> {
-        self.holds_checkpoints().then(|| {
-            Diagnostic::new(
-                code::CHECKPOINT_RECORDING_ARM_REFUSED,
-                "a recording was not armed: checkpoint slots are held and a snapshot cannot carry \
-                 them yet",
-            )
-            .with_help(
-                "start the recording before the first capture, or `discard` every slot first",
-            )
-        })
     }
 }
 

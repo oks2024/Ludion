@@ -839,6 +839,7 @@ impl Client {
                 // The SDK's screenshot is an agent's, so it answers through the game's own camera
                 // whether or not a host is streaming a flown `render.view` somewhere else.
                 camera: CameraChoice::Scene,
+                view: None,
             }))?
             .body
         {

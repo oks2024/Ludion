@@ -2314,10 +2314,6 @@ impl Engine {
         recorder: &mut Recorder,
         frame: FrameIndex,
     ) -> Result<Option<Diagnostic>, Diagnostic> {
-        if let Some(skipped) = self.checkpoint_keyframe_skip() {
-            recorder.last_keyframe = frame;
-            return Ok(Some(skipped));
-        }
         match crate::snapshot::capture(self) {
             Ok(snapshot) => {
                 crate::recording::write_keyframe(recorder, frame, &snapshot)
@@ -7051,7 +7047,7 @@ impl Engine {
         image.encode_png()
     }
 
-    fn render_view_image(
+    pub(crate) fn render_view_image(
         &mut self,
         name: &str,
         width: u32,
@@ -7589,25 +7585,32 @@ impl Engine {
         scene
     }
 
-    /// The `render.bounds` query, through the view override when `use_view` is set and one is in
-    /// force. Sizes document-backed meshes through the CPU [`AssetCache`] (`&mut` because a miss
+    /// The `render.bounds` query: through the named `RenderView` when `params.view` is set, else the
+    /// view override when `camera` is `View` and one is in force, else the scene camera. Sizes
+    /// document-backed meshes through the CPU [`AssetCache`] (`&mut` because a miss
     /// inserts), with the same disjoint field borrows as
     /// [`extract_render_scene_through`](Engine::extract_render_scene_through). After a rebuild it
     /// keeps and revalidates the cached assets like the first extract, but decodes only what it sizes.
     pub(crate) fn render_bounds(
         &mut self,
-        use_view: bool,
+        params: &ludion_protocol::command::RenderBoundsParams,
     ) -> Result<([u32; 2], Vec<EntityBounds>), Diagnostic> {
         self.asset_cache.forget_failures();
         self.refresh_asset_cache(false);
         let size = self.render_size();
-        let view = use_view.then_some(self.view_override.as_ref()).flatten();
+        let camera = match (&params.view, self.view_override.as_ref()) {
+            (Some(name), _) => crate::bounds::BoundsCamera::Named(name),
+            (None, Some(pose)) if params.camera == ludion_protocol::command::CameraChoice::View => {
+                crate::bounds::BoundsCamera::Override(pose)
+            }
+            _ => crate::bounds::BoundsCamera::Scene,
+        };
         crate::bounds::compute(
             self.driver.world(),
             size,
             AssetRoot::content(&self.project_root),
             &mut self.asset_cache,
-            view,
+            camera,
         )
     }
 
@@ -8113,9 +8116,6 @@ impl Engine {
         keyframe_interval: u64,
         game: Option<ludion_protocol::replay::GameIdentity>,
     ) -> Result<(), Diagnostic> {
-        if let Some(refusal) = self.checkpoint_arm_refusal() {
-            return Err(refusal);
-        }
         let mut header = self.replay_header();
         header.game = game;
         let writer = ReplayWriter::new(sink, &header).map_err(io_to_diagnostic)?;
@@ -8939,6 +8939,9 @@ pub(crate) struct RestoredWorld {
     /// The snapshot's validated render extent, or `None` for a snapshot predating the field, which
     /// leaves the host's extent alone. Applied without the render-scale check: it is sim input.
     pub render_extent: Option<(u32, u32)>,
+    /// The snapshot's checkpoint store, or `None` for one without slots (or predating the field).
+    /// A session restore replaces the engine's store with it; a checkpoint restore ignores it.
+    pub checkpoints: Option<crate::checkpoints::RestoredStore>,
 }
 
 /// A top-level prefab instance's root and the placement its scene entry gave it.
@@ -8993,6 +8996,7 @@ pub(crate) enum Rebuild {
         profile: Option<String>,
         arrived_by_restart: bool,
         render_extent: Option<(u32, u32)>,
+        checkpoints: Option<crate::checkpoints::RestoredStore>,
     },
     /// A scene switch: the same session, a new district. A `restart` rebuilds the current scene and
     /// stays in its prefab epoch.
@@ -9044,6 +9048,7 @@ impl Engine {
                 profile: restored.profile,
                 arrived_by_restart: restored.arrived_by_restart,
                 render_extent: restored.render_extent,
+                checkpoints: restored.checkpoints,
             },
         });
         Ok(())
@@ -9250,11 +9255,18 @@ impl Engine {
         // committed the departing scene's capture, so the arriving district reads what it just left.
         self.install_residue_store();
         self.install_run_save();
-        // A load or restore is a fresh session; a switch and a checkpoint restore keep the slots.
-        self.install_checkpoints(matches!(
-            kind,
-            Rebuild::Load { .. } | Rebuild::Restore { .. }
-        ));
+        // A load is a fresh session; a restore installs the snapshot's store; a switch and a
+        // checkpoint restore keep the slots.
+        let store_row = match &mut kind {
+            Rebuild::Load { .. } => crate::checkpoints::StoreRow::Clear,
+            Rebuild::Restore { checkpoints, .. } => {
+                crate::checkpoints::StoreRow::Replace(checkpoints.take())
+            }
+            Rebuild::Switch { .. } | Rebuild::Checkpoint { .. } => {
+                crate::checkpoints::StoreRow::Keep
+            }
+        };
+        self.install_checkpoints(store_row);
         self.install_run_recording();
         self.install_replay_playback();
         self.commit_docs(docs);

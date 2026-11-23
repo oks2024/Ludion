@@ -149,7 +149,7 @@ only — the pair's summed normal-impulse magnitude over its first base tick of 
 pointing from `a` towards `b` (named like a `QueryHit`'s), both at the poses before the step moved the bodies. Both come from one solver contact of the pair, picked by
 normal impulse descending, then depth descending, then the smaller point, then the smaller normal — never the solver's own order — so a
 resting start with no impulse yet gets a deterministic point too. A pair starts the step it touches: one inside the prediction margin with a gap still open has not started. Both are
-`[0.0; 3]` on a stop. Sorted `(a, b)` ascending, one step's events: a system reading it this tick sees tick `N - 1`'s (the triple runs after every game system). Not hashed; rides the snapshot. `contact_surfaces(&event) -> [Option<SurfaceId>; 2]` names the surface on each side (`ludion docs collision` §Surfaces). A spark at every touch:
+`[0.0; 3]` on a stop. Sorted `(a, b)` ascending, one step's events: a system reading it this tick sees tick `N - 1`'s (the triple runs after every game system). Not hashed; rides the snapshot. `ContactEvent::surface_a`/`surface_b` (`Option<SurfaceId>`) name the surface on each side (`ludion docs collision` §Surfaces). A spark at every touch:
 
 ```rust
 fn sparks(world: &mut World, _ctx: &SystemCtx) {

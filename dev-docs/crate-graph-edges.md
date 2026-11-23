@@ -51,7 +51,7 @@ ludion-ecs             → core  [erased-serde, schemars, serde, serde_json]
     dev: (none)  [schemars, serde, serde_json]
 ludion-engine          → ai, assets, camera, components, core, ecs, font, nav, physics, projectiles,
       protocol, renderer, scene, sculpt, sim, spatial, sprite  [base64, crossbeam-channel, schemars,
-      serde, serde_json, toml, wgpu]
+      serde, serde_json, toml, wgpu, xxhash-rust]
     dev: cook, testkit  [png, proptest]
 ludion-font            → assets(bake), core, scene  [harfrust(bake), skrifa(bake)]
     dev: assets

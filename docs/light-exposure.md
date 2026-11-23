@@ -70,7 +70,7 @@ emissive, `Mesh.wrap`, fog. The sim pose differs from the render pose by up to o
 `ludion render --scene examples/gallery/light-exposure.yaml --debug-view irradiance` draws every opaque
 `Mesh` fragment as the diffuse irradiance the renderer summed there (albedo 1: ambient/IBL, local lights
 and the sun, each with its shadow; no specular, emissive or post), stored as `sRGB(E / 4)`, so it saturates
-at `E = 4`. The view is CLI and Rust only, not a `render.debug` value (`ludion docs wire-render`).
+at `E = 4`. `render.debug {"view": "irradiance"}` sets it too (`ludion docs wire-render`).
 The engine test `light_exposure_agreement` renders that scene at 512×512 and compares a 32×32 grid of
 floor points with `light_exposure(Facing::Normal([0, 1, 0]))`:
 

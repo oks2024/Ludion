@@ -89,6 +89,12 @@
 //! serializes byte-identically to before it existed. The pool is hashed (`WorldHash` rule 6); the
 //! index is a resource, invisible to the hash.
 //!
+//! The **checkpoint store** (`checkpoints`) rides it as each held slot's own snapshot document plus
+//! the last restore's outcome, so a replay keyframe, an `engine.restore` and a run-save resume
+//! reinstall the slots a later restore asks for. A session restore replaces the engine's store with
+//! it; a store-free session omits the field. The slot digest in the `WorldHash` covers the slot
+//! metadata, not these documents.
+//!
 //! **Presentation entities** (`Plan/presentation-state.md`) ride the same way: the `presentation`
 //! entity list and, only when the live set cannot reproduce it, `presentation_allocator`. A world
 //! without presentation entities omits both and serializes byte-identically to before.
@@ -110,6 +116,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+use std::sync::{Arc, OnceLock};
 
 use crate::animation_events::AnimationWalk;
 use crate::engine::{Engine, RestoredWorld};
@@ -286,6 +293,12 @@ struct SnapshotDoc {
     /// (`SceneSwitch::arrived_by_restart`). Additive (the `residue` precedent): omitted when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     arrived_by_restart: bool,
+    /// The checkpoint store: every held slot as its own snapshot document, and what the last
+    /// restore did. Additive (the `residue` precedent): omitted with no slot and no last restore,
+    /// and never present inside a slot's own document. A session restore installs it over the
+    /// engine's store; an older snapshot without it restores as an empty store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoints: Option<crate::checkpoints::CheckpointsDoc>,
     /// Top-level fields this build does not define, kept only so a restore can report them. Never
     /// written: capture leaves it empty, so the document stays byte-identical.
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
@@ -318,10 +331,8 @@ struct ScenePhysicsDoc {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     layers: Vec<SceneLayerDoc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schemars(skip)]
     surfaces: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
     default_surface: Option<String>,
 }
 
@@ -482,12 +493,15 @@ pub(crate) fn snapshot_schema() -> Value {
 /// # Errors
 /// Propagates a component serialization failure (`L0007`) or a missing RNG resource (`L3008`).
 pub(crate) fn capture(engine: &Engine) -> Result<Value, Diagnostic> {
-    snapshot_value(&capture_doc(engine, true)?)
+    let mut doc = capture_doc(engine, true)?;
+    doc.checkpoints = engine.checkpoints_doc()?;
+    snapshot_value(&doc)
 }
 
-/// The engine's state as a typed document. With `components` false each entity list holds only the
-/// ids (`index`, `generation`) and an empty component map: the component values ride a column copy
-/// instead ([`capture_structured`]).
+/// The engine's state as a typed document, without the checkpoint store: a slot never nests
+/// another. With `components` false each entity list holds only the ids (`index`, `generation`) and
+/// an empty component map: the component values ride a column copy instead
+/// ([`capture_structured`]).
 fn capture_doc(engine: &Engine, components: bool) -> Result<SnapshotDoc, Diagnostic> {
     let (entities, presentation) = if components {
         (
@@ -590,6 +604,7 @@ fn capture_doc(engine: &Engine, components: bool) -> Result<SnapshotDoc, Diagnos
             .world()
             .resource::<crate::SceneSwitch>()
             .is_some_and(crate::SceneSwitch::arrived_by_restart),
+        checkpoints: None,
         unknown: BTreeMap::new(),
     };
     Ok(doc)
@@ -610,6 +625,23 @@ fn snapshot_value(doc: &SnapshotDoc) -> Result<Value, Diagnostic> {
 pub(crate) struct StructuredSnapshot {
     doc: SnapshotDoc,
     columns: Vec<Option<ColumnCopy>>,
+    /// The document [`structured_document`] renders, kept once it succeeds: a recording renders
+    /// each slot once, not at every keyframe.
+    rendered: OnceLock<Arc<Value>>,
+}
+
+impl StructuredSnapshot {
+    /// The cached rendered document, or `render`'s result, cached on success.
+    pub(crate) fn rendered_or_else(
+        &self,
+        render: impl FnOnce() -> Result<Arc<Value>, Diagnostic>,
+    ) -> Result<Arc<Value>, Diagnostic> {
+        if let Some(doc) = self.rendered.get() {
+            return Ok(Arc::clone(doc));
+        }
+        let doc = render()?;
+        Ok(Arc::clone(self.rendered.get_or_init(|| doc)))
+    }
 }
 
 impl std::fmt::Debug for StructuredSnapshot {
@@ -633,7 +665,11 @@ pub(crate) fn capture_structured(engine: &Engine) -> Result<StructuredSnapshot, 
         .iter()
         .map(|info| info.copy_column(engine.world()))
         .collect();
-    Ok(StructuredSnapshot { doc, columns })
+    Ok(StructuredSnapshot {
+        doc,
+        columns,
+        rendered: OnceLock::new(),
+    })
 }
 
 /// The snapshot document `snapshot.capture` would have produced at the moment `s` was captured,
@@ -1387,6 +1423,17 @@ fn restore_decoded(
         })
         .collect();
 
+    // A slot's own document has no store; only a session restore installs one.
+    let checkpoints = match (&mode, doc.checkpoints.take()) {
+        (RestoreMode::Session(_), Some(store)) => Some(store.into_store().map_err(|reason| {
+            Diagnostic::new(
+                code::PROTOCOL_SNAPSHOT_INVALID,
+                format!("snapshot document is not a valid engine snapshot: {reason}"),
+            )
+        })?),
+        _ => None,
+    };
+
     let frame = doc.frame;
     let restored = RestoredWorld {
         driver,
@@ -1402,6 +1449,7 @@ fn restore_decoded(
         pending_input: doc.pending_input,
         arrived_by_restart: doc.arrived_by_restart,
         render_extent,
+        checkpoints,
     };
     match mode {
         RestoreMode::Session(_) => engine.install_restored(restored),
@@ -1506,13 +1554,12 @@ fn migrate_component(
 
 #[cfg(test)]
 mod surface_schema_tests {
-    /// The replay header hashes this schema: the surface fields are skipped from it so every
-    /// committed replay keeps its content hash (`Plan/surface-tags.md`).
+    /// The snapshot schema carries the scene's declared surfaces.
     #[test]
-    fn the_snapshot_schema_omits_the_surface_fields() {
+    fn the_snapshot_schema_names_the_surface_fields() {
         let schema = super::snapshot_schema().to_string();
-        assert!(!schema.contains("\"surfaces\""), "{schema}");
-        assert!(!schema.contains("default_surface"), "{schema}");
+        assert!(schema.contains("\"surfaces\""), "{schema}");
+        assert!(schema.contains("default_surface"), "{schema}");
     }
 
     /// Guards the `LayerSet` config field: `replay_content_hash` covers the prose-stripped schema,
@@ -1523,5 +1570,18 @@ mod surface_schema_tests {
         let schema = ludion_protocol::schema::strip_prose(super::snapshot_schema()).to_string();
         assert!(schema.contains("ignore_layers"), "{schema}");
         assert!(!schema.contains("LayerSet"), "{schema}");
+    }
+}
+
+#[cfg(test)]
+mod clock_and_store_schema_tests {
+    /// The clock's scale fields and the checkpoint store are part of the typed schema a replay's
+    /// content hash covers.
+    #[test]
+    fn the_snapshot_schema_names_the_clock_scale_fields_and_the_store() {
+        let schema = super::snapshot_schema().to_string();
+        for name in ["slowed_q16", "pending_q16", "step_q16", "checkpoints"] {
+            assert!(schema.contains(name), "{name} is in the schema");
+        }
     }
 }

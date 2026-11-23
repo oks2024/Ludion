@@ -169,6 +169,8 @@ fn a_resting_contact_emits_nothing_more_and_a_despawn_stops_it() {
             impulse: 0.0,
             point: [0.0; 3],
             normal: [0.0; 3],
+            surface_a: None,
+            surface_b: None,
         }]
     );
 
@@ -210,6 +212,8 @@ fn removing_a_collider_stops_its_pairs_once() {
             impulse: 0.0,
             point: [0.0; 3],
             normal: [0.0; 3],
+            surface_a: None,
+            surface_b: None,
         }],
         "the entity stays alive with no collider, so `write` drops it from `live` and `retire` \
          removes its body"

@@ -362,18 +362,12 @@ pub struct GameClock {
     holding: bool,
     /// Q16 ticks already folded out by scaled frames. Never normalized into `held`: a scaled frame
     /// is not a held one.
-    // Outside the typed snapshot schema (so `replay_content_hash` is unchanged); the snapshot still carries it.
-    #[schemars(skip)]
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     slowed_q16: u64,
     /// The scale requested by the frame now running, in Q16.
-    // Outside the typed snapshot schema (so `replay_content_hash` is unchanged); the snapshot still carries it.
-    #[schemars(skip)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_q16: Option<u32>,
     /// The scale step folded into the tick now running, in Q16 (a full tick is `Q16_PER_TICK`).
-    // Outside the typed snapshot schema (so `replay_content_hash` is unchanged); the snapshot still carries it.
-    #[schemars(skip)]
     #[serde(default = "full_step", skip_serializing_if = "is_full_step")]
     step_q16: u32,
     /// The f32 bits of the frame's first invalid scale request, for the engine to report.
@@ -480,6 +474,11 @@ impl GameClock {
     /// Q16 ticks already excluded by scaled frames.
     pub const fn slowed_q16(self) -> u64 {
         self.slowed_q16
+    }
+
+    /// The scale the frame now running has requested, in Q16, if any.
+    pub const fn pending_q16(self) -> Option<u32> {
+        self.pending_q16
     }
 
     /// Takes the first invalid [`scale`](GameClock::scale) value of this frame, if any.
@@ -922,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn the_clock_schema_lists_only_held_and_holding() {
+    fn the_clock_schema_lists_every_serialized_field() {
         let schema = serde_json::to_value(schemars::schema_for!(GameClock)).unwrap();
         let mut keys: Vec<&str> = schema["properties"]
             .as_object()
@@ -931,6 +930,9 @@ mod tests {
             .map(String::as_str)
             .collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["held", "holding"]);
+        assert_eq!(
+            keys,
+            ["held", "holding", "pending_q16", "slowed_q16", "step_q16"]
+        );
     }
 }

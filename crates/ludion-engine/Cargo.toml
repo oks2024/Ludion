@@ -45,6 +45,8 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+# The checkpoint store's and the `GameClock`'s `WorldHash` digests.
+xxhash-rust.workspace = true
 # Only for the two types `Engine::attach_surface` takes from a window host — the instance and the
 # surface it created. Already linked through `ludion-renderer`, so naming it here adds nothing to
 # the build; no wgpu type ever reaches the world, a component, or an extract.

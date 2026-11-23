@@ -342,14 +342,21 @@ fn render_debug_takes_the_sun_cascades_view() {
     assert_eq!(debug_view(&mut engine, Some(None)), None);
 }
 
-/// The irradiance view is renderer and CLI only: a wire variant would move the replay schema hash, so
-/// `render.debug` reports no view for it.
+/// Irradiance, the exposure meter and the rain occlusion view are on the wire: each is set, read back
+/// and cleared by `render.debug`.
 #[test]
-fn render_debug_reports_no_view_for_the_irradiance_view() {
+fn render_debug_takes_the_irradiance_exposure_meter_and_rain_occlusion_views() {
     let root = fixture_root();
     let mut engine = engine(&root, &DebugCategories::None);
-    engine.set_debug_view(Some(ludion_engine::DebugView::Irradiance));
-    assert_eq!(debug_view(&mut engine, None), None);
+    for view in [
+        RenderDebugView::Irradiance,
+        RenderDebugView::ExposureMeter,
+        RenderDebugView::RainOcclusion,
+    ] {
+        assert_eq!(debug_view(&mut engine, Some(Some(view))), Some(view));
+        assert_eq!(debug_view(&mut engine, None), Some(view));
+        assert_eq!(debug_view(&mut engine, Some(None)), None);
+    }
 }
 
 const PHYSICS_SCENE: &str = "\

@@ -43,8 +43,10 @@
 //! 6. **Resource digests:** after the entity loop, for each resource the registry names with a digest
 //!    ([`Registry::register_resource_digest`]) that is present in the world, in registration order:
 //!    the byte `R`, then the length-prefixed resource name, then the digest as `u64` little-endian.
-//!    An absent resource writes nothing, so a world without one hashes as it always did and the
-//!    domain tag stays `v2`.
+//!    An absent resource, or one whose digest is `None` (its identity state), writes nothing, so a
+//!    world without one hashes as it always did and the domain tag stays `v2`. The engine registers
+//!    `projectiles`, `game_clock` (a held or scaled clock) and `checkpoints` (a store holding a
+//!    slot), in that order.
 //!
 //! The value being encoded is the one a component's `Serialize` describes — the same value
 //! `serde_json::to_value` would have built. The private `canonical` submodule holds the encoder that
@@ -53,7 +55,8 @@
 //! pins it there.
 //!
 //! **Deliberately excluded:** resources (including the `DeterministicRng` state), except one the
-//! registry names with a digest (rule 6), and the free-list shape. The hash covers observable world
+//! registry names with a digest (rule 6: the projectile pool, a non-identity `GameClock`, the
+//! checkpoint store's slot metadata), and the free-list shape. The hash covers observable world
 //! *content*, per the architecture's definition ("canonical world serialization: registry order,
 //! entity-index order"); RNG state and allocator internals are covered by snapshots, and any
 //! divergence in them that ever matters must surface as diverging component data — which the
@@ -1212,7 +1215,7 @@ mod tests {
         let plain = tint_registry();
         let mut digested = tint_registry();
         digested
-            .register_resource_digest::<Pool>("pool", |p| p.0)
+            .register_resource_digest::<Pool>("pool", |p| Some(p.0))
             .unwrap();
         let mut world = world_with_tint();
         let base = WorldHash::compute(&world, &plain).unwrap();
@@ -1246,20 +1249,35 @@ mod tests {
     }
 
     #[test]
+    fn a_none_resource_digest_hashes_like_an_absent_resource() {
+        let plain = tint_registry();
+        let mut digested = tint_registry();
+        digested
+            .register_resource_digest::<Pool>("pool", |p| (p.0 != 0).then_some(p.0))
+            .unwrap();
+        let mut world = world_with_tint();
+        let base = WorldHash::compute(&world, &plain).unwrap();
+        world.insert_resource(Pool(0));
+        assert_eq!(WorldHash::compute(&world, &digested).unwrap(), base);
+        world.insert_resource(Pool(3));
+        assert_ne!(WorldHash::compute(&world, &digested).unwrap(), base);
+    }
+
+    #[test]
     fn a_duplicate_resource_digest_is_l0005() {
         let mut registry = Registry::new();
         registry
-            .register_resource_digest::<Pool>("pool", |p| p.0)
+            .register_resource_digest::<Pool>("pool", |p| Some(p.0))
             .unwrap();
         let err = registry
-            .register_resource_digest::<Pool>("other", |p| p.0)
+            .register_resource_digest::<Pool>("other", |p| Some(p.0))
             .unwrap_err();
         assert_eq!(
             err.code,
             ludion_core::codes::code::DUPLICATE_COMPONENT_REGISTRATION
         );
         let err = registry
-            .register_resource_digest::<u8>("pool", |p| *p as u64)
+            .register_resource_digest::<u8>("pool", |p| Some(*p as u64))
             .unwrap_err();
         assert_eq!(
             err.code,

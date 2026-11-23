@@ -346,8 +346,9 @@ impl Registry {
     }
 
     /// Registers a **resource digest**: the world hash folds `digest(&T)` in (rule 6) whenever the
-    /// world holds a `T`, and adds no bytes when it does not. Digests are emitted in registration
-    /// order. The digest must be a pure function of sim state.
+    /// world holds a `T` and the digest is `Some`, and adds no bytes when it does not (or when it
+    /// returns `None`, which a resource in its identity state does). Digests are emitted in
+    /// registration order. The digest must be a pure function of sim state.
     ///
     /// # Errors
     /// `L0005` if `name` is already taken by a resource digest, or if `T` already has one.
@@ -358,7 +359,7 @@ impl Registry {
     ///
     /// struct Score(u64);
     /// let mut registry = Registry::new();
-    /// registry.register_resource_digest::<Score>("score", |s| s.0).unwrap();
+    /// registry.register_resource_digest::<Score>("score", |s| Some(s.0)).unwrap();
     /// let mut world = World::new();
     /// assert_eq!(registry.resource_digests(&world).count(), 0);
     /// world.insert_resource(Score(7));
@@ -367,7 +368,7 @@ impl Registry {
     pub fn register_resource_digest<T: Send + Sync + 'static>(
         &mut self,
         name: &str,
-        digest: fn(&T) -> u64,
+        digest: fn(&T) -> Option<u64>,
     ) -> Result<(), Diagnostic> {
         let type_id = TypeId::of::<T>();
         if self
@@ -380,7 +381,7 @@ impl Registry {
         self.resource_digests.push(ResourceDigest {
             name: name.to_string(),
             type_id,
-            digest: Box::new(move |w| w.resource::<T>().map(digest)),
+            digest: Box::new(move |w| w.resource::<T>().and_then(digest)),
         });
         Ok(())
     }

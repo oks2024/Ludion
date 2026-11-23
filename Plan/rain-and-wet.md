@@ -76,7 +76,7 @@ for the whole arc; W1a ships the streak field.
     `MeshInstance.rain_occluder`. Blended and viewmodel instances never occlude; a hidden entity never reaches the map.
 19. **`L2383` (warning).** `occludes: true` on an entity whose mesh is routed as blended is inert, because blended meshes are
     drawn outside `scene.meshes`; extract reports it once per entity through `degraded`.
-20. **The `rain_occlusion` debug view** (CLI-only, no wire enum). `PostChain.rain_view` is set only with a `Rain` in the scene.
+20. **The `rain_occlusion` debug view** (also `render.debug {"view": "rain_occlusion"}`: on the wire, shipped in R14, `Plan/light-exposure.md` decision 18). `PostChain.rain_view` is set only with a `Rain` in the scene.
     It adds no pass and no pipeline: `EnvParams.wet.w` (reserved until now) is 1, and `mesh.wgsl` tints each opaque fragment
     inside the map by its column's exposure (the `surface_wetness` `under` term): blue exposed, orange covered, untinted outside.
     `surface_wetness` is untouched, so no existing golden moves.

@@ -320,7 +320,7 @@ const PHYSICS_BLOB_MAGIC: [u8; 4] = *b"LPB1";
 
 /// The layout version of a tagged blob's body (the field set of `SnapshotOwned`). A blob written
 /// at another version is refused rather than decoded positionally into the wrong shape.
-pub const PHYSICS_BLOB_VERSION: u32 = 1;
+pub const PHYSICS_BLOB_VERSION: u32 = 2;
 
 /// The snapshot as written. Borrowed, because the solver state is not `Clone`.
 #[derive(Serialize)]
@@ -1630,6 +1630,7 @@ impl PhysicsWorld {
         self.last_step_dt = dt;
         self.fresh_colliders.clear();
         self.collect_contacts(scale);
+        self.resolve_contact_surfaces();
         self.collect_broken_joints();
         self.collect_sensors();
         self.despawned.clear();
@@ -1676,6 +1677,19 @@ impl PhysicsWorld {
             }
             self.detection_poses[slot] = Some(pose);
         }
+    }
+
+    /// Fills `surface_a`/`surface_b` on each `Started` event this step emitted, from the step's
+    /// own poses; a `Stopped` event keeps `None`.
+    fn resolve_contact_surfaces(&mut self) {
+        let mut events = std::mem::take(&mut self.contacts);
+        for event in &mut events {
+            if event.phase == ContactPhase::Started {
+                event.surface_a = self.surface_at(event.a, event.point);
+                event.surface_b = self.surface_at(event.b, event.point);
+            }
+        }
+        self.contacts = events;
     }
 
     /// Diffs the narrow phase's touching pairs against the previous step's touching set, filling
@@ -1751,6 +1765,8 @@ impl PhysicsWorld {
                 impulse,
                 point,
                 normal,
+                surface_a: None,
+                surface_b: None,
             };
             (event, engaged(pair))
         };
@@ -1801,6 +1817,8 @@ impl PhysicsWorld {
                             impulse: 0.0,
                             point: [0.0; 3],
                             normal: [0.0; 3],
+                            surface_a: None,
+                            surface_b: None,
                         });
                     }
                 }
@@ -3036,8 +3054,8 @@ impl PhysicsWorld {
     }
 
     /// The surface `entity`'s collider reports: its `SurfaceTag`, else the scene's
-    /// `default_surface`, else `None`. A contact consumer calls
-    /// [`contact_surfaces`](PhysicsWorld::contact_surfaces) instead.
+    /// `default_surface`, else `None`. A contact consumer reads `ContactEvent::surface_a`/`surface_b`
+    /// instead.
     pub fn surface_of(&self, entity: EntityId) -> Option<SurfaceId> {
         self.surface_ids
             .binary_search_by_key(&entity, |&(e, _)| e)
@@ -3159,40 +3177,6 @@ impl PhysicsWorld {
             .or_else(|| self.face_at(entity, point))
             .or_else(|| self.part_at(entity, point))
             .or_else(|| self.surface_of(entity))
-    }
-
-    /// The surfaces a contact event reports, `[surface of a, surface of b]`.
-    ///
-    /// A [`Started`](ContactPhase::Started) event resolves each side with
-    /// [`surface_at`](PhysicsWorld::surface_at) at the event's point, so an overlay containing the
-    /// point answers for both sides. A [`Stopped`](ContactPhase::Stopped) event has no point and
-    /// answers `[None, None]`. A pure read of the last completed step: a restore answers identically.
-    ///
-    /// # Example
-    /// ```
-    /// use ludion_core::ids::EntityId;
-    /// use ludion_core::time::TickRate;
-    /// use ludion_physics::{ContactEvent, ContactPhase, PhysicsWorld};
-    ///
-    /// let world = PhysicsWorld::new(TickRate::DEFAULT);
-    /// let event = ContactEvent {
-    ///     a: EntityId::new(0, 0),
-    ///     b: EntityId::new(1, 0),
-    ///     phase: ContactPhase::Stopped,
-    ///     impulse: 0.0,
-    ///     point: [0.0; 3],
-    ///     normal: [0.0; 3],
-    /// };
-    /// assert_eq!(world.contact_surfaces(&event), [None, None]);
-    /// ```
-    pub fn contact_surfaces(&self, event: &ContactEvent) -> [Option<SurfaceId>; 2] {
-        match event.phase {
-            ContactPhase::Started => [
-                self.surface_at(event.a, event.point),
-                self.surface_at(event.b, event.point),
-            ],
-            ContactPhase::Stopped => [None, None],
-        }
     }
 
     /// The surface under `point`: an overlay containing it, else the surface of the nearest

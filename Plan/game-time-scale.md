@@ -76,12 +76,14 @@ pitch handed to request 0023 (OQ5). **One clock, no per-entity dilation** (OQ6).
 
 **8. Compatibility.** `GameClock::advance() -> bool` and `SystemCtx::with_clock(&clock, advanced)` keep
 their signatures. New `GameClock` fields are omitted from serde at identity, so snapshots and replays of
-a game that never scales do not move; `GameClock` stays out of `WorldHash`.
+a game that never scales do not move. `GameClock` was out of `WorldHash`; since R14 it has a term
+written only while the clock is non-identity (owner ruling (a), `ludion_engine::game_clock::digest`,
+a rule-6 resource digest), so an identity clock hashes as before.
 
-**9. Scale state stays out of the snapshot schema.** The scale state is serialized but outside the typed
-snapshot schema, so `replay_content_hash` and the corpus are unchanged. Cost: a build without scale
-support would restore a scaled snapshot as an unscaled clock, silently. Fold the fields into the schema at
-the next deliberate corpus re-record.
+**9. Scale state stays out of the snapshot schema.** *Superseded in R14: the fields are in the schema.*
+The scale state was serialized but outside the typed snapshot schema, so `replay_content_hash` and the
+corpus did not move. Cost: a build without scale support would restore a scaled snapshot as an unscaled
+clock, silently. The R14 re-record round folded the three fields into the schema (owner ruling (e)).
 
 ## Waves
 
@@ -128,13 +130,13 @@ for the platform and 0.1 m for its rider. Closed forms match exactly.
 
 ## Owner rulings (2026-11-19)
 
-- Accepted, scheduled (R14 re-record round). (a) A `GameClock` `WorldHash` term when non-identity (moves no existing hash only if gated on
+- Accepted, shipped in R14 (T10-A1). (a) A `GameClock` `WorldHash` term when non-identity (moves no existing hash only if gated on
   non-identity; a `WorldHash` design change).
 - Accepted. (b) The `Plan/physics.md` §Time scale amendment, "a gameplay scale drives `scale_time`" (W3).
 - Accepted. (c) The `docs/game-clock.md` rule extension to fractional time (shipped as docs in W1; binding only as
   evaluators adopt it).
 - Accepted. (d) `MIN_SCALE` 1/1024.
-- Accepted, scheduled (R14 re-record round). (e) Fold `slowed_q16`, `pending_q16` and `step_q16` into the snapshot schema at the next deliberate
+- Accepted, shipped in R14 (T10-A1). (e) Fold `slowed_q16`, `pending_q16` and `step_q16` into the snapshot schema at the next deliberate
   corpus re-record (decision 9); folding now would move `replay_content_hash` and force a corpus re-record.
 - Accepted. (f) No GameClock::hold_reaches_physics opt-in (the request's §3 / open question 4): freeze() beside
   hold() covers it (decision 16). If the owner wants the request's API: a GameClock bool that makes the
@@ -143,7 +145,7 @@ for the platform and 0.1 m for its rider. Closed forms match exactly.
 ## Out of scope
 
 Closed-form evaluators (W2); physics `scale_time` and the motor's `gameplay_dt` (W3); the acceptance run,
-hash trace and thread identity (W4); the `WorldHash` term (owner ruling); audio pitch (request 0023);
+hash trace and thread identity (W4); audio pitch (request 0023);
 scales above 1; per-entity time dilation; retyping `game_time`; fractional `started` stamps. Each
 reopens when a game needs it.
 
@@ -155,5 +157,9 @@ reopens when a game needs it.
   follows the scale; W3's tests pin it.
 - **W3:** shipped, Lore rev 2378.
 - **W4:** shipped, Lore rev 2378.
+- **R14 (T10-A1):** rulings (a) and (e) shipped. The three scale fields are in the snapshot schema (decision 9
+  superseded) and `GameClock` has a `WorldHash` term, written only while non-identity. The
+  `replay_content_hash` and the committed replays and traces of sessions that held or scaled the clock move
+  with the final re-record wave.
 - **Owner rulings (2026-11-19):** (a)–(f) in "Owner rulings" above. (b) is applied conservatively: `Plan/physics.md`
   §Time scale carries the amendment line.

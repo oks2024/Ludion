@@ -346,3 +346,88 @@ fn needs_gpu_render_debug_view_draws_the_ssr_view_the_cli_draws() {
         "the same bytes as --debug-view"
     );
 }
+
+/// **`render.screenshot {view}` is the view's own image**: the bytes `render_view_png` produces, at
+/// the view's size; an unknown name is `L2379`.
+#[test]
+fn needs_gpu_screenshot_of_a_view_is_the_view_image() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/gallery/render-view-radar.yaml");
+    let mut engine = Engine::new().with_render_size(160, 90);
+    engine
+        .load_inline_scene(&std::fs::read_to_string(&scene).unwrap())
+        .unwrap();
+    let expected = match engine.render_view_png("radar") {
+        Ok(png) => png,
+        Err(diag) if is_no_adapter(&diag) => {
+            eprintln!("[render.screenshot view] SKIPPED: no GPU adapter available");
+            return;
+        }
+        Err(diag) => panic!("view render failed: {diag}"),
+    };
+    let reply = dispatch(
+        &mut engine,
+        Command::RenderScreenshot(RenderScreenshotParams {
+            view: Some("radar".to_string()),
+            ..Default::default()
+        }),
+    )
+    .expect("the view screenshot succeeds");
+    let ResponseBody::Screenshot {
+        width,
+        height,
+        data,
+        ..
+    } = reply.body
+    else {
+        panic!("expected Screenshot");
+    };
+    let decoded = ludion_png_size(&expected);
+    assert_eq!((width, height), decoded, "the reply is the view's size");
+    assert_ne!((width, height), (160, 90), "not the main frame's size");
+    assert_eq!(data, base64::encode(&expected));
+
+    let error = dispatch(
+        &mut engine,
+        Command::RenderScreenshot(RenderScreenshotParams {
+            view: Some("minimap".to_string()),
+            ..Default::default()
+        }),
+    )
+    .expect_err("no such view");
+    assert_eq!(error.code.as_str(), "L2379");
+}
+
+/// The IHDR width and height of a PNG.
+fn ludion_png_size(png: &[u8]) -> (u32, u32) {
+    let be = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+    (be(16), be(20))
+}
+
+/// **A live host draws the irradiance view `render.debug` sets**: the frame differs from the normal one.
+#[test]
+fn needs_gpu_render_debug_view_draws_the_irradiance_view() {
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/gallery/mirror-floor.yaml");
+    let (w, h) = (160, 90);
+    let mut engine = Engine::new();
+    engine
+        .load_inline_scene(&std::fs::read_to_string(&scene).unwrap())
+        .unwrap();
+    let normal = match engine.render_png(w, h) {
+        Ok(png) => png,
+        Err(diag) if is_no_adapter(&diag) => {
+            eprintln!("[render.debug irradiance] SKIPPED: no GPU adapter available");
+            return;
+        }
+        Err(diag) => panic!("render failed: {diag}"),
+    };
+    engine
+        .execute(Command::RenderDebug(RenderDebugParams {
+            categories: None,
+            view: Some(Some(RenderDebugView::Irradiance)),
+        }))
+        .unwrap();
+    let live = engine.render_png(w, h).unwrap();
+    assert_ne!(live, normal, "the view replaces the composite");
+}

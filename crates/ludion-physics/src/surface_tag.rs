@@ -20,7 +20,7 @@ pub const MAX_SURFACES: usize = 256;
 /// let table = SurfaceTable::new(vec!["concrete".into(), "metal_grate".into()], None);
 /// assert_eq!(table.id("metal_grate"), Some(SurfaceId(1)));
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SurfaceId(pub u16);
 
 /// A scene's declared surfaces as the physics world reads them: the names in declaration order (the

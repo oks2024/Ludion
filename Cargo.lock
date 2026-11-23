@@ -1843,6 +1843,7 @@ dependencies = [
  "serde_json",
  "toml",
  "wgpu",
+ "xxhash-rust",
 ]
 
 [[package]]

@@ -116,8 +116,8 @@ an engine preset with numeric fields: text-authorable, `--set`/`--sweep`-able, g
 19. **Consistent with request 0013.** `LightExposure` answers authored light from sim state and never reads the camera;
     the meter is render-only and never feeds the sim. A game that drives zone targets from `LightExposure` gets one
     light model on both sides. The `irradiance` debug view replaces `composite`, so it stays unmetered.
-20. **Instruments.** `ludion render --debug-view exposure_meter` (CLI and engine only, not on the wire: a
-    `RenderDebugView` variant moves `replay_schema_hash`, `Plan/light-exposure.md` decision 18) replaces `composite`
+20. **Instruments.** `ludion render --debug-view exposure_meter` (also `render.debug {"view": "exposure_meter"}`:
+    on the wire, shipped in R14, `Plan/light-exposure.md` decision 18) replaces `composite`
     with the metered frame, dimmed, and the 64-bin histogram over its bottom quarter: bars white inside the trimmed
     window and grey where `metering_clip` cut them, a green line at the trimmed mean, a yellow one at the mid-grey
     target, a translucent blue band over the means the correction does not clamp. The view needs the meter, so a manual

@@ -160,6 +160,12 @@ release) prints the summed pass GPU time at 512² and 256².
   frame's; `ludion test --filter .view-` runs those alone.
 - `L2379` (error): the name matches no enabled, in-budget view (unknown, disabled or a fifth); the help lists the rendered names.
 
+## On the wire
+`render.screenshot {"view": "radar"}` returns the view's image at its own `size` (the bytes `ludion render --view` writes) and
+`render.bounds {"view": "radar"}` projects every renderable through the view's camera at that `size` (radar pin positions);
+an unknown or disabled name is `L2379`. `render.view` is unchanged: it flies the host stream's camera and returns no image.
+`render.bounds` names the view in `view`, not `camera`, which is the `scene`/`view` choice (`ludion docs wire-render`).
+
 ## Gotchas
 - A view is a presentation read: it sees the world as the last extract left it, never writes sim state, and a game
   system cannot read its pixels.

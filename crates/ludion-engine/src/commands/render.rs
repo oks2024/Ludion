@@ -44,6 +44,22 @@ pub(crate) fn screenshot(
     axis("render.screenshot", width, "width", MAX_WIDTH, help)?;
     axis("render.screenshot", height, "height", MAX_HEIGHT, help)?;
 
+    // A named view renders through its own camera at its own size; the extent above only sizes the
+    // extract's main frame, as `ludion render --view` does with `--width/--height`.
+    if let Some(name) = &params.view {
+        let image = engine
+            .render_view_image(name, width, height)
+            .map_err(collapse)?;
+        let png = image.encode_png()?;
+        return Ok(ResponseBody::Screenshot {
+            width: image.width,
+            height: image.height,
+            format: "png".to_string(),
+            data: base64::encode(&png),
+            stale: engine.gi_stale(),
+        });
+    }
+
     let png = engine.render_png_through(width, height, params.camera == CameraChoice::View)?;
     Ok(ResponseBody::Screenshot {
         width,
@@ -251,7 +267,7 @@ pub(crate) fn debug(
             .into_iter()
             .map(String::from)
             .collect(),
-        view: engine.debug_view().and_then(wire_view),
+        view: engine.debug_view().map(wire_view),
     })
 }
 
@@ -262,21 +278,23 @@ fn renderer_view(view: RenderDebugView) -> DebugView {
         RenderDebugView::ProbeIndex => DebugView::ProbeIndex,
         RenderDebugView::LocalShadowAtlas => DebugView::LocalShadowAtlas,
         RenderDebugView::SunCascades => DebugView::SunCascades,
+        RenderDebugView::Irradiance => DebugView::Irradiance,
+        RenderDebugView::ExposureMeter => DebugView::ExposureMeter,
+        RenderDebugView::RainOcclusion => DebugView::RainOcclusion,
     }
 }
 
-fn wire_view(view: DebugView) -> Option<RenderDebugView> {
-    Some(match view {
+fn wire_view(view: DebugView) -> RenderDebugView {
+    match view {
         DebugView::SsrConfidence => RenderDebugView::SsrConfidence,
         DebugView::SsrFootprint => RenderDebugView::SsrFootprint,
         DebugView::ProbeIndex => RenderDebugView::ProbeIndex,
         DebugView::LocalShadowAtlas => RenderDebugView::LocalShadowAtlas,
         DebugView::SunCascades => RenderDebugView::SunCascades,
-        // Not on the wire: a wire variant moves the replay schema hash.
-        DebugView::Irradiance => return None,
-        DebugView::ExposureMeter => return None,
-        DebugView::RainOcclusion => return None,
-    })
+        DebugView::Irradiance => RenderDebugView::Irradiance,
+        DebugView::ExposureMeter => RenderDebugView::ExposureMeter,
+        DebugView::RainOcclusion => RenderDebugView::RainOcclusion,
+    }
 }
 
 /// `render.dump_graph` — the render graph structure as JSON (no GPU needed).
@@ -318,7 +336,7 @@ pub(crate) fn bounds(
     engine: &mut Engine,
     params: RenderBoundsParams,
 ) -> Result<ResponseBody, Diagnostic> {
-    let (render_size, entities) = engine.render_bounds(params.camera == CameraChoice::View)?;
+    let (render_size, entities) = engine.render_bounds(&params)?;
     Ok(ResponseBody::RenderBounds {
         render_size,
         entities,

@@ -101,8 +101,7 @@ categories the last tick emitted, whether enabled or not — a category you enab
 from `drawn` is a typo or a quiet scene). It applies to the live stream and to `render.screenshot`,
 so an agent that enables `motor` gets the lines in its screenshot. There is no per-call opt-out.
 `view` (`"ssr_confidence"`, `"ssr_footprint"`, `"probe_index"`, `"local_shadow_atlas"`, `"sun_cascades"` (tints each surface by its sun cascade), or `null` to clear) shows a debug view in place of
-the composite; a view never turns SSR on (`ludion docs wire-render`). The CLI also takes `irradiance` (the diffuse
-light each mesh fragment receives, `ludion docs light-exposure`), which is not a `view` value: `render.debug` reports `null` for it.
+the composite; a view never turns SSR on (`ludion docs wire-render`). `"irradiance"` (the diffuse light each mesh fragment receives, `ludion docs light-exposure`), `"exposure_meter"` (`ludion docs post-processing`) and `"rain_occlusion"` (`ludion docs weather`) are `view` values too.
 Runnable: `cargo run -p ludion-engine --example render_debug`. Reference renders: `examples/gallery/debug-shapes.yaml` (every pen primitive, drawn by a game-free system) and `nav.yaml`.
 
 ## Gotchas

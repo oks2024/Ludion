@@ -90,6 +90,11 @@ Existing agent calls, tests and CLI paths keep the game's own framing while a hu
 
 An entity hidden by `Visibility` is still reported, with `hidden: true` (absent otherwise).
 
+Both also take `view: "<name>"`, a `RenderView` (`ludion docs render-views`): `render.screenshot` returns that
+view's image at its own `size` (what `ludion render --view` draws), and `render.bounds` projects every renderable
+through that view's camera at its `size`, which `render_size` echoes. `camera` does not apply to a view; an unknown
+or disabled name is `L2379`.
+
 ## What the game draws for debugging: `render.debug`
 
 Games record world-space debug lines (a character's motor, a platform's path) under named categories.
@@ -108,8 +113,8 @@ from a quiet scene.
 
 `view` shows a debug view in place of the composite, the same views as
 `ludion render --debug-view`: `"ssr_confidence"`, `"ssr_footprint"`, `"local_shadow_atlas"` (the local-light shadow atlas, letterboxed: `ludion docs local-shadows`), `"sun_cascades"` (each lit surface tinted by its sun cascade: `ludion docs sun-cascades`) or `"probe_index"` (the winning
-reflection probe per pixel, coloured by rank; the `probes` category draws the volumes). The CLI's `irradiance` view
-(`ludion docs light-exposure`) is not a `view` value: CLI and Rust only, `render.debug` reports `null` for it. A name sets it, `null` clears it,
+reflection probe per pixel, coloured by rank; the `probes` category draws the volumes). Also `"irradiance"` (the diffuse
+light each mesh fragment receives: `ludion docs light-exposure`), `"exposure_meter"` (the metered frame with its histogram: `ludion docs post-processing`) and `"rain_occlusion"` (`ludion docs weather`). A name sets it, `null` clears it,
 absent keeps it; the reply's `view` is the one in force. A view never turns SSR on: on a frame without
 SSR the normal frame is drawn (`render.dump_graph` shows whether `ssr_debug` is scheduled).
 

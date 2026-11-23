@@ -472,7 +472,7 @@ fn a_scaled_snapshot_round_trips() {
     let document = snapshot_of(&mut scaled);
     assert!(
         document["game_clock"].get("slowed_q16").is_some(),
-        "the schema-skipped field still travels in the snapshot"
+        "the scale fields travel in the snapshot"
     );
     let mut restored = build();
     restored
@@ -487,6 +487,53 @@ fn a_scaled_snapshot_round_trips() {
     advance(&mut unscaled, 30);
     assert!(snapshot_of(&mut unscaled).get("game_clock").is_none());
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A clock that has excluded time is in the `WorldHash`; an identity clock is not. The two games
+/// differ only in the clock calls, so any hash difference is the clock's term.
+#[test]
+fn a_held_or_scaled_clock_moves_the_world_hash_and_an_identity_clock_does_not() {
+    fn slow_late(world: &mut World, ctx: &SystemCtx) {
+        if ctx.frame.as_u64() >= HOLD_FROM {
+            world.resource_mut::<GameClock>().unwrap().scale(0.5);
+        }
+    }
+    let dir = root("hash_term");
+    type Run = fn(&mut World, &SystemCtx);
+    let build = |system: Option<(&'static str, Run)>| {
+        let mut builder = Engine::builder().project_root(&dir);
+        if let Some((name, run)) = system {
+            builder = builder.system(name, run);
+        }
+        let mut engine = builder.build().expect("the documents validate");
+        engine.load_inline_scene(SCENE).expect("the scene loads");
+        engine
+    };
+    let mut plain = build(None);
+    let mut held = build(Some(("freeze_window", freeze_window)));
+    let mut scaled = build(Some(("slow_late", slow_late)));
+    for engine in [&mut plain, &mut held, &mut scaled] {
+        advance(engine, HOLD_FROM - 1);
+    }
+    let before = plain.world_hash().unwrap();
+    assert_eq!(
+        held.world_hash().unwrap(),
+        before,
+        "identity clocks add no term"
+    );
+    assert_eq!(scaled.world_hash().unwrap(), before);
+    for engine in [&mut plain, &mut held, &mut scaled] {
+        advance(engine, 10);
+    }
+    let after = plain.world_hash().unwrap();
+    assert_ne!(held.world_hash().unwrap(), after, "a held clock is hashed");
+    assert_ne!(
+        scaled.world_hash().unwrap(),
+        after,
+        "a scaled clock is hashed"
+    );
+    assert_ne!(scaled.world_hash().unwrap(), held.world_hash().unwrap());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

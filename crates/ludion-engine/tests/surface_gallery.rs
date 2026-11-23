@@ -144,10 +144,9 @@ fn the_balls_first_contact_names_the_grating_and_the_ball() {
             continue;
         };
         let [grating, wood] = if event.a == floor {
-            physics.contact_surfaces(event)
+            [event.surface_a, event.surface_b]
         } else {
-            let [b, a] = physics.contact_surfaces(event);
-            [a, b]
+            [event.surface_b, event.surface_a]
         };
         assert_eq!(
             grating.and_then(|id| physics.surface_name(id)),

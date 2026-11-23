@@ -1,5 +1,6 @@
 //! [`ContactEvent`]: which collider pairs started or stopped touching on the last step.
 
+use crate::surface_tag::SurfaceId;
 use ludion_core::ids::EntityId;
 use serde::{Deserialize, Serialize};
 
@@ -135,4 +136,9 @@ pub struct ContactEvent {
     pub point: [f32; 3],
     /// Unit world-space normal from `a` towards `b` on a start; `[0.0; 3]` on a stop.
     pub normal: [f32; 3],
+    /// The surface on `a`'s side at `point` (`PhysicsWorld::surface_at`), resolved when the step
+    /// emits the event; `None` on a stop or when untagged with no `default_surface`.
+    pub surface_a: Option<SurfaceId>,
+    /// The surface on `b`'s side at `point`; see `surface_a`.
+    pub surface_b: Option<SurfaceId>,
 }

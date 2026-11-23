@@ -72,7 +72,7 @@ fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
 - **Follows the scale:** the physics step (it runs at `dt × s`, min-composed with the game's own `scale_time`; `ludion docs physics-time-scale`), the motor's `PhysicsWorld::gameplay_dt` (`dt × s`) and everything that integrates `ctx.game_dt` — `PathFollower` (a kinematic platform pushes at its true speed), camera rig springs, projectile pools, `ludion-ai` state machines (`ai_tick` runs every tick time moves: integrate `ctx.game_dt`) — and every closed form, which reads the exact fractional instant and so slows smoothly: volley bullets, particle emitters, assembly and character clips (phase, crossfade weight), `ParentJoint` sockets, the ragdoll switch pose and animation events (each fires once, in order, on the tick its clip time is crossed). The pattern timeline fires once per crossed gameplay frame (`game_frames_crossed()`). `ludion-ai` `Timer`/`Cooldown` count whole gameplay frames: `just_expired` fires once, on the crossing tick.
 - **Pass `ctx.game_instant` to the evaluators.** They take `impl Into<GameTime>`: `ctx.game_time` still compiles but steps in whole frames under a scale.
 - **`set_clip_speed` keeps a whole-frame anchor** (`ClipAnchor.frame`): a speed change applies on the floor gameplay frame, so the pose jumps by the fraction times the speed difference.
-- The scale stays out of `WorldHash`, like `hold`; the clock rides `engine.snapshot` and is omitted while it excludes nothing.
+- The clock rides `engine.snapshot` (all its fields are in the snapshot schema) and is omitted while it excludes nothing; the `WorldHash` has a clock term only while it has excluded time.
 
 ## Rules
 
@@ -99,10 +99,11 @@ fn slow_while_aiming(world: &mut World, _ctx: &SystemCtx) {
 - Animation playback — flipbooks and assembly clips alike — follows the gameplay clock too: one
   clock; the only opt-out is engine-owned: the entities bound to a `holds_gameplay` sequence read their
   own instant (`ludion docs sequences`).
-- `GameClock` is a resource, so it is never a `WorldHash` term; a diverging hold surfaces
-  indirectly, as diverging entity data (volleys reaped or not, timelines fired or not). It **is**
-  carried by `engine.snapshot`/`engine.restore` — the `game_clock` field, omitted from the document
-  when the clock holds nothing, so a snapshot recorded before this field existed restores
+- `GameClock` is a resource with a `WorldHash` term written only while it has excluded time (a
+  clock that never holds or scales hashes as it always did), so a diverging hold shows in the hash
+  directly as well as in diverging entity data (volleys reaped or not, timelines fired or not). It
+  is carried by `engine.snapshot`/`engine.restore` — the `game_clock` field, omitted from the
+  document when the clock holds nothing, so a snapshot recorded before this field existed restores
   unchanged. A replay needs nothing extra: the game re-derives its holds from the replayed input
   that drove the freeze in the first place.
 - `Command::SimPause` (`sim.pause`) is the other freeze mechanism and stays distinct: it stops the

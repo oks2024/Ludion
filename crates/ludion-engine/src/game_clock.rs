@@ -5,6 +5,35 @@ use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::time::GameClock;
 use ludion_ecs::World;
+use xxhash_rust::xxh3::Xxh3;
+
+/// The clock's `WorldHash` term (rule 6): `None` while it has excluded nothing, so a game that
+/// never holds or scales hashes as it did before the term existed. Only the fields the snapshot
+/// carries count — the latched rejected request is reported and drained at the boundary.
+pub(crate) fn digest(clock: &GameClock) -> Option<u64> {
+    let pending = clock.pending_q16();
+    if clock.held() == 0
+        && !clock.is_holding()
+        && clock.slowed_q16() == 0
+        && pending.is_none()
+        && !clock.is_scaling()
+    {
+        return None;
+    }
+    let mut hasher = Xxh3::new();
+    hasher.update(&clock.held().to_le_bytes());
+    hasher.update(&[u8::from(clock.is_holding())]);
+    hasher.update(&clock.slowed_q16().to_le_bytes());
+    match pending {
+        Some(q) => {
+            hasher.update(&[1]);
+            hasher.update(&q.to_le_bytes());
+        }
+        None => hasher.update(&[0]),
+    }
+    hasher.update(&clock.step_q16().to_le_bytes());
+    Some(hasher.digest())
+}
 
 /// Reports `L4260` for the invalid `scale` value the frame's systems latched, once per session.
 pub(crate) fn report_rejected_scale(world: &mut World) {

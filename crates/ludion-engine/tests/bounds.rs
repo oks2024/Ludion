@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 
 use ludion_ecs::World;
 use ludion_engine::{
-    Camera, CameraOffset, Engine, Mesh, MeshGrid, MeshSource, PointLight, Projection, Sprite, Text,
-    TileAppearance, Tilemap, Transform, dispatch,
+    Camera, CameraOffset, Engine, Mesh, MeshGrid, MeshSource, PointLight, Projection, RenderView,
+    Sprite, Text, TileAppearance, Tilemap, Transform, dispatch,
 };
 use ludion_protocol::command::{CameraChoice, RenderBoundsParams, RenderViewParams, ViewPose};
 use ludion_protocol::response::{EntityBounds, ScreenRect, WorldAabb};
@@ -849,9 +849,12 @@ fn offset_world(offset: bool) -> (Engine, ludion_core::ids::EntityId) {
 }
 
 fn sprite_rect(engine: &mut Engine, camera: CameraChoice) -> ScreenRect {
-    match dispatch(engine, Command::RenderBounds(RenderBoundsParams { camera }))
-        .expect("render.bounds should succeed")
-        .body
+    match dispatch(
+        engine,
+        Command::RenderBounds(RenderBoundsParams { camera, view: None }),
+    )
+    .expect("render.bounds should succeed")
+    .body
     {
         ResponseBody::RenderBounds { entities, .. } => entities[0].screen_rect.unwrap(),
         other => panic!("expected RenderBounds, got {other:?}"),
@@ -897,4 +900,122 @@ fn bounds_project_through_the_offset_but_not_through_the_view_override() {
         sprite_rect(&mut plain, CameraChoice::View)
     );
     assert_eq!(moved.world_hash().unwrap(), before);
+}
+
+/// A `radar` view of `size` at the origin, looking down −Z from `z = 10` (the exact-math camera),
+/// returned as an entity carrying both `Camera` and `RenderView`.
+fn add_view(world: &mut World, size: [u32; 2], enabled: bool) {
+    let cam = add_camera(world);
+    world
+        .insert(
+            cam,
+            RenderView {
+                name: "radar".to_string(),
+                size,
+                enabled,
+                ..serde_json::from_str(r#"{"name":"radar"}"#).unwrap()
+            },
+        )
+        .unwrap();
+}
+
+fn view_bounds(
+    engine: &mut Engine,
+    view: &str,
+) -> Result<([u32; 2], Vec<EntityBounds>), ludion_core::diagnostics::Diagnostic> {
+    let reply = dispatch(
+        engine,
+        Command::RenderBounds(RenderBoundsParams {
+            view: Some(view.to_string()),
+            ..Default::default()
+        }),
+    )?;
+    match reply.body {
+        ResponseBody::RenderBounds {
+            render_size,
+            entities,
+        } => Ok((render_size, entities)),
+        other => panic!("expected RenderBounds, got {other:?}"),
+    }
+}
+
+/// A 2×1 sprite at the origin, a main camera 100 m to the side (the sprite is off-screen through it)
+/// and a `radar` view looking at the origin: the view's bounds project at the view's own size.
+#[test]
+fn bounds_through_a_named_view_project_at_the_views_size() {
+    let mut engine = engine();
+    let world = engine.world_mut();
+    let main = add_camera(world);
+    world
+        .insert(
+            main,
+            Transform {
+                translation: [100.0, 0.0, 10.0],
+                ..Transform::default()
+            },
+        )
+        .unwrap();
+    add_view(world, [128, 64], true);
+    let sprite = world.spawn();
+    world.insert(sprite, Transform::default()).unwrap();
+    world
+        .insert(
+            sprite,
+            Sprite {
+                size: Some([2.0, 1.0]),
+                ..Sprite::default()
+            },
+        )
+        .unwrap();
+
+    let (scene_size, scene) = bounds(&mut engine);
+    assert_eq!(scene_size, [256, 256]);
+    assert!(!scene[0].on_screen, "off-screen through the scene camera");
+
+    let (size, entities) = view_bounds(&mut engine, "radar").expect("the view answers");
+    assert_eq!(size, [128, 64]);
+    let entity = &entities[0];
+    assert!(entity.on_screen);
+    let rect = entity.screen_rect.expect("a rect");
+    assert!(
+        rect.x >= 0.0 && rect.y >= 0.0 && rect.x + rect.w <= 128.0 && rect.y + rect.h <= 64.0,
+        "{rect:?} is inside 128x64"
+    );
+}
+
+/// An unknown name is `L2379` and the help names the views that do render.
+#[test]
+fn bounds_through_an_unknown_view_is_l2379() {
+    let mut engine = engine();
+    let world = engine.world_mut();
+    add_camera(world);
+    add_view(world, [128, 64], true);
+    let error = view_bounds(&mut engine, "minimap").expect_err("no such view");
+    assert_eq!(error.code.as_str(), "L2379");
+    let text = format!("{error:?}");
+    assert!(text.contains("radar"), "{text}");
+}
+
+/// A disabled view does not render, so it is `L2379` too.
+#[test]
+fn bounds_through_a_disabled_view_is_l2379() {
+    let mut engine = engine();
+    let world = engine.world_mut();
+    add_camera(world);
+    add_view(world, [128, 64], false);
+    let error = view_bounds(&mut engine, "radar").expect_err("disabled");
+    assert_eq!(error.code.as_str(), "L2379");
+}
+
+/// A view names its own viewpoint, so a world with only a view camera answers instead of `L2102`.
+#[test]
+fn bounds_through_a_view_need_no_main_camera() {
+    let mut engine = engine();
+    let world = engine.world_mut();
+    add_view(world, [128, 64], true);
+    let sprite = world.spawn();
+    world.insert(sprite, Sprite::default()).unwrap();
+    let (size, entities) = view_bounds(&mut engine, "radar").expect("answers, not L2102");
+    assert_eq!(size, [128, 64]);
+    assert_eq!(entities.len(), 1);
 }

@@ -184,6 +184,11 @@ fn engine(scale: Scale) -> Engine {
     engine
 }
 
+/// The world's content hash: a restore moves the clock and store terms of `world_hash` on purpose.
+fn content_hash(engine: &Engine) -> u64 {
+    crate::checkpoints::content_hash(engine, |r| r.register::<Guard>("Guard")).as_u64()
+}
+
 /// One cycle's frame durations and the hashes right after the capture and restore frames.
 struct Cycle {
     frames: [Duration; CYCLE as usize],
@@ -209,7 +214,7 @@ fn run_cycle(engine: &mut Engine) -> Cycle {
                         .is_some(),
                     "the slot exists after the capture frame"
                 );
-                captured = engine.world_hash().unwrap().as_u64();
+                captured = content_hash(engine);
             }
             RESTORE_AT => {
                 assert!(
@@ -219,7 +224,7 @@ fn run_cycle(engine: &mut Engine) -> Cycle {
                     ),
                     "the restore ran"
                 );
-                restored = engine.world_hash().unwrap().as_u64();
+                restored = content_hash(engine);
             }
             _ => {}
         }

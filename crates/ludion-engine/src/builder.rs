@@ -1520,8 +1520,14 @@ impl EngineBuilder {
             visuals.check_assets(&project_root)?;
         }
         let mut registry = builtin_registry();
-        registry
-            .register_resource_digest::<crate::Projectiles>("projectiles", |p| p.pool().digest())?;
+        registry.register_resource_digest::<crate::Projectiles>("projectiles", |p| {
+            Some(p.pool().digest())
+        })?;
+        registry.register_resource_digest::<ludion_core::time::GameClock>(
+            "game_clock",
+            crate::game_clock::digest,
+        )?;
+        registry.register_resource_digest::<crate::Checkpoints>("checkpoints", |c| c.digest)?;
         for register in self.registrations {
             register(&mut registry)?;
         }

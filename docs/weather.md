@@ -90,7 +90,7 @@ nothing.
 
 `ludion render --scene <scene> --debug-view rain_occlusion` tints every opaque mesh fragment inside the map: blue where
 rain reaches it, orange where it is covered, untinted outside the map. It needs a `Rain` (the normal frame is drawn
-without one) and is CLI-only.
+without one); `render.debug {"view": "rain_occlusion"}` sets it too.
 
 ## Wetness
 `wetness` (default 1) darkens and glosses every opaque mesh surface the rain reaches. Per fragment the scene pass

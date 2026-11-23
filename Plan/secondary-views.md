@@ -93,7 +93,7 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
     instrument, not a golden.
 29. **View goldens** are named `<stem>.view-<name>.png` beside the frame's golden. The manifest's `views` adds tests named
     `<stem>.view-<name>`; `--filter` matches the test name, so `--filter .view-` selects view tests only.
-    Request differences: the wire fields are W4c; the sheet has no drawn labels; `golden(view=)` is `GoldenTest.view`.
+    Request differences: the wire fields shipped in W4c (D37); the sheet has no drawn labels; `golden(view=)` is `GoldenTest.view`.
 30. **A view's sub-graph is the graph it renders.** `view_scene(scene, i)` at `FrameSize::native(view.size)` with
     `PostChain { aa: Off, ..chain_of(&derived) }`, where `chain_of` is the same quality mask (and, live, the same
     frustum-culling switch) the main dump uses. Emitted as `"views": [{ "name", "graph" }]` after `aliasing`, omitted when
@@ -119,6 +119,15 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
     table covers the union of both key sets, so an item on a view-only layer is keyed.
 36. **What stays the newer tick:** an orthographic view's height, a view's projection when its `size` aspect changes between
     ticks, and the viewmodel (views drop it).
+37. **The views on the wire (W4c, shipped in R14).** `render.screenshot` and `render.bounds` gain `view: Option<String>`.
+    A screenshot returns the named view's image at its own `size` (what `ludion render --view` and `Engine::render_view_png`
+    draw); `width`/`height` still validate and size the extract's main extent, and `camera` does not apply to a view.
+    Bounds project every renderable (no layer filtering) through the view's camera at its `size`, which `render_size` echoes;
+    a view names its own viewpoint, so no main camera is needed (no `L2101`/`L2102`). An unknown, disabled or over-budget
+    name is `L2379` on both. Request differences: `render.view` does not change (it is the host stream's free camera and
+    returns no image; the request's "`render.view {view}` returns that texture" is `render.screenshot {view}`), and
+    bounds take `view`, not `camera`: `camera` is the `scene`/`view` choice and a free-string name there would collide with
+    a view named `view` or `scene`.
 
 ## Waves
 
@@ -137,8 +146,8 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   budget file (D30-D33).
 - **W4b-2:** presenter interpolation of view cameras and of a layered frame's view content (today `blend` blends only the
   main lists, so `scene.layered`'s source and `scene.views[i].camera` come from the newer tick).
-- **W4c:** the wire fields `render.screenshot`/`render.view {view}` and `render.bounds {camera}`. They move the protocol
-  schema hash and the replay schema hash (an R14 item), so they are held for the owner.
+- **W4c** (shipped in R14): the wire fields `render.screenshot {view}` and `render.bounds {view}` (decision 37). They move
+  the protocol schema hash and the replay schema hash; the snapshot bless and the corpus re-record ride the round's final wave.
 
 ## Out of scope / deferred
 
@@ -190,7 +199,7 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   `Engine::render_view_png` and `views_sheet` (`ludion-engine`), `L2379`, `GoldenTest.view` and the manifest's `views`
   (`ludion-testkit`), the view goldens `render-view-radar.view-radar` and `render-view-portrait.view-portrait` (blessed on the
   RTX 3090), docs `render-views` and `verify-loop`. No wire field, golden, replay or graph moved (`dump-graph` of
-  `render-view-radar` and `render-view-unlit` identical). Owed: the macOS twins of the two view goldens (M4). W4b and W4c are open.
+  `render-view-radar` and `render-view-unlit` identical). Owed: the macOS twins of the two view goldens (M4). W4b is open.
 - **W4b-1:** mechanized. A trailing `views` array in `dump-graph`/`render.dump_graph` (`dump_graph_json_with_views`,
   `dump_scene_frame_graph_json`), `view:<name>` and `view:<name>/<pass>` rows in the offline profile
   (`Renderer::dump_view_timings_json`, a separate loop after the measured loop so the cull ring never sees a view),
@@ -206,3 +215,4 @@ render-to-texture. Neon Shroud request 0017 asks for secondary views. W1 is the 
   pub fields (a struct literal needs `..Default::default()`; none found outside `crates/`). W4c is open.
 - M4 (2026-11-22, Lore 2449 verified on the pinned Apple M4): the macOS twins of `render-view-unlit`, `render-view-portrait` and `render-view-radar` are blessed (r2451); the full macOS gallery re-renders byte-identically.
 - M4 (2026-11-22): the macOS budget twin `budgets/pinned-apple-m4-render-views.toml` is measured on the pinned Apple M4: `view:radar` 1.09-1.10 ms, ceiling 2.2. Its TeamCity budgets-macos step is owed with the re-provision.
+- **W4c** (R14, 2026-11-23): `render.screenshot {view}` and `render.bounds {view}` (decision 37; `BoundsCamera` in `bounds.rs`, `RenderBoundsParams` loses `Copy`). Moves the protocol schema hash and `replay_schema_hash`; no component schema, `WorldHash`, `SnapshotDoc` or golden moved.
