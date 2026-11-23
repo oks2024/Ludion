@@ -1,11 +1,11 @@
-# Feature: Rain - drops are world-anchored, not carried by the camera. Sparse, wide, white streaks on a near-black sky:
+# Feature: Rain - drops are world-anchored, not carried by the camera. Sparse, wide, cyan streaks on a dark red-brown sky:
 # no meshes, no fog, no light, so every bright pixel is one drop. The engine test
 # `needs_gpu_drops_stay_world_anchored_when_the_camera_moves` (crates/ludion-engine/tests/rain.rs) loads this scene,
 # extracts it at one tick from this camera and from one 2 m to the side, and checks that each fixed world drop lands
 # at the pixel the CPU twin (rain_layout, drop_position) projects it to in both renders.
 # Ripples, splashes, wetness, lighting, shadows and backlight are all off, so the golden shows streaks and nothing else.
 format: 1
-name: "rain-camera-move - Rain: sparse white drops, world-anchored"
+name: "rain-camera-move - Rain: sparse cyan drops, world-anchored"
 entities:
   - name: camera
     components:
@@ -26,16 +26,16 @@ entities:
     components:
       Environment:
         sky_zenith:
-          - 0.0
-          - 0.0
+          - 0.03
+          - 0.005
           - 0.0
         sky_horizon:
-          - 0.0
-          - 0.0
+          - 0.03
+          - 0.005
           - 0.0
         sky_ground:
-          - 0.0
-          - 0.0
+          - 0.03
+          - 0.005
           - 0.0
         ibl_intensity: 0.0
   - name: weather
@@ -55,8 +55,8 @@ entities:
         drop_width: 0.05
         streak: 1.0
         color:
-          - 1.0
-          - 1.0
+          - 0.2
+          - 0.8
           - 1.0
           - 1.0
         lit: false
