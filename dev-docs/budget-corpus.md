@@ -73,7 +73,8 @@ vigil's E6 pair carry `threads = 8`; the rest state no worker count.
   casters, a shadowed spot, SSR and fog under a `Rain` at every default, `Plan/rain-and-wet.md` D36), gating `[passes]`
   `rain_occlusion`, `scene` and `transparents` plus `gpu_frame_ms`. Measured on the RTX 3090 2026-11-22: `rain_occlusion` 0.002
   (flat 0.05 ceiling), `scene` 0.2529, `transparents` 0.0492, `gpu_frame_ms` 1.3222 (ceiling 2.65); `extract_ms` (~0.027) is
-  deliberately absent. The macOS twin is owed.
+  deliberately absent. Its twin `pinned-apple-m4-rain-heavy.toml` was measured on the M4 2026-11-22: `gpu_frame_ms` 9.4276
+  (ceiling 19.0), the rain ~3.1 ms of it (mostly `transparents`, blended overdraw).
 - `budgets/pinned-rtx3090-physics-settle.toml` / `budgets/pinned-apple-m4-physics-settle.toml` — the physics
   settle prime's, checked by `settle_bench.rs` (ignored; it reads the host's `pinned-<box>-physics-settle.toml`
   through `platform_budget`) on a primed 2,000-body jointed town. `[systems_max] physics_step` 12.0 and

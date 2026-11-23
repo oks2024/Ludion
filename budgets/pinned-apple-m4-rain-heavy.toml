@@ -1,0 +1,36 @@
+# Rain budget — pinned Apple M4 mac mini, 1920x1080, release.
+#
+# Regression tripwires, NOT performance goals. Each ceiling below is roughly twice the median
+# measured by `ludion profile --scene … --frames 120` in `--release` on the pinned Apple M4, so a
+# failure means a real, reproducible slowdown — never machine noise. All values are milliseconds.
+# Re-calibrate deliberately (a re-bless event) if a cost becomes intended and permanent —
+# `ludion explain L4005`. The macOS twin of `pinned-rtx3090-rain-heavy.toml`.
+#
+# **One budget file, one calibration scene.** This one is `examples/gallery/rain-heavy.yaml`
+# (`Plan/rain-and-wet.md` D36): a hut and yard with 24 casting cubes, a shadowed sodium spot, a coat
+# puddle, SSR and light fog, under a `Rain` at every default. Checked with:
+#
+#   ludion profile --scene examples/gallery/rain-heavy.yaml --frames 120 --check budgets/pinned-apple-m4-rain-heavy.toml
+#
+# Measured 2026-11-22 over four 120-frame runs at 1920x1080 on a quiet box, sim.threads 8. Metal pass
+# rows carry the smear the other M4 files describe (several unrelated passes read 2.1-2.4 ms here),
+# so `gpu_frame_ms` is the figure to trust; the pass ceilings are tripwires on their own readings.
+#
+# The rain's share, from two runs of the same scene with `intensity: 0`: `gpu_frame_ms` 6.31 / 6.25
+# against 9.42, so the whole rain is ~3.1 ms here (~0.25 ms on the RTX 3090; the request's target is
+# 0.8 ms at 1080p). Most of it is `transparents` (0.75 -> 2.51, the streaks and splashes, blended
+# overdraw on a tile-based GPU), then `scene` (1.33 -> 1.76, wetness and ripples) and
+# `rain_occlusion` (0.16).
+
+# `gpu_frame_ms` over four runs: 9.4089 / 9.4339 / 9.4213 / 9.4407, median 9.4276, ceiling 19.0.
+gpu_frame_ms = 19.0   # 9.4276 measured (median of four)
+
+# `rain_occlusion` 0.1601 / 0.1613 / 0.1614 / 0.1613 (a Metal reading, not the 3090's 0.002), ceiling 0.33.
+# `scene` 1.7596 / 1.7588 / 1.7595 / 1.7609, median 1.7596, ceiling 3.5.
+# `transparents` 2.5256 / 2.5008 / 2.5067 / 2.5149, median 2.5108, ceiling 5.0.
+[passes]
+rain_occlusion = 0.33   # 0.1613 measured (median of four)
+scene = 3.5             # 1.7596 measured (median of four)
+transparents = 5.0      # 2.5108 measured (median of four)
+
+# Deliberately absent, as on the 3090: `extract_ms` and `threads`, the other passes, and `[systems]`.
