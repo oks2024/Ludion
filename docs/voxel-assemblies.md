@@ -13,6 +13,8 @@ An assembly is one file that owns **one palette**, places lean part files into o
 grid, and declares the part hierarchy. Its **rest pose is the assembled grid**: what a sheet shows,
 every `check-scene` view analyses, and renders when no clip plays.
 
+An assembly can instead wrap a skinned mesh (`mesh:` in place of `parts:`): `ludion docs character-animation`.
+
 ## The loop
 
 1. **Author** `models/x.assembly.yaml` and one `parts/*.part.yaml` per part. Part and clip paths are

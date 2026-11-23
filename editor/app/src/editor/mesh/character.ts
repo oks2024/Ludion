@@ -1,5 +1,5 @@
-// The Characters library's paths and its document reader, as pure data: where a `kind: character`
-// document lives, how a scene names one, and which clips it binds.
+// The Characters library's paths and its document reader, as pure data: where a skinned `kind: assembly`
+// (`mesh:`) document lives, how a scene names one, and which clips it binds.
 //
 // THE SAME CONTENT ROOT AS THE MESHES. A character's `Mesh.shape` is `{ character: <ref> }`, resolved
 // against the stage session's content root exactly like a mesh asset, so its reference is its listing
@@ -11,7 +11,7 @@
 //
 // Pure: no React, no Tauri, no DOM.
 
-import type { ClipBinding } from '../voxel/assembly';
+import { readClipBinding, type ClipBinding } from '../voxel/assembly';
 import { mapEntries, splitLines } from '../voxel/doc';
 import { join } from '../voxel/stage';
 import { displayName } from '../voxel/tree';
@@ -30,7 +30,7 @@ export function characterDisplayName(relPath: string): string {
   return displayName(relPath, CHARACTER_EXT);
 }
 
-/** A `kind: character` document read positionally. */
+/** A skinned `kind: assembly` (`mesh:`) document read positionally. */
 export interface CharacterDoc {
   readonly name: string | null;
   /** The skinned mesh's path as authored, relative to the character file. */
@@ -39,7 +39,7 @@ export interface CharacterDoc {
   readonly clips: readonly ClipBinding[];
 }
 
-/** Reads a `kind: character` document. Total: never throws, never validates. */
+/** Reads a skinned `kind: assembly` (`mesh:`) document. Total: never throws, never validates. */
 export function parseCharacterDoc(source: string): CharacterDoc {
   const raw = splitLines(source);
   let name: string | null = null;
@@ -55,15 +55,9 @@ export function parseCharacterDoc(source: string): CharacterDoc {
         mesh = entry.inline === null ? null : entry.inline.text;
         break;
       case 'clips':
-        clips = mapEntries(raw, entry.body[0], entry.body[1]).map((clip) => {
-          const fields = mapEntries(raw, clip.body[0], clip.body[1]);
-          const file = fields.find((field) => field.key === 'clip')?.inline?.text ?? '';
-          const text = fields.find((field) => field.key === 'speed')?.inline?.text;
-          const speed = text === undefined || text === '' ? Number.NaN : Number(text);
-          return Number.isFinite(speed) && speed > 0
-            ? { name: clip.key, file, speed }
-            : { name: clip.key, file };
-        });
+        clips = mapEntries(raw, entry.body[0], entry.body[1]).map((clip) =>
+          readClipBinding(raw, clip),
+        );
         break;
       default:
         break;

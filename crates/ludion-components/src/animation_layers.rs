@@ -1,4 +1,4 @@
-//! The [`AnimationLayers`] component: override and additive clip layers over a skinned character's
+//! The [`AnimationLayers`] component: override and additive clip layers over a skinned assembly's
 //! base [`Animation`](crate::Animation) (`Plan/animation-layers.md`, Neon Shroud request 0007).
 
 use ludion_core::codes::code;
@@ -98,7 +98,7 @@ impl Default for AnimationLayer {
     }
 }
 
-/// Override and additive clip layers over a skinned `kind: character`'s base `Animation`.
+/// Override and additive clip layers over a skinned `kind: assembly`'s base `Animation`.
 ///
 /// Layers are evaluated in list order over the base pose (at most four, `L1670`). An override layer
 /// blends toward its clip by `weight` × the bone mask's weight for each joint; a joint the clip has no

@@ -5,7 +5,7 @@ description: Masks, AnimationLayers, blend spaces and the AnimGraph state graph 
 # Animation layers
 
 Play a second clip over the base `Animation` on part of the body — carry a body over a run, aim over
-a walk, lean around a corner. Two pieces: a **mask** in the `kind: character` document says which
+a walk, lean around a corner. Two pieces: a **mask** in the skinned `kind: assembly` document says which
 joints a layer touches, and an **`AnimationLayers`** component says which clip plays under which mask
 and how strongly. Base playback, crossfade and events stay in `ludion docs character-animation`.
 
@@ -13,7 +13,7 @@ and how strongly. Base playback, crossfade and events stay in `ludion docs chara
 
 ```yaml
 format: 1
-kind: character
+kind: assembly
 mesh: ../meshes/guard.mesh.yaml
 clips:
   run:
@@ -39,8 +39,8 @@ masks:
 - `joints` lists skin joints (block list; at least one, each once). `descendants: true` makes every
   joint under a listed one inherit its nearest listed ancestor's weight. Every other joint weighs 0.
 - `weights` is one number in `[0, 1]` per listed joint, in order; omitted means 1.
-- A joint the mesh lacks is `L1200` (pointer `/masks/<name>/joints/<i>`, help names the nearest joint);
-  a malformed mask or a weight outside `[0, 1]` is `L1199`.
+- A joint the mesh lacks is `L1138` (pointer `/masks/<name>/joints/<i>`, help names the nearest joint);
+  a malformed mask or a weight outside `[0, 1]` is `L1137`.
 
 ## Layers
 
@@ -108,7 +108,7 @@ target and `play_layer` of the current clip write nothing.
 
 ## Blend spaces
 
-A `blends:` map in the character document (or the assembly document, `ludion docs voxel-animation`) mixes point clips by a parameter — a walk-to-run space, a
+A `blends:` map in the skinned assembly document (or a voxel one, `ludion docs voxel-animation`) mixes point clips by a parameter — a walk-to-run space, a
 strafe cross. `Animation.clip` (and a crossfade's `from`) may name a blend; `Animation.params` drives it.
 
 ```yaml
@@ -151,7 +151,7 @@ blends:
 - **Assemblies.** An assembly's `blends:` follows the same rules, with its clips bound at speed 1 and
   `sync` read from the clip document's own events; errors are `L1137`/`L1138`.
 
-Errors: `L1199` for a malformed `blends:` entry, `L1200` for a duplicate position, a name clash,
+Errors: `L1137` for a malformed `blends:` entry, `L1138` for a duplicate position, a name clash,
 collinear 2D points, an unbound or non-looping point clip, or a `sync` event a point clip lacks.
 
 ## State graph

@@ -341,7 +341,7 @@ ik:
   target out of reach leaves the limb straight or folded, aimed at it (no pole vector). `weight` blends from
   the animated pose to the solved one.
 - No `IkTargets`, no matching entry or weight 0 poses byte for byte as without IK. Not in the ragdoll
-  switch or `kind: character` skins; the model sheet solves it only for `--look`/`--ik`.
+  switch or skinned `kind: assembly` skins; the model sheet solves it only for `--look`/`--ik`.
 - `check-scene <assembly>` lists each entry: `ik hand_r: chain upper-arm-r -> lower-arm-r, effector [..],
   hinge [..] bend +1` (the hinge the solver uses, a defaulted one included) and `ik look: look-at head_look,
   forward [..], yaw ±70, pitch ±40`. `--json` adds `"ik"` only when there are entries.
@@ -380,7 +380,7 @@ ground:
   ground; it never raises the root.
 - An active `IkTargets` goal on a grounded chain wins over the ground.
 - Presentation only: no foot pitch to the slope, no moving platforms, not in the model sheet, the ragdoll
-  switch or `kind: character` skins. Sockets on a grounded part follow it; the sim keeps the rest socket.
+  switch or skinned `kind: assembly` skins. Sockets on a grounded part follow it; the sim keeps the rest socket.
 - `check-scene` ends a grounded chain's row with `, ground` and prints `ground: max_adjust 3, root_drop`.
 - Cost: the budget is at most 0.5 ms of extract for 32 grounded, layered, IK'd assemblies; `cargo test -p ludion-engine --release --test it -- assembly_anim_bench --ignored --nocapture` prints it by feature.
 
@@ -456,7 +456,7 @@ outside the mesh content hash, so nothing is re-uploaded to the GPU.
 ## Next
 
 - `ludion docs voxel-assemblies` — the model the clips address: parts, pivots, the humanoid names.
-- `ludion docs character-animation` — skinned characters: the `kind: character` document, clips, `crossfade`, `AnimationEvents`.
+- `ludion docs character-animation` — skinned characters: the skinned `kind: assembly` document, clips, `crossfade`, `AnimationEvents`.
 - `ludion docs sprite-animation` — the same `Animation` component over a `Sprite`'s atlas flipbook.
 - `ludion docs paired-actions` — the `kind: paired` document: two assemblies aligned, with events and contact gaps checked.
 - `ludion docs prefab-animation` — imported rigid node clips on a prefab instance.

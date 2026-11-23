@@ -1,7 +1,7 @@
 //! Blend-space phase: the `blend_clocks` sim system and the event crossings a blend emits
 //! (`Plan/animation-layers.md` decisions 13-19).
 //!
-//! A character whose `Animation.clip` names a blend of its `kind: character` document plays every
+//! A character whose `Animation.clip` names a blend of its skinned `kind: assembly` document plays every
 //! point clip on one shared normalized phase. [`blend_clocks`] integrates that phase, in unwrapped
 //! cycles, into a hashed [`BlendClock`] on the entity; `extract` poses from it and
 //! `animation_events` fires the dominant point's events on its crossings. The rate is

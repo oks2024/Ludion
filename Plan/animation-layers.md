@@ -544,7 +544,7 @@ share one driver shape.
   stairs).
 - Accepted. An active `IkTargets` goal on a grounded chain wins over ground.
 - Accepted, scheduled (its own arc after the Neon Shroud queue empties). `animation-clips` decision 10's merge trigger fired (a character feature assemblies also want); merging
-  `kind: character` and `kind: assembly` is not done here.
+  `kind: character` and `kind: assembly` is not done here. Done: `Plan/character-assembly-merge.md` W1–W3 (2026-11-23).
 
 ## Non-goals
 

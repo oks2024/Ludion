@@ -1,11 +1,51 @@
 # Plan: Character–assembly merge — one document kind for "a model plus its clips"
 
-> Status: **planned (2026-11-22).** No wave shipped. The design was written from the tree at Lore 2514; re-grep
-> before editing.
+> Status: **W1–W3 mechanized (2026-11-23); decisions 8 and 12 Proposed, owner ruling owed.** The design was
+> written from the tree at Lore 2514; re-grep before editing.
 
 ## Status
 
-Nothing shipped yet. Each wave appends its file table and its verify line here.
+Nothing was re-recorded or re-blessed by W1 or W2; W3 re-blessed `component_schemas.json` (description text only).
+
+### W1 — the merged document (Lore 2517)
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/assembly.rs` | `mesh:` body, clip mapping form (`clip`, `speed`, `events`; scalar stays canonical), `check_assembly_mesh_clips`, `L1246` for a `kind: character` document |
+| `crates/ludion-core/src/codes.rs` | `L1246` `CHARACTER_KIND_MERGED` |
+| `crates/ludion-engine/src/assembly_mesh.rs` | the voxel loader refuses a skinned assembly |
+| `crates/ludion-scene/src/{lib,envelope}.rs`, `crates/ludion-import/src/lib.rs` | exports and the kind envelope |
+| `crates/ludion-scene/tests/assembly_roundtrip.rs` | skinned body, mapping clips, byte-identical voxel re-emit |
+
+Nothing migrated; no hash, image or schema moved.
+
+### W2 — the switch and migration (Lore 2518)
+
+| file | role |
+|---|---|
+| `crates/ludion-engine/src/{character,asset_cache,model_sheet,mesh_check}.rs` | the character loader, model sheet and cache read a skinned assembly through `check_assembly` |
+| `crates/ludion-cli/src/check_scene.rs` | a skinned assembly gets the character report; `kind: character` is `L1246` |
+| `crates/ludion-scene/src/{character,lib,kinds}.rs` | the character module deleted; `L1199`/`L1200` retire |
+| `examples/gallery/characters/*.character.yaml`, `fuzz/src/lib.rs`, inline fixtures | migrated to `kind: assembly`, paths unchanged |
+| `crates/ludion-scene/tests/skinned_assembly_roundtrip.rs` | the old character round-trip, migrated |
+
+The character-cycle trace, the skinned ragdoll and physics-horde replays and the mannequin goldens pass
+unchanged. Accepted deviations: the model-sheet kind-table test accepts `L1246`; a skinned clip-track pointer is
+`/clips/<n>`; the fuzz `CHECK_ONLY` list holds `character`.
+
+### W3 — docs and editor text
+
+| file | role |
+|---|---|
+| `docs/{character-animation,animation-layers,voxel-animation,voxel-assemblies,components,components-fx}.md` and their embedded mirrors | skinned assembly wording, `L1137`/`L1138` for `L1199`/`L1200`, the `L1246` paragraph |
+| `dev-docs/{assembly-animation,engine-layout}.md` | the two assembly bodies |
+| `crates/ludion-components/src/{lib,animation_layers}.rs`, `crates/ludion-engine/src/{blend_clock,blend_space}.rs` | doc comments; `component_schemas.json` re-blessed, description text only |
+| `editor/app/src/editor/voxel/assembly.ts` | `readClipBinding`: one reader for scalar and mapping clip entries, used by both parsers (fixes the Models view losing the mannequin's scalar clips) |
+| `editor/app/src/editor/mesh/character.ts`, `ModelsView.tsx`, `README.md` and the two vitest files | text, and the scalar/mapping cases |
+
+Verify: `node scripts/check.mjs --frontend-only`; scoped check over docs, dev-docs, editor, the three crates and
+`Plan`; `--lib` for `ludion-components` and `ludion-engine`; `component_schema_snapshot`; `cargo build -p ludion-cli`;
+`node scripts/privacy-canary.mjs`.
 
 ## Trigger
 

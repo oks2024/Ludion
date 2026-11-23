@@ -8,8 +8,8 @@
 // `Mesh.shape.voxel`. Nothing about the stage is sculpt-shaped; only the library is.
 //
 // THREE LIBRARIES, ONE SUBJECT. Beside the sculpts it lists the project's `kind: mesh` documents —
-// imported and generated geometry, the other `Mesh.shape` asset kind — and its `kind: character`
-// documents, a skinned mesh with its bound clips (`Mesh.shape.character`). The stage holds exactly one
+// imported and generated geometry, the other `Mesh.shape` asset kind — and its skinned `kind: assembly`
+// documents (`mesh:`), a skinned mesh with its bound clips (`Mesh.shape.character`). The stage holds exactly one
 // subject, so the three browsers share one selection.
 //
 // A CHARACTER IS PREVIEWED THROUGH THE VOXEL ARTIST'S CLIP STRIP. Its clips are read from the

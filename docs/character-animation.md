@@ -1,26 +1,29 @@
 ---
-description: Skinned characters: kind: character, clips, crossfade, AnimationEvents, crowd posing cost
+description: Skinned assemblies: kind: assembly with mesh, clips, crossfade, AnimationEvents, crowd cost
 ---
 
 # Character animation
 
-**Scope:** making a skinned mesh move under game code — the `kind: character` document, the clips
+**Scope:** making a skinned mesh move under game code — the skinned `kind: assembly` document, the clips
 `ludion import` produces from Blender, `crossfade`, and `AnimationEvents`. The `Animation` component's
 fields and defaults are owned by `ludion docs components`; the clip strips and their flags by
 `ludion docs voxel-animation`; the rig itself by `ludion docs blender-craft`.
 
-## The character document
+## The skinned assembly document
 
-A `kind: character` document binds a skinned mesh to named clips; an entity draws it with
-`Mesh.shape: { character: "characters/hero.character.yaml" }`, and `Animation.clip` names a key of
-its `clips:`. Example: `examples/gallery/characters/mannequin.character.yaml`; run
+A `kind: assembly` document with `mesh:` (instead of voxel `parts:`) binds a skinned mesh to named clips.
+An entity draws it with `Mesh.shape: { character: "characters/hero.character.yaml" }` (`{ assembly: … }`
+draws a voxel one), and `Animation.clip` names a key of its `clips:`. `kind: character` was merged into
+`kind: assembly`: a document still saying it is `L1246` — change the `kind:` line. Example:
+`examples/gallery/characters/mannequin.character.yaml`; run
 `cargo run -p ludion-engine --example character_clips` to print each clip's effective values.
 
 ```yaml
 format: 1
-kind: character
+kind: assembly
 mesh: ../meshes/skin-mannequin.mesh.yaml
 clips:
+  idle: ../clips/idle.anim.yaml
   run:
     clip: ../clips/run.anim.yaml
     speed: 1.2
@@ -29,13 +32,14 @@ clips:
         name: foot_l
 ```
 
-- `mesh` and each `clip` resolve relative to the character file; `..` is legal, an absolute, drive or device path is refused (`L1200`). A plain
+- A clip entry is the scalar path, canonical unless it carries an overlay (`speed`, `events`).
+- `mesh` and each `clip` resolve relative to the assembly file; `..` is legal, an absolute, drive or device path is refused (`L1138`). A plain
   `{ asset: … }` of the same mesh shares one GPU upload.
 - `events` overlays a clip that has none of its own (an imported clip never does); overlay events
-  on a clip that has its own are `L1200`, as are a mesh with no `joints:` and a clip track naming
+  on a clip that has its own are `L1138`, as are a mesh with no `joints:` and a clip track naming
   a joint the mesh lacks. An overlay event past the clip's duration, or at it on a looping clip (a loop's end is its
   start), is `L1198`; a malformed
-  document is `L1199`.
+  document is `L1137`.
 - **Playback.** An entity with `Animation.clip` naming a bound clip poses the skin from it: a track
   binds to the joint of the same name, a joint with no track stays at rest, and a channel a track
   leaves out keeps its bind value. Rotation slerps, so
@@ -47,7 +51,7 @@ clips:
 - Editing the character, its mesh or any clip re-reads it (the pose; `AnimationEvents` picks up retimed events at the next load, restore or scene switch). `ludion check-scene <file>` loads and
   reports it, with a `contact <joint>: height min … max …` line per clip for each ground-contact
   joint (a leaf joint at the mesh's floor at rest — the feet), sampled at 30 Hz in
-  mesh units; `SkinBone` parts can name a character's skin.
+  mesh units; `SkinBone` parts can name a skinned assembly's skin.
 
 ## Clips
 
@@ -65,7 +69,7 @@ clips:
 
 ## Layers
 
-A character document may declare `masks:` (named joint sets), and an entity may carry `AnimationLayers` to play
+A skinned assembly may declare `masks:` (named joint sets), and an entity may carry `AnimationLayers` to play
 masked override or additive clips over its base `Animation`; `ludion docs animation-layers`.
 
 ## Crossfade
@@ -118,7 +122,7 @@ masked override or additive clips over its base `Animation`; `ludion docs animat
   `.query::<(&Animation, &Mesh)>()`, `.query::<(&Animation, &Sprite)>()` and `.query::<(&Animation, &PrefabInstance)>()` (observed even with no prefab in the world; a missing one is `L1126`); a consumer reads
   `events.fired(entity, clip, name)` the same tick.
 - A one-shot clip emits an implicit `end`; a clip's own events come from the clip or the character's
-  `events:` overlay (`L1198` for a malformed one, `L1200` for an overlay on a clip that has its own).
+  `events:` overlay (`L1198` for a malformed one, `L1138` for an overlay on a clip that has its own).
   Only the incoming clip of a crossfade emits.
 - A `t: 0` event fires once per clip start, never lost or doubled: on the start tick for a clip stamped by a system
   registered before `animation_events`, on the next tick (with its first clip time) for a later one (a reaction to `end`).

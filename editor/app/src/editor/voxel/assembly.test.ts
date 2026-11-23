@@ -114,6 +114,16 @@ describe('parseAssemblyDoc — the stage rig', () => {
     ]);
   });
 
+  it('reads a mapping-form clip entry through its clip field', () => {
+    const doc = parseAssemblyDoc(
+      'kind: assembly\nclips:\n  walk: a.anim.yaml\n  wave:\n    clip: b.anim.yaml\n    speed: 2\n',
+    );
+    expect(doc.clips).toEqual([
+      { name: 'walk', file: 'a.anim.yaml' },
+      { name: 'wave', file: 'b.anim.yaml', speed: 2 },
+    ]);
+  });
+
   it('is total: an empty and a half-typed document parse to nothing, never a throw', () => {
     expect(parseAssemblyDoc('')).toEqual({
       name: null,

@@ -163,6 +163,7 @@ the clip.
     assembly is already the voxel model's hand-authored document. **Trigger to merge the two:** a
     character feature that assemblies also want.
     Amended 2026-11-19 (owner): the trigger fired; the merge is accepted as its own arc after the Neon Shroud queue empties, see Plan/animation-layers.md §Owner rulings (2026-11-19).
+    Amended 2026-11-23: merged — a skinned model is `kind: assembly` with `mesh:` (`Plan/character-assembly-merge.md`).
 11. **Imported motion is derived; the character carries a per-clip overlay.** An imported clip bears
     `generated_from` and is drift-gated. A character's clip entry may add `events:` and `speed`.
     Import ignores Blender markers, so a derived clip never carries events. A hand-authored clip

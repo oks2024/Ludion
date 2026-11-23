@@ -1,5 +1,5 @@
 //! Blend spaces resolved against a rig's bound clips (`Plan/animation-layers.md` decisions 13-19 and
-//! 31), shared by `kind: character` and `kind: assembly`: the resolver is neutral over the rig,
+//! 31), shared by the skinned and voxel `kind: assembly` bodies: the resolver is neutral over the rig,
 //! taking each bound clip's `(name, duration, speed, events)`.
 
 use ludion_scene::{AnimationEvent, BlendAt, BlendSpace};

@@ -60,12 +60,22 @@ describe('parseCharacterDoc — total', () => {
 
   it('drops a speed that is not finite and positive', () => {
     const doc = parseCharacterDoc(
-      'kind: character\nclips:\n  a:\n    clip: a.anim.yaml\n    speed: 0\n  b:\n    clip: b.anim.yaml\n    speed: nope\n  c:\n    speed: 2\n',
+      'kind: assembly\nclips:\n  a:\n    clip: a.anim.yaml\n    speed: 0\n  b:\n    clip: b.anim.yaml\n    speed: nope\n  c:\n    speed: 2\n',
     );
     expect(doc.clips).toEqual([
       { name: 'a', file: 'a.anim.yaml' },
       { name: 'b', file: 'b.anim.yaml' },
       { name: 'c', file: '', speed: 2 },
+    ]);
+  });
+
+  it('reads a scalar and a mapping entry side by side', () => {
+    const doc = parseCharacterDoc(
+      'kind: assembly\nclips:\n  idle: idle.anim.yaml\n  run:\n    clip: run.anim.yaml\n    speed: 1.5\n',
+    );
+    expect(doc.clips).toEqual([
+      { name: 'idle', file: 'idle.anim.yaml' },
+      { name: 'run', file: 'run.anim.yaml', speed: 1.5 },
     ]);
   });
 });

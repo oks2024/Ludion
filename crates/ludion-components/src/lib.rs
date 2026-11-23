@@ -409,7 +409,7 @@ fn atlas_reference_diagnostics(present: impl Fn(&str) -> bool, prefix: &str) -> 
 /// shape:
 ///   sculpt: "sculpts/idol.sculpt.yaml"   # an implicit-surface model
 /// shape:
-///   character: "characters/hero.character.yaml"  # a skinned mesh bound to named clips
+///   character: "characters/hero.character.yaml"  # a skinned assembly: a mesh bound to named clips
 /// shape:
 ///   assembly_part:                       # one part of an assembly, drawn on its own entity
 ///     assembly: "models/player.assembly.yaml"
@@ -424,8 +424,9 @@ fn atlas_reference_diagnostics(present: impl Fn(&str) -> bool, prefix: &str) -> 
 /// names a `*.assembly.yaml` document (`ludion_scene::check_assembly`) plus the part files it
 /// declares, each meshed on its own; `sculpt` names a `*.sculpt.yaml` document
 /// (`ludion_scene::check_sculpt`), its primitive parts meshed as one smooth surface; `character`
-/// names a `*.character.yaml` document (`ludion_scene::check_character`) whose skinned mesh is
-/// drawn like an `asset` and whose `clips:` map `Animation.clip` resolves through. All resolve to
+/// names a skinned `kind: assembly` document (`mesh:` in place of `parts:`, `ludion_scene::check_assembly`;
+/// by convention `*.character.yaml`) whose skinned mesh is drawn like an `asset` and whose `clips:`
+/// map `Animation.clip` resolves through. All resolve to
 /// vertex data at extract time. A voxel model's origin is bottom-centered (it sits on the ground) and
 /// so are an assembly's assembled grid and a sculpt's surface; `Mesh.color` still tints them, and
 /// `Transform.scale` sizes them (1 voxel = 1 unit; a sculpt is authored in world units).
@@ -453,8 +454,8 @@ pub enum MeshSource {
     /// primitive parts folded into one signed distance field, meshed at load into a smooth triangle
     /// surface with blended palette colors and materials.
     Sculpt(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
-    /// A character document at this content-root-relative path (`*.character.yaml`): it names a
-    /// skinned mesh and binds short clip names to animation clips. The entity draws the skinned mesh
+    /// A skinned assembly document at this content-root-relative path (`kind: assembly` with `mesh:`,
+    /// by convention `*.character.yaml`): it names a skinned mesh and binds short clip names to animation clips. The entity draws the skinned mesh
     /// (a `SkinBone` part can name it), and `Animation.clip` names a key of the document's `clips:`.
     Character(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
     /// One named part of an assembly document, drawn on its own entity rather than the whole model

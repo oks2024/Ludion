@@ -64,8 +64,24 @@ export interface AssemblyPart {
 export interface ClipBinding {
   readonly name: string;
   readonly file: string;
-  /** A character clip's overlay `speed` (clip ticks per sim tick); assemblies leave it unset. */
+  /** A mapping-form entry's overlay `speed` (clip ticks per sim tick); a scalar entry leaves it unset. */
   readonly speed?: number;
+}
+
+/** Reads one `clips:` entry in either canonical spelling: a scalar (`idle: ../clips/idle.anim.yaml`)
+ *  or a mapping (`clip:` plus an optional `speed:`). `speed` is kept only when finite and positive.
+ *  Total: a malformed entry reads as an empty `file`. */
+export function readClipBinding(raw: readonly RawLine[], clip: MapEntryRead): ClipBinding {
+  if (clip.inline !== null) {
+    return { name: clip.key, file: clip.inline.text };
+  }
+  const fields = mapEntries(raw, clip.body[0], clip.body[1]);
+  const file = fields.find((field) => field.key === 'clip')?.inline?.text ?? '';
+  const text = fields.find((field) => field.key === 'speed')?.inline?.text;
+  const speed = text === undefined || text === '' ? Number.NaN : Number(text);
+  return Number.isFinite(speed) && speed > 0
+    ? { name: clip.key, file, speed }
+    : { name: clip.key, file };
 }
 
 /** An assembly document read positionally. Every field is best-effort; see the module doc. */
@@ -114,10 +130,9 @@ export function parseAssemblyDoc(source: string): AssemblyDoc {
         parts = readParts(raw, entry);
         break;
       case 'clips':
-        clips = mapEntries(raw, entry.body[0], entry.body[1]).map((clip) => ({
-          name: clip.key,
-          file: clip.inline?.text ?? '',
-        }));
+        clips = mapEntries(raw, entry.body[0], entry.body[1]).map((clip) =>
+          readClipBinding(raw, clip),
+        );
         break;
       default:
         break;
