@@ -7,7 +7,7 @@
 //! - **Masked.** An upper-body override moves the arms and leaves the legs bit-identical.
 //! - **Steered.** A weight ramp is between its endpoints mid-fade and lands on the target; a
 //!   snapshot restored mid-fade reproduces the palette; a socket follows the layered pose.
-//! - **Refused.** A mask naming a joint the mesh lacks is `L1200`.
+//! - **Refused.** A mask naming a joint the mesh lacks is `L1138`.
 //!
 //! Runs over a scratch copy of the gallery mannequin in the system temp directory.
 
@@ -30,7 +30,7 @@ const LEGS: std::ops::Range<usize> = 7..11;
 /// The mannequin plus an `upper_body` mask (the torso and everything under it).
 const LAYERED_CHARACTER: &str = "\
 format: 1
-kind: character
+kind: assembly
 name: layered
 mesh: \"../meshes/skin-mannequin.mesh.yaml\"
 clips:
@@ -49,7 +49,7 @@ masks:
 
 const BAD_MASK_CHARACTER: &str = "\
 format: 1
-kind: character
+kind: assembly
 name: bad
 mesh: \"../meshes/skin-mannequin.mesh.yaml\"
 clips:
@@ -398,7 +398,7 @@ fn a_mask_naming_a_missing_joint_is_l1200() {
     assert!(
         errors
             .iter()
-            .any(|d| d.code == code::CHARACTER_DATA_CONSISTENCY
+            .any(|d| d.code == code::ASSEMBLY_DATA_CONSISTENCY
                 && d.path.as_deref() == Some("/masks/upper_body/joints/0")),
         "{errors:?}"
     );

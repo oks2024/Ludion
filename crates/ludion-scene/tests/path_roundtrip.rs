@@ -110,7 +110,7 @@ fn envelope_errors_are_l1213() {
             .iter()
             .any(|d| d.code.as_str() == "L1213")
     );
-    let wrong_kind = CANONICAL.replace("kind: path", "kind: character");
+    let wrong_kind = CANONICAL.replace("kind: path", "kind: sprite");
     assert!(
         structure_errors(&wrong_kind)
             .iter()

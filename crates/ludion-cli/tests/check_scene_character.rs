@@ -1,5 +1,5 @@
-//! Integration tests for `ludion check-scene` on `kind: character` documents
-//! (`Plan/animation-clips.md`): the gallery mannequin checks clean, and a bad overlay is `L1200`.
+//! Integration tests for `ludion check-scene` on `kind: assembly` documents
+//! (`Plan/animation-clips.md`): the gallery mannequin checks clean, and a bad overlay is `L1138`, a retired `kind: character` is `L1246`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -47,7 +47,7 @@ fn the_gallery_character_checks_clean() {
 
 /// An overlay event past its clip's duration is a data error at the character.
 #[test]
-fn a_bad_overlay_is_l1200() {
+fn a_bad_overlay_is_l1138() {
     let dir = std::env::temp_dir().join(format!("ludion-check-character-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("characters")).unwrap();
@@ -71,14 +71,14 @@ fn a_bad_overlay_is_l1200() {
     let character = dir.join("characters/hero.character.yaml");
     std::fs::write(
         &character,
-        "format: 1\nkind: character\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  run:\n    clip: ../clips/run.anim.yaml\n    events:\n      - t: 0.1\n        name: step\n",
+        "format: 1\nkind: assembly\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  run:\n    clip: ../clips/run.anim.yaml\n    events:\n      - t: 0.1\n        name: step\n",
     )
     .unwrap();
 
     let output = run_check_scene(&character);
     assert!(!output.status.success(), "expected a non-zero exit");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("L1200"), "stderr was: {stderr}");
+    assert!(stderr.contains("L1138"), "stderr was: {stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -106,7 +106,7 @@ fn a_huge_clip_duration_is_l1142() {
     let character = dir.join("characters/hero.character.yaml");
     std::fs::write(
         &character,
-        "format: 1\nkind: character\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  run:\n    clip: ../clips/run.anim.yaml\n",
+        "format: 1\nkind: assembly\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  run:\n    clip: ../clips/run.anim.yaml\n",
     )
     .unwrap();
 
@@ -114,5 +114,29 @@ fn a_huge_clip_duration_is_l1142() {
     assert!(!output.status.success(), "expected a non-zero exit");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("L1142"), "stderr was: {stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The retired `kind: character` is `L1246`, which names the one-line fix.
+#[test]
+fn a_kind_character_document_is_l1246() {
+    let dir = std::env::temp_dir().join(format!(
+        "ludion-check-character-retired-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let character = dir.join("hero.character.yaml");
+    std::fs::write(
+        &character,
+        "format: 1\nkind: character\nmesh: ../meshes/skin-mannequin.mesh.yaml\n",
+    )
+    .unwrap();
+
+    let output = run_check_scene(&character);
+    assert!(!output.status.success(), "expected a non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1246"), "stderr was: {stderr}");
+    assert!(stderr.contains("kind: assembly"), "stderr was: {stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }

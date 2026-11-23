@@ -199,7 +199,7 @@ fn every_kind_prints_its_summary_object() {
         // The gallery mannequin binds idle, jump, run and spin.
         (
             "../../examples/gallery/characters/mannequin.character.yaml",
-            "character",
+            "assembly",
             "name",
             json!("mannequin"),
         ),

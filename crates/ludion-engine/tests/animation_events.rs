@@ -132,7 +132,7 @@ tracks:
 /// its `jump` (0.8 s one-shot) with a `land` event.
 const CHARACTER: &str = "\
 format: 1
-kind: character
+kind: assembly
 name: fast
 mesh: \"../meshes/skin-mannequin.mesh.yaml\"
 clips:

@@ -717,7 +717,7 @@ impl AssetCache {
     /// so editing the mesh or any clip re-reads the character.
     ///
     /// # Errors
-    /// `L1101`/`L1199`/`L1200` (and the mesh's and clips' own codes) if a *missing* entry cannot be
+    /// `L1101`/`L1137`/`L1138` (and the mesh's and clips' own codes) if a *missing* entry cannot be
     /// read, parsed, or validated; a cached entry never errors.
     pub(crate) fn load_character(
         &mut self,
@@ -2337,7 +2337,7 @@ tracks:
         let rel = "characters/hero.character.yaml";
         std::fs::write(
             dir.join(rel),
-            "format: 1\nkind: character\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  idle:\n    clip: ../clips/idle.anim.yaml\n",
+            "format: 1\nkind: assembly\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  idle:\n    clip: ../clips/idle.anim.yaml\n",
         )
         .unwrap();
 
@@ -2455,7 +2455,7 @@ tracks:
     }
 
     /// One dependent failing to re-read must not leave a later dependent of the same file stale: the
-    /// mesh is valid but renames a joint the character's clip tracks, so the character fails `L1200`
+    /// mesh is valid but renames a joint the character's clip tracks, so the character fails `L1138`
     /// while the mesh entry itself must still be re-read.
     #[test]
     fn a_failed_reload_still_re_reads_every_other_dependent() {
@@ -2472,7 +2472,7 @@ tracks:
         let rel = "characters/hero.character.yaml";
         std::fs::write(
             dir.join(rel),
-            "format: 1\nkind: character\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  idle:\n    clip: ../clips/idle.anim.yaml\n",
+            "format: 1\nkind: assembly\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  idle:\n    clip: ../clips/idle.anim.yaml\n",
         )
         .unwrap();
 
@@ -2492,7 +2492,7 @@ tracks:
         let error = cache
             .reload(ludion_assets::AssetRoot::content(&dir), mesh)
             .unwrap_err();
-        assert_eq!(error.code.as_str(), "L1200", "{error:?}");
+        assert_eq!(error.code.as_str(), "L1138", "{error:?}");
         assert!(
             !cache.contains_character(rel),
             "the failed entry is dropped"
@@ -3796,7 +3796,7 @@ parts:
         write_file(
             dir,
             CHARACTER,
-            "format: 1\nkind: character\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  idle:\n    clip: ../clips/idle.anim.yaml\n",
+            "format: 1\nkind: assembly\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  idle:\n    clip: ../clips/idle.anim.yaml\n",
         );
     }
 

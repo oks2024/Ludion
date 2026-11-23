@@ -1,12 +1,14 @@
-//! Loading a `kind: character` document: the skinned mesh it names plus its bound animation clips.
+//! Loading a skinned `kind: assembly` document: the skinned mesh it names plus its bound animation
+//! clips.
 //!
-//! A character is a strict-YAML `*.character.yaml` document ([`ludion_scene::check_character`]) that
-//! names one skinned mesh document and binds short clip names to `kind: animation` files, each with
-//! an optional playback speed and events overlay (`Plan/animation-clips.md` decisions 10–12). This
-//! module is the engine-side IO seam, with the same `load(root, rel)` shape as
-//! [`crate::assembly_mesh`]: read the bytes, parse and validate through `ludion-scene`, then run the
-//! cross-file rules ([`ludion_scene::check_character_clips`]). The rules live in `ludion-scene`; this
-//! module adds only the file reads and the unskinned-mesh check, which needs the mesh document.
+//! A skinned assembly is a strict-YAML `*.character.yaml` document ([`ludion_scene::check_assembly`]
+//! with `mesh:` set) that names one skinned mesh document and binds short clip names to
+//! `kind: animation` files, each with an optional playback speed and events overlay
+//! (`Plan/animation-clips.md` decisions 10–12). This module is the engine-side IO seam, with the
+//! same `load(root, rel)` shape as [`crate::assembly_mesh`]: read the bytes, parse and validate
+//! through `ludion-scene`, then run the cross-file rules
+//! ([`ludion_scene::check_assembly_mesh_clips`]). The rules live in `ludion-scene`; this module adds
+//! only the file reads and the unskinned-mesh check, which needs the mesh document.
 //!
 //! The character draws through its mesh path exactly like a plain `Mesh.shape: asset`: nothing here
 //! meshes or samples anything.
@@ -14,7 +16,7 @@
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
 use ludion_core::math::glam::Vec3;
-use ludion_scene::{AnimationDocument, AnimationEvent, CharacterDocument};
+use ludion_scene::{AnimationDocument, AnimationEvent, AssemblyDocument};
 
 use crate::assembly_mesh::read_clip;
 use crate::asset_cache::SourceFiles;
@@ -95,8 +97,9 @@ impl CharacterData {
 ///
 /// # Errors
 /// - `L1101` if the character, its mesh or any clip file cannot be read.
-/// - `L1199`/`L1200` for a malformed or inconsistent character, including a mesh with no skin, an
-///   overlay on a clip that has its own events, and a clip track naming a joint the mesh lacks.
+/// - `L1137`/`L1138` for a malformed or inconsistent skinned assembly, including a voxel assembly, a
+///   mesh with no skin, an overlay on a clip that has its own events, and a clip track naming a joint
+///   the mesh lacks.
 /// - `L1141`/`L1142`/`L1198` for a malformed clip document.
 pub fn load(
     root: ludion_assets::AssetRoot<'_>,
@@ -115,7 +118,7 @@ pub(crate) fn load_with_sources(
     rel: &str,
 ) -> Result<(CharacterData, SourceFiles), Vec<Diagnostic>> {
     let (doc, doc_hash) = read_character(root, rel)?;
-    let mesh = sibling(rel, &doc.mesh);
+    let mesh = sibling(rel, doc.mesh.as_deref().unwrap_or_default());
     let (mesh_joints, mesh_hash) =
         crate::mesh_asset::with_mesh_source(root, &mesh, ludion_scene::read_mesh_joints)?;
     let joints: Vec<&str> = match &mesh_joints {
@@ -125,8 +128,10 @@ pub(crate) fn load_with_sources(
         _ => {
             return Err(vec![
                 Diagnostic::new(
-                    code::CHARACTER_DATA_CONSISTENCY,
-                    format!("mesh `{mesh}` has no `joints:`: a character needs a skinned mesh"),
+                    code::ASSEMBLY_DATA_CONSISTENCY,
+                    format!(
+                        "mesh `{mesh}` has no `joints:`: a skinned assembly needs a skinned mesh"
+                    ),
                 )
                 .with_path("/mesh")
                 .with_help(
@@ -141,7 +146,7 @@ pub(crate) fn load_with_sources(
     let mut diagnostics = Vec::new();
     let mut clips = Vec::with_capacity(doc.clips.len());
     for binding in &doc.clips {
-        let file = sibling(rel, &binding.clip);
+        let file = sibling(rel, &binding.file);
         match read_clip(root, &file, &binding.name) {
             Ok((clip, hash)) => {
                 clips.push(clip);
@@ -153,7 +158,7 @@ pub(crate) fn load_with_sources(
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
-    let cross = ludion_scene::check_character_clips(&doc, &clips, &joints);
+    let cross = ludion_scene::check_assembly_mesh_clips(&doc, &clips, &joints);
     if !cross.is_empty() {
         return Err(cross);
     }
@@ -164,7 +169,7 @@ pub(crate) fn load_with_sources(
         .zip(clips)
         .map(|(binding, clip)| CharacterClipData {
             name: binding.name.clone(),
-            file: binding.clip.clone(),
+            file: binding.file.clone(),
             speed: binding.speed,
             sampler: ludion_scene::ClipSampler::new(&clip, joints.iter().copied()),
             events: if clip.events.is_empty() {
@@ -353,24 +358,38 @@ pub(crate) fn mesh_path(
     root: ludion_assets::AssetRoot<'_>,
     rel: &str,
 ) -> Result<String, Vec<Diagnostic>> {
-    read_character(root, rel).map(|(doc, _)| sibling(rel, &doc.mesh))
+    read_character(root, rel).map(|(doc, _)| sibling(rel, doc.mesh.as_deref().unwrap_or_default()))
 }
 
-/// Reads and validates the character document at `root`/`rel`, returning it with its bytes' content
-/// hash.
+/// Reads and validates the skinned assembly at `root`/`rel`, returning it with its bytes' content
+/// hash. The returned document's `mesh` is always `Some`.
 fn read_character(
     root: ludion_assets::AssetRoot<'_>,
     rel: &str,
-) -> Result<(CharacterDocument, u64), Vec<Diagnostic>> {
+) -> Result<(AssemblyDocument, u64), Vec<Diagnostic>> {
     let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
     let source = std::str::from_utf8(&bytes.bytes).map_err(|_| {
         vec![
             Diagnostic::new(
-                code::CHARACTER_DOCUMENT_STRUCTURE,
-                format!("character asset `{rel}` is not valid UTF-8 text"),
+                code::ASSEMBLY_DOCUMENT_STRUCTURE,
+                format!("assembly asset `{rel}` is not valid UTF-8 text"),
             )
-            .with_help("a character document is a strict-YAML text file (`*.character.yaml`)"),
+            .with_help("an assembly document is a strict-YAML text file"),
         ]
     })?;
-    Ok((ludion_scene::check_character(source)?, bytes.hash))
+    let doc = ludion_scene::check_assembly(source)?;
+    if doc.mesh.is_none() {
+        return Err(vec![
+            Diagnostic::new(
+                code::ASSEMBLY_DATA_CONSISTENCY,
+                format!(
+                    "`{rel}` is a voxel assembly; `Mesh.shape: {{ character: … }}` draws a skinned \
+                     assembly"
+                ),
+            )
+            .with_path("/mesh")
+            .with_help("draw a voxel assembly with `Mesh.shape: { assembly: <path> }`"),
+        ]);
+    }
+    Ok((doc, bytes.hash))
 }

@@ -772,7 +772,7 @@ indices:
         let dir = scratch("character");
         std::fs::write(
             dir.join("c.character.yaml"),
-            "format: 1\nkind: character\nmesh: gone.mesh.yaml\nclips: {}\n",
+            "format: 1\nkind: assembly\nmesh: gone.mesh.yaml\nclips: {}\n",
         )
         .unwrap();
         let found = check(&dir, &mesh_entity("character: c.character.yaml"));

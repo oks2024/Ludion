@@ -2210,6 +2210,29 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
         // entirely before any GPU adapter is requested.
         Some("assembly") => {
             let doc = ludion_scene::check_assembly(&source)?;
+            if doc.mesh.is_some() {
+                // A skinned assembly: rooted at the file's own directory, as `check-scene` roots
+                // it, so the mesh and clips the document names resolve relative to it. `extract`
+                // loads the same assembly again from the cell's root, the harness's established
+                // double-parse.
+                let root = ludion_assets::AssetRoot::local_document_unconfined(
+                    model.parent().unwrap_or_else(|| Path::new(".")),
+                );
+                let data = crate::character::load(root, &file_name)?;
+                let mesh = crate::skin_bone::load_mesh_document(root, &data.mesh)?;
+                let (min, max) = mesh_aabb(&mesh);
+                return Ok(LoadedModel {
+                    bounds: ModelBounds {
+                        kind: ModelKind::Character,
+                        min,
+                        max,
+                        file_name,
+                        scale: 1.0,
+                        emissive_texture: mesh.textures.emissive.is_some(),
+                    },
+                    extra: LoadedExtra::Character(data),
+                });
+            }
             let (min, max) = assembly_aabb(&doc);
             Ok(LoadedModel {
                 bounds: ModelBounds {
@@ -2252,28 +2275,8 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
                 extra: LoadedExtra::Sculpt(Box::new(LoadedSculpt { doc, mesh, sources })),
             })
         }
-        // Rooted at the file's own directory, as `check-scene` roots it: the mesh and clips the
-        // document names resolve relative to it. `extract` loads the same character again from the
-        // cell's root, the harness's established double-parse.
-        Some("character") => {
-            let root = ludion_assets::AssetRoot::local_document_unconfined(
-                model.parent().unwrap_or_else(|| Path::new(".")),
-            );
-            let data = crate::character::load(root, &file_name)?;
-            let mesh = crate::skin_bone::load_mesh_document(root, &data.mesh)?;
-            let (min, max) = mesh_aabb(&mesh);
-            Ok(LoadedModel {
-                bounds: ModelBounds {
-                    kind: ModelKind::Character,
-                    min,
-                    max,
-                    file_name,
-                    scale: 1.0,
-                    emissive_texture: mesh.textures.emissive.is_some(),
-                },
-                extra: LoadedExtra::Character(data),
-            })
-        }
+        // The retired `kind: character`: `check_assembly` reports `L1246` with the one-line fix.
+        Some("character") => Err(ludion_scene::check_assembly(&source).err().unwrap_or_default()),
         // Rooted at the file's own directory, like a character: the parts' meshes and the clips
         // resolve relative to it. Its bounds are the rest-pose box of one expanded instance.
         Some("prefab") => {
@@ -5878,9 +5881,11 @@ entities:
             std::fs::write(&path, format!("format: 1\nkind: {}\n", entry.name)).unwrap();
             let refused = match load_model(&path) {
                 Ok(_) => false,
-                Err(diagnostics) => diagnostics
-                    .iter()
-                    .any(|d| d.message.contains(&format!("has kind `{}`", entry.name))),
+                // The retired `character` kind is refused with its own `L1246` instead.
+                Err(diagnostics) => diagnostics.iter().any(|d| {
+                    d.message.contains(&format!("has kind `{}`", entry.name))
+                        || d.code == ludion_core::codes::code::CHARACTER_KIND_MERGED
+                }),
             };
             assert_eq!(
                 refused, !entry.model_sheet,

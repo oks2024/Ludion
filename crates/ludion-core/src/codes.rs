@@ -1424,17 +1424,6 @@ pub mod code {
     /// at `/events` or `/events/<i>/t|name`. Raised by `ludion-scene`.
     pub const ANIMATION_EVENT_INVALID: DiagnosticCode = DiagnosticCode::new("L1198");
 
-    /// `L1199` — a `kind: character` document is structurally invalid: an empty or non-mapping root,
-    /// a wrong `format`/`kind`, a missing `mesh` or clip `clip`, a wrong-typed value, or an unknown
-    /// key. Pointed at the offending key. Raised by `ludion-scene`.
-    pub const CHARACTER_DOCUMENT_STRUCTURE: DiagnosticCode = DiagnosticCode::new("L1199");
-
-    /// `L1200` — a well-shaped `kind: character` document is inconsistent: a blank `mesh`/`clip`
-    /// path, a non-finite or non-positive `speed`, overlay `events` on a clip that has its own, a
-    /// clip track naming a joint the mesh lacks, or a mesh with no skin. Raised by `ludion-scene`
-    /// and the engine's character loader.
-    pub const CHARACTER_DATA_CONSISTENCY: DiagnosticCode = DiagnosticCode::new("L1200");
-
     /// `L1670` — an `AnimationLayers` component holds more than four layers. Pointed at `/layers`.
     pub const ANIMATION_LAYERS_TOO_MANY: DiagnosticCode = DiagnosticCode::new("L1670");
 
@@ -8028,57 +8017,6 @@ name, drop an empty `events:` key, and move a derived clip's events into the cha
 Shape/type problems (a missing `t`, a non-mapping event) are the separate `L1141`.",
     },
     CodeEntry {
-        code: code::CHARACTER_DOCUMENT_STRUCTURE,
-        severity: Severity::Error,
-        title: "character document is structurally invalid",
-        explanation: "\
-A `kind: character` document does not have the shape the format requires. One of:
-
-  - the file is empty, or its root is not a mapping;
-  - `format` is missing or is not the supported version, or `kind` is missing or not `character`;
-  - a required key is missing (`mesh`) or a key has the wrong type (`mesh` must be a string, `clips` a
-    mapping, a clip entry a mapping with a string `clip`, `speed` a number, `events` a sequence of
-    `{t, name}` mappings);
-  - a clip entry is missing its `clip` path;
-  - a `blends` entry is not a mapping with `points` (two to sixteen `{clip, at}` entries, every `at`
-    a finite number or all of them an `[x, z]` block list) and an optional `sync` string;
-  - a key is not part of the format (the diagnostic suggests the nearest valid key).
-
-The JSON Pointer names the offending key or entry (`/mesh`, `/clips/walk/clip`, `/clips/walk/speed`,
-`/blends/locomotion/points/1/at`).
-
-Fix: write `format: 1`, `kind: character`, `mesh: <path to the skinned mesh document>`, then one
-`clips:` entry per clip, each with a `clip:` path and optionally `speed:` and `events:`. Data problems
-in a well-shaped document (a blank path, a non-positive speed) are the separate `L1200`.",
-    },
-    CodeEntry {
-        code: code::CHARACTER_DATA_CONSISTENCY,
-        severity: Severity::Error,
-        title: "character document data is inconsistent",
-        explanation: "\
-A well-shaped `kind: character` document holds values that do not hang together. One of:
-
-  - `mesh` or a clip's `clip` path is blank;
-  - a clip's `speed` is not finite or not greater than zero;
-  - a clip carries `events` in the overlay while the clip document has its own (a clip's events live
-    in one place);
-  - a clip track animates a joint the character's mesh does not have (the diagnostic names the joint
-    and the nearest one the mesh has);
-  - the character's mesh document has no skin, so there is nothing for the clips to drive;
-  - a mask has a blank name, or lists a joint the mesh does not have;
-  - a blend has the name of a clip binding, two points at one position, or 2D points that are all
-    collinear; one of its points names a clip that is not bound, a clip that does not loop, or (with
-    `sync`) a clip with no event of that name.
-
-The JSON Pointer names the offending value (`/mesh`, `/clips/<name>/clip`, `/clips/<name>/speed`,
-`/clips/<name>/events`, `/masks/<name>/joints/<i>`, `/blends/<name>/points/<i>/clip`,
-`/blends/<name>/sync`).
-
-Fix: point `mesh` at a skinned mesh document (an imported glTF with a skin), give every path, keep
-`speed` positive, put a clip's events in either the clip or the overlay, and rename the clip's tracks
-(or re-export it from the same rig) so every target is a joint of the mesh.",
-    },
-    CodeEntry {
         code: code::ANIMATION_LAYERS_TOO_MANY,
         severity: Severity::Error,
         title: "AnimationLayers holds too many layers",
@@ -14652,6 +14590,14 @@ pub const RETIRED: &[(&str, &str)] = &[
          check already refuses as L1017 on every reachable path",
     ),
     (
+        "L1199",
+        "a `kind: character` document's structure error, merged into `L1137`/`L1138` when `kind: character` became `kind: assembly` (`Plan/character-assembly-merge.md`)",
+    ),
+    (
+        "L1200",
+        "a `kind: character` document's data-consistency error, merged into `L1137`/`L1138` when `kind: character` became `kind: assembly` (`Plan/character-assembly-merge.md`)",
+    ),
+    (
         "L1216",
         "a `PathFollower` spawned into a world without `path_follow`; the system is now always \
          installed",
@@ -14962,8 +14908,6 @@ mod tests {
         code::SKIN_BONE_DUPLICATE,
         code::SKIN_BONE_ANIMATED_SKIN,
         code::ANIMATION_EVENT_INVALID,
-        code::CHARACTER_DOCUMENT_STRUCTURE,
-        code::CHARACTER_DATA_CONSISTENCY,
         code::ANIMATION_LAYERS_TOO_MANY,
         code::ANIMATION_LAYER_INVALID,
         code::ANIMATION_LAYERS_ON_SKIN_BONE_SKIN,

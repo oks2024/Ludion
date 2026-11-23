@@ -8,7 +8,7 @@
 //! - **Neutral.** Extraction moves no hash; a plain-clip entity never gets a `BlendClock`.
 //! - **Deterministic.** Hash traces and palettes match at 1, 2 and 8 threads; a snapshot restored
 //!   mid-sweep reproduces the phase, the palette and the event log.
-//! - **Refused.** An unbound point clip, a missing `sync` event and a name clash are `L1200`.
+//! - **Refused.** An unbound point clip, a missing `sync` event and a name clash are `L1138`.
 //!
 //! Runs over a scratch copy of the gallery mannequin in the system temp directory.
 
@@ -30,7 +30,7 @@ const JOINTS: usize = 11;
 /// each with `foot_l`/`foot_r` overlay events half a stride apart, and two blends.
 const CHARACTER: &str = "\
 format: 1
-kind: character
+kind: assembly
 name: blended
 mesh: \"../meshes/skin-mannequin.mesh.yaml\"
 clips:
@@ -505,7 +505,7 @@ fn bad_blends_are_l1200() {
     assert!(
         unbound
             .iter()
-            .any(|d| d.code == code::CHARACTER_DATA_CONSISTENCY
+            .any(|d| d.code == code::ASSEMBLY_DATA_CONSISTENCY
                 && d.path.as_deref() == Some("/blends/b/points/1/clip")),
         "{unbound:?}"
     );
@@ -513,7 +513,7 @@ fn bad_blends_are_l1200() {
     assert!(
         no_sync
             .iter()
-            .any(|d| d.code == code::CHARACTER_DATA_CONSISTENCY
+            .any(|d| d.code == code::ASSEMBLY_DATA_CONSISTENCY
                 && d.path.as_deref() == Some("/blends/b/sync")),
         "{no_sync:?}"
     );
@@ -521,7 +521,7 @@ fn bad_blends_are_l1200() {
     assert!(
         clash
             .iter()
-            .any(|d| d.code == code::CHARACTER_DATA_CONSISTENCY
+            .any(|d| d.code == code::ASSEMBLY_DATA_CONSISTENCY
                 && d.path.as_deref() == Some("/blends/run")),
         "{clash:?}"
     );

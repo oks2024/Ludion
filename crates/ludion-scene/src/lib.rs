@@ -108,7 +108,6 @@ mod animation;
 mod assembly;
 mod atlas;
 mod blend_space;
-mod character;
 mod clip_eval;
 mod doc;
 mod emit;
@@ -169,7 +168,6 @@ pub use atlas::{
 pub use blend_space::{
     BlendWeights, MAX_BLEND_POINTS, blend_weights_1d, blend_weights_2d, triangulate,
 };
-pub use character::{CHARACTER_FORMAT_VERSION, CharacterClip, CharacterDocument};
 pub use clip_eval::{
     ClipSampler, PartPose, clip_phase, flipbook_frame, joint_pose, part_pose, sample_channel,
     sample_rotation, slerp, track as clip_track,
@@ -2387,59 +2385,6 @@ pub fn emit_assembly(doc: &AssemblyDocument) -> String {
     assembly::emit(doc)
 }
 
-// --- Character documents (`*.character.yaml`) ---------------------------------------------------
-//
-// A character binds a skinned mesh to named animation clips with a per-clip speed and events overlay
-// (`Plan/animation-clips.md` decisions 10–12). The cross-file rules take already-resolved documents
-// ([`check_character_clips`]); this crate never reads a file.
-
-/// Parses strict-subset YAML into a [`CharacterDocument`], checking structure/shape only.
-///
-/// # Errors
-/// `L1199` for a missing/wrong-typed key, an unrecognized `kind`, or an unknown key; `L1198` for
-/// `events: []` in a clip entry.
-pub fn parse_character(source: &str) -> Result<CharacterDocument, Vec<Diagnostic>> {
-    character::parse(source)
-}
-
-/// Validates data-consistency invariants of `doc`: non-blank `mesh` and clip paths, a finite
-/// positive `speed` (`L1200`), and well-formed overlay events (`L1198`, no duration bound — see
-/// [`check_character_clips`]).
-pub fn validate_character(doc: &CharacterDocument) -> Vec<Diagnostic> {
-    character::validate(doc)
-}
-
-/// Parses and validates a character document in one step.
-///
-/// # Errors
-/// Everything [`parse_character`] and [`validate_character`] can report.
-pub fn check_character(source: &str) -> Result<CharacterDocument, Vec<Diagnostic>> {
-    let doc = parse_character(source)?;
-    let diagnostics = validate_character(&doc);
-    if diagnostics.is_empty() {
-        Ok(doc)
-    } else {
-        Err(diagnostics)
-    }
-}
-
-/// Checks a character against its resolved clip documents and its mesh's joint names: overlay
-/// `events` on a clip that has its own (`L1200`), an overlay event past the clip's `duration`
-/// or at it on a looping clip (`L1198`), and a clip track naming a joint the mesh lacks (`L1200`, naming the nearest joint).
-///
-/// `clips` is aligned by index with [`CharacterDocument::clips`]. Pure and IO-free; every
-/// diagnostic points into the *character* document.
-///
-/// # Panics
-/// If `clips` is not the same length as [`CharacterDocument::clips`].
-pub fn check_character_clips(
-    doc: &CharacterDocument,
-    clips: &[AnimationDocument],
-    joints: &[&str],
-) -> Vec<Diagnostic> {
-    character::check_clips(doc, clips, joints)
-}
-
 /// Resolves a rig mask to one weight per skin joint or assembly part. `joints` is `(name, parent
 /// index)` in the rig's order (any order: ancestors are walked). A listed joint takes its weight
 /// (1.0 without `weights`); with `descendants`, an unlisted joint inherits its nearest listed
@@ -2460,35 +2405,6 @@ pub fn check_character_clips(
 #[must_use]
 pub fn resolve_rig_mask(mask: &RigMask, joints: &[(&str, Option<u32>)]) -> Vec<f32> {
     rig_mask::resolve_mask(mask, joints)
-}
-
-/// Writes `doc` in canonical form (stable field order, LF endings, ryu shortest-round-trip floats;
-/// clips sorted by short name, `speed: 1.0` canonicalized to the key's absence). Byte-idempotent.
-///
-/// # Example
-/// ```
-/// let source = "\
-/// format: 1
-/// kind: character
-/// name: goblin
-/// mesh: goblin.mesh.yaml
-/// clips:
-///   idle:
-///     clip: clips/idle.anim.yaml
-///   run:
-///     clip: clips/run.anim.yaml
-///     speed: 1.5
-///     events:
-///       - t: 0.2
-///         name: footstep
-/// ";
-/// let model = ludion_scene::check_character(source).expect("the character is valid");
-/// assert_eq!(model.clips.len(), 2);
-/// assert_eq!(model.clips[1].speed, 1.5);
-/// assert_eq!(ludion_scene::emit_character(&model), source); // canonical emit is a fixed point
-/// ```
-pub fn emit_character(doc: &CharacterDocument) -> String {
-    character::emit(doc)
 }
 
 // --- Path documents (`*.path.yaml`) -------------------------------------------------------------

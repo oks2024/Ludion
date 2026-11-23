@@ -1,4 +1,4 @@
-//! A skinned character's clip bindings: loads the gallery mannequin's `kind: character` document
+//! A skinned character's clip bindings: loads the gallery mannequin's `kind: assembly` document
 //! and prints each bound clip's name, duration, loop flag, effective speed and events.
 //!
 //! The character names a skinned mesh and binds short clip names (`run`, `idle`) to

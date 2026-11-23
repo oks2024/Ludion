@@ -29,7 +29,7 @@ const JOINTS: usize = 11;
 /// 1D `locomotion` blend and a 2D `cross` blend over them.
 const CHARACTER: &str = "\
 format: 1
-kind: character
+kind: assembly
 name: blended
 mesh: \"../meshes/skin-mannequin.mesh.yaml\"
 clips:

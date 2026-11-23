@@ -239,8 +239,9 @@ pub fn canonical_idempotence(data: &[u8]) {
     assert_value_preserved(&scene, &reparsed);
 }
 
-/// `KINDS` rows a `Here` checker validates but that have no canonical emitter.
-const CHECK_ONLY: &[&str] = &["voxel-ops"];
+/// `KINDS` rows a `Here` checker validates but that have no canonical emitter (`character` is the
+/// retired kind whose checker only reports `L1246`).
+const CHECK_ONLY: &[&str] = &["voxel-ops", "character"];
 
 /// Checks `source` as `kind`; a document that passes must emit canonical text that re-checks and
 /// re-emits byte-identical.
@@ -272,7 +273,6 @@ fn round_trip(kind: &str, source: &str) -> bool {
         "voxel" => canonical(kind, source, s::check_voxel, s::emit_voxel),
         "assembly" => canonical(kind, source, s::check_assembly, s::emit_assembly),
         "part" => canonical(kind, source, s::check_part, s::emit_part),
-        "character" => canonical(kind, source, s::check_character, s::emit_character),
         "prefab" => canonical(
             kind,
             source,

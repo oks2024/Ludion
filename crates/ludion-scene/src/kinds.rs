@@ -116,7 +116,7 @@ pub const KINDS: &[KindEntry] = &[
     },
     KindEntry {
         name: "assembly",
-        noun: "a voxel assembly",
+        noun: "a voxel or skinned assembly",
         check: KindCheck::Here(|s| crate::check_assembly(s).map(drop)),
         doc_store: false,
         model_sheet: true,
@@ -130,10 +130,10 @@ pub const KINDS: &[KindEntry] = &[
     },
     KindEntry {
         name: "character",
-        noun: "a skinned character",
-        check: KindCheck::Here(|s| crate::check_character(s).map(drop)),
+        noun: "a retired kind (merged into assembly)",
+        check: KindCheck::Here(|s| crate::check_assembly(s).map(drop)),
         doc_store: false,
-        model_sheet: true,
+        model_sheet: false,
     },
     // The registry half runs in `ludion check-scene`'s prefab arm.
     KindEntry {

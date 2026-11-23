@@ -605,7 +605,7 @@ fn parse_channel(node: &Node, pointer: &str, diagnostics: &mut Vec<Diagnostic>) 
 }
 
 /// Parses `events`: a sequence of `{t, name}` mappings at `pointer`, with structure problems raised
-/// under `structure` (a clip's `L1141`, a character overlay's `L1199`).
+/// under `structure` (a clip's `L1141`, an assembly clip overlay's `L1137`).
 pub(crate) fn parse_events(
     node: &Node,
     pointer: &str,

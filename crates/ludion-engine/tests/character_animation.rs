@@ -24,7 +24,7 @@ const JOINTS: usize = 11;
 /// The gallery mannequin with `run` at its overlay `speed: 1.2`, and a copy without the overlay.
 const PLAIN_CHARACTER: &str = "\
 format: 1
-kind: character
+kind: assembly
 name: plain
 mesh: \"../meshes/skin-mannequin.mesh.yaml\"
 clips:

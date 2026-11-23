@@ -150,7 +150,7 @@ fn overlay_events_on_a_clip_with_its_own_are_l1200() {
     assert!(
         errors
             .iter()
-            .any(|d| d.code == code::CHARACTER_DATA_CONSISTENCY),
+            .any(|d| d.code == code::ASSEMBLY_DATA_CONSISTENCY),
         "{errors:?}"
     );
     assert!(
@@ -168,7 +168,7 @@ fn a_track_naming_an_unknown_joint_is_l1200() {
     assert!(
         errors
             .iter()
-            .any(|d| d.code == code::CHARACTER_DATA_CONSISTENCY),
+            .any(|d| d.code == code::ASSEMBLY_DATA_CONSISTENCY),
         "{errors:?}"
     );
     assert!(
@@ -194,7 +194,7 @@ fn an_unskinned_mesh_is_l1200() {
     assert!(
         errors
             .iter()
-            .any(|d| d.code == code::CHARACTER_DATA_CONSISTENCY),
+            .any(|d| d.code == code::ASSEMBLY_DATA_CONSISTENCY),
         "{errors:?}"
     );
     assert!(
@@ -234,6 +234,6 @@ fn skin_bone_follows_a_characters_skin() {
 #[test]
 fn the_gallery_character_is_canonical() {
     let text = std::fs::read_to_string(gallery().join(CHARACTER)).unwrap();
-    let doc = ludion_scene::check_character(&text).unwrap();
-    assert_eq!(ludion_scene::emit_character(&doc), text);
+    let doc = ludion_scene::check_assembly(&text).unwrap();
+    assert_eq!(ludion_scene::emit_assembly(&doc), text);
 }

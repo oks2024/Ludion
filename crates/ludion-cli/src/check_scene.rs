@@ -211,6 +211,20 @@ pub fn run(
     );
     match kind {
         Some(kind) if kind == "voxel" && !sculpt_views.any() => run_voxel(reporter, &source, views),
+        Some(kind) if kind == "assembly" && is_skinned_assembly(&source) => {
+            // The authoring views read a voxel grid; a skinned assembly has none.
+            if views.any() || sculpt_views.any() {
+                if views.any() {
+                    diagnostic::usage_error(voxel_flags_on_non_voxel("skinned assembly"));
+                }
+                if sculpt_views.any() {
+                    diagnostic::usage_error(sculpt_flags_on_non_sculpt("skinned assembly"));
+                }
+                ExitCode::FAILURE
+            } else {
+                run_character(reporter, &source)
+            }
+        }
         // `kind: assembly` runs the same authoring views over its *composed* grid
         // (`Plan/voxel-animation.md` decision 11) — checked before the catch-all usage error below,
         // so this is the one other kind the voxel-view flags are legal against.
@@ -250,7 +264,6 @@ pub fn run(
         Some(kind) if kind == "atlas" => run_atlas(reporter, &source),
         Some(kind) if kind == "font-source" => run_font_source(reporter, &source),
         Some(kind) if kind == "font" => run_font(reporter, &source),
-        Some(kind) if kind == "character" => run_character(reporter, &source),
         Some(kind) if kind == "prefab" => run_prefab(reporter, &source),
         Some(kind) if kind == "paired" => crate::paired_report::run(reporter),
         Some(other) => match ludion_scene::kind_entry(&other) {
@@ -1789,9 +1802,16 @@ fn run_prefab(mut reporter: Reporter, source: &str) -> ExitCode {
     })
 }
 
-/// `kind: character`: loads the document with its skinned mesh and every clip it binds, rooted at
-/// the file's own directory (the `run_assembly` rooting), and reports each binding's effective
-/// speed and events. `source` is the text already in hand, re-checked only for the authored name.
+/// Whether `source` parses as an assembly that carries a skinned `mesh:` (a parse failure is not
+/// skinned: the voxel arm reports it).
+fn is_skinned_assembly(source: &str) -> bool {
+    ludion_scene::check_assembly(source).is_ok_and(|doc| doc.mesh.is_some())
+}
+
+/// A skinned `kind: assembly`: loads the document with its skinned mesh and every clip it binds,
+/// rooted at the file's own directory (the `run_assembly` rooting), and reports each binding's
+/// effective speed and events. `source` is the text already in hand, re-checked only for the
+/// authored name.
 fn run_character(mut reporter: Reporter, source: &str) -> ExitCode {
     let path = reporter.path;
     let root = path.parent().unwrap_or_else(|| Path::new("."));
@@ -1807,8 +1827,8 @@ fn run_character(mut reporter: Reporter, source: &str) -> ExitCode {
         Ok(data) => data,
         Err(diagnostics) => return reporter.fail(diagnostics),
     };
-    let name = match ludion_scene::check_character(source) {
-        Ok(character) => character.name,
+    let name = match ludion_scene::check_assembly(source) {
+        Ok(assembly) => assembly.name,
         Err(diagnostics) => return reporter.fail(diagnostics),
     };
     let contacts = match ludion_engine::contact_heights(
