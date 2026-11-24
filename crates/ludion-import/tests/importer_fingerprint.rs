@@ -53,7 +53,7 @@ fn the_fingerprint_moves_with_the_closure_and_only_with_it() {
         &root,
         "vendor/d",
         "d",
-        // Like the vendored rapier3d, an excluded path crate outside the workspace members.
+        // An excluded path crate outside the workspace members, as a game's own vendored crate is.
         "[dependencies]\ne = { path = \"../e\" }\n[workspace]\n",
     );
     krate(&root, "vendor/e", "e", "[workspace]\n");
@@ -148,7 +148,12 @@ fn the_real_closure_excludes_the_engine_and_renderer() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let closure = fingerprint::closure(&cargo(), &manifest, "ludion-import").unwrap();
     let names: Vec<&str> = closure.crates.iter().map(|(n, _)| n.as_str()).collect();
-    for wanted in ["ludion-components", "ludion-core", "rapier3d", "parry3d"] {
+    for wanted in [
+        "ludion-components",
+        "ludion-core",
+        "ludion-rapier3d",
+        "ludion-parry3d",
+    ] {
         assert!(names.contains(&wanted), "{wanted} missing from {names:?}");
     }
     for unwanted in ["ludion-engine", "ludion-cli", "ludion-render"] {

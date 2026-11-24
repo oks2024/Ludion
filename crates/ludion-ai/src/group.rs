@@ -29,7 +29,7 @@ pub struct GroupMember {
 }
 
 /// Opt-in membership memory for a [`Group`]: with it, each tick's departures reach the remaining
-/// members through [`Machine::member_left`]. A group without it reports nothing. All fields are
+/// members through [`Machine::member_left`](crate::Machine::member_left). A group without it reports nothing. All fields are
 /// runtime state; author an empty `GroupRoster: {}`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GroupRoster {

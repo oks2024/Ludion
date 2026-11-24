@@ -1,6 +1,6 @@
 # rapier3d 0.35.3, modified by Ludion
 
-This is rapier3d 0.35.3 (Apache-2.0, Dimforge) with thirteen files changed, as Apache-2.0 §4(b) requires
+This is rapier3d 0.35.3 (Apache-2.0, Dimforge) with thirteen files changed and `Cargo.toml.orig` removed, as Apache-2.0 §4(b) requires
 stating. Everything else is byte-identical to the crates.io release; the license is `LICENSE-APACHE`.
 
 **Changed:**
@@ -15,11 +15,18 @@ stating. Everything else is byte-identical to the crates.io release; the license
   `src/dynamics/joint/impulse_joint/impulse_joint_set.rs` and `src/dynamics/joint/multibody_joint/multibody_joint_set.rs`.
 - `src/geometry/collider.rs` (`set_friction`, `set_restitution`) and
   `src/geometry/collider_components.rs` (`ColliderChanges::MATERIAL`).
-- `Cargo.toml`, the `parry3d` dependency gains `path = "../parry3d"`: a consumer never sees a root
-  `[patch]`, so this is how the parry3d patch reaches it (and keeps one parry3d in the build).
-- `Cargo.toml`, an empty `[workspace]` table: the crate is its own workspace root, so `cargo metadata
-  --no-deps` on it (the importer fingerprint's build script) works offline even when the checkout nests
-  inside another workspace. Cargo ignores it when the crate is built as a dependency.
+- `Cargo.toml` is the fork's manifest. The package is `ludion-rapier3d` (the lib keeps the name
+  `rapier3d`), a member of Ludion's workspace, so `cargo package --workspace` verifies it with the crates
+  that depend on it and it can be published beside them. The `parry3d` dependency is `ludion-parry3d`
+  by path (`path = "../parry3d"`): a consumer never sees a root `[patch]`, so this is how the parry3d
+  patch reaches it (and keeps one parry3d in the build). The features are cut to the ones Ludion
+  builds, the dropped ones kept in `check-cfg`, so `--all-features` is the shipped set and never meets
+  the `simd8` + `enhanced-determinism` `compile_error!`. Upstream's test, bench and example targets are
+  not built (`[lib] test = false`, `doctest = false`; only the three dev-dependencies the in-source
+  tests name remain, so `clippy --all-targets` compiles them). Clippy lints are allowed: Ludion does
+  not restyle upstream code. The description, documentation, repository and docs.rs features name
+  the fork.
+- `Cargo.toml.orig` is removed: cargo reserves that name in a package's source.
 
 The exact change is `LUDION-PATCH.diff`.
 
@@ -61,6 +68,6 @@ rounded SIMD arithmetic is used, so results stay cross-architecture exact.
 
 **Re-apply** onto another release: `patch -p1 < LUDION-PATCH.diff` (or `git apply`) from the
 release's root; if it does not apply, port the two joint formulas, the
-three small material edits, the one-line sleep gate and the prime (the `detect_phase` split, `prime`, the pending-change helpers) by hand, then regenerate the diff with `diff -u --strip-trailing-cr`.
+three small material edits, the one-line sleep gate, the prime (the `detect_phase` split, `prime`, the pending-change helpers) and the manifest by hand, then regenerate the diff with `diff -u --strip-trailing-cr`.
 
 Upstream: not reported.

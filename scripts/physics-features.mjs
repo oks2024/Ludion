@@ -29,8 +29,9 @@
 //
 // A fifth check exists because Cargo honours `[patch]` only in the root workspace: a game that
 // depends on Ludion by path would build the registry rapier3d/parry3d, unpatched. The vendored
-// crates are therefore path dependencies, and a scratch consumer of `ludion-physics` (under
-// target/) is resolved to prove a path consumer gets vendor/rapier3d and vendor/parry3d too.
+// crates are therefore path dependencies, renamed `ludion-rapier3d`/`ludion-parry3d` (their libs keep
+// the upstream names), and a scratch consumer of `ludion-physics` (under target/) is resolved to
+// prove a path consumer gets vendor/rapier3d and vendor/parry3d too.
 //
 // Usage:  node scripts/physics-features.mjs
 //
@@ -68,8 +69,9 @@ if (values.help) {
 // (`dim3 f32 std enhanced-determinism parallel serde-serialize`, `default-features = false`): those
 // six plus `alloc`, which rapier3d's own `std` feature unconditionally implies. A resolved set that
 // differs — larger (something unexpectedly on, e.g. a `simd*` feature) or smaller (a pin
-// regression, `parallel` dropped) — is exactly the silent-drift case this gate exists for.
-const EXPECTED_RAPIER3D_FEATURES = ['alloc', 'dim3', 'enhanced-determinism', 'f32', 'parallel', 'serde-serialize', 'std'];
+// regression, `parallel` dropped) — is exactly the silent-drift case this gate exists for. `default`
+// is on because the fork is a workspace member, and adds nothing: it is `dim3 f32 std`.
+const EXPECTED_RAPIER3D_FEATURES = ['alloc', 'default', 'dim3', 'enhanced-determinism', 'f32', 'parallel', 'serde-serialize', 'std'];
 
 // parry3d's feature set as `rapier3d` 0.35.3 actually resolves it today (inspected via `cargo
 // metadata` against the pinned lock, not derived by reading manifests): `required-features` (its
@@ -78,9 +80,10 @@ const EXPECTED_RAPIER3D_FEATURES = ['alloc', 'dim3', 'enhanced-determinism', 'f3
 // (`downcast-rs`, `ena`, `hashbrown`, `indexmap`, `rstar`, `slab`, `smallvec`, `serde`,
 // `serde_arrays`, and `rayon`, the implicit feature of parry's `parallel = ["rayon"]`). Any drift here —
 // added or missing — means the pin moved under us or parry3d's own feature wiring changed, either
-// of which is a stop-and-recheck event, not something to wave through silently.
+// of which is a stop-and-recheck event, not something to wave through silently. `default`
+// (`required-features std`) is on for the same reason as rapier's.
 const EXPECTED_PARRY3D_FEATURES = [
-  'alloc', 'dim3', 'downcast-rs', 'ena', 'enhanced-determinism', 'f32', 'hashbrown', 'indexmap',
+  'alloc', 'default', 'dim3', 'downcast-rs', 'ena', 'enhanced-determinism', 'f32', 'hashbrown', 'indexmap',
   'parallel', 'rayon', 'required-features', 'rstar', 'serde', 'serde-serialize', 'serde_arrays', 'slab', 'smallvec', 'std',
 ];
 
@@ -99,7 +102,9 @@ const FORBIDDEN_NORMAL_DEPS = new Set(['rayon', 'rayon-core']);
 // The named carve-outs: rapier's internal scheduler (Serious Isaac 0020; its pool is owned by
 // `ludion-physics`, sized `par::threads()`) and `ludion_core::par`'s private persistent pool (0033).
 // Only these crates may depend on rayon.
-const ALLOWED_RAYON_EDGES = new Set(['rapier3d', 'parry3d', 'ludion-core']);
+// The vendored forks' package names, keyed by their directory under vendor/.
+const VENDORED = { rapier3d: 'ludion-rapier3d', parry3d: 'ludion-parry3d' };
+const ALLOWED_RAYON_EDGES = new Set([VENDORED.rapier3d, VENDORED.parry3d, 'ludion-core']);
 
 function fail(msg) {
   console.error(`physics-features: ${msg}`);
@@ -164,14 +169,15 @@ function singlePackage(name, byName = packagesByName) {
   return pkgs[0];
 }
 
-// `name` must be exactly one path package under vendor/<name>/; `how` names what keeps it there.
-function assertVendored(byName, name, how, where) {
+// `dir`'s fork must be exactly one path package under vendor/<dir>/; `how` names what keeps it there.
+function assertVendored(byName, dir, how, where) {
+  const name = VENDORED[dir];
   const pkg = singlePackage(name, byName);
   const manifest = pkg.manifest_path.replaceAll('\\', '/');
-  if (pkg.source !== null || !manifest.endsWith(`/vendor/${name}/Cargo.toml`)) {
+  if (pkg.source !== null || !manifest.endsWith(`/vendor/${dir}/Cargo.toml`)) {
     fail(
-      `${name}@${pkg.version} resolved from ${pkg.source ?? manifest}, not vendor/${name}, ${where} — ${how} has fallen ` +
-      `away, so the patch (vendor/${name}/LUDION-PATCH.md) is not in the build`,
+      `${name}@${pkg.version} resolved from ${pkg.source ?? manifest}, not vendor/${dir}, ${where} — ${how} has fallen ` +
+      `away, so the patch (vendor/${dir}/LUDION-PATCH.md) is not in the build`,
     );
   }
   return pkg;
@@ -295,12 +301,12 @@ for (const id of visited) {
   const path_ = chain.map((pid) => `${nameById.get(pid)}@${metadata.packages.find((p) => p.id === pid)?.version ?? '?'}`).join(' -> ');
   fail(`"${name}" is reachable from ludion-physics's normal dependency closure:\n  ${path_}\nRayon is allowed only through rapier3d and parry3d (the \`parallel\` carve-out) and ludion-core (par's pool); something else in the closure now reaches it.`);
 }
-for (const edge of ['rapier3d -> rayon', 'parry3d -> rayon', 'ludion-core -> rayon-core']) {
+for (const edge of [`${VENDORED.rapier3d} -> rayon`, `${VENDORED.parry3d} -> rayon`, 'ludion-core -> rayon-core']) {
   if (!allowedEdgesSeen.has(edge)) {
     fail(
       `${edge.split(' ')[0]} no longer reaches ${edge.split(' ')[2]} — ` +
-      `${edge.startsWith('ludion-core') ? "par's pool dependency was removed?" : 'the \`parallel\` pin changed?'} Expected rapier3d -> rayon, ` +
-      `parry3d -> rayon and ludion-core -> rayon-core (seen: ${[...allowedEdgesSeen].join(', ') || 'none'})`,
+      `${edge.startsWith('ludion-core') ? "par's pool dependency was removed?" : 'the \`parallel\` pin changed?'} Expected ${VENDORED.rapier3d} -> rayon, ` +
+      `${VENDORED.parry3d} -> rayon and ludion-core -> rayon-core (seen: ${[...allowedEdgesSeen].join(', ') || 'none'})`,
     );
   }
 }

@@ -715,7 +715,7 @@ pub(crate) struct AttachedVoice {
 /// voice ([`AudioQueue::play_on`]) while it is tracked and audible. While any source is live the
 /// engine sends [`AudioMessage::Duck`] for each bus in `duck`, fading in over `attack_ticks` and back
 /// out over `release_ticks`. Rules and manual ducks multiply, floored at
-/// [`DUCK_FLOOR_DB`](ludion_core::audio::DUCK_FLOOR_DB).
+/// [`DUCK_FLOOR_DB`].
 ///
 /// `when` is a bus with a tracked end — not [`Bus::Master`] or [`Bus::Music`]; `duck` is non-empty
 /// and names neither `Master` nor `when`; `depth_db` is finite and at most `0.0`. Anything else

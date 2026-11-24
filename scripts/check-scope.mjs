@@ -72,7 +72,8 @@ export function classify(paths, { members, fuzzDeps }, { deps = false } = {}) {
     }
     if (under('docs') || under('crates/ludion-cli/embedded-docs')) { s.docs = true; continue; }
     if (under('examples')) { s.drift = true; continue; }
-    const member = byDepth.find((m) => under(m.dir));
+    // A vendored physics fork is a member, but a patch to it moves every physics result.
+    const member = under('vendor') ? undefined : byDepth.find((m) => under(m.dir));
     if (member) {
       s.packages.add(member.name);
       if (under('games') && !p.endsWith('.rs')) s.drift = true;

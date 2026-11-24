@@ -82,7 +82,7 @@ pub(crate) fn overrides_camera(world: &mut World, camera: EntityId) -> bool {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PlayerState {
-    /// Spawned by [`play`]; the next [`sequence_update`] stamps its start.
+    /// Spawned by [`play`]; the next `sequence_update` stamps its start.
     #[default]
     Pending,
     /// Running.
@@ -119,10 +119,10 @@ pub struct SequencePlayer {
     /// The playhead through which keys have applied; none yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_through: Option<u32>,
-    /// A skip waiting for the next [`sequence_update`].
+    /// A skip waiting for the next `sequence_update`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub skip: bool,
-    /// A cancel waiting for the next [`sequence_update`].
+    /// A cancel waiting for the next `sequence_update`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub cancel: bool,
     /// The `seq` of every dialogue line it said, so a skip or cancel can interrupt them.
@@ -285,7 +285,7 @@ fn find_doc(world: &World, key: &str) -> Option<SequenceDoc> {
 }
 
 /// Starts the sequence `key` (the document's content-root path) with `bindings` mapping each role to
-/// an entity. The first [`sequence_update`] after this stamps the start and applies the keys at 0.
+/// an entity. The first `sequence_update` after this stamps the start and applies the keys at 0.
 ///
 /// # Errors
 /// `L4354` without `.sequences()`, `L4350` for an unknown document, `L4351` for a role the document
@@ -367,7 +367,7 @@ pub fn play(
     Ok(SequenceHandle(player))
 }
 
-/// Cuts the sequence to its end state at the next [`sequence_update`]: the last camera, animation
+/// Cuts the sequence to its end state at the next `sequence_update`: the last camera, animation
 /// and ui key of every role applies in its end form, unfired `on_skip: fire` events fire in order,
 /// unplayed audio and dialogue keys are dropped and its lines are interrupted; then
 /// `Ended { Skipped }`. `false` when the handle is not live or the document says
@@ -395,7 +395,7 @@ pub fn skip(world: &mut World, handle: SequenceHandle) -> bool {
     true
 }
 
-/// Stops the sequence where it is at the next [`sequence_update`]: no end state is applied, its
+/// Stops the sequence where it is at the next `sequence_update`: no end state is applied, its
 /// lines are interrupted, and it emits `Ended { Cancelled }`. `false` when the handle is not live.
 ///
 /// # Example

@@ -3,7 +3,7 @@
 //!
 //! Two entry points bracket an element's resolve. The `pre_*` functions return the element as it
 //! should be resolved — a [`Cow`], borrowed when nothing animates it — with the tween's offset, size,
-//! colour and opacity applied. [`post`] then edits the instances the element just emitted: scale
+//! colour and opacity applied. `post` then edits the instances the element just emitted: scale
 //! about the centre of their box, the world anchor's translation, `show`, `behind`, `fade`. Neither
 //! writes the world, and an element with neither component is returned and left untouched.
 

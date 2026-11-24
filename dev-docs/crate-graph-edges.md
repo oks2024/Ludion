@@ -66,7 +66,7 @@ ludion-mcp             → client, core, protocol  [serde_json]
 ludion-mesh-edit       → assets, core, scene  [serde]
     dev: (none)  [serde_json]
 ludion-nav             → core
-ludion-physics         → core, ecs, spatial  [bincode, rapier3d, schemars, serde, serde_json]
+ludion-physics         → core, ecs, spatial  [bincode, ludion-rapier3d, schemars, serde, serde_json]
     dev: (none)  [xxhash-rust]
 ludion-projectiles     → core, physics, spatial  [xxhash-rust]
     dev: ecs  [schemars, serde]
@@ -103,15 +103,15 @@ shmup-stress           → ludion  [schemars, serde]
 sokoban                → ludion  [schemars, serde]
     dev: core, engine, testkit  [serde_json]
 
-wgpu          ← ludion, engine, render-graph, renderer, window
-tokio         ← server
-winit         ← ludion(window), window
-gilrs         ← window
-notify        ← assets(watch)
-rapier3d      ← physics
-saphyr-parser ← scene, testkit
-assets/watch  ← ludion(wire), cli, server
-font/bake     ← cli
+wgpu            ← ludion, engine, render-graph, renderer, window
+tokio           ← server
+winit           ← ludion(window), window
+gilrs           ← window
+notify          ← assets(watch)
+ludion-rapier3d ← physics
+saphyr-parser   ← scene, testkit
+assets/watch    ← ludion(wire), cli, server
+font/bake       ← cli
 
 no wgpu in the tree: ai, assets, audio, camera, client, components, cook, core, ecs, font, gen,
       import, mcp, mesh-edit, nav, physics, projectiles, protocol, scene, sculpt, shader-bindgen,

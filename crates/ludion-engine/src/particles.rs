@@ -8,7 +8,7 @@
 //!   "where is this thing after `t` seconds" in the engine. That matters because a second consumer
 //!   is coming that runs the same function *sim-side* (a projectile pattern's hit test): two
 //!   implementations of the same trajectory would drift, and the visual one would be the lie.
-//! - **[`evaluate`]** — a [`ParticleEmitter`] plus a [`Transform`] plus a [`SimTime`] in, a stream
+//! - **[`evaluate`]** — a [`ParticleEmitter`] plus a [`Transform`] plus a [`SimTime`](ludion_core::time::SimTime) in, a stream
 //!   of [`ParticleInstance`]s out. It reads *nothing else*: no world, no resource, no accumulated
 //!   state, no clock. The same three arguments therefore give the same particles in any process, on
 //!   any thread count, at any point of a replay, and after any `engine.restore`.

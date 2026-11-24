@@ -1,13 +1,15 @@
 # parry3d 0.30.2, modified by Ludion
 
-This is parry3d 0.30.2 (Apache-2.0, Dimforge) with one file changed, as Apache-2.0 §4(b) requires
+This is parry3d 0.30.2 (Apache-2.0, Dimforge) with one source file changed and its manifest adapted, as Apache-2.0 §4(b) requires
 stating. Everything else is byte-identical to the crates.io release; the license is `LICENSE-APACHE`.
 
 **Changed:** `src/query/ray/ray_heightfield.rs`, the dim3 `RayCast for HeightField`'s
 `cast_local_ray_and_get_normal`: the start cell is re-seated right after `cell_at_point`. The exact
-change is `LUDION-PATCH.diff`. `Cargo.toml` also gains an empty `[workspace]` table: the crate is its
-own workspace root, so `cargo metadata --no-deps` on it (the importer fingerprint's build script) works
-offline even inside a nested checkout. Cargo ignores it when built as a dependency.
+change is `LUDION-PATCH.diff`. `Cargo.toml` is the fork's manifest:
+the package is `ludion-parry3d` (the lib keeps the name `parry3d`), a member of Ludion's workspace,
+with its features cut to the ones Ludion builds and upstream's test, bench and example targets not
+built, as `vendor/rapier3d/LUDION-PATCH.md` describes for rapier3d. `Cargo.toml.orig` is removed:
+cargo reserves that name in a package's source.
 
 It reaches every build through rapier3d's path dependency on it (`vendor/rapier3d/Cargo.toml`), not a
 root `[patch]`.
@@ -26,7 +28,7 @@ rounding in the triangle test, which has no tolerance (282 of 46488 for in-plane
 x in `ludion-physics/tests/queries.rs`).
 
 **Re-apply** onto another release: `patch -p1 < LUDION-PATCH.diff` (or `git apply`) from the
-release's root; if it does not apply, port the one hunk by hand, then regenerate the diff with
+release's root; if it does not apply, port the one hunk and the manifest by hand, then regenerate the diff with
 `diff -u --strip-trailing-cr`.
 
 Upstream: not reported.

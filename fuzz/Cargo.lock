@@ -899,14 +899,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "ludion-parry3d"
+version = "0.30.2"
+dependencies = [
+ "approx",
+ "arrayvec",
+ "bitflags",
+ "downcast-rs",
+ "either",
+ "ena",
+ "foldhash",
+ "glamx",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "log",
+ "num-derive",
+ "num-traits",
+ "ordered-float",
+ "rayon",
+ "rstar",
+ "serde",
+ "serde_arrays",
+ "simba",
+ "slab",
+ "smallvec",
+ "static_assertions",
+ "thiserror",
+]
+
+[[package]]
 name = "ludion-physics"
 version = "0.1.0"
 dependencies = [
  "bincode",
  "ludion-core",
  "ludion-ecs",
+ "ludion-rapier3d",
  "ludion-spatial",
- "rapier3d",
  "schemars",
  "serde",
  "serde_json",
@@ -933,6 +962,27 @@ dependencies = [
  "serde_path_to_error",
  "xxhash-rust",
  "zstd",
+]
+
+[[package]]
+name = "ludion-rapier3d"
+version = "0.35.3"
+dependencies = [
+ "approx",
+ "arrayvec",
+ "bitflags",
+ "glamx",
+ "log",
+ "ludion-parry3d",
+ "nalgebra",
+ "num-traits",
+ "profiling",
+ "rayon",
+ "serde",
+ "simba",
+ "static_assertions",
+ "thiserror",
+ "wide",
 ]
 
 [[package]]
@@ -1318,36 +1368,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parry3d"
-version = "0.30.2"
-dependencies = [
- "approx",
- "arrayvec",
- "bitflags",
- "downcast-rs",
- "either",
- "ena",
- "foldhash",
- "glamx",
- "hashbrown 0.17.1",
- "indexmap",
- "log",
- "num-derive",
- "num-traits",
- "ordered-float",
- "rayon",
- "rstar",
- "serde",
- "serde_arrays",
- "simba",
- "slab",
- "smallvec",
- "spade",
- "static_assertions",
- "thiserror",
-]
-
-[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1449,27 +1469,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
 
 [[package]]
-name = "rapier3d"
-version = "0.35.3"
-dependencies = [
- "approx",
- "arrayvec",
- "bitflags",
- "glamx",
- "log",
- "nalgebra",
- "num-traits",
- "parry3d",
- "profiling",
- "rayon",
- "serde",
- "simba",
- "static_assertions",
- "thiserror",
- "wide",
-]
-
-[[package]]
 name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1558,12 +1557,6 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
-
-[[package]]
-name = "robust"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 
 [[package]]
 name = "rstar"
@@ -1783,19 +1776,6 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
-
-[[package]]
-name = "spade"
-version = "2.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9699399fd9349b00b184f5635b074f9ec93afffef30c853f8c875b32c0f8c7fa"
-dependencies = [
- "hashbrown 0.16.1",
- "num-traits",
- "robust",
- "serde",
- "smallvec",
-]
 
 [[package]]
 name = "spirv"

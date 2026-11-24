@@ -56,7 +56,7 @@ use crate::components::{Animation, Mesh, MeshSource, PoseSnapshot, SnapshotPart,
 use crate::ragdoll::{mesh_bounds, switch_invalid};
 
 /// Where a folded ragdoll puts its root, and which way it lies: the placement rule in the
-/// [module docs](self).
+/// module docs.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RagdollToAssembly {
@@ -294,7 +294,7 @@ pub fn ragdoll_landing(
 
 /// Folds a voxel ragdoll back into its root `entity`: captures the parts' poses into a
 /// [`PoseSnapshot`], despawns `parts`, re-inserts the root's `Mesh { shape: assembly }`, places the
-/// root by the [module's rule](self), starts `clip`, and returns the placement.
+/// root by the module's rule, starts `clip`, and returns the placement.
 ///
 /// `parts` are the entities [`switch_to_ragdoll`](crate::switch_to_ragdoll) returned, in order; a
 /// part retired by the ragdoll budget (only `Transform` and `Mesh` left) folds back like any other.

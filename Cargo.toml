@@ -1,10 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "games/*"]
-# The patched rapier3d and parry3d are path dependencies under the workspace directory; without this
-# they would become members and every workspace gate (clippy, fmt, nextest) would run over them.
+# The vendored rapier3d and parry3d forks are members so `cargo package --workspace` verifies them
+# with the crates that depend on them; their manifests keep them clean under every workspace gate
+# (`vendor/<crate>/LUDION-PATCH.md`).
+members = ["crates/*", "games/*", "vendor/rapier3d", "vendor/parry3d"]
 # games/vigil is a detached workspace of its own (its own Cargo.lock), so this lock never names it.
-exclude = ["vendor/rapier3d", "vendor/parry3d", "games/vigil"]
+exclude = ["games/vigil"]
 
 # Shared package metadata. Individual crates inherit these with `field.workspace = true`
 # so version/edition/license stay defined in exactly one place.
@@ -211,12 +212,13 @@ harfrust = { version = "=0.13.3", default-features = false, features = ["std"] }
 # solver state. Only
 # `ludion-physics` names a rapier or nalgebra type — the boundary rule the crate's `clippy.toml`
 # cannot itself enforce, which is why `scripts/physics-features.mjs` exists.
-# rapier3d and parry3d are vendored and patched (`vendor/<crate>/LUDION-PATCH.md`) and reach the build
-# as path dependencies (rapier here, parry through `vendor/rapier3d/Cargo.toml`), so a game that
-# depends on Ludion by path builds the patched crates too — a root `[patch.crates-io]` would not
-# reach it. `version` stays first for `scripts/physics-pin-ritual.mjs`. A temporary mechanism while
-# Ludion is unpublished: revisit before any crates.io publish (`dev-docs/physics-pin.md`).
-rapier3d = { version = "=0.35.3", path = "vendor/rapier3d", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism", "parallel", "serde-serialize"] }
+# rapier3d and parry3d are vendored and patched (`vendor/<crate>/LUDION-PATCH.md`), renamed
+# `ludion-rapier3d` and `ludion-parry3d` (the libs keep their names), and reach the build as path
+# dependencies (rapier here, parry through `vendor/rapier3d/Cargo.toml`), so a game that depends on
+# Ludion by path builds the patched crates too — a root `[patch.crates-io]` would not reach it, and a
+# published Ludion depends on the published forks. `version` stays first for
+# `scripts/physics-pin-ritual.mjs` (`dev-docs/physics-pin.md`).
+rapier3d = { version = "=0.35.3", package = "ludion-rapier3d", path = "vendor/rapier3d", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism", "parallel", "serde-serialize"] }
 # Binary codec for the physics snapshot blob (`Plan/physics.md` W1): about 4.7x smaller and 11x
 # faster than JSON text for rapier's serialized state, which a structured `serde_json::Value`
 # cannot hold at all (the narrow phase's 128-bit solver masks overflow it). Unpinned within the 1.x
@@ -242,6 +244,14 @@ opt-level = 1
 # rest of the render/streaming stack run at full speed under a debug workspace
 # (dev-docs/frame-streaming.md).
 [profile.dev.package."*"]
+opt-level = 3
+
+# The vendored physics forks are members, which `"*"` does not reach: they stay at the opt-level
+# every other dependency builds at.
+[profile.dev.package.ludion-rapier3d]
+opt-level = 3
+
+[profile.dev.package.ludion-parry3d]
 opt-level = 3
 
 # The two overrides below both exist because of rustc's share-generics: in dev builds a generic

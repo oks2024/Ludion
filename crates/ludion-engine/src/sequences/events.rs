@@ -60,7 +60,7 @@ pub enum SequenceEvent {
     },
 }
 
-/// Every [`SequenceEvent`] the last [`sequence_update`](super::sequence_update) produced, in the
+/// Every [`SequenceEvent`] the last `sequence_update` produced, in the
 /// order they happened. Rewritten on every run, so a consumer reads it the same tick, after that
 /// system.
 ///

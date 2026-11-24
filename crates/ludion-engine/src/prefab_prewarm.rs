@@ -94,7 +94,7 @@ impl PrefabPrewarm {
 }
 
 /// Requests the prewarm of the prefab at `path` placed at `placement`, replacing any earlier request;
-/// see [`PrefabPrewarm`]. The prefab is read and validated exactly as [`prepare_prefab`] does.
+/// see [`PrefabPrewarm`]. The prefab is read and validated exactly as [`prepare_prefab`](crate::prepare_prefab) does.
 ///
 /// # Errors
 /// The diagnostics [`prepare_prefab`](crate::prepare_prefab) returns for `path`; a failed call leaves

@@ -5,8 +5,8 @@
 //! [`EngineBuilder::dialogue`](crate::EngineBuilder::dialogue) implies). `kind: strings` holds one
 //! locale's key → text map, `kind: locales` names the default. The active locale is the hashed
 //! [`LocaleState`] component on one lazily spawned entity, so it rides snapshots and checkpoints;
-//! [`set_locale`] changes it. A [`UiText`](ludion_components::UiText) or
-//! [`Text`](ludion_components::Text) with a `key` shows the key's string through the engine's
+//! [`set_locale`] changes it. A [`UiText`] or
+//! [`Text`] with a `key` shows the key's string through the engine's
 //! `localize_text` system, which writes the runtime-only `resolved` field and **never** the authored
 //! `text` — a scene saved under any locale is byte-identical.
 

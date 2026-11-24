@@ -7,7 +7,7 @@ pub const GUTTER: u32 = 8;
 /// The sheet's fill, visible in the gutters and below a short cell.
 const FILL: [u8; 4] = [20, 20, 28, 255];
 
-/// One row, top-aligned, at native sizes: `frame`, then each of `views` in order, [`GUTTER`] pixels apart
+/// One row, top-aligned, at native sizes: `frame`, then each of `views` in order, `GUTTER` pixels apart
 /// on a dark fill. Width is the cells' widths plus the gutters, height the tallest cell. Unlabelled.
 ///
 /// # Example

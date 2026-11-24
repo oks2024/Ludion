@@ -184,7 +184,7 @@ pub struct MeshDocument {
     pub lods: Vec<MeshLodRef>,
     /// Per-triangle surface tags (the `surfaces` and `triangle_surfaces` keys), matched to the
     /// scene's `physics.surfaces` at load. `None` for an untagged mesh. Validated with the
-    /// document (`L1696`) and written by [`emit`] right before `indices`.
+    /// document (`L1696`) and written by the canonical mesh writer right before `indices`.
     pub surfaces: Option<MeshSurfaces>,
     /// Triangle list: flat vertex indices, 3 per triangle.
     pub indices: Vec<u32>,
