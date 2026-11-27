@@ -164,6 +164,7 @@ fn game(root: &Path, driver: Option<Driver>) -> ludion_engine::EngineBuilder {
     builder
         .system("blend_clocks", blend_clocks)
         .query::<(&Animation, &Mesh)>()
+        .query::<(&ludion_engine::Animation, &ludion_engine::PrefabInstance)>()
         .query::<(&mut BlendClock,)>()
         .system("animation_events", animation_events)
         .query::<(&Animation, &Mesh)>()

@@ -61,6 +61,7 @@ fn the_scene_validates_and_its_blend_figures_step_on_alternating_feet() {
         .project_root(gallery())
         .system("blend_clocks", blend_clocks)
         .query::<(&Animation, &Mesh)>()
+        .query::<(&ludion_engine::Animation, &ludion_engine::PrefabInstance)>()
         .query::<(&mut BlendClock,)>()
         .system("animation_events", animation_events)
         .query::<(&Animation, &Mesh)>()

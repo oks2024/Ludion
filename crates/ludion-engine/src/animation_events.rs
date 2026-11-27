@@ -35,7 +35,7 @@
 //! fading-out run's footsteps would double the incoming clip's and a stale `end` would release a
 //! choice the game has already made.
 //!
-//! **Layers.** A skinned character's or voxel assembly's `AnimationLayers` layer with
+//! **Layers.** A skinned character's, voxel assembly's or prefab instance root's `AnimationLayers` layer with
 //! `events: true` fires its clip's events too, only while its weight at the gameplay instant is above 0, with `ClipEvent.layer` set to
 //! the layer's name (base events carry an empty `layer`) and `clip` to the layer's clip or blend. A
 //! layer keeps no walk record: a plain clip is walked statelessly over `(T(i − step), T(i)]`, `T`
@@ -44,8 +44,8 @@
 //! when the layer's `started` lies after `floor(i − step)`; a layer a system registered after
 //! `animation_events` starts therefore loses only an event at exactly `t = 0`, so register
 //! `play_layer` callers before it. A raw `speed` write mid-clip may skip or repeat one crossing that
-//! tick. A layer naming a blend fires its dominant point's events over its `BlendClock.layers` window
-//! (characters only; an assembly's layers name clips).
+//! tick. A layer naming a blend fires its dominant point's events over its `BlendClock.layers` window,
+//! on a character, an assembly or a prefab root.
 //! An entity's base events come first, then its layers' in list order.
 //!
 //! **Held frames.** A frame the game held crosses nothing: the resource is cleared and the walk
@@ -55,8 +55,10 @@
 //! The walk is sequential, so the log is thread-count invariant by construction.
 //!
 //! **Prefab instances.** An `Animation` on the root part of a prefab instance (`PrefabInstance.root`
-//! is the entity itself) plays the prefab's `clips:`; a root that also has an assembly or character
-//! `Mesh` uses the mesh's model. The root need not carry a `Mesh`.
+//! is the entity itself) plays the prefab's `clips:` and `blends:`, and fires their events: base
+//! blend events from its `BlendClock`, and its `events: true` layers', with or without a base clip.
+//! A root that also has an assembly or character `Mesh` uses the mesh's model. The root need not
+//! carry a `Mesh`.
 //!
 //! **Where timing comes from.** No sim-side resource holds assembly, character or prefab data (the
 //! asset cache is render-only), so [`AnimationLibrary`] loads each model once, lazily, through the same
@@ -90,7 +92,7 @@ use crate::blend_space::BlendSpaceData;
 use crate::components::{
     Animation, AnimationLayers, BlendClock, Mesh, MeshSource, Sprite, layer_weight_at,
 };
-use crate::extract::clock_elapsed;
+use crate::extract::{clock_elapsed, is_prefab_player};
 use crate::prefab::PrefabInstance;
 use crate::sequences::bound::{self, entity_clock};
 use ludion_components::animation_layers::MAX_ANIMATION_LAYERS;
@@ -149,7 +151,7 @@ pub(crate) struct AnimationLibrary {
     /// Keyed by model kind and path; `Err` holds the loader's diagnostics for a model that failed
     /// to load.
     models: BTreeMap<Model, Result<BTreeMap<String, ClipTiming>, Vec<Diagnostic>>>,
-    /// The blend spaces of each loaded character or assembly (`blend_clock`).
+    /// The blend spaces of each loaded model (`blend_clock`).
     blends: BTreeMap<Model, Vec<BlendSpaceData>>,
     /// The [`RootModel`] of each model. Interior-mutable so the sim read `root_motion_delta` works
     /// through `&World`; the lock is held only to get or insert.
@@ -255,6 +257,7 @@ impl AnimationLibrary {
                 Model::Prefab(_) => {
                     crate::prefab_clips::load_with_sources(AssetRoot::content(&self.root), rel).map(
                         |(data, _)| {
+                            self.blends.insert(model.clone(), data.blends.clone());
                             self.fill_root(model, root_model_of_prefab(&data));
                             data.clips
                                 .iter()
@@ -310,7 +313,7 @@ fn root_model_of_character(data: &crate::character::CharacterData) -> RootModel 
     }
 }
 
-/// A prefab has no blend spaces.
+/// Root motion reads a prefab's plain clips only, so its blend list is left empty.
 fn root_model_of_prefab(data: &crate::prefab_clips::PrefabClipData) -> RootModel {
     RootModel {
         clips: root_clips(data.clips.iter().map(|b| (&b.name, &b.clip, 1.0))),
@@ -465,26 +468,33 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
     let mut walked = Vec::new();
     // Entities in ascending id order: a mesh model, else the instance's prefab for a root part.
     let mut playing: BTreeMap<EntityId, (Animation, Model)> = BTreeMap::new();
-    for (id, (animation, instance)) in world.query_ids::<(&Animation, &PrefabInstance)>() {
-        if instance.root == id && !animation.clip.is_empty() {
-            playing.insert(
-                id,
-                (animation.clone(), Model::Prefab(instance.source.clone())),
-            );
+    // An entity with no base clip still walks its event-firing layers.
+    let mut baseless = Vec::new();
+    let roots: Vec<(EntityId, Animation, PrefabInstance)> = world
+        .query_ids::<(&Animation, &PrefabInstance)>()
+        .filter(|(id, (_, instance))| instance.root == *id)
+        .map(|(id, (animation, instance))| (id, animation.clone(), instance.clone()))
+        .collect();
+    for (id, animation, instance) in roots {
+        if is_prefab_player(world, id, &instance) {
+            let model = Model::Prefab(instance.source);
+            if animation.clip.is_empty() {
+                baseless.push((id, animation, model));
+            } else {
+                playing.insert(id, (animation, model));
+            }
         }
     }
-    // A character or assembly with no base clip still walks its event-firing layers.
-    let mut baseless = Vec::new();
     for (id, (animation, mesh)) in world.query_ids::<(&Animation, &Mesh)>() {
         let model = match &mesh.shape {
             MeshSource::Assembly(rel) => Model::Assembly(rel.clone()),
             MeshSource::Character(rel) => Model::Character(rel.clone()),
             _ => continue,
         };
-        if !animation.clip.is_empty() {
-            playing.insert(id, (animation.clone(), model));
-        } else if matches!(model, Model::Character(_) | Model::Assembly(_)) {
+        if animation.clip.is_empty() {
             baseless.push((id, animation.clone(), model));
+        } else {
+            playing.insert(id, (animation.clone(), model));
         }
     }
     for (id, animation, model) in baseless {
@@ -627,7 +637,7 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
 }
 
 /// Appends the events of `id`'s event-firing `AnimationLayers` layers, in list order (the module
-/// docs' "Layers" paragraph). Only a skinned character or an assembly has layers.
+/// docs' "Layers" paragraph).
 fn walk_layers(
     world: &World,
     library: &mut AnimationLibrary,
@@ -636,9 +646,6 @@ fn walk_layers(
     model: &Model,
     fired: &mut Vec<ClipEvent>,
 ) {
-    if matches!(model, Model::Prefab(_)) {
-        return;
-    }
     // Unrecorded, as in the baseless scan.
     let Some(stack) = world.get_unrecorded::<AnimationLayers>(id).ok().flatten() else {
         return;

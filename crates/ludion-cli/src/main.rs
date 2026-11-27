@@ -783,13 +783,14 @@ enum Command {
         /// when the fade begins. Conflicts with `--clip`; one model only.
         #[arg(long, value_name = "FROM:TO:SECONDS", conflicts_with_all = ["scene", "clip", "atlas", "sprite"])]
         crossfade: Option<String>,
-        /// Under `--model`, sweep a blend space of an assembly or character as a strip of phases:
+        /// Under `--model`, sweep a blend space of an assembly, character or prefab as a strip of phases:
         /// `--blend locomotion:0..2` evaluates the 1D blend `locomotion` at parameters swept
         /// linearly from 0 to 2 across five phases (`--strip N` for 2 to 8); `--blend aim:0.5:-1..1`
         /// holds the first parameter of a 2D blend and sweeps the second; plain values give one
         /// phase. Each phase prints its parameters, its shared phase in cycles and the gap analysis,
         /// all at `--time`. `check-scene <model>.assembly.yaml` lists a model's blends and their
-        /// points. Conflicts with `--clip` and `--crossfade`; one model only; a prefab has no blends.
+        /// points. Conflicts with `--clip` and `--crossfade`; one model only. A prefab's phases report no
+        /// gap analysis.
         #[arg(long, value_name = "NAME:P0[:P1]", conflicts_with_all = ["scene", "clip", "crossfade", "atlas", "sprite"])]
         blend: Option<String>,
         /// Under `--model`, stack a layer over the pose of `--clip`, `--crossfade` or `--blend`:
@@ -798,7 +799,7 @@ enum Command {
         /// The fields are `CLIP:WEIGHT[:MASK[:MODE]]` with a weight in 0 to 1 and a mode of `override`
         /// (the default) or `additive`. Repeat the flag for more layers, bottom first, at most four
         /// (`L1670`). The report echoes the stack and poses the gap analysis through it;
-        /// `check-scene <model>.assembly.yaml` lists the masks. A prefab has no layers.
+        /// `check-scene <model>.assembly.yaml` (or `.prefab.yaml`) lists the masks.
         #[arg(long, value_name = "CLIP:WEIGHT[:MASK[:MODE]]", conflicts_with_all = ["scene", "atlas", "sprite"])]
         layer: Vec<String>,
         /// Under `--model`, aim an assembly's `ik:` look-at over the pose of `--clip`, `--crossfade`

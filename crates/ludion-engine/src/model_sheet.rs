@@ -2742,12 +2742,12 @@ impl<'a> ClipSource<'a> {
         }
     }
 
-    /// The blend space bound as `name`, or `None` (a prefab has none).
+    /// The blend space bound as `name`, or `None`.
     fn blend(&self, name: &str) -> Option<&crate::blend_space::BlendSpaceData> {
         match self {
             ClipSource::Assembly(posing) => posing.data.blend(name),
             ClipSource::Character(data) => data.blend(name),
-            ClipSource::Prefab(_) => None,
+            ClipSource::Prefab(data) => data.blend(name),
         }
     }
 
@@ -2765,7 +2765,11 @@ impl<'a> ClipSource<'a> {
                 .iter()
                 .map(|blend| blend.name.as_str())
                 .collect(),
-            ClipSource::Prefab(_) => Vec::new(),
+            ClipSource::Prefab(data) => data
+                .blends
+                .iter()
+                .map(|blend| blend.name.as_str())
+                .collect(),
         }
     }
 
@@ -3206,18 +3210,6 @@ fn game_now(tick: u64) -> ludion_core::time::GameTime {
     ludion_core::time::GameTime::from(SimTime::from_ticks(tick, TickRate::DEFAULT))
 }
 
-/// `L1117` for a prefab asked to blend or layer: its parts carry neither.
-fn refuse_prefab(what: &str) -> Vec<Diagnostic> {
-    refuse_clip(
-        format!(
-            "{what} cannot pose a prefab: a prefab's parts carry `Animation` clips only, with no \
-             `blends:` and no `AnimationLayers`"
-        ),
-        "point `--model` at the assembly or character that declares the blends and masks, or play a \
-         prefab clip with `--clip`",
-    )
-}
-
 /// "it declares `a`, `b`" — or "it declares none" — for a refusal that lists what a model has.
 fn declared(names: &[&str]) -> String {
     if names.is_empty() {
@@ -3236,9 +3228,6 @@ fn check_layers(
     if specs.is_empty() {
         return Ok(());
     }
-    if matches!(source, ClipSource::Prefab(_)) {
-        return Err(refuse_prefab("`--layer`"));
-    }
     let list = |names: Vec<&str>| declared(&names);
     let (clips, masks): (Vec<&str>, Vec<&str>) = match source {
         ClipSource::Assembly(posing) => (
@@ -3249,7 +3238,10 @@ fn check_layers(
             data.clips.iter().map(|c| c.name.as_str()).collect(),
             data.masks.iter().map(|m| m.name.as_str()).collect(),
         ),
-        ClipSource::Prefab(_) => (Vec::new(), Vec::new()),
+        ClipSource::Prefab(data) => (
+            data.clips.iter().map(|c| c.name.as_str()).collect(),
+            data.masks.iter().map(|m| m.name.as_str()).collect(),
+        ),
     };
     let blends = source.blend_names();
     for spec in specs {
@@ -3299,9 +3291,6 @@ fn resolve_blend(
     let what = format!("`--blend {}`", spec.name);
     let (noun, _) = clip_names(loaded, &what)?;
     let source = ClipSource::load(model, loaded)?;
-    if matches!(source, ClipSource::Prefab(_)) {
-        return Err(refuse_prefab(&what));
-    }
     check_layers(&source, noun, request.layers)?;
     let ik = resolve_ik(&source, noun, request)?;
     let Some(blend) = source.blend(spec.name) else {
@@ -4980,7 +4969,7 @@ fn animation_of(spec: AnimationSpec) -> Animation {
 }
 
 /// One prefab instance entry: the normalizing placement on the entry, and a posed sheet's
-/// `Animation` as an override of the root part, where playback reads it.
+/// `Animation` and `AnimationLayers` as overrides of the root part, where playback reads them.
 fn prefab_instance_entity(
     index: usize,
     file: &str,
@@ -5005,6 +4994,7 @@ fn prefab_instance_entity(
         let mut value = serde_json::json!({
             "clip": animation.clip,
             "started": animation.started,
+            "params": animation.params,
         });
         if let Some(fade) = animation.fade {
             value["from"] = fade.from.into();
@@ -5012,10 +5002,16 @@ fn prefab_instance_entity(
             value["fade_started"] = fade.fade_started.into();
             value["fade"] = fade.seconds.into();
         }
-        instance.overrides.insert(
-            root_part.to_string(),
-            vec![("Animation".to_string(), value)],
-        );
+        let mut overrides = vec![("Animation".to_string(), value)];
+        if !animation.layers.is_empty() {
+            overrides.push(typed(
+                "AnimationLayers",
+                &AnimationLayers {
+                    layers: layers_of(animation.layers, animation.started),
+                },
+            ));
+        }
+        instance.overrides.insert(root_part.to_string(), overrides);
     }
     ludion_scene::SceneEntity {
         name: Some(format!("phase-{index}")),
@@ -6206,7 +6202,7 @@ entities:
             ik: None,
             look: None,
         };
-        assert_eq!(keys(posed), ["clip", "started"]);
+        assert_eq!(keys(posed), ["clip", "params", "started"]);
         let fading = AnimationSpec {
             fade: Some(FadeSpec {
                 from: "snap",
@@ -6224,9 +6220,53 @@ entities:
                 "fade_started",
                 "from",
                 "from_started",
+                "params",
                 "started"
             ]
         );
+    }
+
+    /// A phase's blend parameters ride the `Animation` override, and its layers an `AnimationLayers`
+    /// override of the root part.
+    #[test]
+    fn a_prefab_phase_carries_its_params_and_layers_on_the_root_part() {
+        let bounds = ModelBounds {
+            kind: ModelKind::Prefab("base".to_string()),
+            ..baseline_bounds()
+        };
+        let subject = Subject::single(&bounds);
+        let layers = [parse_layer("curl:1:forearm").expect("a layer")];
+        let yaml = synthesize_scene(
+            &[&bounds],
+            std::slice::from_ref(&bounds.file_name),
+            &subject,
+            None,
+            ModelView::Front,
+            "front",
+            &[],
+            &[Some(AnimationSpec {
+                clip: "sway",
+                started: 4,
+                fade: None,
+                params: [0.5, 0.0],
+                layers: &layers,
+                ik: None,
+                look: None,
+            })],
+            200,
+            200,
+            None,
+        );
+        let scene = ludion_scene::parse(&yaml).expect("the sheet parses");
+        let instance = scene.entities[0].instance.as_ref().expect("a prefab entry");
+        let components = &instance.overrides["base"];
+        assert_eq!(components[0].0, "Animation");
+        assert_eq!(components[0].1["params"], serde_json::json!([0.5, 0.0]));
+        assert_eq!(components[1].0, "AnimationLayers");
+        let layer = &components[1].1["layers"][0];
+        assert_eq!(layer["clip"], "curl");
+        assert_eq!(layer["mask"], "forearm");
+        assert_eq!(layer["started"], 4);
     }
 
     /// **A non-finite placement names its field.** A typed `f32` NaN serializes to `null`, which the

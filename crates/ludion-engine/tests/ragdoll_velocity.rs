@@ -243,6 +243,7 @@ fn engine_for(name: &str, text: &str, driver: Option<Driver>) -> (Engine, PathBu
     let mut engine = builder
         .system("blend_clocks", blend_clocks)
         .query::<(&Animation, &Mesh)>()
+        .query::<(&ludion_engine::Animation, &ludion_engine::PrefabInstance)>()
         .query::<(&mut BlendClock,)>()
         .system("animation_events", animation_events)
         .query::<(&Animation, &Mesh)>()

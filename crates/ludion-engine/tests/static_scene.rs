@@ -3,7 +3,10 @@
 //! through the ECS write journal. The one acceptance is that the kept scene equals the rebuilt one
 //! (`Engine::set_static_scene(false)`) after every kind of edit, and none of it needs a GPU.
 
-use ludion_components::{Animation, Mesh, MeshSource, Name, PrefabInstance, Static, Transform};
+use ludion_components::{
+    Animation, AnimationLayer, AnimationLayers, Mesh, MeshSource, Name, PrefabInstance, Static,
+    Transform,
+};
 use ludion_core::codes::code;
 use ludion_core::diagnostics::DiagnosticCode;
 use ludion_core::ids::EntityId;
@@ -707,6 +710,47 @@ fn animating_a_held_prefab_part_at_runtime_releases_it() {
     for _ in 0..5 {
         let (scene, _) = on_equals_off(&mut engine);
         assert_eq!(scene.statics.count, 0, "the animated instance is released");
+    }
+    assert!(!reported(&engine, code::STATIC_INELIGIBLE).is_empty());
+}
+
+#[test]
+fn a_layered_prefab_part_takes_the_dynamic_path() {
+    let mut engine = hinge_engine(
+        "layered",
+        "        Static: {}\n        AnimationLayers:\n          layers:\n            - name: arm\n              \
+         clip: open\n              weight: 1.0\n",
+    );
+    for _ in 0..5 {
+        let (scene, _) = on_equals_off(&mut engine);
+        assert_eq!(scene.statics.count, 0, "the posed parts are not held");
+    }
+    assert!(!reported(&engine, code::STATIC_INELIGIBLE).is_empty());
+}
+
+#[test]
+fn layering_a_held_prefab_part_at_runtime_releases_it() {
+    let mut engine = hinge_engine("runtime-layers", "        Static: {}\n");
+    let (scene, _) = on_equals_off(&mut engine);
+    assert_eq!(scene.statics.count, 3, "the still instance is held");
+    let base = part(&engine, "base");
+    engine
+        .world_mut()
+        .insert(
+            base,
+            AnimationLayers {
+                layers: vec![AnimationLayer {
+                    name: "arm".into(),
+                    clip: "open".into(),
+                    weight: 1.0,
+                    ..AnimationLayer::default()
+                }],
+            },
+        )
+        .expect("layers");
+    for _ in 0..5 {
+        let (scene, _) = on_equals_off(&mut engine);
+        assert_eq!(scene.statics.count, 0, "the layered instance is released");
     }
     assert!(!reported(&engine, code::STATIC_INELIGIBLE).is_empty());
 }

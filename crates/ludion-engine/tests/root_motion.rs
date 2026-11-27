@@ -297,6 +297,7 @@ fn build_scheduled(
         builder = builder
             .system("blend_clocks", blend_clocks)
             .query::<(&Animation, &Mesh)>()
+            .query::<(&ludion_engine::Animation, &ludion_engine::PrefabInstance)>()
             .query::<(&mut BlendClock,)>();
     }
     if let Some(driver) = driver {

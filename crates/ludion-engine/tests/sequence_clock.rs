@@ -152,6 +152,7 @@ fn builder(root: &Path, opted_in: bool, holds: bool) -> EngineBuilder {
         .doc_text(BEAT, &beat(holds))
         .system("blend_clocks", blend_clocks)
         .query::<(&ludion_engine::Animation, &ludion_engine::Mesh)>()
+        .query::<(&ludion_engine::Animation, &ludion_engine::PrefabInstance)>()
         .query::<(&mut ludion_engine::BlendClock,)>()
         .system("animation_events", animation_events)
         .query::<(&ludion_engine::Animation, &ludion_engine::Mesh)>()

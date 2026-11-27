@@ -43,7 +43,7 @@ The prefab gains an optional `clips:` map, short name to clip file, resolved aga
 - **Two instances animate independently**, each with its own `Animation`.
 - **A track must name a part: `L1314`** from `check-scene` of the prefab or of any scene placing it, and from wire `scene.check` (`the clip snap animates lidd, which is not a part of this prefab`), with the nearest part name as the fix. Playback draws an unmatched track's part at rest, silently, so run the check.
 - **Visual only.** Posing happens at extract; the sim `Transform`, the `WorldHash` and recordings are unchanged. Children of a posed part follow, and so do point and spot lights (in position — a spot's aim is its world-space `direction`, not the part's rotation), rendered reflection probes, decals, particles and drop shadows under it; **colliders, cameras and the sun do not**, and the `probes` debug lines stay at the stored pose — move an analytic collider from game code.
-- **`animation_events` needs one more query.** A game registering that system declares `.query::<(&Animation, &PrefabInstance)>()` or the query-drift gate reports `L1126`.
+- **`animation_events` and `blend_clocks` need one more query.** A game registering either system declares `.query::<(&Animation, &PrefabInstance)>()` for it or the query-drift gate reports `L1126`.
 - **Root motion.** A `$root` track targets no part (never `L1314`): `root_motion_delta` reads it on the root part, in prefab-local units (`ludion docs voxel-animation` §Root motion).
 - **Profiling:** the load report gains a `prefab_clips` row (`ludion devdocs profiling`).
 
@@ -71,13 +71,14 @@ blends:
 - **Override** takes the layer's channels by `weight × mask`; **additive** adds the layer's difference from rest, so a key equal to the rest adds nothing.
 - **`reference:`** measures an additive layer from that clip's first frame instead of the rest.
 - An unknown clip, blend, mask or reference leaves the pose as if the layer were absent.
-- **Phase.** A blend plays at `elapsed * rate(params now)`: exact while the params hold still; changing them mid-loop jumps the phase.
-- **No events** fire from a prefab's blends or layers, and `root_motion_delta` reads a prefab's plain clips only.
+- **Phase.** Register `blend_clocks` (`ludion docs animation-layers` §Blend spaces) and the root keeps a hashed `BlendClock`, so a cadence follows `params` without a pose jump. It declares both `.query::<(&Animation, &Mesh)>()` and `.query::<(&Animation, &PrefabInstance)>()`, then `.query::<(&mut BlendClock,)>()`; leaving one out is `L1126`. Without the system a blend plays `elapsed * rate(params now)`: exact while the params hold still; changing them mid-loop jumps the phase. A root that plays no blend gets no clock.
+- **Events.** With `animation_events` registered after it, a base blend fires its dominant point's events (`ClipEvent.clip` is the blend's name), and an `events: true` layer, clip or blend, fires its own with `ClipEvent.layer` set, even when `Animation.clip` is empty (the entity still needs an `Animation`). Blend events need `blend_clocks`; clip layers do not.
+- **Root motion** stays plain-clip: `root_motion_delta` reads no prefab blend.
 - **Check:** `ludion check-scene examples/gallery/prefabs/arm/arm.prefab.yaml` (a checkout's runnable example) lists `mask` and `blend` rows after the clips. `L1226` is a malformed entry; `L1674` an unknown mask part or an unusable blend.
 
 ## The model sheet
 
-`render --model <prefab>` renders the prefab **alone**, framed by its rest-pose bounds, with `--clip`, `--time`, `--strip` and `--crossfade` as for an assembly. There is no lineup, `--set` or `--sweep` (the clip resolves relative to the prefab file; override the scene that places the instance instead) and no gap analysis. A prefab that draws no mesh is `L1117`; so is `--clip` with a name the prefab does not bind (the error lists the clips it does).
+`render --model <prefab>` renders the prefab **alone**, framed by its rest-pose bounds, with `--clip`, `--time`, `--strip`, `--crossfade`, `--blend` and `--layer` as for an assembly (`--blend sway:0..1 --layer curl:1:forearm`; the sheet's blend phase is `elapsed * rate(params)`, so it matches a game without a `BlendClock`). There is no lineup, `--set` or `--sweep` (the clip resolves relative to the prefab file; override the scene that places the instance instead) and no gap analysis. A prefab that draws no mesh is `L1117`; so is `--clip`, `--blend` or `--layer` with a name the prefab does not declare (the error lists the ones it does).
 
 ## Gotchas
 

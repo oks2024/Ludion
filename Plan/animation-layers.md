@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **A3a (prefab-part masks, layers and blends, in extract and `check-scene`) mechanized (2026-11-27).** **W6b-2b (the glTF importer writes `$root`) mechanized (2026-11-27).** **W6b-2a (root motion on skinned assemblies and prefab roots, on the entity's clock) mechanized (2026-11-27).** **W6b-1 (blend root motion, tooling) mechanized (2026-11-26).** **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); W4c (entity targets) mechanized (2026-11-21); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); W6a (root motion) mechanized (2026-11-21); A3b (prefab blend clock, events, render) not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **A3b (the prefab `BlendClock`, prefab blend and layer events, `render --model <prefab> --blend/--layer`, its gallery golden) mechanized (2026-11-27); the macOS twin of `prefab-layers.png` is owed to the M4.** **A3a (prefab-part masks, layers and blends, in extract and `check-scene`) mechanized (2026-11-27).** **W6b-2b (the glTF importer writes `$root`) mechanized (2026-11-27).** **W6b-2a (root motion on skinned assemblies and prefab roots, on the entity's clock) mechanized (2026-11-27).** **W6b-1 (blend root motion, tooling) mechanized (2026-11-26).** **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); W4c (entity targets) mechanized (2026-11-21); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); W6a (root motion) mechanized (2026-11-21); the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -272,6 +272,20 @@ No hash, schema or golden moved. Without the key the written clip is unchanged.
 
 No component, `WorldHash`, replay, wire schema or golden moved. A prefab without the keys and an instance without
 layers or blends pose as before.
+
+### A3b — the prefab `BlendClock`, prefab events, the sheet flags
+
+| file | role |
+|---|---|
+| `crates/ludion-engine/src/blend_clock.rs`, `animation_events.rs` | prefab roots integrate a clock and fire base and layer events |
+| `crates/ludion-engine/src/extract.rs` | `is_prefab_player`, the clocked base and layer phase on prefab parts |
+| `crates/ludion-engine/src/model_sheet.rs`, `crates/ludion-cli/src/main.rs` | `--blend`/`--layer` on a prefab |
+| `crates/ludion-engine/tests/prefab_layers.rs`, `static_scene.rs`, `model_sheet.rs` | the clock, events, continuity, restore, hash inertness, a layers-only root |
+| `examples/gallery/prefab-layers.yaml`, `goldens/windows/prefab-layers.png` | the gallery proof (the macOS twin of `prefab-layers.png` is owed to the M4) |
+| `docs/prefab-animation.md`, `docs/animation-layers.md`, `docs/voxel-animation.md`, embedded mirrors | the user-facing contract |
+
+No component, wire schema, replay or other golden moved, and a world without a prefab blend or layer hashes as
+before. Registering `blend_clocks` now needs a `(&Animation, &PrefabInstance)` query declaration (decision 76).
 
 ## Trigger
 
@@ -613,6 +627,16 @@ share one driver shape.
     --blend/--layer` with a gallery golden.
 72. **Hand-authored prefabs only** (A3a). A generated prefab is write-only and the importer writes neither key.
     **Trigger** for an importer pass-through: an imported prefab needs layers.
+73. **The prefab `BlendClock`** (A3b, amends 71). `blend_clocks` covers every prefab root: an entity that is its own
+    `PrefabInstance.root` and whose `Mesh`, if any, is not an assembly or character (one rule, shared with extract
+    and `animation_events`). Base and layer entries are integrated as in decisions 15 and 20. Extract reads them
+    advanced by the tick fraction, else the stateless fallback.
+74. **Prefab events** (A3b, amends 71). Base blend events per decision 16, and layer events per decision 22 (an
+    `events: true` layer, on a based or baseless root; the root still needs an `Animation`).
+75. **The prefab sheet** (A3b). `render --model <prefab> --blend/--layer` per decision 35: the sheet's phase is
+    stateless, and a prefab phase reports no gap analysis.
+76. **The declared-query break** (A3b). `blend_clocks` now reads `(&Animation, &PrefabInstance)`, so every game
+    registering it declares that query (`L1126` otherwise), under the 2026-11-19 BREAK ruling.
 
 ## Waves
 
@@ -628,8 +652,9 @@ share one driver shape.
 - **A3a (shipped 2026-11-27).** Prefab-part masks, layers and blends in `prefab_part_poses`, and `check-scene`
   rows (decisions 69–72). The owner waived the trigger (2026-11-26). A prefab whose root carries an assembly `Mesh`
   still plays through the assembly path.
-- **A3b.** A `BlendClock` and blend and layer events on prefab roots, `render --model <prefab> --blend/--layer`,
-  and a gallery scene with its golden.
+- **A3b (shipped 2026-11-27).** A `BlendClock` and blend and layer events on prefab roots,
+  `render --model <prefab> --blend/--layer`, and a gallery scene with its golden (decisions 73-76; the macOS twin
+  of `prefab-layers.png` is owed to the M4).
 - **W2c (shipped).** `check-scene` masks and blends, `render --model … --blend/--layer` strips
   (`model_sheet.rs` + CLI; decision 35).
 - **W2d (shipped).** The gallery humanoid, `assembly-layers.yaml` and two goldens (macOS twins owed).
@@ -679,7 +704,6 @@ share one driver shape.
 
 ## Non-goals
 
-- `render --blend/--layer` on a prefab. **Trigger:** A3b.
 - Per-layer anchors (`set_clip_speed` for a layer). **Trigger:** a layer clip that must change rate mid-clip.
 - Layer-to-layer blending (a crossfade inside one layer). **Trigger:** a layer whose clip switch visibly pops.
 - A masked crossfade of the base. **Trigger:** a base switch that must not touch the upper body.

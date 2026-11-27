@@ -4160,10 +4160,9 @@ pub(crate) fn asset_refs(world: &World, project_root: AssetRoot<'_>) -> AssetRef
         set.insert(ludion_core::paths::normalize(path));
     }
     for &id in &ids {
-        if get::<Animation>(world, id).is_some()
+        if (get::<Animation>(world, id).is_some() || get::<AnimationLayers>(world, id).is_some())
             && let Some(instance) = get::<PrefabInstance>(world, id)
-            && instance.root == id
-            && !drives_a_model_mesh(world, id)
+            && is_prefab_player(world, id, instance)
         {
             refs.prefab_clips
                 .insert(ludion_core::paths::normalize(&instance.source));
@@ -6900,15 +6899,22 @@ pub(crate) fn character_pose<'a>(
     (pose, fade)
 }
 
-/// Whether `id`'s `Mesh` is an assembly or a character: its `Animation` then plays that model's
-/// clips, and a prefab root carrying one does not also play the prefab's (as `animation_events`).
-fn drives_a_model_mesh(world: &World, id: EntityId) -> bool {
-    get::<Mesh>(world, id).is_some_and(|mesh| {
-        matches!(
-            mesh.shape,
-            MeshSource::Assembly(_) | MeshSource::Character(_)
-        )
-    })
+/// Whether `id` is the root of the prefab `instance` and plays its clips and blends: it is the
+/// instance's root and its `Mesh`, if any, is not an assembly or a character, whose `Animation`
+/// plays that model's own. The one rule extract, `blend_clocks` and `animation_events` share.
+pub(crate) fn is_prefab_player(world: &World, id: EntityId, instance: &PrefabInstance) -> bool {
+    // Unrecorded: an optional `Mesh` must not demand a game's query declaration.
+    instance.root == id
+        && !world
+            .get_unrecorded::<Mesh>(id)
+            .ok()
+            .flatten()
+            .is_some_and(|mesh| {
+                matches!(
+                    mesh.shape,
+                    MeshSource::Assembly(_) | MeshSource::Character(_)
+                )
+            })
 }
 
 /// One playing prefab instance: its loaded rig, the sides of its `Animation` and its
@@ -7013,8 +7019,9 @@ fn apply_rest_delta(rest: &Trs, delta: &ludion_scene::PartPose) -> Trs {
 ///
 /// A clip is chosen by game logic at runtime, so every miss (no clip or blend bound under the name,
 /// a layer with an unknown mask or reference, an instance whose prefab will not load) is silent and
-/// leaves the rest or base pose, as for [`animation_pose`]. A blend plays the stateless phase
-/// `elapsed * rate(params)`.
+/// leaves the rest or base pose, as for [`animation_pose`]. A blend plays the root's `BlendClock`
+/// phase (base and layer entries, advanced by the fraction of a tick `now` is past the clock's
+/// tick), else the stateless `elapsed * rate(params)`.
 ///
 /// Layers and blends compose as an assembly's do, over each sample's delta from the part's rest
 /// ([`rest_delta`]). A part no layer reaches under a plain-clip base samples the clip directly.
@@ -7044,12 +7051,11 @@ fn prefab_part_poses(
         }
         let rebased = rebased_instant(world, id, now);
         let now = animation.map_or(rebased, |animation| held(animation, rebased));
-        let Some(instance) = get::<PrefabInstance>(world, id).filter(|i| i.root == id) else {
+        let Some(instance) =
+            get::<PrefabInstance>(world, id).filter(|i| is_prefab_player(world, id, i))
+        else {
             continue;
         };
-        if drives_a_model_mesh(world, id) {
-            continue;
-        }
         let Ok(data) = assets.prefab_clips(&instance.source) else {
             continue;
         };
@@ -7065,20 +7071,39 @@ fn prefab_part_poses(
                     })
                     .clone()
             });
+        // Unrecorded: an optional component must not demand a game's query declaration.
+        let clock = world.get_unrecorded::<BlendClock>(id).ok().flatten();
+        let fraction =
+            now.ticks_since(FrameIndex::new(now.ticks_floor())) * now.rate().seconds_per_tick();
         let (pose, fade) = animation.map_or((None, None), |animation| {
-            let side = |name: &str, elapsed: f64| {
+            let side = |name: &str, elapsed: f64, phase: Option<(f64, f32)>| {
                 if let Some(index) = data.clips.iter().position(|binding| binding.name == name) {
                     let t = ludion_scene::clip_phase(&data.clips[index].clip, elapsed);
                     return Some(PrefabSide::Clip(index, t));
                 }
                 let index = data.blends.iter().position(|blend| blend.name == name)?;
                 let rate = crate::blend_clock::blend_rate(&data.blends[index], animation.params);
-                Some(PrefabSide::Blend(index, animation.params, elapsed * rate))
+                let phase = phase.map_or(elapsed * rate, |(phase, speed)| {
+                    phase + rate * f64::from(speed) * fraction
+                });
+                Some(PrefabSide::Blend(index, animation.params, phase))
             };
-            let pose = side(&animation.clip, clip_elapsed(animation, now));
+            let live =
+                clock.filter(|c| c.blend == animation.clip && c.started == animation.started);
+            let pose = side(
+                &animation.clip,
+                clip_elapsed(animation, now),
+                live.map(|c| (c.phase, animation.speed)),
+            );
+            let outgoing =
+                clock.filter(|c| !c.from_blend.is_empty() && c.from_blend == animation.from);
             let fade = fade_weight(animation, now).map(|weight| {
                 (
-                    side(&animation.from, from_clip_elapsed(animation, now)),
+                    side(
+                        &animation.from,
+                        from_clip_elapsed(animation, now),
+                        outgoing.map(|c| (c.from_phase, animation.from_speed)),
+                    ),
                     weight,
                 )
             });
@@ -7115,10 +7140,17 @@ fn prefab_part_poses(
         .iter()
         .map(|(&root, play)| {
             let rig = RigClips::of_prefab(&play.data);
+            let clock = world.get_unrecorded::<BlendClock>(root).ok().flatten();
+            let now = play.now;
+            let fraction =
+                now.ticks_since(FrameIndex::new(now.ticks_floor())) * now.rate().seconds_per_tick();
             let layers = play
                 .layers
                 .iter()
-                .filter_map(|layer| rig_layer_pose(rig, layer, play.now, None))
+                .filter_map(|layer| {
+                    let live_phase = live_layer_phase(rig, clock, layer, fraction, 0.0);
+                    rig_layer_pose(rig, layer, now, live_phase)
+                })
                 .collect();
             (root, layers)
         })
@@ -7743,26 +7775,33 @@ pub(crate) fn assembly_layer_poses_at<'a>(
         .iter()
         .take(ludion_components::animation_layers::MAX_ANIMATION_LAYERS)
         .filter_map(|layer| {
-            let live = clock.and_then(|c| {
-                c.layers.iter().find(|entry| {
-                    entry.name == layer.name
-                        && entry.blend == layer.clip
-                        && entry.started == layer.started
-                })
-            });
-            let live_phase = live.map(|entry| {
-                let rate = data.blend(&layer.clip).map_or(0.0, |blend| {
-                    crate::blend_clock::blend_rate(blend, layer.params)
-                });
-                let mut advanced = entry.phase + rate * f64::from(layer.speed) * fraction;
-                if back > 0.0 {
-                    advanced -= rate * f64::from(layer.speed) * back;
-                }
-                advanced
-            });
+            let rig = RigClips::of_assembly(data);
+            let live_phase = live_layer_phase(rig, clock, layer, fraction, back);
             assembly_layer_pose(data, layer, then, live_phase)
         })
         .collect()
+}
+
+/// The phase of `layer`'s blend in its `BlendClock.layers` entry, advanced by `fraction` seconds past
+/// the clock's tick and wound back by `back`; `None` when the clock holds no entry for the layer.
+fn live_layer_phase(
+    rig: RigClips<'_>,
+    clock: Option<&BlendClock>,
+    layer: &AnimationLayer,
+    fraction: f64,
+    back: f64,
+) -> Option<f64> {
+    let entry = clock?.layers.iter().find(|entry| {
+        entry.name == layer.name && entry.blend == layer.clip && entry.started == layer.started
+    })?;
+    let rate = rig.blend(&layer.clip).map_or(0.0, |blend| {
+        crate::blend_clock::blend_rate(blend, layer.params)
+    });
+    let mut advanced = entry.phase + rate * f64::from(layer.speed) * fraction;
+    if back > 0.0 {
+        advanced -= rate * f64::from(layer.speed) * back;
+    }
+    Some(advanced)
 }
 
 /// One layer ready to pose `data` at `now`, or `None` when it has no weight, names no bound clip or
@@ -8202,6 +8241,29 @@ mod tests {
     /// for `now`, and exactly what the three-argument [`extract`] passes.
     fn tick_zero() -> SimTime {
         SimTime::from_ticks(0, TickRate::DEFAULT)
+    }
+
+    /// The prefetch and retention set names a prefab's clips for a root that poses its parts, by
+    /// `AnimationLayers` alone too, and not for a still instance.
+    #[test]
+    fn asset_refs_name_the_prefab_of_a_posing_root() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+        let named = |overrides: &str| {
+            let mut engine = crate::Engine::with_project_root(&root);
+            engine
+                .load_inline_scene(&format!(
+                    "format: 1\nseed: 1\nentities:\n  - name: arm\n    prefab: prefabs/arm/arm.prefab.yaml\n{overrides}"
+                ))
+                .expect("the scene loads");
+            asset_refs(engine.world(), AssetRoot::content(&root))
+                .prefab_clips
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        let layers_only = "    overrides:\n      base:\n        AnimationLayers:\n          layers:\n            \
+                           - name: arm\n              clip: curl\n              weight: 1.0\n";
+        assert_eq!(named(layers_only), ["prefabs/arm/arm.prefab.yaml"]);
+        assert!(named("").is_empty());
     }
 
     /// Two extracts through one cache hand back the cache's own texture bytes — a loose PNG and an

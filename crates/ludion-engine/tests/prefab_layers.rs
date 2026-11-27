@@ -8,10 +8,15 @@
 
 use std::path::{Path, PathBuf};
 
+use ludion_core::ids::EntityId;
 use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::time::{SimTime, TickRate};
-use ludion_engine::{Engine, QualityParams, extract_at};
-use ludion_protocol::{Command, command};
+use ludion_engine::{
+    Animation, AnimationEvents, BlendClock, ClipEvent, Engine, Mesh, PrefabInstance, QualityParams,
+    Sprite, animation_events, blend_clocks, extract_at,
+};
+use ludion_protocol::command::{EngineRestoreParams, SimStepParams};
+use ludion_protocol::{Command, ResponseBody};
 use ludion_renderer::MeshInstance;
 
 const PARTS: usize = 4;
@@ -388,7 +393,7 @@ fn extracting_a_layered_prefab_run_changes_neither_its_hashes_nor_its_recording(
             .expect("recording starts");
         let mut trace = Vec::new();
         for _ in 0..60 {
-            let step = Command::SimStep(command::SimStepParams {
+            let step = Command::SimStep(SimStepParams {
                 ticks: 1,
                 hash: false,
             });
@@ -413,5 +418,361 @@ fn extracting_a_layered_prefab_run_changes_neither_its_hashes_nor_its_recording(
     assert_eq!(quiet_trace.len(), 60);
     assert_eq!(quiet_trace, drawn_trace);
     assert_eq!(quiet_bytes, drawn_bytes);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// --- The `BlendClock` and events --------------------------------------------------------------
+
+/// [`fixture_project`] plus what the clock and event proofs need: `swing` fires `step` and `reach`
+/// fires `grab`, each a quarter in; `slow` is `swing` stretched to three seconds with no events, and
+/// the blend `gait` runs from `swing` at 0 to `slow` at 1, so only its params change the cadence.
+fn clock_project(name: &str) -> PathBuf {
+    let dir = fixture_project(name, false);
+    let clips = dir.join("arm/clips");
+    let read = |clip: &str| {
+        std::fs::read_to_string(clips.join(format!("{clip}.anim.yaml")))
+            .unwrap()
+            .replace("\r\n", "\n")
+    };
+    let slow = read("swing")
+        .replace("name: swing", "name: slow")
+        .replace("duration: 1.0", "duration: 3.0")
+        .replace("t: 1.0", "t: 3.0")
+        .replace("t: 0.5", "t: 1.5");
+    std::fs::write(clips.join("slow.anim.yaml"), slow).unwrap();
+    for (clip, event) in [("swing", "step"), ("reach", "grab")] {
+        let text = read(clip).replacen(
+            "tracks:\n",
+            &format!("events:\n  - t: 0.25\n    name: {event}\ntracks:\n"),
+            1,
+        );
+        std::fs::write(clips.join(format!("{clip}.anim.yaml")), text).unwrap();
+    }
+    let prefab = dir.join("arm/arm.prefab.yaml");
+    let text = std::fs::read_to_string(&prefab)
+        .unwrap()
+        .replacen("clips:\n", "clips:\n  slow: clips/slow.anim.yaml\n", 1)
+        .replacen(
+            "blends:\n",
+            "blends:\n  gait:\n    points:\n      - clip: swing\n        at: 0.0\n      \
+             - clip: slow\n        at: 1.0\n",
+            1,
+        );
+    std::fs::write(prefab, text).unwrap();
+    dir
+}
+
+/// The events every tick fired, in firing order.
+#[derive(Default)]
+struct EventLog(Vec<(u64, ClipEvent)>);
+
+fn record(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+    let fired: Vec<ClipEvent> = world
+        .resource::<AnimationEvents>()
+        .map(|events| events.iter().cloned().collect())
+        .unwrap_or_default();
+    if world.resource::<EventLog>().is_none() {
+        world.insert_resource(EventLog::default());
+    }
+    let log = world.resource_mut::<EventLog>().expect("just inserted");
+    log.0
+        .extend(fired.into_iter().map(|event| (ctx.frame.as_u64(), event)));
+}
+
+type Driver = fn(&mut ludion_ecs::World, &ludion_ecs::SystemCtx);
+
+/// The game: an optional driver, then `blend_clocks` when `clocked`, the events and the log.
+fn running(root: &Path, scene: &str, clocked: bool, driver: Option<Driver>) -> Engine {
+    let mut builder = Engine::builder().project_root(root);
+    if let Some(driver) = driver {
+        builder = builder
+            .system("driver", driver)
+            .query::<(&mut Animation,)>();
+    }
+    if clocked {
+        builder = builder
+            .system("blend_clocks", blend_clocks)
+            .query::<(&Animation, &Mesh)>()
+            .query::<(&Animation, &PrefabInstance)>()
+            .query::<(&mut BlendClock,)>();
+    }
+    let mut engine = builder
+        .system("animation_events", animation_events)
+        .query::<(&Animation, &Mesh)>()
+        .query::<(&Animation, &Sprite)>()
+        .query::<(&Animation, &PrefabInstance)>()
+        .query::<(&BlendClock,)>()
+        .system("record", record)
+        .build()
+        .expect("the game builds");
+    engine.load_inline_scene(scene).expect("the scene loads");
+    engine
+}
+
+fn step(engine: &mut Engine, ticks: u64) {
+    engine
+        .execute(Command::SimStep(SimStepParams { ticks, hash: false }))
+        .expect("steps");
+}
+
+fn log(engine: &Engine) -> Vec<(u64, ClipEvent)> {
+    engine
+        .world()
+        .resource::<EventLog>()
+        .map(|log| log.0.clone())
+        .unwrap_or_default()
+}
+
+/// The instance roots, in spawn order.
+fn roots(engine: &Engine) -> Vec<EntityId> {
+    let world = engine.world();
+    world
+        .entities()
+        .filter(|&id| {
+            world
+                .component::<PrefabInstance>(id)
+                .is_some_and(|instance| instance.root == id)
+        })
+        .collect()
+}
+
+fn clock_of(engine: &Engine, id: EntityId) -> Option<BlendClock> {
+    engine.world().component::<BlendClock>(id).cloned()
+}
+
+fn params(x: f32) -> String {
+    format!("params:\n            - {x:?}\n            - 0.0")
+}
+
+fn layer_params(x: f32) -> String {
+    format!("params:\n                - {x:?}\n                - 0.0")
+}
+
+#[test]
+fn a_blend_gets_a_clock_and_a_plain_clip_none() {
+    let root = clock_project("clock");
+    let text = scene(&[
+        instance("blended", "sway", &[], &[]),
+        instance("plain", "swing", &[], &[]),
+        instance("layered", "swing", &[], &[layer("arm", "sway", &[])]),
+    ]);
+    let mut engine = running(&root, &text, true, None);
+    step(&mut engine, 30);
+    let [blended, plain, layered] = roots(&engine)[..] else {
+        panic!("three instances");
+    };
+    let clock = clock_of(&engine, blended).expect("a base blend holds a clock");
+    assert_eq!(clock.blend, "sway");
+    assert!(clock.phase > 0.0);
+    assert!(clock_of(&engine, plain).is_none(), "no blend, no clock");
+    let clock = clock_of(&engine, layered).expect("a layer blend holds a clock");
+    assert_eq!((clock.blend.as_str(), clock.layers.len()), ("", 1));
+    assert_eq!(clock.layers[0].blend, "sway");
+    let mut animation = engine
+        .world()
+        .component::<Animation>(blended)
+        .cloned()
+        .expect("animates");
+    animation.clip = "swing".into();
+    engine
+        .world_mut()
+        .insert(blended, animation)
+        .expect("switches");
+    step(&mut engine, 2);
+    assert!(clock_of(&engine, blended).is_none(), "the blend is gone");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Switches `gait` from the fast point to the slow one at frame 240.
+fn slow_down(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+    if ctx.game_frame.as_u64() == 240 {
+        for (_, (animation,)) in world.query_ids::<(&mut Animation,)>() {
+            animation.params = [1.0, 0.0];
+        }
+    }
+}
+
+#[test]
+fn a_param_change_keeps_a_clocked_pose_continuous() {
+    let root = clock_project("continuous");
+    let zero = params(0.0);
+    let text = scene(&[instance("arm", "gait", &[&zero], &[])]);
+    // The largest change of `upper`'s local matrix over the two ticks around the switch.
+    let jump = |clocked: bool| {
+        let mut engine = running(&root, &text, clocked, Some(slow_down));
+        step(&mut engine, 239);
+        let before = local(&posed_at(&engine, 239), 0, UPPER);
+        step(&mut engine, 2);
+        let after = local(&posed_at(&engine, 241), 0, UPPER);
+        (after - before)
+            .to_cols_array()
+            .iter()
+            .fold(0.0f32, |most, v| most.max(v.abs()))
+    };
+    let (clocked, stateless) = (jump(true), jump(false));
+    assert!(clocked < 0.06, "the clock carries the phase: {clocked}");
+    assert!(stateless > 0.2, "the stateless phase jumps: {stateless}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_base_blend_fires_the_dominant_points_events() {
+    let root = clock_project("base-events");
+    let (low, high) = (params(0.25), params(0.75));
+    let text = scene(&[
+        instance("swings", "sway", &[&low], &[]),
+        instance("reaches", "sway", &[&high], &[]),
+    ]);
+    let mut engine = running(&root, &text, true, None);
+    step(&mut engine, 150);
+    let [swings, reaches] = roots(&engine)[..] else {
+        panic!("two instances");
+    };
+    let events = log(&engine);
+    for (id, name) in [(swings, "step"), (reaches, "grab")] {
+        let mine: Vec<&ClipEvent> = events
+            .iter()
+            .map(|(_, e)| e)
+            .filter(|e| e.entity == id)
+            .collect();
+        // A one-second cycle crosses a quarter at 0.25, 1.25 and 2.25 s.
+        assert_eq!(mine.len(), 3, "{mine:?}");
+        assert!(
+            mine.iter()
+                .all(|e| e.name == name && e.clip == "sway" && e.layer.is_empty()),
+            "{mine:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn event_layers_fire_on_a_based_and_a_baseless_prefab_root() {
+    let root = clock_project("layer-events");
+    let high = layer_params(1.0);
+    let layers = [
+        layer("clip", "swing", &["events: true"]),
+        layer("blend", "sway", &["events: true", &high]),
+        layer("mute", "reach", &[]),
+    ];
+    let text = scene(&[
+        instance("based", "curl", &[], &layers),
+        instance("baseless", "\"\"", &[], &layers),
+    ]);
+    let mut engine = running(&root, &text, true, None);
+    step(&mut engine, 90);
+    let events = log(&engine);
+    let ids = roots(&engine);
+    assert_eq!(ids.len(), 2);
+    for id in ids {
+        let fired: Vec<(&str, &str, &str)> = events
+            .iter()
+            .map(|(_, e)| e)
+            .filter(|e| e.entity == id)
+            .map(|e| (e.layer.as_str(), e.clip.as_str(), e.name.as_str()))
+            .collect();
+        // Both cross at 0.25 and 1.25 s; the layers fire in list order within a tick.
+        assert_eq!(
+            fired,
+            [
+                ("clip", "swing", "step"),
+                ("blend", "sway", "grab"),
+                ("clip", "swing", "step"),
+                ("blend", "sway", "grab"),
+            ],
+            "{id}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn registering_blend_clocks_moves_no_hash_without_a_prefab_blend() {
+    let root = clock_project("clock-inert");
+    let text = scene(&[
+        instance("plain", "swing", &[], &[]),
+        instance("fading", "curl", &["from: swing", "fade: 1.0"], &[]),
+        instance("layered", "swing", &[], &[layer("arm", "curl", &[])]),
+        instance("baseless", "", &[], &[layer("arm", "reach", &[])]),
+    ]);
+    let run = |clocked: bool| {
+        let mut engine = running(&root, &text, clocked, None);
+        let mut trace = Vec::new();
+        for _ in 0..120 {
+            let one = Command::SimStep(SimStepParams {
+                ticks: 1,
+                hash: false,
+            });
+            trace.extend(
+                ludion_engine::drive_hashes(&mut engine, vec![one])
+                    .expect("the session drives")
+                    .into_iter()
+                    .skip(1),
+            );
+        }
+        for id in roots(&engine) {
+            assert!(clock_of(&engine, id).is_none());
+        }
+        trace
+    };
+    let (clocked, unclocked) = (run(true), run(false));
+    assert_eq!(clocked.len(), 120);
+    assert_eq!(clocked, unclocked);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Writes `params = [tick / 120, 0]` (0 to 1 over 120 ticks, then held).
+fn sweep_gait(world: &mut ludion_ecs::World, ctx: &ludion_ecs::SystemCtx) {
+    let x = (ctx.game_frame.as_u64() as f32 / 120.0).min(1.0);
+    for (_, (animation,)) in world.query_ids::<(&mut Animation,)>() {
+        animation.params = [x, 0.0];
+    }
+}
+
+#[test]
+fn a_restored_prefab_blend_resumes_the_same_phase() {
+    let root = clock_project("restore");
+    let quarter = layer_params(0.25);
+    let text = scene(&[instance(
+        "arm",
+        "gait",
+        &[],
+        &[layer(
+            "add",
+            "sway",
+            &["events: true", "mode: additive", &quarter],
+        )],
+    )]);
+    let mut engine = running(&root, &text, true, Some(sweep_gait));
+    step(&mut engine, 70);
+    let snapshot = match engine.execute(Command::EngineSnapshot).unwrap().body {
+        ResponseBody::Snapshot { snapshot } => snapshot,
+        other => panic!("expected a snapshot, got {other:?}"),
+    };
+    step(&mut engine, 100);
+    let outcome = |engine: &Engine| {
+        let events: Vec<(u64, ClipEvent)> = log(engine)
+            .into_iter()
+            .filter(|(tick, _)| *tick >= 70)
+            .collect();
+        let matrices: Vec<[u32; 16]> = posed_at(engine, engine.frame().as_u64())
+            .iter()
+            .map(|mesh| mesh.model.to_cols_array().map(f32::to_bits))
+            .collect();
+        (clock_of(engine, roots(engine)[0]), events, matrices)
+    };
+    let want = outcome(&engine);
+    assert!(want.0.is_some() && !want.1.is_empty());
+    match engine
+        .execute(Command::EngineRestore(EngineRestoreParams { snapshot }))
+        .unwrap()
+        .body
+    {
+        ResponseBody::Restored { .. } => {}
+        other => panic!("expected a restore, got {other:?}"),
+    }
+    engine.world_mut().remove_resource::<EventLog>();
+    step(&mut engine, 100);
+    assert_eq!(outcome(&engine), want);
     let _ = std::fs::remove_dir_all(&root);
 }

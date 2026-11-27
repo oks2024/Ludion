@@ -1,7 +1,8 @@
 //! Blend-space phase: the `blend_clocks` sim system and the event crossings a blend emits
 //! (`Plan/animation-layers.md` decisions 13-19).
 //!
-//! A character whose `Animation.clip` names a blend of its skinned `kind: assembly` document plays every
+//! An entity whose `Animation.clip` names a blend of its model (a skinned or voxel `kind: assembly`,
+//! or the `kind: prefab` its instance root plays) plays every
 //! point clip on one shared normalized phase. [`blend_clocks`] integrates that phase, in unwrapped
 //! cycles, into a hashed [`BlendClock`] on the entity; `extract` poses from it and
 //! `animation_events` fires the dominant point's events on its crossings. The rate is
@@ -21,7 +22,8 @@ use crate::blend_space::BlendSpaceData;
 use crate::components::{
     Animation, AnimationLayer, AnimationLayers, BlendClock, LayerPhase, Mesh, MeshSource,
 };
-use crate::extract::{clip_elapsed, clock_elapsed, fade_weight};
+use crate::extract::{clip_elapsed, clock_elapsed, fade_weight, is_prefab_player};
+use crate::prefab::PrefabInstance;
 use crate::sequences::entity_clock;
 use ludion_components::animation_layers::MAX_ANIMATION_LAYERS;
 
@@ -50,9 +52,9 @@ pub(crate) fn layer_fallback_phase(
     clock_elapsed(now, layer.started, layer.speed, None) * blend_rate(blend, layer.params)
 }
 
-/// Integrates the [`BlendClock`] of every character whose `Animation.clip` (or, while a crossfade is
-/// live, `from`) or whose `AnimationLayers` layer `clip` names a blend of its character document, and
-/// removes the clock from one that no longer does.
+/// Integrates the [`BlendClock`] of every character, assembly or prefab instance root whose
+/// `Animation.clip` (or, while a crossfade is live, `from`) or whose `AnimationLayers` layer `clip`
+/// names a blend of its model, and removes the clock from one that no longer does.
 ///
 /// Entities run in ascending id order. A held gameplay frame only parks `prev` on `phase`. A changed
 /// `(clip, started)` restarts the phase at the stateless value for the new clock and, when the
@@ -66,15 +68,19 @@ pub(crate) fn layer_fallback_phase(
 /// need no query line):
 ///
 /// ```
-/// use ludion_engine::{Animation, BlendClock, Engine, Mesh, animation_events, blend_clocks};
+/// use ludion_engine::{
+///     Animation, BlendClock, Engine, Mesh, PrefabInstance, animation_events, blend_clocks,
+/// };
 /// use ludion_protocol::{Command, command};
 ///
 /// let mut engine = Engine::builder()
 ///     .system("blend_clocks", blend_clocks)
 ///     .query::<(&Animation, &Mesh)>()
+///     .query::<(&Animation, &PrefabInstance)>()
 ///     .query::<(&mut BlendClock,)>()
 ///     .system("animation_events", animation_events)
 ///     .query::<(&Animation, &Mesh)>()
+///     .query::<(&Animation, &PrefabInstance)>()
 ///     .query::<(&BlendClock,)>()
 ///     .build()
 ///     .unwrap();
@@ -98,6 +104,17 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
             _ => None,
         })
         .collect();
+    // A prefab player never has a mesh model, so no entity is listed twice.
+    let roots: Vec<(EntityId, Animation, PrefabInstance)> = world
+        .query_ids::<(&Animation, &PrefabInstance)>()
+        .filter(|(id, (_, instance))| instance.root == *id)
+        .map(|(id, (animation, instance))| (id, animation.clone(), instance.clone()))
+        .collect();
+    for (id, animation, instance) in roots {
+        if is_prefab_player(world, id, &instance) {
+            candidates.push((id, animation, Model::Prefab(instance.source)));
+        }
+    }
     candidates.sort_by_key(|(id, _, _)| *id);
     for (id, animation, model) in candidates {
         let own = entity_clock(world, id, ctx);

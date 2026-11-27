@@ -54,8 +54,8 @@ instead of a `Mesh`'s clips — `ludion docs sprite-animation` covers that bindi
    Each phase prints `params [x, y], phase <cycles>` and its gap analysis, all at `--time`; output
    defaults to `<name>-<blend>-blend.png`. **`--layer <clip>:<weight>[:<mask>[:override|additive]]`**
    (repeatable, at most four, `L1670`) stacks layers over `--clip`, `--crossfade` or `--blend`, echoed as
-   `layers: …`, and the gap analysis poses through them; the output gains `-layered`. A prefab has no
-   blends or layers.
+   `layers: …`, and the gap analysis poses through them; the output gains `-layered`. A prefab takes
+   both flags too (`ludion docs prefab-animation`), with no gap analysis.
 4. **Wire it** from a game system that writes `Animation` when the *choice* changes.
 
 ## Format
@@ -388,7 +388,7 @@ ground:
 
 A clip may carry a reserved `$root` track: the displacement the character travels. It is never drawn, and
 nothing applies it for you. It works the same on skinned assemblies and on prefab roots (the entity that is its
-own `PrefabInstance.root`; plain clips only, a prefab has no blends, and its other parts read `None`).
+own `PrefabInstance.root`; plain clips only there, no prefab blends, and its other parts read `None`).
 
 ```yaml
 tracks:

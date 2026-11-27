@@ -255,6 +255,7 @@ fn build(root: &Path, text: &str, read: bool) -> Engine {
         .sequences()
         .system("blend_clocks", blend_clocks)
         .query::<(&Animation, &Mesh)>()
+        .query::<(&ludion_engine::Animation, &ludion_engine::PrefabInstance)>()
         .query::<(&mut BlendClock,)>();
     if read {
         builder = builder

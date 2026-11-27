@@ -88,6 +88,7 @@ pub struct RootMotion {
 /// let mut engine = Engine::builder()
 ///     .system("blend_clocks", blend_clocks)
 ///     .query::<(&Animation, &Mesh)>()
+///     .query::<(&Animation, &ludion_engine::PrefabInstance)>()
 ///     .query::<(&mut BlendClock,)>()
 ///     .system("root_motion", |world, ctx| {
 ///         let ids: Vec<_> = world.query_ids::<(&Animation, &Mesh, &Transform)>().map(|(id, _)| id).collect();

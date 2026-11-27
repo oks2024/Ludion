@@ -2284,16 +2284,86 @@ fn blend_and_layer_request_errors_are_readable() {
     .unwrap_err();
     assert_eq!(errors[0].code.as_str(), "L1670");
 
-    let hinge = hinge();
-    let prefab = [hinge.as_path()];
+    let arm = arm();
+    let prefab = [arm.as_path()];
     let errors = render_model_sheet(&ModelSheetRequest {
-        clip: Some("snap"),
-        layers: &layer("snap:1.0"),
+        blend: blend("gait:0..1"),
         ..plain(&prefab, 64, 64)
     })
     .unwrap_err();
     assert_eq!(errors[0].code.as_str(), "L1117");
-    assert!(errors[0].message.contains("prefab"), "{errors:?}");
+    assert!(errors[0].message.contains("`sway`"), "{errors:?}");
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        clip: Some("swing"),
+        layers: &layer("curl:1.0:legs"),
+        ..plain(&prefab, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1117");
+    assert!(errors[0].message.contains("`forearm`"), "{errors:?}");
+
+    let errors = render_model_sheet(&ModelSheetRequest {
+        clip: Some("swing"),
+        layers: &layer("wave:1.0"),
+        ..plain(&prefab, 64, 64)
+    })
+    .unwrap_err();
+    assert_eq!(errors[0].code.as_str(), "L1117");
+}
+
+/// The hand-authored arm prefab, with a `forearm` mask and a `sway` blend.
+fn arm() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/gallery/prefabs/arm/arm.prefab.yaml")
+}
+
+/// `--blend` and `--layer` on a prefab: each phase reports its parameters, and the masked layer
+/// reaches the drawn root part.
+#[test]
+fn needs_gpu_a_prefab_blend_sweep_takes_params_and_layers() {
+    let arm = arm();
+    let models = [arm.as_path()];
+    let request = ModelSheetRequest {
+        blend: blend("sway:0..1"),
+        strip: Some(3),
+        views: &[ModelView::Game],
+        ..plain(&models, 480, 270)
+    };
+    let Some(plain_sweep) = pose_or_skip("prefab_blend", &request) else {
+        return;
+    };
+    let layers = [ludion_engine::parse_layer("curl:1:forearm").expect("a layer")];
+    let layered = pose_or_skip(
+        "prefab_blend_layer",
+        &ModelSheetRequest {
+            layers: &layers,
+            time: Some(0.5),
+            ..request
+        },
+    )
+    .expect("adapter");
+    let unlayered = pose_or_skip(
+        "prefab_blend_unlayered",
+        &ModelSheetRequest {
+            time: Some(0.5),
+            ..request
+        },
+    )
+    .expect("adapter");
+    let clip = plain_sweep.clip.as_ref().expect("a sweep reports its clip");
+    assert_eq!(clip.blend.as_deref(), Some("sway"));
+    assert_eq!(
+        clip.phases
+            .iter()
+            .map(|phase| phase.params)
+            .collect::<Vec<_>>(),
+        [Some([0.0, 0.0]), Some([0.5, 0.0]), Some([1.0, 0.0])]
+    );
+    assert!(clip.phases.iter().all(|phase| phase.components.is_none()));
+    let reported = layered.clip.as_ref().expect("a layered sheet reports");
+    assert_eq!(reported.layers, ["curl 1.0 forearm override"]);
+    assert_ne!(sheet_bytes(&layered), sheet_bytes(&unlayered));
 }
 
 // --- Prefabs -----------------------------------------------------------------------------------

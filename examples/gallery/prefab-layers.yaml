@@ -1,0 +1,143 @@
+# Feature: prefab layers and blend spaces - a kind: prefab instance masks, layers and blends the clips
+# its prefab binds (`ludion docs prefab-animation`). Four instances of one hand-authored arm (base,
+# upper, lower, hand; mask `forearm` = `lower` and its descendants; blend `sway` = `swing` at 0 and
+# `reach` at 1), left to right, rendered at frame 30 (0.5 s, the clips' peak): (1) the `sway` blend
+# at params [0.5, 0], halfway between a sideways swing and a backward reach; (2) `swing` with a `curl`
+# override on the `forearm` mask, so the upper arm swings and the forearm curls; (3) `swing` with an
+# additive `tilt` at weight 0.7 tipping the hand; (4) `curl` with a layer naming `sway` at layer
+# params [1, 0], so the upper arm reaches back while the forearm curls. Each instance is turned 30
+# degrees so both turns show.
+format: 1
+name: "prefab-layers - a prefab blend, a masked override layer, an additive layer and a layer blend"
+entities:
+  - name: camera
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 3.4
+          - 11.0
+        rotation:
+          - -9.0
+          - 0.0
+          - 0.0
+      Camera:
+        projection:
+          type: perspective
+          fov_y_deg: 40.0
+  - name: key
+    components:
+      Transform:
+        translation:
+          - -3.0
+          - 7.0
+          - 7.0
+      PointLight:
+        color:
+          - 1.0
+          - 0.97
+          - 0.92
+        intensity: 3.0
+        range: 28.0
+  - name: ground
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - -0.5
+          - 0.0
+        scale:
+          - 30.0
+          - 1.0
+          - 30.0
+      Mesh:
+        shape: plane
+        color:
+          - 0.4
+          - 0.4
+          - 0.42
+          - 1.0
+        roughness: 0.8
+  - name: blended
+    prefab: prefabs/arm/arm.prefab.yaml
+    transform:
+      translation:
+        - -4.2
+        - 0.0
+        - 0.0
+      rotation:
+        - 0.0
+        - 30.0
+        - 0.0
+    overrides:
+      base:
+        Animation:
+          clip: sway
+          params:
+            - 0.5
+            - 0.0
+  - name: masked
+    prefab: prefabs/arm/arm.prefab.yaml
+    transform:
+      translation:
+        - -1.4
+        - 0.0
+        - 0.0
+      rotation:
+        - 0.0
+        - 30.0
+        - 0.0
+    overrides:
+      base:
+        Animation:
+          clip: swing
+        AnimationLayers:
+          layers:
+            - name: curl
+              clip: curl
+              mask: forearm
+              weight: 1.0
+  - name: additive
+    prefab: prefabs/arm/arm.prefab.yaml
+    transform:
+      translation:
+        - 1.4
+        - 0.0
+        - 0.0
+      rotation:
+        - 0.0
+        - 30.0
+        - 0.0
+    overrides:
+      base:
+        Animation:
+          clip: swing
+        AnimationLayers:
+          layers:
+            - name: tilt
+              clip: tilt
+              mode: additive
+              weight: 0.7
+  - name: layer-blend
+    prefab: prefabs/arm/arm.prefab.yaml
+    transform:
+      translation:
+        - 4.2
+        - 0.0
+        - 0.0
+      rotation:
+        - 0.0
+        - 30.0
+        - 0.0
+    overrides:
+      base:
+        Animation:
+          clip: curl
+        AnimationLayers:
+          layers:
+            - name: sway
+              clip: sway
+              weight: 1.0
+              params:
+                - 1.0
+                - 0.0

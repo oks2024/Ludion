@@ -143,12 +143,13 @@ blends:
   phase crosses them, so `foot_l` and `foot_r` fire once per stride at every speed. `ClipEvent.clip`
   is the blend's name. A crossfade's outgoing side never emits.
 - **Registration.** Register `blend_clocks` after whatever writes `Animation` and before
-  `animation_events`, declaring `.query::<(&Animation, &Mesh)>()` and `.query::<(&mut BlendClock,)>()`.
+  `animation_events`, declaring `.query::<(&Animation, &Mesh)>()`,
+  `.query::<(&Animation, &PrefabInstance)>()` and `.query::<(&mut BlendClock,)>()`.
   It keeps a hashed `BlendClock` only on an entity whose clip names a blend. Without it, extract falls
   back to `elapsed * rate(params now)`: exact while the params hold still, and no events fire.
 - **Limits.** `hold` does not step a blend's phase. A blend may not share a clip binding's name.
-  A prefab's blends play stateless and fire no events (`ludion docs prefab-animation`); a layer
-  blend's phase is not stepped by `hold`.
+  A layer blend's phase is not stepped by `hold`. A prefab's blends follow these rules too
+  (`ludion docs prefab-animation`).
 - **Assemblies.** An assembly's `blends:` follows the same rules, with its clips bound at speed 1 and
   `sync` read from the clip document's own events; errors are `L1137`/`L1138`.
 

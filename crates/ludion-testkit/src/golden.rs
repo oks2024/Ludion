@@ -88,7 +88,7 @@ pub struct GoldenTest {
     /// of phases, exactly `ludion render --crossfade FROM:TO:SECONDS` (five phases unless
     /// [`strip`](Self::strip) says otherwise). Conflicts with [`clip`](Self::clip).
     pub crossfade: Option<String>,
-    /// For an assembly or character source: sweep a blend space as a strip of phases, exactly
+    /// For an assembly, character or prefab source: sweep a blend space as a strip of phases, exactly
     /// `ludion render --blend NAME:P0[:P1]` (five phases unless [`strip`](Self::strip) says
     /// otherwise). Conflicts with [`clip`](Self::clip) and [`crossfade`](Self::crossfade).
     pub blend: Option<String>,
