@@ -125,7 +125,7 @@
 //!   [`Nav`] resource. A [`NavAgent`] entity gets its desired velocity in [`NavSteering`] from [`nav_steer`]
 //!   (scheduled after `nav_update`, before the game's mover): a flow-field seek for a walker, a 3D seek for a
 //!   flyer, plus separation from `spatial3d` neighbours; with a [`NavGoal`] a walker follows a planned
-//!   [`NavRoute`] instead, and [`nav_path`] answers one-off [`PathRequest`]s. A [`NavLink`] adds an off-mesh edge (a ladder): a routed walker stops `at_link` until the game calls [`nav_link_done`]. A guard with a [`PatrolFollower`] walks a `kind: patrol` document as nav legs when [`patrol_update`] is scheduled between `nav_update` and `nav_steer`; [`patrol_motion`] reads its facing. The `ludion::nav` module (not in the prelude, which would clash with a game's own `nav`) holds the grid and flow-field types (`NavGrid`,
+//!   [`NavRoute`] instead, and [`nav_path`] answers one-off [`PathRequest`]s. A [`NavLink`] adds an off-mesh edge (a ladder): a routed walker stops `at_link` until the game calls [`nav_link_done`]. A guard with a [`PatrolFollower`] walks a `kind: patrol` document as nav legs when [`patrol_update`] is scheduled between `nav_update` and `nav_steer`; [`patrol_motion`] reads its facing and [`patrol_route`] the loaded [`PatrolDocument`]. The `ludion::nav` module (not in the prelude, which would clash with a game's own `nav`) holds the grid and flow-field types (`NavGrid`,
 //!   `FlowCache`, `FlowField`).
 //! - **Rigid-body dynamics** — the second tier of the same [`Collider`] surface: a 3D [`Shape`] or
 //!   `body: rigid` (with [`RigidBody`] and its [`AxisLock`]; a static or kinematic body takes a
@@ -351,7 +351,7 @@ pub use ludion_engine::{
 };
 pub use ludion_engine::{
     PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
-    patrol_update,
+    patrol_route, patrol_update,
 };
 pub use ludion_engine::{
     PoseSnapshot, RagdollToAssembly, SnapshotPart, ragdoll_landing, switch_ragdoll_to_assembly,
@@ -360,6 +360,7 @@ pub use ludion_engine::{PostProfile, ViewBackground, ViewShading};
 pub use ludion_engine::{ScreenEffect, ScreenEffectPreset, ScreenEffectTarget, ScreenMaskKind};
 pub use ludion_engine::{UiDash, UiLineCap, UiLineJoin, UiShape, UiShapeType, UiStroke};
 pub use ludion_engine::{VoiceFilter, VoiceSpatial};
+pub use ludion_scene::{PatrolDocument, PatrolLook, PatrolMode, PatrolPoint};
 
 pub use ludion_ecs::{
     AssetPathSchema, Component, EntityRefCollection, EntityRefSchema, EntityRefSelfSchema, Parent,

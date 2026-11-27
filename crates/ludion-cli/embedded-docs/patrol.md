@@ -59,6 +59,20 @@ repeats its look cycle. Canonical text always spells `mode`.
   `stopped`, `paused`, `done`), `stop_left`, `stop_elapsed`, `look_deg`, `arrived` (true only on the
   tick a stop began). A scene without a follower has none, so its hash is unchanged.
 
+## Reading the route
+
+`patrol_route(world, &follower.route)` returns the loaded `Arc<PatrolDocument>` that `patrol_update`
+walks: `mode` and `points` (`at`, `wait`, `face_deg`, `look`, `tag`). It is `None` until
+`patrol_update` has loaded the route, and for a route that failed to load; it never loads one. For
+example, the legs of a route, for a distance-to-segment test (add the last-to-first leg for `loop`):
+
+```rust
+let Some(doc) = patrol_route(world, &follower.route) else { return };
+for leg in doc.points.windows(2) {
+    let (from, to) = (leg[0].at, leg[1].at); // [f64; 3]
+}
+```
+
 ## Rules
 
 - **Gameplay time.** Waits and looks count `game_dt`; a `GameClock` hold freezes `stop_left`.

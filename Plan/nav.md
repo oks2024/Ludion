@@ -232,6 +232,9 @@ phase (`plan_route` now returns the attempt's log; `plan_reason` keeps its condi
 `retry`, `goal_moved`, `blocker_closed`, `at_link`/`at_blocker` names, `unreachable` without a cost, field and fly
 modes, a nav-free world printing nothing, `WorldHash` identity and byte-identical runs. No pinned artifact moved.
 
+An external game's request 0028: `patrol_route` reads the loaded `PatrolDocument` that `patrol_update` walks, and the
+`ludion` prelude re-exports it with `PatrolDocument`, `PatrolPoint`, `PatrolMode` and `PatrolLook`.
+
 ## Waves (Neon Shroud request 0004)
 
 The request asks for paths, patrols, off-mesh links, dynamic blockers and avoidance. Each wave is

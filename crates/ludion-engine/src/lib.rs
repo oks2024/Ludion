@@ -312,7 +312,7 @@ pub use path_follow::{
 };
 pub use patrol::{
     PatrolFollower, PatrolMotion, PatrolPhase, PatrolResume, PatrolState, patrol_motion,
-    patrol_update,
+    patrol_route, patrol_update,
 };
 pub use patterns::{
     BulletKind, MotionSegment, PatternDoc, PatternPlayer, RampSpec, TimelineEntry, TurnSpec,

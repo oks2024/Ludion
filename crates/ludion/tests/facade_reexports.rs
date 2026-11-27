@@ -48,3 +48,15 @@ fn physics_query_types_are_nameable_through_the_prelude() {
     let _: Option<SweepFilter> = None;
     let _: Option<SweepHit> = None;
 }
+
+#[test]
+fn patrol_route_types_are_nameable_through_the_prelude() {
+    use ludion::prelude::{
+        PatrolDocument, PatrolLook, PatrolMode, PatrolPoint, World, patrol_route,
+    };
+
+    let _ = (PatrolDocument::default(), PatrolPoint::default());
+    let _: Option<PatrolLook> = None;
+    let _ = PatrolMode::PingPong;
+    assert!(patrol_route(&World::new(), "yard.patrol.yaml").is_none());
+}

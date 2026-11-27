@@ -11,7 +11,7 @@ use ludion_ecs::{SystemCtx, World};
 use ludion_engine::diagnostics::Diagnostics;
 use ludion_engine::{
     Engine, EngineBuilder, NavGoal, PatrolFollower, PatrolPhase, PatrolState, Transform,
-    TransformHierarchy, nav_steer, nav_update, patrol_motion, patrol_update,
+    TransformHierarchy, nav_steer, nav_update, patrol_motion, patrol_route, patrol_update,
 };
 use ludion_protocol::Command;
 use ludion_protocol::command::EngineRestoreParams;
@@ -382,6 +382,30 @@ fn the_motion_reads_the_stops_tag() {
     let motion = patrol_motion(world, id).expect("a patrolling guard");
     assert_eq!((motion.point, motion.phase), (0, PatrolPhase::Stopped));
     assert_eq!(motion.tag.as_deref(), Some("door"));
+}
+
+#[test]
+fn patrol_route_reads_the_document_patrol_update_loaded() {
+    let root = fixture_root("route");
+    write(
+        &root,
+        "loop.patrol.yaml",
+        &patrol_doc("loop", &[(A, "    tag: door\n"), (B, ""), (C, "")]),
+    );
+    let yaml = scene(&[ground()])
+        + &guard(0, A, &follower("loop.patrol.yaml"))
+        + &guard(1, B, &follower("nowhere.patrol.yaml"));
+    let mut engine = engine_with(game(&root), &yaml);
+    assert!(patrol_route(engine.world(), "loop.patrol.yaml").is_none());
+    samples(&mut engine, 5);
+    let world = engine.world();
+    let doc = patrol_route(world, "loop.patrol.yaml").expect("a loaded route");
+    let points: Vec<[f64; 3]> = doc.points.iter().map(|p| p.at).collect();
+    assert_eq!(points, [A, B, C].map(|at| at.map(f64::from)));
+    assert_eq!(doc.points[0].tag.as_deref(), Some("door"));
+    assert!(patrol_route(world, "other.patrol.yaml").is_none());
+    assert_eq!(reported(&engine, code::PATROL_ROUTE_UNLOADED).len(), 1);
+    assert!(patrol_route(world, "nowhere.patrol.yaml").is_none());
 }
 
 fn restore_engine(root: &Path) -> Engine {

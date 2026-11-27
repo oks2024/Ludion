@@ -119,6 +119,23 @@ pub fn patrol_motion(world: &World, entity: EntityId) -> Option<PatrolMotion> {
     })
 }
 
+/// The loaded patrol document of `route` (a `PatrolFollower.route`), the one [`patrol_update`] walks.
+///
+/// `None` until [`patrol_update`] has loaded it, and for a route that failed to load. Never loads on
+/// demand.
+///
+/// # Example
+/// ```
+/// use ludion_ecs::World;
+/// use ludion_engine::patrol_route;
+///
+/// let world = World::new();
+/// assert!(patrol_route(&world, "patrols/yard.patrol.yaml").is_none());
+/// ```
+pub fn patrol_route(world: &World, route: &str) -> Option<Arc<PatrolDocument>> {
+    world.resource::<PatrolLibrary>()?.cached(route).cloned()
+}
+
 /// A diagnostic [`patrol_update`] reports once its borrows are over.
 enum Failure {
     NoAgent(EntityId),
