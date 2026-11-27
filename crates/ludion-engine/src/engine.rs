@@ -4018,6 +4018,9 @@ impl Engine {
             speed: PlaybackSpeed::X1,
         };
         self.profile_off_disk = true;
+        // The header scene loads before the header's settings, and the locale is hashed: this
+        // machine's language must not reach it.
+        self.settings.text.language = None;
         self.playback_name = Some(name.to_string());
         if let Some(state) = self.replay_playback.as_mut() {
             state.last_outcome = None;
@@ -5018,8 +5021,8 @@ impl Engine {
 
     /// Installs a replay header's settings (`None` for the defaults) **without touching disk**: the
     /// recorded values replace the boot file-load's, and the world's [`SettingsView`](crate::SettingsView)
-    /// is reinstalled from them, so a recording reproduces on a machine whose file differs. Render
-    /// state (quality, anti-aliasing) and the window are left as they are.
+    /// is reinstalled from them and their language applied, so a recording reproduces on a machine
+    /// whose file differs. Render state (quality, anti-aliasing) and the window are left as they are.
     pub(crate) fn install_settings_from_text(&mut self, text: Option<&str>) {
         let (doc, warnings) = match text {
             Some(text) => crate::settings::parse_text(text),
@@ -5028,6 +5031,15 @@ impl Engine {
         self.boot_warnings.extend(warnings);
         self.settings = doc;
         self.install_settings();
+        self.apply_settings_language();
+    }
+
+    /// Makes the settings language, when there is one, the active locale. It is hashed state, so the
+    /// call sites are points a replay repeats; a restored world keeps the locale its snapshot holds.
+    fn apply_settings_language(&mut self) {
+        if let Some(tag) = &self.settings.text.language {
+            crate::localization::set_locale(self.driver.world_mut(), tag);
+        }
     }
 
     /// Reads the settings file at build when persistence is on: warnings go to `boot_warnings`, the
@@ -5053,13 +5065,15 @@ impl Engine {
             self.set_quality(setting);
         }
         self.install_settings();
+        self.apply_settings_language();
     }
 
     /// Applies the game's pending [`Settings`](crate::Settings) requests at the frame boundary:
     /// volumes to the `User` mix layer (logged, only on change), anti-aliasing, quality, rumble and
     /// brightness to the engine's host state, the text options to the view, the window mode to the armed host channel (only on change), then the
     /// one write a `save()` asks for. A replay (`profile_off_disk`) updates its view but never
-    /// reaches the window or the disk. Host state: nothing here is hashed or snapshotted.
+    /// reaches the window or the disk. Host state: nothing here is hashed or snapshotted, except the
+    /// locale a language request sets.
     fn drain_settings(&mut self, frame: FrameIndex) {
         self.drain_window_mode_reports();
         let requests = match self.driver.world_mut().resource_mut::<crate::Settings>() {
@@ -5103,6 +5117,8 @@ impl Engine {
         }
         if let Some(tag) = requests.language {
             self.settings.text.language = Some(tag);
+            // Even when unchanged: the game may have set another locale since.
+            self.apply_settings_language();
         }
         if let Some(preset) = requests.quality
             && self.settings.graphics.quality != Some(preset)
@@ -9424,6 +9440,10 @@ impl Engine {
         self.install_run_recording();
         self.install_replay_playback();
         self.commit_docs(docs);
+        // A restore keeps its snapshot's locale. After the diagnostics, so an `L5140` has a sink.
+        if matches!(kind, Rebuild::Load { .. } | Rebuild::Switch { .. }) {
+            self.apply_settings_language();
+        }
         // A later load reads the persisted save; the boot load carries the profile the build read.
         // A restore is an exact continuation, so it installs the snapshot's embedded profile off-disk
         // (preserving unsaved changes, reproducing on a machine whose save differs) and falls back to

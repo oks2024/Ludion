@@ -9,11 +9,11 @@ use ludion_assets::AssetRoot;
 use ludion_core::rumble::RumbleCommand;
 use ludion_core::time::FrameIndex;
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::dialogue;
+use ludion_engine::localization::{self, LocaleState};
 use ludion_engine::{
-    DialogueConfig, Engine, EngineBuilder, PlaybackOutcome, ReplayPlayback, ReplayPlaybackConfig,
-    Rumble, RumbleEffect, RunRecording, RunRecordingConfig, Settings, SettingsView,
-    dialogue_update,
+    Diagnostics, DialogueConfig, Engine, EngineBuilder, PlaybackOutcome, ReplayPlayback,
+    ReplayPlaybackConfig, Rumble, RumbleEffect, RunRecording, RunRecordingConfig, SceneSwitch,
+    Settings, SettingsView, dialogue, dialogue_update, replay_hashes_with, replay_with,
 };
 use ludion_protocol::Command;
 use ludion_protocol::command::SimStepParams;
@@ -408,4 +408,225 @@ fn extract_hides_and_scales_subtitles_without_writing_the_view() {
         .map(|(view,)| view.size)
         .collect::<Vec<_>>();
     assert_eq!(authored, [30.0], "the authored component is untouched");
+}
+
+const STRINGS_FR: &str = "format: 1
+kind: strings
+locale: fr
+strings:
+  hud.start: Demarrer
+";
+
+const STRINGS_DE: &str = "format: 1
+kind: strings
+locale: de
+strings:
+  hud.start: Starten
+";
+
+const KEYED_SCENE: &str = "format: 1
+seed: 1
+entities:
+  - name: start
+    components:
+      UiText:
+        text: Start (authored)
+        key: hud.start
+";
+
+const FRENCH: &str = "format: 1\nkind: settings\ntext:\n  language: fr\n";
+
+/// A root whose `content/` holds the French and German tables and a hub scene.
+fn localized_root(name: &str, settings: Option<&str>) -> PathBuf {
+    let root = scratch(name);
+    let strings = root.join("content").join("strings");
+    std::fs::create_dir_all(&strings).unwrap();
+    std::fs::write(strings.join("fr.yaml"), STRINGS_FR).unwrap();
+    std::fs::write(strings.join("de.yaml"), STRINGS_DE).unwrap();
+    std::fs::write(root.join("content").join("hub.yaml"), KEYED_SCENE).unwrap();
+    if let Some(text) = settings {
+        write_settings(&root, text);
+    }
+    root
+}
+
+fn localized(root: &Path) -> EngineBuilder {
+    persisted(root)
+        .project_root(root.join("content"))
+        .localization()
+}
+
+fn locale_states(engine: &mut Engine) -> usize {
+    engine.world_mut().query_ids::<(&LocaleState,)>().count()
+}
+
+#[test]
+fn the_file_language_is_the_locale_at_boot_load_and_restart_and_a_request_moves_it() {
+    let root = localized_root("language", Some(FRENCH));
+    let mut engine = localized(&root).build().unwrap();
+    assert_eq!(localization::locale(engine.world_mut()), "fr", "boot");
+    engine.load_inline_scene(KEYED_SCENE).unwrap();
+    assert_eq!(localization::locale(engine.world_mut()), "fr", "load");
+    assert_eq!(locale_states(&mut engine), 1);
+
+    localization::set_locale(engine.world_mut(), "de");
+    engine
+        .world_mut()
+        .resource_mut::<SceneSwitch>()
+        .unwrap()
+        .restart(Vec::new());
+    step(&mut engine);
+    assert_eq!(localization::locale(engine.world_mut()), "fr", "switch");
+
+    requests(&mut engine).request_language("de");
+    assert_eq!(localization::locale(engine.world_mut()), "fr");
+    step(&mut engine);
+    assert_eq!(localization::locale(engine.world_mut()), "de", "request");
+
+    // The stored value is unchanged, but the game has set another locale since.
+    localization::set_locale(engine.world_mut(), "fr");
+    requests(&mut engine).request_language("de");
+    step(&mut engine);
+    assert_eq!(localization::locale(engine.world_mut()), "de");
+}
+
+#[test]
+fn a_language_with_no_strings_warns_after_a_load() {
+    let root = localized_root(
+        "language-unknown",
+        Some("format: 1\nkind: settings\ntext:\n  language: it\n"),
+    );
+    let mut engine = localized(&root).build().unwrap();
+    engine.load_inline_scene(KEYED_SCENE).unwrap();
+    let reported = engine
+        .world()
+        .resource::<Diagnostics>()
+        .unwrap()
+        .reported(ludion_core::codes::code::LOCALE_WITHOUT_STRINGS)
+        .count();
+    assert_eq!(reported, 1);
+}
+
+#[test]
+fn a_file_without_a_language_spawns_no_locale_state() {
+    let root = localized_root(
+        "language-none",
+        Some("format: 1\nkind: settings\ntext:\n  subtitles: false\n"),
+    );
+    let mut engine = localized(&root).build().unwrap();
+    assert_eq!(locale_states(&mut engine), 0);
+    engine.load_inline_scene(KEYED_SCENE).unwrap();
+    step(&mut engine);
+    assert_eq!(locale_states(&mut engine), 0);
+}
+
+/// The recorded game turns subtitles off, then picks German, inside the recorded span.
+fn language_requests(world: &mut World, ctx: &SystemCtx) {
+    let Some(settings) = world.resource_mut::<Settings>() else {
+        return;
+    };
+    if ctx.frame == FrameIndex(2) {
+        settings.request_subtitles(false);
+    }
+    if ctx.frame == FrameIndex(4) {
+        settings.request_language("de");
+    }
+}
+
+#[test]
+fn a_recording_made_in_french_replays_identically_on_a_machine_with_no_file() {
+    let recording = |root: &Path| localized(root).system("language_requests", language_requests);
+    let a = localized_root("language-record", Some(FRENCH));
+    let mut engine = recording(&a).build().unwrap();
+    engine.load_inline_scene(KEYED_SCENE).unwrap();
+    let path = a.join("session.lrp");
+    engine
+        .set_recording(std::fs::File::create(&path).unwrap())
+        .unwrap();
+    let live: Vec<_> = (0..8)
+        .map(|_| {
+            engine.advance_live();
+            (engine.frame(), engine.world_hash().unwrap())
+        })
+        .collect();
+    engine.stop_recording().unwrap();
+    assert_eq!(localization::locale(engine.world_mut()), "de");
+    let bytes = std::fs::read(&path).unwrap();
+
+    let b = localized_root("language-replay", None);
+    let trace = replay_hashes_with(recording(&b), &bytes, b.join("content")).unwrap();
+    for expected in &live {
+        assert!(trace.contains(expected), "{expected:?} not in {trace:?}");
+    }
+    let mut replayed = replay_with(recording(&b), &bytes, b.join("content"), |_, _| {
+        Ok(std::ops::ControlFlow::Continue(()))
+    })
+    .unwrap();
+    assert_eq!(localization::locale(replayed.world_mut()), "de");
+    assert_eq!(
+        replayed.world().resource::<SettingsView>(),
+        engine.world().resource::<SettingsView>()
+    );
+
+    // A machine in another language reproduces it too.
+    let c = localized_root(
+        "language-replay-de",
+        Some("format: 1\nkind: settings\ntext:\n  language: de\n"),
+    );
+    assert_eq!(
+        replay_hashes_with(recording(&c), &bytes, c.join("content")).unwrap(),
+        trace
+    );
+}
+
+#[test]
+fn in_place_playback_keeps_this_machines_language_out_of_the_replay() {
+    let root = localized_root("language-playback", None);
+    let mut engine = localized(&root)
+        .persist_profile()
+        .run_recordings(RunRecordingConfig::default())
+        .replay_playback(ReplayPlaybackConfig::default())
+        .build()
+        .unwrap();
+    engine.load_inline_scene(KEYED_SCENE).unwrap();
+    engine
+        .world_mut()
+        .resource_mut::<RunRecording>()
+        .unwrap()
+        .start("p");
+    for _ in 0..20 {
+        engine.advance_live();
+    }
+    engine
+        .world_mut()
+        .resource_mut::<RunRecording>()
+        .unwrap()
+        .stop();
+    engine.advance_live();
+
+    requests(&mut engine).request_language("fr");
+    engine.advance_live();
+    assert_eq!(localization::locale(engine.world_mut()), "fr");
+
+    engine
+        .world_mut()
+        .resource_mut::<ReplayPlayback>()
+        .unwrap()
+        .play("p", "hub.yaml");
+    engine.advance_live();
+    let outcome = engine
+        .world()
+        .resource::<ReplayPlayback>()
+        .unwrap()
+        .last_outcome()
+        .cloned();
+    assert_eq!(engine.playing(), Some("p"), "{outcome:?}");
+    assert_eq!(
+        locale_states(&mut engine),
+        0,
+        "the recording had no language"
+    );
+
+    engine.stop_playback();
+    assert_eq!(localization::locale(engine.world_mut()), "fr");
 }

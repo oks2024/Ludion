@@ -1,6 +1,6 @@
 # Plan: Player settings — a per-machine settings file, requests and a view
 
-> **Waves 1, 2 and 3a mechanized; Wave 3b (language apply) not started.**
+> **Waves 1, 2 and 3 mechanized.**
 > Driven by Neon Shroud request 0022: a game's options menu needs volumes, window mode, quality and
 > anti-aliasing that persist per machine, load leniently and never refuse a boot. Game-facing doc:
 > `ludion docs settings`. Amends `Plan/audio-ambience.md` decision 6 (a runtime setter now exists).
@@ -60,7 +60,7 @@
     clamps, a non-number takes the fallback; a non-bool `subtitles`, or a `language` that is not a
     non-empty trimmed string, is dropped (each `L4342`). An unset key is not emitted, so a default file is
     unchanged. The language is stored and round-tripped, and no tag is validated; applying it to the locale
-    is decision 18, owed to `0022-04`.
+    is decision 18.
 16. **Rumble and brightness are host render state:** set from the file at build and from a request at the
     drain, never from a replay header (decision 11), saved across an in-place playback and restored on
     return. Brightness is an EV offset added to the exposure compensation, before the tonemap, in both
@@ -70,6 +70,19 @@
 17. **Subtitles and their scale apply at extract,** read from `SettingsView`: off draws nothing, a scale
     draws through a copy of `SubtitleView` with `size` multiplied. The authored component is never written
     (`Plan/dialogue.md` decision 45). The scale touches the glyph size only, not `padding` or `wrap_width`.
+18. **The language is hashed sim state.** `text.language`, when set, goes through
+    `localization::set_locale` into `LocaleState` (a no-op without `.localization()`; `L5140` for a tag
+    with no strings), so a replay reproduces it. A file without one spawns no entity and moves no hash.
+    `LocaleState` does not outlive a world rebuild, so it applies at four points: the end of the build's
+    file read; a `scene.load` or a scene switch, after the docs are committed (`set_locale` reads the
+    string tables, and an `L5140` needs the world's diagnostics); a replay's header install, which
+    follows the header scene's load as the recording machine's Load-time apply did; and every `language`
+    request, even one that repeats the stored value, since the game may have set the locale since.
+    An in-place playback clears this machine's language before the header scene loads. A restore and a
+    checkpoint restore never apply it: their snapshot carries its own `LocaleState`, and writing it
+    would move the restored hash.
+19. **A text request reaches the view and `LocaleState` at that tick's frame boundary,** so the next
+    tick is the first to see it.
 
 `ludion new` already ignores the save directory (`/scenes/save/` in the gitignore template).
 
@@ -85,7 +98,7 @@
   quality docs.
 - **W3a (shipped):** rumble (binds `set_rumble_intensity`), brightness, subtitles and subtitle scale;
   every Wave 3 key stored, the language included.
-- **W3b:** the language applies to the locale.
+- **W3b (shipped):** the language applies to the locale (decisions 18, 19).
 - **Live window mode (shipped, R13):** the settings view reports the live window mode, so it
   never disagrees with the window after a chord (decision 13); the chord stays non-persisting.
 
@@ -127,6 +140,13 @@ hiding and doubling subtitles; and a `WorldHash` trace equal with no file and wi
 Nothing hashed, blessed or re-recorded. Live smoke (brightness in a window included) is owed to a human,
 with W2's.
 
+**W3b:** `Engine::apply_settings_language` at decision 18's four points. Tests cover the locale from the
+file at boot, load and restart, a request (an unchanged value included), `L5140` after a load, no
+`LocaleState` without a language, a recording made in French replaying with an identical `WorldHash`
+trace and equal `SettingsView` on a machine with no file and on a German one, and an in-place playback
+of a recording without a language on a French engine. Wave 3 is shipped. Nothing blessed or
+re-recorded.
+
 ## Owner rulings (2026-11-19)
 
 - Shipped (R13). The chord stays temporary, keeping the Clockout 0023 ruling; the settings view reports the live window mode instead (Waves). The window chord writes `display.window` (reverses the Clockout 0023 ruling; W2 ships it
@@ -140,5 +160,7 @@ with W2's.
 
 ## Explicitly out of scope (triggers recorded)
 
-- Applying the language to the locale — W3b.
+- Applying the machine's language on a run-save resume or a checkpoint restore: the save's locale stays
+  (trigger: the game reports a resume in the wrong language).
+- Validating the tag against `kind: locales` at load; `L5140` covers it.
 - A brightness calibration screen; post-tonemap brightness.

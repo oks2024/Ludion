@@ -67,7 +67,7 @@ hot reload (`asset.reload`) shows on the next tick.
 
 `LocaleState` is one lazily spawned entity, hashed and snapshotted, and skipped by `scene.save`: the locale is not saved into scenes. `localization::locale`
 reads it (the default when unset). `set_locale` to a tag with no `kind: strings` doc still applies and warns `L5140`
-once per tag.
+once per tag. The player's saved language, which sets the locale, is `ludion docs settings`.
 
 ## Per-locale faces
 

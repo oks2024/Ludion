@@ -6,7 +6,7 @@
 //! drains it at the frame boundary onto the [`Engine`](crate::Engine), where it outlives world
 //! rebuilds, and applies it: volumes to the `User` mix layer, anti-aliasing, quality and brightness
 //! to the next render, rumble to the pad commands, the window mode to a host channel, the subtitle
-//! options at extract. The language is stored and round-tripped. Persistence is opt-in
+//! options at extract, the language to the locale. Persistence is opt-in
 //! ([`EngineBuilder::persist_settings`](crate::EngineBuilder::persist_settings)).
 //!
 //! The file is the shared per-machine save shape: a canonical `format: 1` / `kind: settings`
@@ -694,13 +694,13 @@ fn sanitize_text(
 /// wins. Volumes go to the `User` mix layer ([`MixLayer::User`](ludion_core::audio::MixLayer));
 /// anti-aliasing, quality and brightness apply from the next render (a quality a host pinned with
 /// `--quality` persists but does not apply); rumble scales later pad commands; the subtitle options
-/// apply at extract; the language is stored; a window mode is sent to the window host. Nothing is
+/// apply at extract; the language becomes the locale; a window mode is sent to the window host. Nothing is
 /// written to disk until [`save`](Settings::save), and only when the engine was built with
 /// [`persist_settings`](crate::EngineBuilder::persist_settings).
 ///
 /// **Host state:** the requests live on the [`Engine`](crate::Engine), survive world rebuilds, and are
-/// never hashed, snapshotted, recorded or on the wire. Read the result back through
-/// [`SettingsView`].
+/// never hashed, snapshotted, recorded or on the wire (the locale a language sets is sim state:
+/// hashed and snapshotted). Read the result back through [`SettingsView`].
 ///
 /// # Example
 /// ```

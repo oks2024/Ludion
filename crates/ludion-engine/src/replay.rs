@@ -1006,7 +1006,7 @@ pub(crate) fn install_replay(
             .map(String::as_str),
     );
 
-    // Likewise for `save/settings.yaml`: only the world's view is installed, never render state.
+    // Likewise for `save/settings.yaml`: the view and the locale are installed, never render state.
     engine.install_settings_from_text(
         header
             .save_docs
