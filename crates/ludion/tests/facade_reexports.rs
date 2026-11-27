@@ -1,5 +1,6 @@
 //! The facade names what a game needs without a second dependency: `WorldHash` (the type
-//! `replay_hashes` returns), the Euler/quaternion pair, the seeded RNG and the deterministic collections.
+//! `replay_hashes` returns), the Euler/quaternion pair, the seeded RNG, the deterministic collections
+//! and the physics query types.
 
 use ludion::math::{euler_xyz_degrees_to_quat, quat_to_euler_xyz_degrees};
 use ludion::prelude::WorldHash;
@@ -36,4 +37,14 @@ fn deterministic_collections_are_nameable_through_the_facade() {
     let mut set: StableSet<u32> = StableSet::default();
     set.insert(1);
     assert_eq!((map.len(), set.len()), (1, 1));
+}
+
+#[test]
+fn physics_query_types_are_nameable_through_the_prelude() {
+    use ludion::prelude::{QueryLayers, Sweep, SweepFilter, SweepHit};
+
+    let _ = QueryLayers::default();
+    let _ = Sweep::new([0.0; 3], [1.0, 0.0, 0.0], 0.25);
+    let _: Option<SweepFilter> = None;
+    let _: Option<SweepHit> = None;
 }

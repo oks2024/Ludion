@@ -382,9 +382,10 @@ pub use ludion_physics::{
     ExitCause, Falloff, GroundHit, GroundProbe, IgnoreCollisions, JointBroken, LaneEnd, LaneFrame,
     LaneReport, LayerSet, MotorError, MoveConstraint, MoveReport, PartSurface, PhysicsError,
     PhysicsWorld, PlatformCarry, PlatformPose, PointHit, Posture, PostureReport, PostureShape,
-    QueryFilter, QueryHit, ResizeReport, ResumeReport, SensorEvent, SensorPhase, SurfaceHit,
-    SurfaceId, SurfaceOverlay, SurfacePart, SurfaceTable, SurfaceTag, SurfaceVelocity, TurnReport,
-    height_in_force, motor_capsule_segment, motor_in_force, teleport_kinematic,
+    QueryFilter, QueryHit, QueryLayers, ResizeReport, ResumeReport, SensorEvent, SensorPhase,
+    SurfaceHit, SurfaceId, SurfaceOverlay, SurfacePart, SurfaceTable, SurfaceTag, SurfaceVelocity,
+    Sweep, SweepFilter, SweepHit, TurnReport, height_in_force, motor_capsule_segment,
+    motor_in_force, teleport_kinematic,
 };
 pub use ludion_projectiles as projectiles;
 pub use ludion_spatial::{
