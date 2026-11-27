@@ -16,8 +16,9 @@
 //! platform this crate targets (XInput on Windows, IOKit on macOS) actually reports.
 //!
 //! Only the first connected pad is forwarded (a settled out-of-scope, `Plan/phase-13-input.md`); the
-//! poll loop in `lib.rs` owns which pad that is. When it unplugs, [`on_disconnect`] releases whatever
-//! it held (the OS reports no release for an unplugged pad) and promotes the next connected pad.
+//! poll loop in `lib.rs` owns which pad that is, and announces it with `gamepad_connected` and its
+//! [`family_name`]. When it unplugs, [`on_disconnect`] releases whatever it held (the OS reports no
+//! release for an unplugged pad), says `gamepad_disconnected` and promotes the next connected pad.
 
 use gilrs::{Axis, Button};
 
@@ -93,6 +94,26 @@ fn button_value(kind: &str, name: &str) -> serde_json::Value {
     serde_json::json!({"kind": kind, "button": name})
 }
 
+/// The engine's pad family name for a USB vendor id.
+pub fn family_name(vendor: Option<u16>) -> &'static str {
+    match vendor {
+        Some(0x045E) => "xbox",
+        Some(0x054C) => "playstation",
+        Some(0x057E) => "nintendo",
+        _ => "generic",
+    }
+}
+
+/// The `input.inject` event `Value` announcing the primary pad.
+pub fn connected_value(family: &str) -> serde_json::Value {
+    serde_json::json!({"kind": "gamepad_connected", "family": family})
+}
+
+/// The `input.inject` event `Value` for the primary pad leaving.
+pub fn disconnected_value() -> serde_json::Value {
+    serde_json::json!({"kind": "gamepad_disconnected"})
+}
+
 /// The axes and buttons the primary pad last forwarded as non-neutral, so an unplug (the OS reports
 /// no release for what the pad was holding) can neutralise them. Trigger buttons are not tracked: the
 /// sim synthesises them from the trigger axis, so zeroing the axis releases them.
@@ -164,21 +185,26 @@ impl PadHeld {
     }
 }
 
-/// Handles pad `gone` disconnecting. When it is the primary, returns the releases for everything it
-/// held and promotes the first `connected` pad other than `gone` (or none); any other pad changes
-/// nothing. Generic over the pad id so tests need no real `gilrs::GamepadId`.
+/// Handles pad `gone` disconnecting. When it is the primary, promotes the first `connected` pad
+/// other than `gone` (or none) and returns the events to inject: the releases for everything it
+/// held, then `gamepad_disconnected`, then the promoted pad's `gamepad_connected` with the family
+/// `family_of` gives it. Any other pad changes nothing. Generic over the pad id so tests need no
+/// real `gilrs::GamepadId`.
 pub fn on_disconnect<Id: Copy + PartialEq>(
     primary: &mut Option<Id>,
     gone: Id,
     held: &mut PadHeld,
     connected: impl IntoIterator<Item = Id>,
+    family_of: impl Fn(Id) -> &'static str,
 ) -> Vec<serde_json::Value> {
     if *primary != Some(gone) {
         return Vec::new();
     }
-    let releases = held.release();
+    let mut events = held.release();
+    events.push(disconnected_value());
     *primary = connected.into_iter().find(|&id| id != gone);
-    releases
+    events.extend(primary.map(|id| connected_value(family_of(id))));
+    events
 }
 
 #[cfg(test)]
@@ -222,17 +248,24 @@ mod tests {
         held
     }
 
+    /// Pad 2 is a Nintendo pad; any other is generic.
+    fn family_of(id: i32) -> &'static str {
+        if id == 2 { "nintendo" } else { "generic" }
+    }
+
     #[test]
-    fn primary_unplug_zeroes_axes_then_releases_buttons() {
+    fn primary_unplug_releases_then_disconnects_then_announces_the_promoted_pad() {
         let mut held = busy_pad();
         let mut primary = Some(1);
-        let out = on_disconnect(&mut primary, 1, &mut held, [1, 2]);
+        let out = on_disconnect(&mut primary, 1, &mut held, [1, 2], family_of);
         assert_eq!(
             out,
             vec![
                 zero("left_stick_x"),
                 zero("right_trigger"),
                 serde_json::json!({"kind": "gamepad_button_up", "button": "south"}),
+                serde_json::json!({"kind": "gamepad_disconnected"}),
+                serde_json::json!({"kind": "gamepad_connected", "family": "nintendo"}),
             ]
         );
         assert_eq!(primary, Some(2));
@@ -243,17 +276,19 @@ mod tests {
     fn a_non_primary_unplug_changes_nothing() {
         let mut held = busy_pad();
         let mut primary = Some(1);
-        assert!(on_disconnect(&mut primary, 2, &mut held, [1, 2]).is_empty());
+        assert!(on_disconnect(&mut primary, 2, &mut held, [1, 2], family_of).is_empty());
         assert_eq!(primary, Some(1));
         assert_eq!(held.release().len(), 3);
     }
 
     #[test]
     fn promotion_is_none_when_no_pad_is_left() {
-        let mut held = PadHeld::default();
+        let mut held = busy_pad();
         let mut primary = Some(1);
-        on_disconnect(&mut primary, 1, &mut held, [1]);
+        let out = on_disconnect(&mut primary, 1, &mut held, [1], family_of);
         assert_eq!(primary, None);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out.last(), Some(&disconnected_value()));
     }
 
     #[test]
@@ -262,7 +297,23 @@ mod tests {
         held.forward(&axis(Axis::LeftStickX, 1.0));
         held.forward(&axis(Axis::LeftStickX, 0.0));
         let mut primary = Some(1);
-        assert!(on_disconnect(&mut primary, 1, &mut held, []).is_empty());
+        assert_eq!(
+            on_disconnect(&mut primary, 1, &mut held, [], family_of),
+            vec![disconnected_value()]
+        );
+    }
+
+    #[test]
+    fn the_vendor_id_names_the_family() {
+        for (vendor, family) in [
+            (Some(0x045E), "xbox"),
+            (Some(0x054C), "playstation"),
+            (Some(0x057E), "nintendo"),
+            (Some(0x046D), "generic"),
+            (None, "generic"),
+        ] {
+            assert_eq!(family_name(vendor), family, "{vendor:?}");
+        }
     }
 
     #[test]

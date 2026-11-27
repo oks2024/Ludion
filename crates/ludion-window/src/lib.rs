@@ -36,7 +36,8 @@
 //!   owns the fatal path.
 //! - **The gamepad thread** owns a [`gilrs::Gilrs`] instance and polls it (`next_event_blocking` with
 //!   a short timeout, so it wakes promptly to check for shutdown) for the first connected pad only
-//!   (when it unplugs, it releases what that pad held and promotes the next one),
+//!   (which it announces; when it unplugs, it releases what that pad held, says so and promotes the
+//!   next one),
 //!   translating axis/button samples into `gamepad_*` event `Value`s onto the same channel the input
 //!   thread drains (`gamepad.rs` holds the pure mapping; capture is out-of-sim by construction — the
 //!   sim only ever sees what this thread injects).
@@ -533,9 +534,11 @@ fn connect_input(url: &str) -> Option<Client> {
 /// as a machine with the backend but no pad plugged in, which just never yields an event. Polls with
 /// a bounded timeout (rather than an unbounded block) so the thread notices `running` going false and
 /// exits promptly on teardown, without busy-waiting between samples. Only the first-seen connected
-/// pad's events are forwarded (multi-pad is out of scope, `Plan/phase-13-input.md`). A `Disconnected`
-/// from that pad first sends the releases for everything it held (axes to zero, buttons up), then
-/// promotes the next still-connected pad, if any.
+/// pad's events are forwarded (multi-pad is out of scope, `Plan/phase-13-input.md`). That pad is
+/// announced with `gamepad_connected` and its family, whether it is there at the start or plugged in
+/// later; other pads send nothing. A `Disconnected` from it sends the releases for everything it
+/// held (axes to zero, buttons up) and `gamepad_disconnected`, then promotes and announces the next
+/// still-connected pad, if any.
 ///
 /// `rumble` carries the engine's force-feedback commands (the out-of-process viewer passes a channel
 /// that never yields). They are mixed per motor and played on the primary pad; a disconnect clears
@@ -552,6 +555,9 @@ pub fn spawn_gamepad_thread(
             Err(_) => return, // no gamepad backend on this machine: nothing to poll, ever
         };
         let mut primary: Option<GamepadId> = gilrs.gamepads().next().map(|(id, _)| id);
+        if let Some(id) = primary {
+            send(connected_event(&gilrs, id));
+        }
         let mut held = gamepad::PadHeld::default();
         let start = std::time::Instant::now();
         let mut mix = rumble::RumbleMix::default();
@@ -579,6 +585,7 @@ pub fn spawn_gamepad_thread(
                 gilrs::EventType::Connected => {
                     if primary.is_none() {
                         primary = Some(event.id);
+                        send(connected_event(&gilrs, event.id));
                     }
                     continue;
                 }
@@ -589,9 +596,14 @@ pub fn spawn_gamepad_thread(
                         output.release();
                     }
                     let connected = gilrs.gamepads().map(|(id, _)| id);
-                    for value in
-                        gamepad::on_disconnect(&mut primary, event.id, &mut held, connected)
-                    {
+                    let family_of = |id| pad_family(&gilrs, id);
+                    for value in gamepad::on_disconnect(
+                        &mut primary,
+                        event.id,
+                        &mut held,
+                        connected,
+                        family_of,
+                    ) {
                         send(value);
                     }
                     continue;
@@ -606,6 +618,14 @@ pub fn spawn_gamepad_thread(
             }
         }
     })
+}
+
+fn pad_family(gilrs: &Gilrs, id: GamepadId) -> &'static str {
+    gamepad::family_name(gilrs.gamepad(id).vendor_id())
+}
+
+fn connected_event(gilrs: &Gilrs, id: GamepadId) -> serde_json::Value {
+    gamepad::connected_value(pad_family(gilrs, id))
 }
 
 /// The waiter thread: forward the caller's `stop` to the loop as a clean shutdown, or exit quietly

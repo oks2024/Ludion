@@ -57,7 +57,7 @@ use ludion_renderer::{
     WindowBackend,
 };
 use ludion_scene::{ExpandedScene, InstanceTransform, Scene, SceneEntity, ScenePhysics};
-use ludion_sim::{InputState, RunState, SimConfig, SimDriver, Speed, WorldHash};
+use ludion_sim::{DeviceFacts, InputState, RunState, SimConfig, SimDriver, Speed, WorldHash};
 use ludion_spatial::Plane;
 use serde_json::Value;
 
@@ -3930,6 +3930,7 @@ impl Engine {
         })?;
         let reader = ludion_protocol::replay::ReplayReader::new(&bytes)?;
         crate::replay_compat::check_compatible(reader.header())?;
+        crate::replay::header_devices(reader.header())?;
         let mut scan = crate::replay::scan_replay(&reader, crate::replay::Keyframes::Skip)?;
         crate::replay_compat::check_game(reader.header(), &self.game_identity())?;
         let doc_texts = crate::docs::resolve_doc_texts(
@@ -4007,12 +4008,15 @@ impl Engine {
             fallback_path: self.current_scene_path.clone(),
             fallback_text: self.current_scene_text(),
         };
+        // The live input goes on following this machine's devices while the world replays.
+        let mut live_input = InputState::default();
+        live_input.set_devices(self.device_facts());
         let active = ActivePlayback {
             name: name.to_string(),
             cursor: crate::replay::ActionCursor::new(scan.actions),
             frames: 0,
             saved,
-            live_input: InputState::default(),
+            live_input,
             pending_live: Vec::new(),
             paused: false,
             speed: PlaybackSpeed::X1,
@@ -4154,6 +4158,10 @@ impl Engine {
         {
             self.set_quality(setting);
         }
+        let mut live_input = playback.live_input;
+        for event in playback.pending_live {
+            live_input.apply(event);
+        }
         self.playback = None;
         self.playback_name = None;
         self.replay_scene_text = None;
@@ -4181,6 +4189,8 @@ impl Engine {
                 }
             }
         }
+        // The return load kept the replayed world's device facts.
+        self.set_device_facts(live_input.devices());
         self.push_event(Event::SceneChanged(SceneChangedData {
             kind: SceneChangeKind::Load,
             path: self.current_scene_path.clone(),
@@ -6800,6 +6810,20 @@ impl Engine {
         Ok(count)
     }
 
+    /// What the live world knows about the devices.
+    pub(crate) fn device_facts(&self) -> DeviceFacts {
+        self.driver
+            .world()
+            .resource::<InputState>()
+            .map(InputState::devices)
+            .unwrap_or_default()
+    }
+
+    /// Replaces what the live world knows about the devices, with no change edge.
+    pub(crate) fn set_device_facts(&mut self, facts: DeviceFacts) {
+        set_devices(self.driver.world_mut(), facts);
+    }
+
     /// Reseeds the world's RNG (and the recorded seed) to `seed`, leaving the world otherwise
     /// unchanged. Used by replay to honor the header seed after loading the scene.
     pub(crate) fn reseed(&mut self, seed: u64) {
@@ -8330,8 +8354,9 @@ impl Engine {
         }
     }
 
-    /// The per-machine save documents in force, keyed by kind, for a recording's header: the input
-    /// overrides and, when not the defaults, the settings (so a default header stays byte-identical).
+    /// What a recording's header carries of this machine, keyed by kind: the input overrides and,
+    /// when not the defaults, the settings and the device facts (so a default header stays
+    /// byte-identical).
     fn save_docs_text(&self) -> BTreeMap<String, String> {
         let mut docs = BTreeMap::new();
         if let Some(text) = self.input_bindings_text() {
@@ -8341,6 +8366,13 @@ impl Engine {
             docs.insert(
                 crate::settings::SETTINGS_KIND.to_string(),
                 self.settings.emit(),
+            );
+        }
+        let devices = self.device_facts();
+        if devices != DeviceFacts::default() {
+            docs.insert(
+                crate::replay::INPUT_DEVICES_KEY.to_string(),
+                serde_json::to_string(&devices).expect("plain data serializes"),
             );
         }
         docs
@@ -9085,6 +9117,12 @@ pub(crate) struct RestoredWorld {
     pub sequence_seek: Option<crate::sequences::wire::SequenceSeek>,
 }
 
+fn set_devices(world: &mut World, facts: DeviceFacts) {
+    if let Some(input) = world.resource_mut::<InputState>() {
+        input.set_devices(facts);
+    }
+}
+
 /// A top-level prefab instance's root and the placement its scene entry gave it.
 pub(crate) type Placed = (EntityId, InstanceTransform);
 
@@ -9250,7 +9288,8 @@ impl Engine {
         // departing world's held input and its pending injected events. After the carriers, so this
         // row is authoritative.
         match &mut kind {
-            Rebuild::Load { .. } => {}
+            // Nothing is held, but the pad and the focus are still what they were.
+            Rebuild::Load { .. } => set_devices(driver.world_mut(), self.device_facts()),
             Rebuild::Restore {
                 input,
                 pending_input,

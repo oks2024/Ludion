@@ -10,7 +10,7 @@ use ludion_protocol::command::{EngineRestoreParams, InputInjectParams};
 use ludion_protocol::replay::ReplayReader;
 use ludion_protocol::{Command, ResponseBody};
 use ludion_sim::rebind::{CaptureOptions, CaptureResult, CaptureSlot, Resolve};
-use ludion_sim::{ActionName, Actions, Key};
+use ludion_sim::{ActionName, Actions, Device, DeviceFacts, GamepadFamily, InputState, Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -496,6 +496,51 @@ fn a_run_save_resume_keeps_the_machines_overrides() {
         })
     );
     assert_eq!(scan_key(&b), Some(Key::F), "the machine's overrides stay");
+}
+
+#[test]
+fn a_run_save_resume_keeps_the_machines_device_facts() {
+    let root = fresh_dir("resume-devices");
+    let game = |root: &Path| {
+        builder(root, false, false)
+            .profile::<Save>()
+            .persist_profile()
+            .run_save()
+    };
+    let mut a = booted(game(&root));
+    inject(
+        &mut a,
+        None,
+        json!({ "kind": "gamepad_connected", "family": "nintendo" }),
+    );
+    inject(&mut a, None, json!({ "kind": "focus", "gained": false }));
+    a.advance_live();
+    a.world_mut().resource_mut::<RunSave>().unwrap().suspend();
+    a.advance_live();
+
+    let mut b = booted(game(&root));
+    inject(
+        &mut b,
+        None,
+        json!({ "kind": "gamepad_connected", "family": "xbox" }),
+    );
+    tap(&mut b, "Space");
+    b.world_mut().resource_mut::<RunSave>().unwrap().resume();
+    b.advance_live();
+    assert!(matches!(
+        b.world().resource::<RunSave>().unwrap().last_resume(),
+        Some(ResumeOutcome::Resumed { .. })
+    ));
+    let input = b.world().resource::<InputState>().unwrap();
+    assert_eq!(
+        input.devices(),
+        DeviceFacts {
+            pad: Some(GamepadFamily::Xbox),
+            last_device: Device::KeyboardMouse,
+            focused: true,
+        }
+    );
+    assert!(!input.device_changed() && !input.focus_changed());
 }
 
 #[test]

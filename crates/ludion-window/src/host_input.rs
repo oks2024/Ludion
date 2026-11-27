@@ -32,7 +32,7 @@ impl HostStamp {
 }
 
 /// Maps winit window events to `input.inject` event `Value`s, remembering what is held so a focus
-/// loss can release it.
+/// loss can release it. Both focus edges are events themselves.
 #[derive(Default)]
 pub struct HostInput {
     keys: KeyMapper,
@@ -127,11 +127,15 @@ impl HostInput {
                     emit(value, stamp);
                 }
             }
-            // A key or button let go while another window had focus never gets a release.
-            WindowEvent::Focused(false) => {
-                for value in self.focus_lost() {
-                    emit(value, stamp);
+            // A key or button let go while another window had focus never gets a release, and the
+            // releases go first so they land with the loss.
+            WindowEvent::Focused(gained) => {
+                if !gained {
+                    for value in self.focus_lost() {
+                        emit(value, stamp);
+                    }
                 }
+                emit(focus_event(*gained), stamp);
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(pos) = map_cursor(position.x as f32, position.y as f32) {
@@ -147,6 +151,11 @@ impl HostInput {
             _ => {}
         }
     }
+}
+
+/// The `input.inject` event `Value` for the window gaining or losing focus.
+fn focus_event(gained: bool) -> Value {
+    serde_json::json!({"kind": "focus", "gained": gained})
 }
 
 #[cfg(test)]
@@ -259,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn route_releases_on_focus_loss_and_ignores_focus_gain() {
+    fn route_emits_both_focus_edges_with_releases_before_the_loss() {
         let mut input = held_input();
         let mut out = Vec::new();
         input.route(
@@ -268,13 +277,19 @@ mod tests {
             |_, _| None,
             |v, _| out.push(v),
         );
-        assert!(out.is_empty());
+        assert_eq!(
+            out,
+            vec![serde_json::json!({"kind": "focus", "gained": true})]
+        );
+        out.clear();
         input.route(
             &WindowEvent::Focused(false),
             None,
             |_, _| None,
             |v, _| out.push(v),
         );
-        assert_eq!(out, expected_release());
+        let mut expected = expected_release();
+        expected.push(serde_json::json!({"kind": "focus", "gained": false}));
+        assert_eq!(out, expected);
     }
 }

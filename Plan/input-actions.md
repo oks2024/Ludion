@@ -1,6 +1,6 @@
 # Plan: Input actions — a data-driven action map, gestures, rebinding, glyphs, rumble
 
-> **Waves 1a (sim side) and 1b (engine opt-in) mechanized; Waves 2–4 not started.**
+> **Waves 1a–2b, 4 and 4b shipped; Wave 3 in progress (the key set and W3a shipped, W3b not started).**
 > Driven by Neon Shroud request 0021: a game that is played on keyboard and pad needs to name what
 > the player means (`crouch`, `move`), bind it to several physical inputs, tell a tap from a hold from
 > a double-tap, let the player rebind, show the right glyph and shake the pad. Game-facing doc:
@@ -150,6 +150,48 @@
     single sanctioned platform site in `crates/`. A cargo feature alone cannot carry it: objc2
     `compile_error!`s off Apple, and `check.mjs` and `ci.yml` run `clippy --workspace --all-features` on
     Windows. Any other platform code needs a fresh owner ruling.
+34. **Three recorded events (W3a).** `gamepad_connected{family}`, `gamepad_disconnected` and
+    `focus{gained}` are appended to `InputEvent`, never reordered. `InputState` folds them and the sim sees
+    devices from recorded input only. The schema change moves `replay_content_hash` once (the round's
+    batched re-record); the protocol schema hash stays, since the wire carries an input event as an untyped
+    value. `InputState` is no `WorldHash` term, and every new field is skipped at its default, so a snapshot
+    of a session with no device event is byte-identical.
+35. **Family from the USB vendor id.** `0x045E` is `xbox`, `0x054C` `playstation`, `0x057E` `nintendo`;
+    anything else, or no id, is `generic`. Product-id tables wait for a third-party pad mislabelled.
+36. **Host emission.** The pad thread sends `gamepad_connected` for the start-of-session primary and for a
+    plug that becomes primary; other pads send nothing. A primary unplug sends the releases for what it
+    held, `gamepad_disconnected`, then the promoted pad's `gamepad_connected`. The shared window router
+    sends both focus edges, a loss after its releases. The rumble stop on focus loss stays host-side.
+37. **Connection reads.** `GamepadState::connected()` and `family()` (`Some` only while connected; the two
+    are one stored `Option`). The sim synthesizes no release on a disconnect: the host sent them first.
+38. **`last_device`.** The last selecting event wins. Keyboard and mouse: a key down (new or repeat), a
+    mouse button down, a non-zero wheel, or a `mouse_motion` after which the tick's accumulated delta is
+    longer than `MOUSE_DEVICE_THRESHOLD` (4.0 device counts, measured on raw motion, never on
+    `mouse_move`). Gamepad: a button down (triggers too), a stick axis leaving its stick at or past
+    `STICK_DEADZONE`, a trigger axis at or past `TRIGGER_THRESHOLD`, or `gamepad_connected`, which with
+    the host's start-of-session event gives a session that starts with a pad its initial device. Releases
+    select nothing; a disconnect turns `Gamepad` into `KeyboardMouse`. `device_changed()` compares with
+    the tick's start, so a switch and back within one tick is no change.
+39. **Focus.** `focused()` (default true) and `focus_changed()`. A loss's releases precede
+    `focus{gained: false}` in the same tick.
+40. **Device facts cross every rebuild.** `DeviceFacts { pad, last_device, focused }`, read and replaced by
+    `InputState::devices()` / `set_devices()` (no change edge). A switch and a checkpoint carry the whole
+    `InputState`; a session restore and a replay seek take the snapshot's. `scene.load` keeps the live
+    facts over its fresh state, and a run-save resume keeps them over the save's (another session's). A
+    replay boots from the header and never reads the frame-0 keyframe, so a recording armed on a session
+    that has facts writes them as compact JSON to `save_docs["input-devices"]`, only when not the default
+    (a default header stays byte-identical). A replay always installs that entry, or the default, after
+    the header scene's load, so neither an earlier event nor an in-place playback's machine reaches it;
+    a malformed entry is `L3010`. During in-window playback the live input keeps following the machine,
+    and its facts are written back after the return scene loads.
+41. **W3b design.** `Actions::source(action) -> Option<Device>` (the device of the binding whose gesture
+    or axis drove this tick's output; `None` when inactive); a pure
+    `glyph_name(&BindingDoc, GamepadFamily) -> Option<&'static str>` (`pad.<family>.<face>` with the
+    Nintendo South/East and West/North label swap, `pad.*.lt|rt|lb|rb|…`, `key.<name>`, `mouse.<button>`,
+    `mouse.wheel_up|down`); `Actions::glyphs(action, device)` yielding `Glyph { name, gesture }` in
+    binding order, the family from `GamepadState::family()` (else generic). Names only, no engine atlas
+    (the example draws text labels); keyboard labels are physical (QWERTY) names, stated in the docs; an
+    example `examples/device_prompts.rs`; `ludion-sim` and the facade.
 
 ## Waves
 
@@ -166,9 +208,13 @@
   (`kind: input-bindings`, loaded leniently through `open_envelope` + `backup_file` and `apply_overrides`),
   the save drain, `ReplayHeader.save_docs["input-bindings"]` (outside `replay_content_hash`), replay
   installing it and never reading or writing the file, the doc walk skipping `<save_root>/save`, the `rebind_menu` example; `L1636`, `L4277`, `L4278`.
-- **W3 — devices, glyphs and the full key set:** the full key set shipped in R14 (the whole keyboard after `Alt` plus `Back`/`Forward`, the window keymap and mouse mapping for them, the editor maps); still to come: recorded `gamepad_connected{family}` / `gamepad_disconnected`,
-  `last_device` / `device_changed`, `Actions::source`, a glyph table (`glyph_name`), a focus event
-  (accepted 2026-11-19, scheduled (W3)).
+- **W3 — the full key set (shipped R14):** the whole keyboard after `Alt` plus `Back`/`Forward`, the window
+  keymap and mouse mapping for them, the editor maps.
+- **W3a — devices and focus (shipped):** the three recorded events, `GamepadState::connected()`/`family()`,
+  `last_device`/`device_changed`, `focused`/`focus_changed`, `DeviceFacts` across every rebuild and in a
+  recording's header, both native hosts emitting (decisions 34–40).
+- **W3b — glyphs:** `Actions::source`, `glyph_name`, `Actions::glyphs`, the `device_prompts` example
+  (decision 41; accepted 2026-11-19, scheduled (W3)).
 - **W4 — rumble (shipped):** the outbox, the validator, the pad-thread mixer and the gilrs backend on Windows (decisions 27–31); macOS is silent without W4b.
 - **W4b — Apple rumble backend (shipped):** the `apple-rumble` feature, GameController haptics on macOS (decisions 32–33).
 
@@ -230,6 +276,16 @@ reaches the hash through the components systems write next tick. `Key` gains 48 
 appended; the window host and the editor viewer map them. `replay_content_hash`, the snapshot schema and the
 protocol schema hash move; the corpus re-record is owed to the round's final wave.
 
+**W3a**: devices and focus. Tests: `ludion-sim/tests/devices.rs` (each select rule both ways, the motion
+threshold, the one-tick edges, connect and disconnect, focus, the pinned wire forms, the byte-identical
+default state, `DeviceFacts`, a 1/2/8-thread hash trace); `ludion-window` (the vendor table, the unplug
+order with and without a promotion, both focus edges); engine `held_input` (load, switch, session restore;
+a recording armed after device events replays hash for hash, a default one writes no header entry, a
+malformed entry is `L3010`), `input_bindings` (a run-save resume keeps the machine's facts) and
+`replay_playback` (a run recorded with a pad on, played on a machine with another; the machine's facts come
+back). `replay_content_hash` moves, so the committed replays refuse with `L3010` until the round's final
+subtask re-records them; the protocol schema hash, every golden and the component schema stay.
+
 ## Owner rulings (2026-11-19)
 
 - Shipped (W4b). **A macOS rumble backend** (GameController / CHHaptics) behind the `apple-rumble` cargo feature.
@@ -265,7 +321,9 @@ protocol schema hash move; the corpus re-record is owed to the round's final wav
 - **Live `asset.reload` of the map** — `Actions` compiles at world build and is not rebuilt by a
   reload; trigger: tuning an action map in the editor.
 - **Keys beyond today's set in bindings** — shipped (R14).
-- **Keyboard-layout labels** (what the key at a physical position says on this layout) — trigger: glyphs
-  for non-QWERTY players; arrives with W3's glyph table.
+- **Keyboard-layout labels** (what the key at a physical position says on this layout) — deferred; the
+  docs state the limitation. Trigger: glyphs for non-QWERTY players.
+- **The editor viewer and the iOS host emitting connect, disconnect and focus** — trigger: a game played
+  through the editor viewer or on iOS that pauses on unplug or focus loss.
 - **Gyro** and **multiple pads** — triggers as in `Plan/phase-13-input.md`.
 - **The editor's `keymap.ts` forwarding of the new keys** — shipped (R14); a hand mirror.

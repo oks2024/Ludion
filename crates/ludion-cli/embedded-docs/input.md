@@ -62,6 +62,8 @@ Player one's pad (the capture layer forwards the first connected pad only; when 
 next connected pad becomes player one). Sticks and triggers are **level analog**; buttons are edges
 like keys.
 
+- `input.gamepad().connected()` / `.family()` — whether that pad is there, and what kind it is
+  (Devices and focus, below).
 - `input.gamepad().left_stick()` / `.right_stick()` — `[f32; 2]`, each axis in `[-1, 1]`. **+Y is
   up** (the capture layer normalizes to that convention), so pushing a stick up gives `+y` — most
   ground-plane games map that to "away from the camera" (world `−Z`), i.e. use `-y`.
@@ -260,19 +262,59 @@ a `UiList` row per action, `capture` on activation, `save` once bound, and a sec
 
 Capture lives out-of-sim in the window (`--window`) and the
 editor; a plain `ludion serve` / a headless test has nothing feeding it, so `InputState` stays at its
-default — mouse at `[0, 0]`, no buttons, zero sticks. A game reading input headless simply sees no
-action. That is the correct degrade, and it is what every golden/CI run relies on. Drive input in a
+default — mouse at `[0, 0]`, no buttons, zero sticks, no pad connected and always focused. A game
+reading input headless simply sees no action. That is the correct degrade, and it is what every golden/CI run relies on. Drive input in a
 test by scripting it (an `InputScript`, or `input.inject` over the wire) — the same data the window
 records, so a test and a live session run the identical path.
 
-## Focus loss and unplug
+## Devices and focus
 
-When the window loses focus it releases every key and mouse button it had forwarded as down, so
-an Alt-Tab mid-hold never leaves the hero walking; a key still held on return resumes on its next
-real press. When player one's pad unplugs, the capture layer zeroes every non-zero axis (the trigger
-buttons release with their axes) and releases held buttons. These releases are ordinary recorded
-`input.inject` events, so a replay reproduces them. A game cannot yet *see* focus or pad connection
-(no pause-on-focus-loss signal); a game that needs one would get it as new recorded events.
+Three recorded events say what the machine is doing. They are ordinary `input.inject` events, so a
+replay reproduces them. The native windows (`run --window`, `launch`, the attach viewer) emit them;
+the editor viewer and the iOS host send none yet.
+
+| event | when the window sends it |
+|---|---|
+| `{"kind": "gamepad_connected", "family": "xbox"}` | player one's pad is there at the start, is plugged in, or is promoted. `family` comes from the USB vendor id: `xbox`, `playstation`, `nintendo`, else `generic` |
+| `{"kind": "gamepad_disconnected"}` | player one's pad unplugs; a promoted pad's `gamepad_connected` follows |
+| `{"kind": "focus", "gained": false}` | the window loses focus (`true`: gets it back) |
+
+Releases come first, in the same tick. On focus loss the window releases every key and mouse button
+it had forwarded as down, so an Alt-Tab mid-hold never leaves the hero walking; a key still held on
+return resumes on its next real press. When player one's pad unplugs, the window zeroes every
+non-zero axis (the trigger buttons release with their axes) and releases held buttons. The sim
+synthesizes no release of its own.
+
+**Reads.** `input.gamepad().connected()`, and `input.gamepad().family()` (`Some(GamepadFamily)` only
+while connected). `input.focused()` (true until told otherwise) and `input.focus_changed()` (true on
+the tick the focus differs from the tick's start). `input.last_device()` is a `Device`
+(`KeyboardMouse` by default, or `Gamepad`), and `input.device_changed()` is true on the tick it
+differs from the tick's start (there and back in one tick is no change). The last event wins:
+
+| selects | on |
+|---|---|
+| `KeyboardMouse` | a key down (repeats too), a mouse button down, a non-zero wheel turn, or raw `mouse_motion` summing to more than `MOUSE_DEVICE_THRESHOLD` (4 counts) in one tick. `mouse_move` (the cursor) never does |
+| `Gamepad` | a pad button down (triggers too), a stick at or past `STICK_DEADZONE`, a trigger at or past `TRIGGER_THRESHOLD`, or `gamepad_connected` |
+
+Releases select nothing. A disconnect turns `Gamepad` back into `KeyboardMouse`.
+
+Pause when the pad in use goes away, or when the player tabs away:
+
+```rust
+let input = world.resource::<InputState>().unwrap();
+let lost_pad = input.device_changed() && !input.gamepad().connected();
+let tabbed_away = input.focus_changed() && !input.focused();
+if lost_pad || tabbed_away {
+    open_pause_menu(world);
+}
+```
+
+**Across rebuilds.** The pad and its family, the last device and the focus describe the machine, not
+what is held: a scene switch, a checkpoint, `scene.load` and a run-save resume keep the live ones
+(the last two still drop held input) and report no change. `engine.restore` and a replay seek take
+the snapshot's. A recording's header carries the ones at its start (`save_docs`, omitted at the
+defaults) and a replay installs them; after in-window playback the machine's own come back.
+`input.devices()` / `set_devices(facts)` read and replace them as one `DeviceFacts`.
 
 ## Rumble — `Rumble`
 

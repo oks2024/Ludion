@@ -1553,6 +1553,10 @@ fn restore_decoded(
     };
 
     let frame = doc.frame;
+    if matches!(mode, RestoreMode::Resume) {
+        // The save's device facts are another session's.
+        doc.input.set_devices(engine.device_facts());
+    }
     let restored = RestoredWorld {
         driver,
         seed: doc.seed,

@@ -22,7 +22,7 @@ use ludion_core::time::FrameIndex;
 use ludion_protocol::Command;
 use ludion_protocol::command::{InputInjectParams, RenderSizeParams, SimStepParams};
 use ludion_protocol::replay::{ReplayHeader, ReplayReader, ReplayRecord, SceneRef};
-use ludion_sim::WorldHash;
+use ludion_sim::{DeviceFacts, WorldHash};
 use serde_json::Value;
 
 use crate::builder::EngineBuilder;
@@ -956,6 +956,28 @@ pub(crate) fn scan_replay(
     })
 }
 
+/// The key of a replay header's `save_docs` entry holding the [`DeviceFacts`] at frame 0, as JSON.
+/// No file has this kind: the facts are the machine's, not the player's.
+pub(crate) const INPUT_DEVICES_KEY: &str = "input-devices";
+
+/// The device facts a recording starts with: the header's entry, or the defaults without one.
+///
+/// # Errors
+/// `L3010` for an entry that is not the facts' JSON form.
+pub(crate) fn header_devices(header: &ReplayHeader) -> Result<DeviceFacts, Diagnostic> {
+    let Some(text) = header.save_docs.get(INPUT_DEVICES_KEY) else {
+        return Ok(DeviceFacts::default());
+    };
+    serde_json::from_str(text).map_err(|error| {
+        Diagnostic::new(
+            code::REPLAY_FORMAT,
+            format!("replay header save_docs `{INPUT_DEVICES_KEY}`: {error}"),
+        )
+        .with_path(format!("/save_docs/{INPUT_DEVICES_KEY}"))
+        .with_help("the file was not written by the engine's recorder; re-record the session")
+    })
+}
+
 /// Turns `engine` into the replay's frame 0: extent, off-disk texts, header scene, seed and profile,
 /// in that order. The same setup for a fresh replay engine and for a live engine playing in place.
 pub(crate) fn install_replay(
@@ -964,6 +986,7 @@ pub(crate) fn install_replay(
     scene_text: BTreeMap<String, String>,
     prefab_reads: crate::prefab::PrefabTextSource,
 ) -> Result<(), Diagnostic> {
+    let devices = header_devices(header)?;
     // The extent is sim input (a game unprojects the cursor through it), so it is installed before the
     // scene loads — with `render.size`'s validity check, which refuses a hostile header value, but not
     // the host's render-scale check. A header without one is a pre-field `.lrp`, recorded at the
@@ -988,6 +1011,9 @@ pub(crate) fn install_replay(
 
     load_header_scene(engine, header)?;
     engine.reseed(header.seed);
+    // Always set: the load kept the departing world's facts, which in a live engine are this
+    // machine's and not the recording's.
+    engine.set_device_facts(devices);
 
     // Install the header's embedded profile-at-start, overriding whatever the boot disk-load put in
     // place — so a committed `.lrp` reproduces bit-exactly on a machine whose `save/profile.yaml`

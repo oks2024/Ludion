@@ -291,6 +291,70 @@ pub enum GamepadButton {
     RightTrigger,
 }
 
+/// The kind of controller a connected gamepad is, as the host read it from the USB vendor id.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GamepadFamily {
+    /// A Microsoft (Xbox) pad.
+    Xbox,
+    /// A Sony (PlayStation) pad.
+    Playstation,
+    /// A Nintendo pad.
+    Nintendo,
+    /// Any other pad, or one that reports no vendor.
+    #[default]
+    Generic,
+}
+
+/// The kind of device the player last touched; see [`InputState::last_device`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Device {
+    /// The keyboard or the mouse.
+    #[default]
+    KeyboardMouse,
+    /// The gamepad.
+    Gamepad,
+}
+
+/// What a session knows about its devices, as opposed to what is held on them: the part of an
+/// [`InputState`] that outlives a rebuilt world. See [`InputState::devices`].
+///
+/// # Example
+/// ```
+/// use ludion_sim::{DeviceFacts, GamepadFamily, InputEvent, InputState};
+///
+/// let mut live = InputState::default();
+/// live.apply(InputEvent::GamepadConnected { family: GamepadFamily::Xbox });
+///
+/// let mut rebuilt = InputState::default();
+/// rebuilt.set_devices(live.devices());
+/// assert!(rebuilt.gamepad().connected());
+/// assert!(!rebuilt.device_changed());
+/// assert_ne!(rebuilt.devices(), DeviceFacts::default());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceFacts {
+    /// The primary gamepad's family, or `None` when none is connected.
+    pub pad: Option<GamepadFamily>,
+    /// The device the player last touched.
+    pub last_device: Device,
+    /// Whether the window has keyboard focus.
+    pub focused: bool,
+}
+
+impl Default for DeviceFacts {
+    /// No pad, the keyboard and mouse, focused: what a headless session knows.
+    fn default() -> Self {
+        DeviceFacts {
+            pad: None,
+            last_device: Device::KeyboardMouse,
+            focused: true,
+        }
+    }
+}
+
 impl InputEvent {
     /// Checks the analog payload of a wire-supplied event: mouse positions, wheel and motion deltas
     /// must be finite, a gamepad axis finite and inside its range (sticks `[-1, 1]`, triggers
@@ -372,6 +436,10 @@ pub const STICK_DEADZONE: f32 = 0.2;
 /// The fixed level at which a trigger's analog value presses its synthesised button (`>=`
 /// presses, below releases; no hysteresis — read `left_trigger()` for your own).
 pub const TRIGGER_THRESHOLD: f32 = 0.5;
+
+/// The raw mouse motion, in device counts accumulated over one tick, that must be exceeded for
+/// the mouse to become the [`last_device`](InputState::last_device): sensor noise stays under it.
+pub const MOUSE_DEVICE_THRESHOLD: f32 = 4.0;
 
 /// Serde helper: encodes an `f32` as its IEEE-754 bit pattern (a `u32`), never as a JSON number.
 ///
@@ -488,6 +556,20 @@ pub enum InputEvent {
     GamepadButtonUp {
         /// Which button.
         button: GamepadButton,
+    },
+    /// The primary gamepad became available: plugged in, present at the start of the session, or
+    /// promoted after the previous one left.
+    GamepadConnected {
+        /// What kind of pad it is.
+        family: GamepadFamily,
+    },
+    /// The primary gamepad left. The host sends the releases for what it held before this event.
+    GamepadDisconnected,
+    /// The window gained or lost keyboard focus. On a loss the host sends the releases for
+    /// everything held before this event.
+    Focus {
+        /// Whether the window now has focus.
+        gained: bool,
     },
 }
 
@@ -713,6 +795,14 @@ pub struct GamepadState {
     pressed: StableSet<GamepadButton>,
     #[schemars(with = "Vec<GamepadButton>")]
     released: StableSet<GamepadButton>,
+    // `Some` exactly while a pad is connected; skipped when None so a device-free snapshot is
+    // byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    family: Option<GamepadFamily>,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 fn is_trigger_button(button: GamepadButton) -> bool {
@@ -735,6 +825,17 @@ impl GamepadState {
             && all_zero_bits(&self.left_stick)
             && all_zero_bits(&self.right_stick)
             && all_zero_bits(&[self.left_trigger, self.right_trigger])
+            && self.family.is_none()
+    }
+
+    /// Whether the primary gamepad is plugged in, as the recorded events say (never headless).
+    pub fn connected(&self) -> bool {
+        self.family.is_some()
+    }
+
+    /// The primary gamepad's family, `Some` only while one is connected.
+    pub fn family(&self) -> Option<GamepadFamily> {
+        self.family
     }
 
     /// Stores a trigger's level and keeps its button in step: held exactly while the value is
@@ -918,6 +1019,15 @@ pub struct InputState {
     released: StableSet<Key>,
     mouse: MouseState,
     gamepad: GamepadState,
+    #[serde(skip_serializing_if = "is_default")]
+    last_device: Device,
+    #[serde(skip_serializing_if = "is_default")]
+    tick_start_device: Device,
+    // Stored inverted so the default (focused) is the skipped value.
+    #[serde(skip_serializing_if = "is_default")]
+    unfocused: bool,
+    #[serde(skip_serializing_if = "is_default")]
+    tick_start_unfocused: bool,
 }
 
 impl InputState {
@@ -937,6 +1047,69 @@ impl InputState {
             && self.released.is_empty()
             && self.mouse.is_idle()
             && self.gamepad.is_idle()
+            && self.last_device == Device::default()
+            && self.tick_start_device == Device::default()
+            && !self.unfocused
+            && !self.tick_start_unfocused
+    }
+
+    /// The device the player last touched, [`Device::KeyboardMouse`] until something says
+    /// otherwise.
+    ///
+    /// A key, a mouse button, a wheel turn or more than [`MOUSE_DEVICE_THRESHOLD`] counts of raw
+    /// motion in a tick selects the keyboard and mouse; a pad button, a stick or trigger past its
+    /// threshold, or a pad connecting selects the gamepad. The cursor and releases select
+    /// nothing.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_sim::{Device, GamepadButton, InputEvent, InputState};
+    ///
+    /// let mut input = InputState::default();
+    /// input.begin_tick();
+    /// input.apply(InputEvent::GamepadButtonDown { button: GamepadButton::South });
+    /// assert_eq!(input.last_device(), Device::Gamepad);
+    /// assert!(input.device_changed());
+    /// ```
+    pub fn last_device(&self) -> Device {
+        self.last_device
+    }
+
+    /// Whether [`last_device`](InputState::last_device) differs from what it was when the tick
+    /// started (a switch and back within one tick is no change).
+    pub fn device_changed(&self) -> bool {
+        self.last_device != self.tick_start_device
+    }
+
+    /// Whether the window has keyboard focus, as the recorded events say (always, headless).
+    pub fn focused(&self) -> bool {
+        !self.unfocused
+    }
+
+    /// Whether [`focused`](InputState::focused) differs from what it was when the tick started.
+    pub fn focus_changed(&self) -> bool {
+        self.unfocused != self.tick_start_unfocused
+    }
+
+    /// The facts about the devices, apart from anything held or pressed.
+    pub fn devices(&self) -> DeviceFacts {
+        DeviceFacts {
+            pad: self.gamepad.family,
+            last_device: self.last_device,
+            focused: self.focused(),
+        }
+    }
+
+    /// Replaces the facts about the devices, with no change reported for them this tick. Keys,
+    /// buttons, axes and edges are untouched.
+    ///
+    /// For a rebuilt world, so it describes the machine or the recording it runs for.
+    pub fn set_devices(&mut self, facts: DeviceFacts) {
+        self.gamepad.family = facts.pad;
+        self.last_device = facts.last_device;
+        self.tick_start_device = facts.last_device;
+        self.unfocused = !facts.focused;
+        self.tick_start_unfocused = !facts.focused;
     }
 
     /// Whether `key` is currently down.
@@ -1055,6 +1228,8 @@ impl InputState {
         self.mouse.delta = [0.0, 0.0];
         self.gamepad.pressed.clear();
         self.gamepad.released.clear();
+        self.tick_start_device = self.last_device;
+        self.tick_start_unfocused = self.unfocused;
     }
 
     /// Applies one event.
@@ -1067,6 +1242,7 @@ impl InputState {
     pub fn apply(&mut self, event: InputEvent) {
         match event {
             InputEvent::KeyDown { key } => {
+                self.last_device = Device::KeyboardMouse;
                 if self.held.insert(key) {
                     self.pressed.insert(key);
                 }
@@ -1080,6 +1256,7 @@ impl InputState {
                 self.mouse.position = position;
             }
             InputEvent::MouseDown { button } => {
+                self.last_device = Device::KeyboardMouse;
                 if self.mouse.held.insert(button) {
                     self.mouse.pressed.insert(button);
                 }
@@ -1092,24 +1269,48 @@ impl InputState {
             InputEvent::MouseWheel { delta } => {
                 self.mouse.wheel[0] += delta[0];
                 self.mouse.wheel[1] += delta[1];
+                if delta.iter().any(|&v| v != 0.0) {
+                    self.last_device = Device::KeyboardMouse;
+                }
             }
             InputEvent::MouseMotion { delta } => {
                 self.mouse.delta[0] += delta[0];
                 self.mouse.delta[1] += delta[1];
+                if math::hypot(self.mouse.delta[0], self.mouse.delta[1]) > MOUSE_DEVICE_THRESHOLD {
+                    self.last_device = Device::KeyboardMouse;
+                }
             }
-            InputEvent::GamepadAxis { axis, value } => match axis {
-                GamepadAxis::LeftStickX => self.gamepad.left_stick[0] = value,
-                GamepadAxis::LeftStickY => self.gamepad.left_stick[1] = value,
-                GamepadAxis::RightStickX => self.gamepad.right_stick[0] = value,
-                GamepadAxis::RightStickY => self.gamepad.right_stick[1] = value,
-                GamepadAxis::LeftTrigger => {
-                    self.gamepad.set_trigger(GamepadButton::LeftTrigger, value)
+            InputEvent::GamepadAxis { axis, value } => {
+                match axis {
+                    GamepadAxis::LeftStickX => self.gamepad.left_stick[0] = value,
+                    GamepadAxis::LeftStickY => self.gamepad.left_stick[1] = value,
+                    GamepadAxis::RightStickX => self.gamepad.right_stick[0] = value,
+                    GamepadAxis::RightStickY => self.gamepad.right_stick[1] = value,
+                    GamepadAxis::LeftTrigger => {
+                        self.gamepad.set_trigger(GamepadButton::LeftTrigger, value)
+                    }
+                    GamepadAxis::RightTrigger => {
+                        self.gamepad.set_trigger(GamepadButton::RightTrigger, value)
+                    }
                 }
-                GamepadAxis::RightTrigger => {
-                    self.gamepad.set_trigger(GamepadButton::RightTrigger, value)
+                let past = |[x, y]: [f32; 2]| math::hypot(x, y) >= STICK_DEADZONE;
+                let touched = match axis {
+                    GamepadAxis::LeftStickX | GamepadAxis::LeftStickY => {
+                        past(self.gamepad.left_stick)
+                    }
+                    GamepadAxis::RightStickX | GamepadAxis::RightStickY => {
+                        past(self.gamepad.right_stick)
+                    }
+                    GamepadAxis::LeftTrigger | GamepadAxis::RightTrigger => {
+                        value >= TRIGGER_THRESHOLD
+                    }
+                };
+                if touched {
+                    self.last_device = Device::Gamepad;
                 }
-            },
+            }
             InputEvent::GamepadButtonDown { button } => {
+                self.last_device = Device::Gamepad;
                 if is_trigger_button(button) {
                     self.gamepad.set_trigger(button, 1.0);
                 } else if self.gamepad.held.insert(button) {
@@ -1123,6 +1324,18 @@ impl InputState {
                     self.gamepad.released.insert(button);
                 }
             }
+            InputEvent::GamepadConnected { family } => {
+                self.gamepad.family = Some(family);
+                self.last_device = Device::Gamepad;
+            }
+            // No releases are synthesized: the host sends them before this event.
+            InputEvent::GamepadDisconnected => {
+                self.gamepad.family = None;
+                if self.last_device == Device::Gamepad {
+                    self.last_device = Device::KeyboardMouse;
+                }
+            }
+            InputEvent::Focus { gained } => self.unfocused = !gained,
         }
     }
 }

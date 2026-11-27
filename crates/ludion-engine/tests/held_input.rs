@@ -1,14 +1,16 @@
 //! Held input across the three rebuilds: a scene switch carries the held
 //! keys, the cursor and the pending injected events; `engine.restore` continues the snapshot's held
 //! input; `scene.load` starts a new session with none. Edges never re-fire after a carry.
+//! The device facts (pad, last device, focus) stand across a load too, and a recording's header
+//! carries them to its replay.
 
 use ludion_core::ids::EntityId;
 use ludion_ecs::{SystemCtx, World};
-use ludion_engine::{Engine, EngineBuilder, SceneSwitch};
+use ludion_engine::{Engine, EngineBuilder, SceneSwitch, replay_hashes_with};
 use ludion_protocol::command::{EngineRestoreParams, InputInjectParams, SceneLoadParams};
-use ludion_protocol::replay::{ReplayReader, ReplayRecord};
+use ludion_protocol::replay::{ReplayReader, ReplayRecord, ReplayWriter};
 use ludion_protocol::{Command, ResponseBody};
-use ludion_sim::{InputState, Key};
+use ludion_sim::{Device, DeviceFacts, GamepadFamily, InputState, Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -439,4 +441,191 @@ fn non_finite_or_out_of_range_analogs_are_refused_and_leave_input_unchanged() {
     inject(&mut engine, None, stick(1.0f32.to_bits()));
     engine.advance_live();
     assert_eq!(input(&engine).gamepad().left_stick(), [1.0, 0.0]);
+}
+
+/// A pad connected, then a key (so the pad is not the last device unless `pad_last`), unfocused.
+fn plug(engine: &mut Engine, family: &str, pad_last: bool) {
+    let connected = json!({ "kind": "gamepad_connected", "family": family });
+    if pad_last {
+        inject(engine, None, key_down("W"));
+        inject(engine, None, connected);
+    } else {
+        inject(engine, None, connected);
+        inject(engine, None, key_down("W"));
+    }
+    inject(engine, None, json!({ "kind": "focus", "gained": false }));
+}
+
+fn plugged(family: GamepadFamily, last_device: Device) -> DeviceFacts {
+    DeviceFacts {
+        pad: Some(family),
+        last_device,
+        focused: false,
+    }
+}
+
+fn load_start(engine: &mut Engine) {
+    engine
+        .execute(Command::SceneLoad(SceneLoadParams {
+            path: "start.yaml".into(),
+        }))
+        .unwrap();
+}
+
+#[test]
+fn a_scene_load_keeps_the_device_facts_and_drops_held_input() {
+    let dir = fresh_dir("load-devices");
+    let mut engine = booted(&dir);
+    plug(&mut engine, "playstation", true);
+    engine.advance_live();
+    assert!(input(&engine).device_changed() && input(&engine).focus_changed());
+
+    load_start(&mut engine);
+    let state = input(&engine);
+    assert_eq!(
+        state.devices(),
+        plugged(GamepadFamily::Playstation, Device::Gamepad)
+    );
+    assert!(!state.is_held(Key::W) && !state.was_pressed(Key::W));
+    assert!(!state.device_changed() && !state.focus_changed());
+    engine.advance_live();
+    let state = input(&engine);
+    assert!(!state.device_changed() && !state.focus_changed());
+}
+
+#[test]
+fn a_switch_carries_held_input_and_the_device_facts() {
+    let dir = fresh_dir("switch-devices");
+    let mut engine = booted(&dir);
+    plug(&mut engine, "xbox", false);
+    for _ in 0..4 {
+        engine.advance_live(); // the switch happens after frame 2
+    }
+    assert!(engine.last_transition_error().is_none());
+    let state = input(&engine);
+    assert!(state.is_held(Key::W));
+    assert_eq!(
+        state.devices(),
+        plugged(GamepadFamily::Xbox, Device::KeyboardMouse)
+    );
+    assert!(!state.device_changed() && !state.focus_changed());
+}
+
+#[test]
+fn a_session_restore_takes_the_snapshots_device_facts() {
+    let dir = fresh_dir("restore-devices");
+    let mut source = booted(&dir);
+    plug(&mut source, "nintendo", false);
+    source.advance_live();
+    let snapshot = snapshot_of(&mut source);
+    let mut engine = booted(&dir);
+    let idle = snapshot_of(&mut engine);
+
+    plug(&mut engine, "xbox", true);
+    engine.advance_live();
+    restore(&mut engine, snapshot);
+    assert_eq!(
+        input(&engine).devices(),
+        plugged(GamepadFamily::Nintendo, Device::KeyboardMouse)
+    );
+    restore(&mut engine, idle);
+    assert_eq!(input(&engine).devices(), DeviceFacts::default());
+}
+
+/// Folds the device facts and their edges into `Player::hp`, so the `WorldHash` sees them.
+fn see_devices(world: &mut World, _ctx: &SystemCtx) {
+    let Some(input) = world.resource::<InputState>() else {
+        return;
+    };
+    let bits = u32::from(input.gamepad().connected())
+        | u32::from(input.focused()) << 1
+        | u32::from(input.last_device() == Device::Gamepad) << 2;
+    let edges = u32::from(input.device_changed()) + u32::from(input.focus_changed());
+    for (player,) in world.query::<(&mut Player,)>() {
+        player.hp = player.hp.wrapping_mul(31).wrapping_add(bits + 8 * edges);
+    }
+}
+
+fn device_game(root: &Path) -> EngineBuilder {
+    Engine::builder()
+        .components(|reg| reg.register::<Player>("Player"))
+        .system("see_devices", see_devices)
+        .project_root(root)
+}
+
+/// Loads the start scene (again, when `engine` has already run), records six ticks with a focus
+/// gain on the way, and returns the live per-frame trace and the file.
+fn record_after_load(
+    engine: &mut Engine,
+) -> (
+    Vec<(ludion_core::time::FrameIndex, ludion_sim::WorldHash)>,
+    Vec<u8>,
+) {
+    load_start(engine);
+    let sink = SharedSink::default();
+    engine.set_recording(sink.clone()).unwrap();
+    let mut trace = vec![(engine.frame(), engine.world_hash().unwrap())];
+    for tick in 0..6 {
+        if tick == 2 {
+            inject(engine, None, json!({ "kind": "focus", "gained": true }));
+        }
+        engine.advance_live();
+        trace.push((engine.frame(), engine.world_hash().unwrap()));
+    }
+    engine.stop_recording().unwrap();
+    let bytes = sink.0.lock().unwrap().clone();
+    (trace, bytes)
+}
+
+#[test]
+fn a_recording_armed_after_device_events_replays_with_them() {
+    let dir = fresh_dir("record-devices");
+    let mut engine = device_game(&dir).build().expect("boots");
+    load_start(&mut engine);
+    plug(&mut engine, "nintendo", true);
+    engine.advance_live();
+
+    let (live, bytes) = record_after_load(&mut engine);
+    let reader = ReplayReader::new(&bytes).unwrap();
+    assert_eq!(
+        reader.header().save_docs.get("input-devices").unwrap(),
+        r#"{"pad":"nintendo","last_device":"gamepad","focused":false}"#
+    );
+    let replayed = replay_hashes_with(device_game(&dir), &bytes, &dir).unwrap();
+    assert_eq!(replayed, live);
+
+    // The facts reach the hash, so a replay without them could not have matched.
+    let mut bare = device_game(&dir).build().expect("boots");
+    let (without, _) = record_after_load(&mut bare);
+    assert_ne!(without[1], live[1]);
+}
+
+#[test]
+fn a_session_without_device_events_writes_no_header_entry() {
+    let dir = fresh_dir("record-default");
+    let mut engine = device_game(&dir).build().expect("boots");
+    let (live, bytes) = record_after_load(&mut engine);
+    let reader = ReplayReader::new(&bytes).unwrap();
+    assert!(reader.header().save_docs.is_empty());
+    let replayed = replay_hashes_with(device_game(&dir), &bytes, &dir).unwrap();
+    assert_eq!(replayed, live);
+}
+
+#[test]
+fn a_malformed_device_entry_is_refused_with_l3010() {
+    let dir = fresh_dir("record-malformed");
+    let mut engine = device_game(&dir).build().expect("boots");
+    let (_, bytes) = record_after_load(&mut engine);
+    let mut header = ReplayReader::new(&bytes).unwrap().header().clone();
+    header
+        .save_docs
+        .insert("input-devices".into(), r#"{"pad":"sega"}"#.into());
+    let mut edited = Vec::new();
+    ReplayWriter::new(&mut edited, &header)
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    let error = replay_hashes_with(device_game(&dir), &edited, &dir).unwrap_err();
+    assert_eq!(error.code, ludion_core::codes::code::REPLAY_FORMAT);
+    assert_eq!(error.path.as_deref(), Some("/save_docs/input-devices"));
 }

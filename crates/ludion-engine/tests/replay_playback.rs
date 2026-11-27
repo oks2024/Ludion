@@ -12,7 +12,7 @@ use ludion_protocol::{
     Command, ResponseBody,
     command::{InputInjectParams, RenderSizeParams},
 };
-use ludion_sim::{InputState, Key, WorldHash};
+use ludion_sim::{Device, DeviceFacts, GamepadFamily, InputState, Key, WorldHash};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -794,4 +794,104 @@ fn playback_sees_the_host_state_a_replay_verify_sees() {
             .entries()
             .is_empty()
     );
+}
+
+/// Adds the device facts to the tally, so a replay on the wrong ones diverges.
+fn tally_devices(world: &mut World, _ctx: &SystemCtx) {
+    let bits = {
+        let input = world.resource::<InputState>().unwrap();
+        u32::from(input.gamepad().connected())
+            + 2 * u32::from(input.focused())
+            + 4 * u32::from(input.last_device() == Device::Gamepad)
+    };
+    for (t,) in world.query::<(&mut Tally,)>() {
+        t.held = t.held.wrapping_mul(31).wrapping_add(bits);
+    }
+}
+
+fn device_game(dir: &Path, persist: bool) -> EngineBuilder {
+    game(dir, persist, None).system("tally_devices", tally_devices)
+}
+
+fn send(engine: &mut Engine, event: serde_json::Value) {
+    engine
+        .execute(Command::InputInject(InputInjectParams {
+            frame: None,
+            event,
+        }))
+        .unwrap();
+}
+
+fn devices(engine: &Engine) -> DeviceFacts {
+    engine.world().resource::<InputState>().unwrap().devices()
+}
+
+/// Records a run on a machine that had `family` plugged in before it began (none: no pad), and
+/// returns the live trace.
+fn record_devices(dir: &Path, name: &str, family: Option<&str>) -> Trace {
+    let mut engine = boot(device_game(dir, true));
+    if let Some(family) = family {
+        send(
+            &mut engine,
+            json!({ "kind": "gamepad_connected", "family": family }),
+        );
+        engine.advance_live();
+    }
+    engine
+        .world_mut()
+        .resource_mut::<RunRecording>()
+        .unwrap()
+        .start(name);
+    engine.advance_live();
+    let mut live: Trace = vec![sample(&mut engine)];
+    for _ in 0..6 {
+        engine.advance_live();
+        live.push(sample(&mut engine));
+    }
+    engine
+        .world_mut()
+        .resource_mut::<RunRecording>()
+        .unwrap()
+        .stop();
+    engine.advance_live();
+    live.push(sample(&mut engine));
+    live
+}
+
+#[test]
+fn playback_runs_on_the_recordings_devices_and_returns_to_the_machines() {
+    for recorded in [Some("playstation"), None] {
+        let dir = fresh_dir(&format!("devices-{}", recorded.unwrap_or("none")));
+        let live = record_devices(&dir, "run", recorded);
+        let bytes = std::fs::read(dir.join("save/replays/run.lrp")).unwrap();
+        let expected = replay_hashes_with(device_game(&dir, false), &bytes, &dir).unwrap();
+        assert_eq!(expected, live, "{recorded:?}");
+
+        let mut engine = boot(device_game(&dir, true));
+        send(
+            &mut engine,
+            json!({ "kind": "gamepad_connected", "family": "xbox" }),
+        );
+        engine.advance_live();
+        playback(&mut engine).play("run", "hub.yaml");
+        engine.advance_live();
+        assert_eq!(engine.playing(), Some("run"));
+
+        let mut played: Trace = vec![sample(&mut engine)];
+        // This machine loses focus while the replay plays.
+        send(&mut engine, json!({ "kind": "focus", "gained": false }));
+        while engine.advance_live() {
+            played.push(sample(&mut engine));
+        }
+        assert_eq!(played, expected, "{recorded:?}");
+        assert_eq!(engine.playing(), None);
+        assert_eq!(
+            devices(&engine),
+            DeviceFacts {
+                pad: Some(GamepadFamily::Xbox),
+                last_device: Device::Gamepad,
+                focused: false,
+            }
+        );
+    }
 }
