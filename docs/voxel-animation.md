@@ -387,7 +387,8 @@ ground:
 ### Root motion
 
 A clip may carry a reserved `$root` track: the displacement the character travels. It is never drawn, and
-nothing applies it for you.
+nothing applies it for you. It works the same on skinned assemblies and on prefab roots (the entity that is its
+own `PrefabInstance.root`; plain clips only, a prefab has no blends, and its other parts read `None`).
 
 ```yaml
 tracks:
@@ -420,9 +421,12 @@ tracks:
 - `root_motion_delta(&World, entity, &SystemCtx) -> Option<RootMotion>` is a pure sim read of clip data:
   `translation` (world-frame metres, `y` 0), `yaw` (radians) and `weight`. Declare
   `.query::<(&Animation, &Mesh, &Transform)>()`.
-- It reads the exact gameplay clock over this tick's window: a one-shot clamps, a loop wraps, a held frame reads 0,
-  and a scaled clock tiles. Keys are in the entity's frame at the clip start, forward is `-Z`; travel is scaled
-  by the entity's `Transform.scale` (x, z) and rotated by its `Transform.rotation`.
+- It reads the entity's own gameplay clock (`entity_clock`, so a sequence-bound actor travels while a holding
+  sequence freezes the world) over this tick's window: a one-shot clamps, a loop wraps, a held frame reads 0,
+  and a scaled clock tiles. A skinned clip's time is also scaled by its binding `speed`.
+- Keys are in the entity's frame at the clip start, whatever forward the model has (a voxel assembly's is `-Z`),
+  in its units: voxels, skinned mesh units or prefab-local units. Travel is scaled by the entity's
+  `Transform.scale` (x, z) and rotated by its `Transform.rotation`.
 - Base clip and its crossfade only: the incoming side counts at the fade weight, the outgoing `from` at the
   rest, and `weight` is their sum (scale your own code-driven move by `1 - weight`). Layers contribute
   nothing; `None` when no side carries `$root`.
@@ -430,8 +434,8 @@ tracks:
   `Animation.params`, over the `BlendClock` phase this tick, so a cadence change never drops or repeats travel.
   **Register your root system after `blend_clocks`** (without it the phase is `elapsed * rate(params now)`, as
   the pose is). Only rooted points count into `weight`: a partly rooted blend reports a partial one.
-- `check-scene <x>.assembly.yaml` prints a `root` row per `$root` clip (start-to-end travel in the start
-  frame, yaw, duration) and per blend with such a point; `--json` puts them under `root`.
+- `check-scene <x>.assembly.yaml` (voxel or skinned) prints a `root` row per `$root` clip (start-to-end travel
+  in the start frame, yaw, duration) and per blend with such a point; `--json` puts them under `root`.
 - `render --model x.assembly.yaml --clip lunge --strip 6 --root-motion` stands each phase where the clip's
   `$root` puts it (a travel strip, view `right` unless `--views` names one), printing each `root [x, z] yaw`;
   not with `--crossfade`, `--blend` or a `--look` range.

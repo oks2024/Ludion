@@ -1,0 +1,17 @@
+format: 1
+kind: assembly
+name: body
+mesh: tri.mesh.yaml
+clips:
+  idle: anims/idle.anim.yaml
+  lunge:
+    clip: anims/lunge.anim.yaml
+    speed: 2.0
+  walk: anims/walk.anim.yaml
+blends:
+  stride:
+    points:
+      - clip: idle
+        at: 0.0
+      - clip: walk
+        at: 2.0

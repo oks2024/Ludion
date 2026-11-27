@@ -66,6 +66,8 @@ clips:
 - **A pelvis scale rescales every joint under it.** A squash on the root lifts or sinks the feet by
   `leg_length × (scale − 1)`; a `min` below zero in `check-scene <character>`'s `contact` lines is a foot through the
   floor. The mannequin's `jump` keeps `drop = 0.52 × (sy − 1) + air` for exactly this.
+- **Root motion.** A track named `$root` targets no joint: `root_motion_delta` reads it, in mesh units, on the
+  binding's `speed` (`ludion docs voxel-animation` §Root motion).
 
 ## Layers
 

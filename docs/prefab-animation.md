@@ -44,6 +44,7 @@ The prefab gains an optional `clips:` map, short name to clip file, resolved aga
 - **A track must name a part: `L1314`** from `check-scene` of the prefab or of any scene placing it, and from wire `scene.check` (`the clip snap animates lidd, which is not a part of this prefab`), with the nearest part name as the fix. Playback draws an unmatched track's part at rest, silently, so run the check.
 - **Visual only.** Posing happens at extract; the sim `Transform`, the `WorldHash` and recordings are unchanged. Children of a posed part follow, and so do point and spot lights (in position — a spot's aim is its world-space `direction`, not the part's rotation), rendered reflection probes, decals, particles and drop shadows under it; **colliders, cameras and the sun do not**, and the `probes` debug lines stay at the stored pose — move an analytic collider from game code.
 - **`animation_events` needs one more query.** A game registering that system declares `.query::<(&Animation, &PrefabInstance)>()` or the query-drift gate reports `L1126`.
+- **Root motion.** A `$root` track targets no part (never `L1314`): `root_motion_delta` reads it on the root part, in prefab-local units (`ludion docs voxel-animation` §Root motion).
 - **Profiling:** the load report gains a `prefab_clips` row (`ludion devdocs profiling`).
 
 ## The model sheet

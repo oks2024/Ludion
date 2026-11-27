@@ -122,16 +122,19 @@ pub(crate) struct RootClip {
     pub duration: f64,
     /// Whether the clip loops.
     pub looped: bool,
-    /// The `$root` translation channel (voxel units; `v[0]` and `v[2]` are read).
+    /// The `$root` translation channel (the model's units; `v[0]` and `v[2]` are read).
     pub translation: Vec<Keyframe>,
     /// The `$root` rotation channel (Euler degrees; `v[1]` is read).
     pub rotation: Vec<Keyframe>,
+    /// The binding's playback speed multiplier on a plain clip's time (`1.0` for an assembly or
+    /// prefab clip). A blend point's is already inside the blend's rate.
+    pub speed: f64,
 }
 
-/// An assembly's clips that carry a `$root` track, keyed by clip short name.
+/// A model's clips that carry a `$root` track, keyed by clip short name.
 pub(crate) type RootClips = BTreeMap<String, RootClip>;
 
-/// What `root_motion_delta` reads of one assembly: its `$root` clips and the blend spaces that may
+/// What `root_motion_delta` reads of one model: its `$root` clips and the blend spaces that may
 /// weight them.
 #[derive(Debug, Default)]
 pub(crate) struct RootModel {
@@ -148,9 +151,9 @@ pub(crate) struct AnimationLibrary {
     models: BTreeMap<Model, Result<BTreeMap<String, ClipTiming>, Vec<Diagnostic>>>,
     /// The blend spaces of each loaded character or assembly (`blend_clock`).
     blends: BTreeMap<Model, Vec<BlendSpaceData>>,
-    /// The [`RootModel`] of each assembly, keyed by its path. Interior-mutable so the sim read
-    /// `root_motion_delta` works through `&World`; the lock is held only to get or insert.
-    roots: Mutex<BTreeMap<String, Arc<RootModel>>>,
+    /// The [`RootModel`] of each model. Interior-mutable so the sim read `root_motion_delta` works
+    /// through `&World`; the lock is held only to get or insert.
+    roots: Mutex<BTreeMap<Model, Arc<RootModel>>>,
 }
 
 /// A model that binds clips, with its path: the `Mesh.shape` of an assembly or character, or an
@@ -181,17 +184,33 @@ impl AnimationLibrary {
         }
     }
 
-    /// The [`RootModel`] of the assembly at `rel`, loaded on first use (or already filled by
+    /// The [`RootModel`] of `model`, loaded on first use (or already filled by
     /// [`Self::timings`]); empty for a model that fails to load, which `animation_events` reports.
-    pub(crate) fn root_model(&self, rel: &str) -> Arc<RootModel> {
+    pub(crate) fn root_model(&self, model: &Model) -> Arc<RootModel> {
         let lock = || self.roots.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(found) = lock().get(rel) {
+        if let Some(found) = lock().get(model) {
             return Arc::clone(found);
         }
-        let loaded = crate::assembly_mesh::load(AssetRoot::content(&self.root), rel)
-            .map(|data| Arc::new(root_model_of(&data)))
-            .unwrap_or_default();
-        Arc::clone(lock().entry(rel.to_string()).or_insert(loaded))
+        let root = AssetRoot::content(&self.root);
+        let loaded = match model {
+            Model::Assembly(rel) => {
+                crate::assembly_mesh::load(root, rel).map(|data| root_model_of_assembly(&data))
+            }
+            Model::Character(rel) => {
+                crate::character::load(root, rel).map(|data| root_model_of_character(&data))
+            }
+            Model::Prefab(rel) => crate::prefab_clips::load_with_sources(root, rel)
+                .map(|(data, _)| root_model_of_prefab(&data)),
+        };
+        let loaded = Arc::new(loaded.unwrap_or_default());
+        Arc::clone(lock().entry(model.clone()).or_insert(loaded))
+    }
+
+    fn fill_root(&self, model: &Model, root: RootModel) {
+        self.roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(model.clone(), Arc::new(root));
     }
 
     /// The clip timings of `model`, loading it on first use, or the loader's diagnostics for a
@@ -217,10 +236,7 @@ impl AnimationLibrary {
                 Model::Assembly(_) => {
                     crate::assembly_mesh::load(AssetRoot::content(&self.root), rel).map(|data| {
                         self.blends.insert(model.clone(), data.blends.clone());
-                        self.roots
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .insert(rel.to_string(), Arc::new(root_model_of(&data)));
+                        self.fill_root(model, root_model_of_assembly(&data));
                         data.clips
                             .iter()
                             .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
@@ -230,6 +246,7 @@ impl AnimationLibrary {
                 Model::Character(_) => crate::character::load(AssetRoot::content(&self.root), rel)
                     .map(|data| {
                         self.blends.insert(model.clone(), data.blends.clone());
+                        self.fill_root(model, root_model_of_character(&data));
                         data.clips
                             .iter()
                             .map(|b| timing(&b.name, &b.clip, b.speed, &b.events))
@@ -238,6 +255,7 @@ impl AnimationLibrary {
                 Model::Prefab(_) => {
                     crate::prefab_clips::load_with_sources(AssetRoot::content(&self.root), rel).map(
                         |(data, _)| {
+                            self.fill_root(model, root_model_of_prefab(&data));
                             data.clips
                                 .iter()
                                 .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
@@ -263,17 +281,40 @@ pub(crate) fn root_clip(clip: &ludion_scene::AnimationDocument) -> Option<RootCl
         looped: clip.looped,
         translation: track.translation.clone(),
         rotation: track.rotation.clone(),
+        speed: 1.0,
     })
 }
 
-fn root_model_of(data: &crate::assembly_mesh::AssemblyData) -> RootModel {
+fn root_clips<'a>(
+    clips: impl Iterator<Item = (&'a String, &'a ludion_scene::AnimationDocument, f64)>,
+) -> RootClips {
+    clips
+        .filter_map(|(name, clip, speed)| {
+            let rooted = root_clip(clip)?;
+            Some((name.clone(), RootClip { speed, ..rooted }))
+        })
+        .collect()
+}
+
+fn root_model_of_assembly(data: &crate::assembly_mesh::AssemblyData) -> RootModel {
     RootModel {
-        clips: data
-            .clips
-            .iter()
-            .filter_map(|b| Some((b.name.clone(), root_clip(&b.clip)?)))
-            .collect(),
+        clips: root_clips(data.clips.iter().map(|b| (&b.name, &b.clip, 1.0))),
         blends: data.blends.clone(),
+    }
+}
+
+fn root_model_of_character(data: &crate::character::CharacterData) -> RootModel {
+    RootModel {
+        clips: root_clips(data.clips.iter().map(|b| (&b.name, &b.clip, b.speed))),
+        blends: data.blends.clone(),
+    }
+}
+
+/// A prefab has no blend spaces.
+fn root_model_of_prefab(data: &crate::prefab_clips::PrefabClipData) -> RootModel {
+    RootModel {
+        clips: root_clips(data.clips.iter().map(|b| (&b.name, &b.clip, 1.0))),
+        blends: Vec::new(),
     }
 }
 
@@ -812,17 +853,34 @@ tracks:
         }
 
         let lazy = AnimationLibrary::new(dir.clone());
-        let first = lazy.root_model("body.assembly.yaml");
+        let model = Model::Assembly("body.assembly.yaml".into());
+        let first = lazy.root_model(&model);
         assert_eq!((first.clips.len(), first.blends.len()), (1, 1));
-        assert!(Arc::ptr_eq(&first, &lazy.root_model("body.assembly.yaml")));
+        assert!(Arc::ptr_eq(&first, &lazy.root_model(&model)));
 
         let mut prefilled = AnimationLibrary::new(dir.clone());
-        let model = Model::Assembly("body.assembly.yaml".into());
         assert!(prefilled.timings(&model).is_ok());
+        let skinned = Model::Character(skinned_files(&dir));
+        assert!(prefilled.timings(&skinned).is_ok(), "the skinned fixture");
         // With the files gone, only the pre-fill can still answer.
         std::fs::remove_dir_all(&dir).unwrap();
-        let filled = prefilled.root_model("body.assembly.yaml");
+        let filled = prefilled.root_model(&model);
         assert_eq!((filled.clips.len(), filled.blends.len()), (1, 1));
+        let filled = prefilled.root_model(&skinned);
+        assert_eq!(filled.clips["walk"].speed, 2.0);
+    }
+
+    /// A one-joint skinned assembly binding the `$root` walk at speed 2, written beside it.
+    fn skinned_files(dir: &std::path::Path) -> String {
+        let mesh = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/gallery/meshes/skin-mannequin.mesh.yaml");
+        std::fs::copy(mesh, dir.join("skin.mesh.yaml")).unwrap();
+        std::fs::write(
+            dir.join("skin.assembly.yaml"),
+            "format: 1\nkind: assembly\nmesh: skin.mesh.yaml\nclips:\n  walk:\n    clip: walk.anim.yaml\n    speed: 2.0\n",
+        )
+        .unwrap();
+        "skin.assembly.yaml".into()
     }
 
     #[test]

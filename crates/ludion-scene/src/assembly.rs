@@ -2749,7 +2749,11 @@ pub(crate) fn check_mesh_clips(
             }
         }
         for track in &clip.tracks {
-            if joints.contains(&track.target.as_str()) {
+            // `$root` is the root-motion track, not a joint; its shape rules run in
+            // `animation::validate`.
+            if track.target == crate::animation::ROOT_TRACK
+                || joints.contains(&track.target.as_str())
+            {
                 continue;
             }
             let help = match suggest::nearest(&track.target, joints.iter().copied()) {

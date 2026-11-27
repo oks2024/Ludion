@@ -1,10 +1,12 @@
-//! Root motion on voxel assemblies: the displacement a clip's reserved `$root` track authors
-//! (`Plan/animation-layers.md` decisions 55-62, request 0007 section 5).
+//! Root motion on voxel assemblies, skinned assemblies and prefab roots: the displacement a clip's
+//! reserved `$root` track authors (`Plan/animation-layers.md` decisions 55-67, request 0007
+//! section 5).
 //!
 //! A `kind: animation` clip may carry a `$root` track: horizontal translation (`v[0]`, `v[2]`) and
-//! yaw (rotation `v[1]`) only, keyed in the entity's frame at the clip's start, in the assembly's
-//! units, forward being `-Z`. The track is never drawn and nothing applies it for you:
-//! [`root_motion_delta`] is a pure sim read a game feeds to its motor.
+//! yaw (rotation `v[1]`) only, keyed in the entity's frame at the clip's start, in the model's own
+//! units (voxels, skinned mesh units or prefab-local units). The keys are in the entity's frame
+//! whatever forward the model has; a voxel assembly's is `-Z`. The track is never drawn and nothing
+//! applies it for you: [`root_motion_delta`] is a pure sim read a game feeds to its motor.
 
 use ludion_core::ids::EntityId;
 use ludion_core::math::f64::{cos, euler_xyz_degrees_to_quat, sin};
@@ -12,11 +14,12 @@ use ludion_core::time::{FrameIndex, GameTime};
 use ludion_ecs::{SystemCtx, World};
 use ludion_scene::sample_channel;
 
-use crate::animation_events::{AnimationLibrary, RootClip, RootClips};
+use crate::animation_events::{AnimationLibrary, Model, RootClip, RootClips};
 use crate::blend_clock::blend_rate;
 use crate::blend_space::BlendSpaceData;
 use crate::components::{Animation, BlendClock, ClipAnchor, Mesh, MeshSource, Transform};
 use crate::extract::{clock_elapsed, fade_weight};
+use crate::prefab::PrefabInstance;
 use crate::sequences::entity_clock;
 
 /// The most loop cycles one window visits, the latest ones: an absurd speed never stalls the sum.
@@ -36,15 +39,21 @@ pub struct RootMotion {
     pub weight: f32,
 }
 
-/// This tick's root motion of the assembly `entity` is playing, or `None` when no side of its
-/// base clip (a clip, or a blend through its points) carries a `$root` track, or it has no
-/// `Animation`, no assembly `Mesh` or no library.
+/// This tick's root motion of the model `entity` is playing, or `None` when no side of its base
+/// clip (a clip, or a blend through its points) carries a `$root` track, or it has no
+/// `Animation`, no model or no library.
 ///
-/// **Window.** The clip time is the exact gameplay clock (speed, anchor and `game_scale` included,
-/// not the held pose clock) over `(previous instant, this instant]`. A one-shot clamps to its
-/// duration, a loop wraps (the latest 64 cycles), a held frame or a clip started this tick opens
-/// at 0, so windows tile and a scaled clock neither drops nor repeats travel. A reversed clock
-/// yields nothing.
+/// **Model.** An assembly or skinned character `Mesh.shape` is the model. Any other entity that is
+/// the root of a prefab instance (`PrefabInstance.root`) plays the prefab's clips; prefabs have no
+/// blends, and a prefab's non-root part reads `None`. A prefab root reads `PrefabInstance`
+/// unrecorded.
+///
+/// **Window.** The clip time is the entity's own gameplay clock (`entity_clock`: the global one,
+/// or its own while a holding sequence binds it), speed, anchor and `game_scale` included, not the
+/// held pose clock, over `(previous instant, this instant]`; a skinned clip's time is also scaled
+/// by its binding `speed`. A one-shot clamps to its duration, a loop wraps (the latest 64 cycles),
+/// a held frame or a clip started this tick opens at 0, so windows tile and a scaled clock neither
+/// drops nor repeats travel. A reversed clock yields nothing.
 ///
 /// **Crossfade.** While `Animation.fade` runs, the incoming side counts at the fade weight and the
 /// outgoing `from` side at its complement; a side that is unknown, lacks `$root` or is a
@@ -99,12 +108,29 @@ pub struct RootMotion {
 /// ```
 pub fn root_motion_delta(world: &World, entity: EntityId, ctx: &SystemCtx) -> Option<RootMotion> {
     let animation = world.get::<Animation>(entity).ok().flatten()?;
-    let mesh = world.get::<Mesh>(entity).ok().flatten()?;
-    let MeshSource::Assembly(rel) = &mesh.shape else {
-        return None;
-    };
     let transform = world.get::<Transform>(entity).ok().flatten()?;
-    root_motion_of(world, entity, animation, rel, transform, ctx)
+    let model = model_of(world, entity)?;
+    root_motion_of(world, entity, animation, &model, transform, ctx)
+}
+
+/// The model `entity` plays clips of: its assembly or character `Mesh`, else the prefab it roots.
+fn model_of(world: &World, entity: EntityId) -> Option<Model> {
+    match world
+        .get::<Mesh>(entity)
+        .ok()
+        .flatten()
+        .map(|mesh| &mesh.shape)
+    {
+        Some(MeshSource::Assembly(rel)) => Some(Model::Assembly(rel.clone())),
+        Some(MeshSource::Character(rel)) => Some(Model::Character(rel.clone())),
+        // Engine-optional, so read unrecorded: it demands no game query declaration.
+        _ => world
+            .get_unrecorded::<PrefabInstance>(entity)
+            .ok()
+            .flatten()
+            .filter(|instance| instance.root == entity)
+            .map(|instance| Model::Prefab(instance.source.clone())),
+    }
 }
 
 /// [`root_motion_delta`]'s arithmetic on already-read components, so a caller that reads unrecorded
@@ -113,15 +139,16 @@ pub(crate) fn root_motion_of(
     world: &World,
     entity: EntityId,
     animation: &Animation,
-    rel: &str,
+    model: &Model,
     transform: &Transform,
     ctx: &SystemCtx,
 ) -> Option<RootMotion> {
-    let model = world.resource::<AnimationLibrary>()?.root_model(rel);
+    let model = world.resource::<AnimationLibrary>()?.root_model(model);
 
-    let now = ctx.game_instant;
-    let prev = if ctx.game_advanced() {
-        let step_q16 = (ctx.game_scale() * 65536.0) as u64;
+    let own = entity_clock(world, entity, ctx);
+    let now = own.instant;
+    let prev = if own.advanced {
+        let step_q16 = (own.scale * 65536.0) as u64;
         GameTime::from_q16(now.as_q16().saturating_sub(step_q16), now.rate())
     } else {
         now
@@ -151,12 +178,10 @@ pub(crate) fn root_motion_of(
     let mut sum = Sum::default();
     for side in sides.iter().filter(|side| side.share > 0.0) {
         if let Some(clip) = model.clips.get(side.name) {
-            let window = window_delta(clip, side.elapsed(prev), side.elapsed(now));
-            sum.add(side.share, window);
+            sum.add(side.share, clip_window(clip, side, (prev, now)));
         } else if let Some(blend) = model.blends.iter().find(|blend| blend.name == *side.name) {
             // Engine-optional, so read unrecorded: it demands no game query declaration.
             let clock = world.get_unrecorded::<BlendClock>(entity).ok().flatten();
-            let own = entity_clock(world, entity, ctx);
             let own_dt = if own.advanced { f64::from(own.dt) } else { 0.0 };
             let window = phase_window(side, blend, animation, clock, (prev, now), own_dt);
             sum.add_blend(side.share, blend, &model.clips, animation.params, window);
@@ -198,6 +223,15 @@ impl Side<'_> {
     fn elapsed(&self, at: GameTime) -> f64 {
         clock_elapsed(at, self.started, self.speed, self.anchor)
     }
+}
+
+/// A plain clip's window on `side`'s clock times the binding speed, as extract poses it.
+fn clip_window(clip: &RootClip, side: &Side, (prev, now): (GameTime, GameTime)) -> ([f64; 2], f64) {
+    window_delta(
+        clip,
+        side.elapsed(prev) * clip.speed,
+        side.elapsed(now) * clip.speed,
+    )
 }
 
 /// The weighted travel, yaw and weight summed over the sides and blend points.
@@ -335,6 +369,7 @@ pub(crate) fn window_delta(clip: &RootClip, tp: f64, tn: f64) -> ([f64; 2], f64)
 
 #[cfg(test)]
 mod tests {
+    use ludion_core::time::TickRate;
     use ludion_scene::{Ease, Keyframe};
 
     use super::*;
@@ -357,7 +392,29 @@ mod tests {
                 .iter()
                 .map(|&(t, y)| key(t, [0.0, y, 0.0]))
                 .collect(),
+            speed: 1.0,
         }
+    }
+
+    #[test]
+    fn a_binding_speed_of_two_reaches_the_travel_in_half_the_time() {
+        let name = "walk".to_string();
+        let side = Side {
+            incoming: true,
+            name: &name,
+            started: FrameIndex::ZERO,
+            speed: 1.0,
+            anchor: None,
+            share: 1.0,
+        };
+        let at = |ticks: u64| GameTime::from_q16(ticks * 65536, TickRate::DEFAULT);
+        let fast = RootClip {
+            speed: 2.0,
+            ..walk(false)
+        };
+        let half = clip_window(&fast, &side, (at(0), at(30))).0;
+        assert_eq!(half, clip_window(&walk(false), &side, (at(0), at(60))).0);
+        assert!((half[1] - -8.0).abs() < 1e-12, "{half:?}");
     }
 
     fn walk(looped: bool) -> RootClip {

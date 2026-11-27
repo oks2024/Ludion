@@ -486,6 +486,22 @@ fn blend_cross_file_errors_are_l1138_with_nearest() {
     assert!(has(&errors, "L1138", "/blends/locomotion/points/0/clip"));
 }
 
+#[test]
+fn a_root_track_is_not_an_unknown_joint() {
+    let doc = check_assembly(CANONICAL).expect("valid");
+    let rooted = |v1: f64| {
+        format!(
+            "format: 1\nkind: animation\nduration: 1.0\nloop: true\ntracks:\n  \"$root\":\n    translation:\n      - t: 0.0\n        v:\n          - 0.0\n          - {v1:?}\n          - 0.0\n      - t: 1.0\n        v:\n          - 0.0\n          - {v1:?}\n          - -2.0\n  hip:\n    rotation:\n      - t: 0.0\n        v:\n          - 0.0\n          - 0.0\n          - 0.0\n      - t: 1.0\n        v:\n          - 10.0\n          - 0.0\n          - 0.0\n"
+        )
+    };
+    let clip = check_animation(&rooted(0.0)).expect("a horizontal `$root` is valid");
+    let clips = [clip.clone(), clip];
+    assert!(check_assembly_mesh_clips(&doc, &clips, &["hip"]).is_empty());
+
+    let errors = check_animation(&rooted(1.0)).expect_err("`$root` is horizontal");
+    assert!(has(&errors, "L1142", "/tracks/$root/translation/0/v/1"));
+}
+
 fn doc_with_sync_removed() -> ludion_scene::AssemblyDocument {
     check_assembly(&BLENDED.replace("    sync: foot_l\n", "")).expect("valid")
 }

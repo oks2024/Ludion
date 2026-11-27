@@ -45,6 +45,53 @@ fn the_gallery_character_checks_clean() {
     );
 }
 
+/// A skinned assembly lists its `$root` clips in mesh units and its rooted blends, in text and as
+/// the `--json` `root` object; one without `$root` has neither.
+#[test]
+fn a_skinned_assembly_lists_its_root_motion() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/skinned_root/body.assembly.yaml");
+    let json = |path: &Path| -> serde_json::Value {
+        let output = Command::new(env!("CARGO_BIN_EXE_ludion"))
+            .args(["check-scene", "--json"])
+            .arg(path)
+            .output()
+            .expect("failed to run the ludion binary");
+        serde_json::from_slice(&output.stdout).expect("one JSON object")
+    };
+
+    let output = run_check_scene(&fixture);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rows = "  root lunge: travel x 0 z -1.5 units, yaw 45°, 1 s one-shot
+  root walk: travel x 0 z -0.75 units, yaw 0°, 0.5 s loop
+  root blend stride: 1 of 2 points carry $root (walk)
+";
+    assert!(stdout.contains(rows), "stdout was: {stdout}");
+    assert_eq!(
+        json(&fixture)["root"],
+        serde_json::json!({
+            "clips": [
+                { "name": "lunge", "travel": [0.0, -1.5], "yaw": 45.0, "duration": 1.0,
+                  "loop": false },
+                { "name": "walk", "travel": [0.0, -0.75], "yaw": 0.0, "duration": 0.5,
+                  "loop": true }
+            ],
+            "blends": [{ "name": "stride", "points": ["walk"] }]
+        })
+    );
+
+    let plain = gallery().join("characters/mannequin.character.yaml");
+    let stdout = String::from_utf8_lossy(&run_check_scene(&plain).stdout).into_owned();
+    assert!(!stdout.contains("  root "), "{stdout}");
+    let value = json(&plain);
+    assert!(value.get("root").is_none(), "{value}");
+}
+
 /// An overlay event past its clip's duration is a data error at the character.
 #[test]
 fn a_bad_overlay_is_l1138() {

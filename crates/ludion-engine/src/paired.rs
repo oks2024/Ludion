@@ -39,7 +39,7 @@ use ludion_physics::{
 };
 use ludion_scene::{PairedDocument, PairedMoves};
 
-use crate::animation_events::{AnimationEvents, ClipEvent};
+use crate::animation_events::{AnimationEvents, ClipEvent, Model};
 use crate::components::{Animation, Mesh, MeshSource, Transform};
 use crate::motor::set_character_posture;
 use crate::paired_doc::{PairedReport, check_paired_files};
@@ -1058,7 +1058,8 @@ fn root_motion(
     let MeshSource::Assembly(rel) = &mesh.shape else {
         return None;
     };
-    root_motion_of(world, entity, animation, rel, here, ctx)
+    let model = Model::Assembly(rel.clone());
+    root_motion_of(world, entity, animation, &model, here, ctx)
 }
 
 /// Fires the document events of every playing paired action, ends the ones whose clips are done, and

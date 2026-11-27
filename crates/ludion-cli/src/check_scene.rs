@@ -1600,7 +1600,11 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
         fields["ground"] =
             serde_json::json!({ "max_adjust": ground.max_adjust, "root_drop": ground.root_drop });
     }
-    let root_rows = RootRows::of(&data);
+    let root_rows = RootRows::of(
+        data.clips.iter().map(|b| (b.name.as_str(), &b.clip)),
+        &data.blends,
+        "voxels",
+    );
     if let Some(root) = root_rows.json() {
         fields["root"] = root;
     }
@@ -1713,16 +1717,18 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// What `root_motion_delta` can read of an assembly: each clip with a `$root` track, with the
+/// What `root_motion_delta` can read of a voxel or skinned assembly: each clip with a `$root` track, with the
 /// travel and turn it authors from start to end, and each blend with the points that carry one.
 struct RootRows<'a> {
     clips: Vec<RootClipRow<'a>>,
     blends: Vec<RootBlendRow<'a>>,
+    /// What the printed travel is measured in.
+    units: &'static str,
 }
 
 struct RootClipRow<'a> {
     name: &'a str,
-    /// `[x, z]` voxels in the entity's frame at the clip's start.
+    /// `[x, z]` in the model's units, in the entity's frame at the clip's start.
     travel: [f64; 2],
     yaw_degrees: f64,
     duration: f64,
@@ -1737,16 +1743,18 @@ struct RootBlendRow<'a> {
 }
 
 impl<'a> RootRows<'a> {
-    fn of(data: &'a ludion_engine::AssemblyData) -> Self {
-        let clips: Vec<RootClipRow<'a>> = data
-            .clips
-            .iter()
-            .filter_map(|bound| {
-                let track = ludion_scene::clip_track(&bound.clip, ludion_scene::ROOT_TRACK)?;
+    fn of(
+        bound: impl Iterator<Item = (&'a str, &'a ludion_scene::AnimationDocument)>,
+        blends: &'a [ludion_engine::BlendSpaceData],
+        units: &'static str,
+    ) -> Self {
+        let clips: Vec<RootClipRow<'a>> = bound
+            .filter_map(|(name, clip)| {
+                let track = ludion_scene::clip_track(clip, ludion_scene::ROOT_TRACK)?;
                 let at = |keys: &[ludion_scene::Keyframe], t: f64| {
                     ludion_scene::sample_channel(keys, t).unwrap_or_default()
                 };
-                let duration = bound.clip.duration;
+                let duration = clip.duration;
                 let start = at(&track.translation, 0.0);
                 let end = at(&track.translation, duration);
                 let from = at(&track.rotation, 0.0)[1];
@@ -1757,17 +1765,16 @@ impl<'a> RootRows<'a> {
                 let cos = ludion_core::math::f64::cos(theta);
                 let (x, z) = (end[0] - start[0], end[2] - start[2]);
                 Some(RootClipRow {
-                    name: &bound.name,
+                    name,
                     // Adding zero turns a negative zero positive.
                     travel: [x * cos + z * sin + 0.0, -x * sin + z * cos + 0.0],
                     yaw_degrees: to - from + 0.0,
                     duration,
-                    looped: bound.clip.looped,
+                    looped: clip.looped,
                 })
             })
             .collect();
-        let blends = data
-            .blends
+        let blends = blends
             .iter()
             .filter_map(|blend| {
                 let carrying: Vec<&str> = blend
@@ -1783,7 +1790,11 @@ impl<'a> RootRows<'a> {
                 })
             })
             .collect();
-        RootRows { clips, blends }
+        RootRows {
+            clips,
+            blends,
+            units,
+        }
     }
 
     /// The `--json` `root` object, or `None` for an assembly with no `$root` clip.
@@ -1817,10 +1828,11 @@ impl<'a> RootRows<'a> {
         let shown = |v: f64| (v * 1e4).round() / 1e4 + 0.0;
         let clips = self.clips.iter().map(|clip| {
             format!(
-                "  root {}: travel x {} z {} voxels, yaw {}°, {} s {}",
+                "  root {}: travel x {} z {} {}, yaw {}°, {} s {}",
                 clip.name,
                 shown(clip.travel[0]),
                 shown(clip.travel[1]),
+                self.units,
                 shown(clip.yaw_degrees),
                 clip.duration,
                 if clip.looped { "loop" } else { "one-shot" },
@@ -1971,7 +1983,12 @@ fn run_character(mut reporter: Reporter, source: &str) -> ExitCode {
         Ok(contacts) => contacts,
         Err(diagnostics) => return reporter.fail(diagnostics),
     };
-    let fields = serde_json::json!({
+    let root_rows = RootRows::of(
+        data.clips.iter().map(|b| (b.name.as_str(), &b.clip)),
+        &data.blends,
+        "units",
+    );
+    let mut fields = serde_json::json!({
         "name": name,
         "mesh": data.mesh,
         "clips": data.clips.iter().zip(&contacts).map(|(clip, contact)| serde_json::json!({
@@ -1989,6 +2006,9 @@ fn run_character(mut reporter: Reporter, source: &str) -> ExitCode {
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     });
+    if let Some(root) = root_rows.json() {
+        fields["root"] = root;
+    }
     reporter.ok(fields, || {
         let name = name
             .as_ref()
@@ -2016,6 +2036,9 @@ fn run_character(mut reporter: Reporter, source: &str) -> ExitCode {
                     joint.joint, joint.min, joint.min_t, joint.max, joint.max_t,
                 );
             }
+        }
+        for line in root_rows.text() {
+            println!("{line}");
         }
         if contacts.iter().all(|contact| contact.joints.is_empty()) {
             println!("  note: no ground-contact joint found");

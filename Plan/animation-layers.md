@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W6b-1 (blend root motion, tooling) mechanized (2026-11-26).** **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); W4c (entity targets) mechanized (2026-11-21); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); W6a (root motion) mechanized (2026-11-21); A3 deferred; W6b not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **W6b-2b (the glTF importer writes `$root`) mechanized (2026-11-27).** **W6b-2a (root motion on skinned assemblies and prefab roots, on the entity's clock) mechanized (2026-11-27).** **W6b-1 (blend root motion, tooling) mechanized (2026-11-26).** **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); W4c (entity targets) mechanized (2026-11-21); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); W6a (root motion) mechanized (2026-11-21); A3 deferred; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -233,6 +233,30 @@ No hash, schema or golden moved.
 
 No hash or schema moved. One new golden; its macOS twin is owed to the M4.
 
+### W6b-2a — root motion on skinned assemblies and prefab roots
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/assembly.rs`, `tests/skinned_assembly_roundtrip.rs` | `$root` is not an unknown joint of a skinned clip |
+| `crates/ludion-engine/src/animation_events.rs` | the `roots` cache keyed by `Model`, `RootClip.speed`, the three load arms and pre-fills |
+| `crates/ludion-engine/src/root_motion.rs`, `paired.rs`, `prefab_clips.rs` | the model resolution, the entity clock, the binding speed, the prefab `$root` exemption |
+| `crates/ludion-engine/tests/root_motion_models.rs`, `it.rs` | skinned sums, speed and blend, prefab root and part, the bound actor, inertness, threads |
+| `crates/ludion-cli/src/check_scene.rs`, `tests/check_scene_character.rs`, `tests/fixtures/skinned_root/` | the skinned `root` rows |
+| `docs/voxel-animation.md` §Root motion, `docs/character-animation.md`, `docs/prefab-animation.md`, embedded mirrors | the user-facing contract |
+
+No hash, schema, replay or golden moved. The read of an unbound entity is bit-identical.
+
+### W6b-2b — the glTF importer writes `$root`
+
+| file | role |
+|---|---|
+| `crates/ludion-import/src/animation.rs` | the `root_motion` extra, `root_slot`, `extract_root`, `reduce_with`, the bound with `$root` |
+| `crates/ludion-import/src/diagnostics.rs` | the `L1207` help names `root_motion` |
+| `crates/ludion-import/tests/animation.rs` | travel and yaw, swing-twist, pivot and orbit, seam, turns and half turns, refusals, inertness |
+| `docs/blender-craft.md` + embedded mirror, `dev-docs/import-animation.md` | the authoring contract and the pipeline |
+
+No hash, schema or golden moved. Without the key the written clip is unchanged.
+
 ## Trigger
 
 The game's characters do locomotion plus something else on one skin: carry a body, aim, peek around a
@@ -295,7 +319,7 @@ share one driver shape.
     measured extract posed an assembly, offline-only.
 12. **Root motion** (W6): *amended by W6a:* root motion is the reserved `$root` track of `kind: animation` (request
     section 5), read by `root_motion_delta` on assemblies, a deterministic sim read of clip data through the libm
-    sampler. The glTF `ludion_root_motion` extras flag becomes a later import-side writer of `$root`. **Trigger:** a
+    sampler. The glTF `root_motion` extras key (decision 68) is the import-side writer of `$root`. **Trigger:** a
     skinned `kind: character` game needs root motion. Why: the owner's 2026-11-17 ruling makes the game's
     characters assemblies, and one runtime serves both once the importer writes the track.
 13. **Blend points** are `clip` plus `at`: a number is 1D (`params[0]`), a block list `[x, z]` is 2D
@@ -487,7 +511,8 @@ share one driver shape.
     translation key with `v[1] != 0` and a rotation key with `v[0]` or `v[2] != 0` (`L1142`, pointer at the key);
     a part named `$root` is `L1138`. No new code. The canonical writer quotes the key; no committed file had one.
 56. **Window and clock.** `root_motion_delta(&World, entity, &SystemCtx)` integrates the track over
-    `(prev instant, now]` of the exact gameplay clock (`clock_elapsed`, anchor and speed included, not the held pose
+    `(prev instant, now]` of the entity's own gameplay clock (`entity_clock`, amended in W6b-2a: the global clock
+    unless a holding sequence binds the entity; `clock_elapsed`, anchor and speed included, not the held pose
     clock). A one-shot clamps, a loop wraps (latest 64 cycles), a held frame or a clip started this tick opens at
     0, a reversed clock reads nothing; windows tile under a scaled clock. Travel accumulates per key segment in the
     frame faced at the segment start; yaw is the unwrapped degrees lerp (validation keeps a turn under 180 per
@@ -532,6 +557,29 @@ share one driver shape.
     is seen from `right`, broadside to the `-Z` travel (in `game` the figures hide one another and their captions
     overprint); a named view wins. `L1117` without `--clip`, with `--crossfade`, `--blend` or a `--look` range, on
     a character or prefab, and for a clip without `$root`.
+65. **Skinned assemblies** (W6b-2a). A `Mesh.shape: character` entity reads its assembly's `$root` clips and
+    blends. A plain clip's time is the side's elapsed time times the binding `speed`, as extract poses it; a blend
+    point's speed is already in the blend's rate. Keys are in mesh units, in the entity's frame whatever forward the
+    imported mesh has. A skinned mesh joint named `$root` is unchecked (import names never carry `$`).
+66. **Prefab roots** (W6b-2a). With no assembly or character `Mesh`, an entity that is its own
+    `PrefabInstance.root` reads the instanced prefab's `$root` clips, in prefab-local units: plain clips only,
+    since prefabs have no blends until A3. A non-root part reads `None`. `PrefabInstance` is read unrecorded.
+67. **The `$root` exemption** (W6b-2a). The skinned clip check (`L1138`) and the prefab clip target check
+    (`L1314`) skip `$root`; the `L1142` shape rules of d55 still run on every clip. Extract binds joints and parts
+    by name, so the track is never drawn. `check-scene` prints d63's rows for a skinned assembly too, with
+    "units" for the travel; the prefab report has none.
+68. **The glTF writer** (W6b-2b). The animation `extras` key is `root_motion` (decision 12 had a `ludion_` prefix;
+    the siblings `loop`, `reduce_*` and `bound_*` carry none). Its value is a rig node's **emitted** name. It must
+    be the rig's only root and not a reframed one (its channels are dropped); every refusal is `L1207`. Per source
+    frame, `r` is the yaw of the swing-twist about `+Y` minus its value at `t = 0`, unwrapped, and
+    `d = t.xz − rot_y(r, t₀.xz)`, so the joint's start offset stays put while the entity turns about its origin.
+    The strip is exact: translation `[t₀.x, t.y, t₀.z]`, rotation `qY(−r) ⊗ q`; an absent channel stays absent.
+    A `$root` channel within its reduce tolerance of 0 at every frame is omitted. The translation row is stripped
+    when **either** channel is emitted: a root orbiting the origin has `d = 0` while its position is all yaw. With
+    both omitted nothing is rewritten, and the clip is byte-identical to the one without the key. Yaw reduces as the
+    degrees lerp the runtime plays; two frames half a turn apart get a `$root` key at the source's midpoint, and a
+    split key of the stripped rotation is sampled with the yaw taken off. The `L1206` bound is measured with `$root`
+    applied; the loop seam is measured without it.
 
 ## Waves
 
@@ -568,8 +616,11 @@ share one driver shape.
 - **W6a (shipped 2026-11-21).** The `$root` track and `root_motion_delta` on assemblies (decisions 12 and 55-60).
 - **W6b-1 (shipped).** Blend-space root motion on assemblies, the `check-scene` root row and
   `render --root-motion` (decisions 61–64; the macOS twin of its golden is owed to the M4).
-- **W6b-2.** Root motion on skinned-body assemblies, and the glTF `ludion_root_motion` import flag (decision 12).
-  Prefabs stay with A3.
+- **W6b-2a (shipped 2026-11-27).** Root motion on skinned assemblies and prefab roots, on the entity's own clock
+  (decisions 65–67). Prefab blends and layers stay with A3; `render --root-motion` still refuses both models.
+- **W6b-2b (shipped 2026-11-27).** The glTF writer (decisions 12 and 68): the animation-level `root_motion` `extras`
+  key names the rig's root, and `ludion-import` writes its travel and yaw as the `$root` track. A reframed root is
+  refused (`L1207`).
 
 ## Owner rulings (2026-11-19)
 

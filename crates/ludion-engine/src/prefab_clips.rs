@@ -146,7 +146,8 @@ entities:
 }
 
 /// One `L1314` per clip track of `data` whose `target` is not one of the prefab's `parts`, at
-/// `/clips/{name}` of the prefab document.
+/// `/clips/{name}` of the prefab document. The `$root` root-motion track targets no part and is
+/// exempt.
 ///
 /// # Example
 /// ```
@@ -176,7 +177,7 @@ pub fn prefab_clip_target_diagnostics(data: &PrefabClipData, parts: &[String]) -
     let mut diagnostics = Vec::new();
     for binding in &data.clips {
         for track in &binding.clip.tracks {
-            if parts.contains(&track.target) {
+            if track.target == ludion_scene::ROOT_TRACK || parts.contains(&track.target) {
                 continue;
             }
             let help = match ludion_core::suggest::nearest(

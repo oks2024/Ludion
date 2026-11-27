@@ -167,6 +167,7 @@ mod replay_playback;
 mod replay_with;
 mod room_prewarm_bench;
 mod root_motion;
+mod root_motion_models;
 mod rumble;
 mod run_recording;
 mod run_save;

@@ -1,0 +1,41 @@
+format: 1
+kind: animation
+name: walk
+duration: 0.5
+loop: true
+tracks:
+  torso:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 0.0
+          - 10.0
+          - 0.0
+  "$root":
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - -0.75
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
