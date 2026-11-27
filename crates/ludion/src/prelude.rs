@@ -80,7 +80,8 @@
 //!   name enums [`MouseButton`], [`GamepadButton`], [`GamepadAxis`]; the pad's [`GamepadFamily`], the
 //!   last-touched [`Device`] and the [`DeviceFacts`] a rebuilt world keeps; the const-constructible key-or-button
 //!   binding [`Action`], the data-driven action map [`Actions`] read by [`ActionName`]
-//!   (`Engine::builder().input_actions()`, `ludion docs input`) and the standard radial stick deadzone [`STICK_DEADZONE`], the trigger press level [`TRIGGER_THRESHOLD`] and the mouse-motion level that selects the mouse [`MOUSE_DEVICE_THRESHOLD`]; [`SimTime`], [`FrameIndex`],
+//!   (`Engine::builder().input_actions()`, `ludion docs input`), the prompt [`Glyph`]s it names for a device
+//!   ([`glyph_name`] names one binding) and the standard radial stick deadzone [`STICK_DEADZONE`], the trigger press level [`TRIGGER_THRESHOLD`] and the mouse-motion level that selects the mouse [`MOUSE_DEVICE_THRESHOLD`]; [`SimTime`], [`FrameIndex`],
 //!   [`TickRate`]; [`DeterministicRng`] and [`WorldSeed`] are the seeded randomness a system draws from. [`GameClock`] is the gameplay half of that time: the resource a game calls
 //!   `hold()` on every frame it is frozen (`world.resource_mut::<GameClock>().unwrap().hold()`), so
 //!   that `ctx.game_time` / `ctx.game_frame` — what every closed-form evaluator reads, from a
@@ -371,8 +372,8 @@ pub use ludion_ecs::{
 pub use ludion_sim::rebind::{CaptureOptions, CaptureResult, CaptureSlot, Resolve};
 pub use ludion_sim::{
     Action, ActionName, Actions, Device, DeviceFacts, GamepadAxis, GamepadButton, GamepadFamily,
-    GamepadState, InputBindingsDoc, InputEvent, InputState, Key, MOUSE_DEVICE_THRESHOLD,
-    MouseButton, MouseState, STICK_DEADZONE, TRIGGER_THRESHOLD,
+    GamepadState, Glyph, InputBindingsDoc, InputEvent, InputState, Key, MOUSE_DEVICE_THRESHOLD,
+    MouseButton, MouseState, STICK_DEADZONE, TRIGGER_THRESHOLD, glyph_name,
 };
 
 pub use crate::math;

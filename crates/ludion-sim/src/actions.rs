@@ -55,7 +55,11 @@ use ludion_core::time::TickRate;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::input::{GamepadButton, InputState, Key, MouseButton, STICK_DEADZONE, radial_deadzone};
+use crate::glyphs::{Glyph, binding_device, binding_gesture, binding_glyph_names};
+use crate::input::{
+    Device, GamepadButton, GamepadFamily, InputState, Key, MouseButton, STICK_DEADZONE,
+    radial_deadzone,
+};
 
 /// The default level at which a `trigger` binding presses.
 const TRIGGER_PRESS: f32 = 0.5;
@@ -391,7 +395,7 @@ fn valid_name(name: &str) -> bool {
 
 /// A binding source, after the zero-or-many check.
 #[derive(Clone, Copy)]
-enum Source {
+pub(crate) enum Source {
     Key(Key),
     Mouse(MouseButton),
     Pad(GamepadButton),
@@ -412,7 +416,7 @@ impl Source {
         )
     }
 
-    fn fits(self, kind: ActionKind) -> bool {
+    pub(crate) fn fits(self, kind: ActionKind) -> bool {
         match kind {
             ActionKind::Button => matches!(
                 self,
@@ -436,7 +440,7 @@ impl Source {
     }
 }
 
-fn sources(binding: &BindingDoc) -> Vec<(&'static str, Source)> {
+pub(crate) fn sources(binding: &BindingDoc) -> Vec<(&'static str, Source)> {
     let mut out = Vec::new();
     if let Some(v) = binding.key {
         out.push(("key", Source::Key(v)));
@@ -948,6 +952,7 @@ struct ActionOut {
     hold_ticks: u32,
     hold_progress: f32,
     axis: [f32; 2],
+    source: Option<Device>,
 }
 
 #[derive(Debug, Default)]
@@ -986,6 +991,8 @@ pub struct Actions {
     state: ActionState,
     outs: Vec<GestureOut>,
     reads: Vec<ActionOut>,
+    /// The connected pad's family at the last resolve, for the names of its glyphs.
+    pad_family: Option<GamepadFamily>,
     unknown: Mutex<Unknown>,
     /// The defaults the overrides apply to.
     pub(crate) base: InputActionsDoc,
@@ -1014,6 +1021,7 @@ impl Actions {
             state: ActionState::default(),
             outs: vec![GestureOut::default(); inputs],
             reads: vec![ActionOut::default(); actions],
+            pad_family: None,
             unknown: Mutex::new(Unknown::default()),
         }
     }
@@ -1104,6 +1112,7 @@ impl Actions {
     /// restore, the key just pressed to capture a binding) is **latched**: it fires nothing and reads
     /// inactive until released. Wheel steps are never latched.
     pub fn resolve(&mut self, input: &InputState) {
+        self.pad_family = input.gamepad().family();
         let ticks = self.map.ticks;
         let restored = std::mem::take(&mut self.restored);
         for (at, physical) in self.map.inputs.iter().enumerate() {
@@ -1129,7 +1138,7 @@ impl Actions {
             self.outs[at] = step_gesture(gesture, now, flags, ticks);
         }
         for (read, action) in self.reads.iter_mut().zip(&self.map.actions) {
-            *read = read_action(action, &self.outs, input, ticks);
+            *read = read_action(action, &self.map.inputs, &self.outs, input, ticks);
         }
         self.resolve_capture(input);
     }
@@ -1204,6 +1213,55 @@ impl Actions {
             Some(ActionKind::Axis2) => out.axis,
             _ => [0.0, 0.0],
         }
+    }
+
+    /// The device that drove the action's read this tick, for any kind: that of the first binding
+    /// in binding order whose gesture fired, held or ended, or whose axis value was taken. `None`
+    /// while the action reads inactive (a hold still short of its threshold included).
+    pub fn source(&self, name: ActionName) -> Option<Device> {
+        self.lookup(name)?.source
+    }
+
+    /// What to draw to prompt `name` on `device`: the effective bindings (defaults with any
+    /// rebind) read from that device, in binding order, composites expanded. Pad names use the
+    /// family of the pad connected at the last [`resolve`](Actions::resolve), else `generic`. An
+    /// unknown name yields nothing. See [`glyphs`](crate::glyphs) for the names.
+    ///
+    /// # Example
+    /// ```
+    /// use ludion_core::time::TickRate;
+    /// use ludion_sim::actions::{ActionMap, ActionName, Actions, InputActionsDoc};
+    /// use ludion_sim::{Device, GamepadFamily, InputEvent, InputState};
+    ///
+    /// let doc: InputActionsDoc = serde_json::from_value(serde_json::json!({
+    ///     "actions": { "takedown": { "kind": "button",
+    ///         "bindings": [{ "key": "E" }, { "pad": "south" }] } }
+    /// })).unwrap();
+    /// let mut actions = Actions::new(ActionMap::compile(&doc, TickRate::DEFAULT).unwrap());
+    /// let mut input = InputState::default();
+    /// input.begin_tick();
+    /// input.apply(InputEvent::GamepadConnected { family: GamepadFamily::Xbox });
+    /// actions.resolve(&input);
+    ///
+    /// const TAKEDOWN: ActionName = ActionName::new("takedown");
+    /// let pad: Vec<_> = actions.glyphs(TAKEDOWN, input.last_device()).map(|g| g.name).collect();
+    /// assert_eq!(pad, ["pad.xbox.a"]);
+    /// let keyboard: Vec<_> = actions.glyphs(TAKEDOWN, Device::KeyboardMouse).map(|g| g.name).collect();
+    /// assert_eq!(keyboard, ["key.e"]);
+    /// ```
+    pub fn glyphs(&self, name: ActionName, device: Device) -> impl Iterator<Item = Glyph> + '_ {
+        let bindings = self
+            .lookup(name)
+            .and_then(|_| self.bindings(name.0))
+            .unwrap_or_default();
+        let family = self.pad_family.unwrap_or(GamepadFamily::Generic);
+        bindings
+            .iter()
+            .filter(move |binding| binding_device(binding) == Some(device))
+            .flat_map(move |binding| {
+                let gesture = binding_gesture(binding);
+                binding_glyph_names(binding, family).map(move |name| Glyph { name, gesture })
+            })
     }
 
     /// The names read since the last call that the map does not define, each reported once.
@@ -1319,8 +1377,33 @@ fn step_gesture(s: &mut InputGesture, now: bool, flags: InputFlags, t: GestureTi
     o
 }
 
+fn physical_device(physical: PhysicalInput) -> Device {
+    match physical {
+        PhysicalInput::Key(_)
+        | PhysicalInput::Mouse(_)
+        | PhysicalInput::WheelUp
+        | PhysicalInput::WheelDown => Device::KeyboardMouse,
+        PhysicalInput::Pad(_) | PhysicalInput::Trigger { .. } => Device::Gamepad,
+    }
+}
+
+fn axis1_device(source: Axis1Source) -> Device {
+    match source {
+        Axis1Source::Wheel { .. } | Axis1Source::KeyPair(_) => Device::KeyboardMouse,
+        Axis1Source::PadPair(_) => Device::Gamepad,
+    }
+}
+
+fn axis2_device(source: Axis2Source) -> Device {
+    match source {
+        Axis2Source::Keys(_) | Axis2Source::MouseDelta { .. } => Device::KeyboardMouse,
+        Axis2Source::Stick { .. } => Device::Gamepad,
+    }
+}
+
 fn read_action(
     action: &CompiledAction,
+    inputs: &[PhysicalInput],
     outs: &[GestureOut],
     input: &InputState,
     t: GestureTicks,
@@ -1335,6 +1418,9 @@ fn read_action(
                 read.pressed |= o.fired[g];
                 read.held |= o.level[g];
                 ended |= o.ended[g];
+                if read.source.is_none() && (o.fired[g] || o.level[g] || o.ended[g]) {
+                    read.source = Some(physical_device(inputs[at]));
+                }
                 if gesture == Gesture::Hold && o.n > 0 {
                     read.hold_ticks = read.hold_ticks.max(o.n);
                     let progress = (o.n as f32 / t.hold as f32).min(1.0);
@@ -1344,11 +1430,17 @@ fn read_action(
             CompiledBinding::Axis1(source) => {
                 if read.axis[0] == 0.0 {
                     read.axis[0] = axis1_value(source, input);
+                    if read.axis[0] != 0.0 {
+                        read.source = Some(axis1_device(source));
+                    }
                 }
             }
             CompiledBinding::Axis2(source) => {
                 if read.axis == [0.0, 0.0] {
                     read.axis = axis2_value(source, input);
+                    if read.axis != [0.0, 0.0] {
+                        read.source = Some(axis2_device(source));
+                    }
                 }
             }
         }

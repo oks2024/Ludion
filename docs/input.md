@@ -119,8 +119,8 @@ if input.action_pressed(&JUMP) { /* jump */ }
 
 `action_pressed` and `action_held` fire for any input of the action; `action_released` waits for the
 last of them (some input went up this tick and none is still down). `Action` constants are
-compile-time; for taps, holds, axes and a data-driven map, use the action map below. Saved bindings
-and per-device prompt labels are not in the engine.
+compile-time; for taps, holds, axes and a data-driven map, use the action map below, which also has
+saved bindings and prompt glyphs.
 
 ## Action maps — named actions, data-driven
 
@@ -315,6 +315,55 @@ what is held: a scene switch, a checkpoint, `scene.load` and a run-save resume k
 the snapshot's. A recording's header carries the ones at its start (`save_docs`, omitted at the
 defaults) and a replay installs them; after in-window playback the machine's own come back.
 `input.devices()` / `set_devices(facts)` read and replace them as one `DeviceFacts`.
+
+## Prompt glyphs
+
+A prompt names an action on the device the player is using. Spawn one rect per glyph; the frame
+name is the glyph's name:
+
+```rust
+for glyph in actions.glyphs(TAKEDOWN, input.last_device()) {
+    // UiRect { atlas: <your prompt atlas>, frame: glyph.name.into(), .. }
+}
+```
+
+`Actions::glyphs(action, device)` yields `Glyph { name, gesture }` for the effective bindings read
+from that device, in binding order, so a rebind shows at once. An unknown action yields nothing
+(`L4270`). `gesture` is a button binding's gesture (`Press` when it names none), so a prompt can say
+"hold"; it is `None` for an analog or composite axis binding. The pad family is the one connected at
+the last resolve, `generic` with none. `glyph_name(&binding, family)` names one `BindingDoc` that
+is a single input (`None` for a composite).
+
+**The engine ships names only.** The atlas and its art are the game's.
+
+| source | names |
+|---|---|
+| `key` | `key.` + the key name in `snake_case`: `key.e`, `key.tab`, `key.digit1`, `key.page_up`, `key.numpad_add`, `key.f12` |
+| `mouse`, `wheel` | `mouse.left\|right\|middle\|back\|forward`, `mouse.wheel_up\|wheel_down\|wheel_x\|wheel_y` |
+| `mouse_delta` | `mouse.move` |
+| `pad`, `trigger`, `stick` | `pad.<family>.<label>`, family `xbox\|playstation\|nintendo\|generic` |
+
+| face button | `xbox` | `playstation` | `nintendo` | `generic` |
+|---|---|---|---|---|
+| `south` | `a` | `cross` | `b` | `south` |
+| `east` | `b` | `circle` | `a` | `east` |
+| `west` | `x` | `square` | `y` | `west` |
+| `north` | `y` | `triangle` | `x` | `north` |
+
+The other labels are the same in each family: `lb`, `rb`, `lt`, `rt` (trigger buttons and
+`trigger: left|right` alike), `ls`, `rs` (stick clicks), `start`, `select`,
+`dpad_up|dpad_down|dpad_left|dpad_right`, `left_stick` and `right_stick` (an analog `stick`).
+A composite gives one glyph per input: `keys` gives up, down, left, right; `key_pair` and
+`pad_pair` give negative, then positive.
+
+**Key names are physical (QWERTY) positions**, not the player's layout labels: on AZERTY, `key.w`
+is the key labelled Z.
+
+**`actions.source(A)`** is the `Device` that drove `A`'s read this tick, for any action kind: that
+of the first binding in binding order whose gesture fired, held or ended, or whose axis value was
+taken. It is `None` while `A` reads inactive, a hold short of its threshold included.
+
+`cargo run -p ludion --example device_prompts` prints a prompt that follows the device.
 
 ## Rumble — `Rumble`
 

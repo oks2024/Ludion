@@ -73,6 +73,7 @@
 
 pub mod actions;
 pub mod driver;
+pub mod glyphs;
 pub mod hash;
 pub mod input;
 pub mod rebind;
@@ -83,6 +84,7 @@ pub use actions::{
     unknown_action_diagnostic,
 };
 pub use driver::{DriverRestore, PastFrameInject, SimConfig, SimDriver};
+pub use glyphs::{Glyph, glyph_name};
 pub use hash::{HashReport, NonFinite, WorldHash, non_finite_count};
 pub use input::{
     Action, Device, DeviceFacts, GamepadAxis, GamepadButton, GamepadFamily, GamepadState,

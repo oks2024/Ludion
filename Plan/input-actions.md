@@ -1,6 +1,6 @@
 # Plan: Input actions — a data-driven action map, gestures, rebinding, glyphs, rumble
 
-> **Waves 1a–2b, 4 and 4b shipped; Wave 3 in progress (the key set and W3a shipped, W3b not started).**
+> **Waves 1a–4b shipped (Wave 3: the key set, W3a and W3b).**
 > Driven by Neon Shroud request 0021: a game that is played on keyboard and pad needs to name what
 > the player means (`crouch`, `move`), bind it to several physical inputs, tell a tap from a hold from
 > a double-tap, let the player rebind, show the right glyph and shake the pad. Game-facing doc:
@@ -184,14 +184,25 @@
     the header scene's load, so neither an earlier event nor an in-place playback's machine reaches it;
     a malformed entry is `L3010`. During in-window playback the live input keeps following the machine,
     and its facts are written back after the return scene loads.
-41. **W3b design.** `Actions::source(action) -> Option<Device>` (the device of the binding whose gesture
-    or axis drove this tick's output; `None` when inactive); a pure
-    `glyph_name(&BindingDoc, GamepadFamily) -> Option<&'static str>` (`pad.<family>.<face>` with the
-    Nintendo South/East and West/North label swap, `pad.*.lt|rt|lb|rb|…`, `key.<name>`, `mouse.<button>`,
-    `mouse.wheel_up|down`); `Actions::glyphs(action, device)` yielding `Glyph { name, gesture }` in
-    binding order, the family from `GamepadState::family()` (else generic). Names only, no engine atlas
-    (the example draws text labels); keyboard labels are physical (QWERTY) names, stated in the docs; an
-    example `examples/device_prompts.rs`; `ludion-sim` and the facade.
+41. **Prompt glyphs (W3b).** Names only, no engine atlas: a glyph name is a frame of the game's own
+    atlas, and the example prints text labels. Keyboard names are `key.` plus the `Key` serde name in
+    `snake_case` (`key.e`, `key.digit1`, `key.page_up`, `key.numpad_add`, `key.f12`) and are physical
+    (QWERTY) positions. Mouse names are `mouse.` plus `left`, `right`, `middle`, `back` or `forward`; the
+    wheel sources are `mouse.wheel_up`, `wheel_down`, `wheel_x` and `wheel_y`; `mouse_delta` is
+    `mouse.move`. Pad names are `pad.<family>.<label>` (`xbox`, `playstation`, `nintendo`, `generic`).
+    The face labels for South, East, West, North are `a`, `b`, `x`, `y` on Xbox; `cross`, `circle`,
+    `square`, `triangle` on PlayStation; `b`, `a`, `y`, `x` on Nintendo; `south`, `east`, `west`, `north`
+    generic. Every other label is family-independent: `lb`, `rb`, `lt`, `rt` (the trigger buttons and
+    `trigger` bindings alike), `ls`, `rs`, `start`, `select`, `dpad_up|down|left|right`, and an analog
+    `stick` is `left_stick` or `right_stick`. A composite is one glyph per physical input (`keys`: up,
+    down, left, right; `key_pair`, `pad_pair`: negative, positive). `glyph_name(&BindingDoc,
+    GamepadFamily)` names a single-input binding and is `None` for a composite or an invalid one.
+    `Actions::glyphs(action, device)` yields `Glyph { name, gesture }` over the effective bindings read
+    from `device`, in binding order, composites expanded; `gesture` is a button binding's (`press` when
+    unset) and `None` for an axis binding. The pad family is the one the last `resolve` saw, else
+    generic. `Actions::source(action) -> Option<Device>` is the device of the first binding in binding
+    order that drove the tick's read: a button binding whose gesture fired, held or ended, or the axis
+    binding whose non-zero value was taken; `None` when inactive.
 
 ## Waves
 
@@ -213,8 +224,8 @@
 - **W3a — devices and focus (shipped):** the three recorded events, `GamepadState::connected()`/`family()`,
   `last_device`/`device_changed`, `focused`/`focus_changed`, `DeviceFacts` across every rebuild and in a
   recording's header, both native hosts emitting (decisions 34–40).
-- **W3b — glyphs:** `Actions::source`, `glyph_name`, `Actions::glyphs`, the `device_prompts` example
-  (decision 41; accepted 2026-11-19, scheduled (W3)).
+- **W3b — glyphs (shipped):** `Actions::source`, `glyph_name`, `Actions::glyphs`, the `device_prompts`
+  example (decision 41; accepted 2026-11-19).
 - **W4 — rumble (shipped):** the outbox, the validator, the pad-thread mixer and the gilrs backend on Windows (decisions 27–31); macOS is silent without W4b.
 - **W4b — Apple rumble backend (shipped):** the `apple-rumble` feature, GameController haptics on macOS (decisions 32–33).
 
@@ -286,7 +297,19 @@ malformed entry is `L3010`), `input_bindings` (a run-save resume keeps the machi
 back). `replay_content_hash` moves, so the committed replays refuse with `L3010` until the round's final
 subtask re-records them; the protocol schema hash, every golden and the component schema stay.
 
+**W3b**: prompt glyphs. `ludion-sim/src/glyphs.rs`, `Actions::source` and `Actions::glyphs`, the facade
+re-exports, `docs input` §Prompt glyphs and the `device_prompts` example. Tests
+(`ludion-sim/tests/glyphs.rs`): every pad button in every family against a literal table, every key
+against its serde name, the mouse, wheel, trigger and stick names, `None` for composites and invalid
+bindings, binding order, device filtering, expansion and gestures, the family following connect and
+disconnect, a rebind and loaded overrides showing at once, an unknown name reported once, `source` over
+press, release, tap, hold, binding order and axes, and a 1/2/8-thread hash trace; `glyph_name` and
+`Actions::glyphs` have doctests. No pinned artifact moved: no event, snapshot, component or wire change.
+
 ## Owner rulings (2026-11-19)
+
+- Accepted. **Glyphs are names only** (no engine atlas), and keyboard names are physical QWERTY positions
+  (layout labels stay out of scope, below).
 
 - Shipped (W4b). **A macOS rumble backend** (GameController / CHHaptics) behind the `apple-rumble` cargo feature.
 - Accepted. **The 8 ms pad poll.** A rumble command waits at most one poll, so the thread wakes every 8 ms while a
