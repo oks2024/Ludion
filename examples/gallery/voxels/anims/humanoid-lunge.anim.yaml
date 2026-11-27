@@ -1,0 +1,105 @@
+format: 1
+kind: animation
+name: humanoid-lunge
+duration: 1.0
+loop: false
+tracks:
+  "$root":
+    rotation:
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 45.0
+          - 0.0
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - -56.0
+  torso:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - -25.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - -15.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-arm-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 100.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - 70.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-l:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 65.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - 45.0
+          - 0.0
+          - 0.0
+        ease: smooth
+  upper-leg-r:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - -5.0
+          - 0.0
+          - 0.0
+        ease: smooth
+      - t: 1.0
+        v:
+          - -10.0
+          - 0.0
+          - 0.0
+        ease: smooth

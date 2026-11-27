@@ -432,6 +432,9 @@ tracks:
   the pose is). Only rooted points count into `weight`: a partly rooted blend reports a partial one.
 - `check-scene <x>.assembly.yaml` prints a `root` row per `$root` clip (start-to-end travel in the start
   frame, yaw, duration) and per blend with such a point; `--json` puts them under `root`.
+- `render --model x.assembly.yaml --clip lunge --strip 6 --root-motion` stands each phase where the clip's
+  `$root` puts it (a travel strip, view `right` unless `--views` names one), printing each `root [x, z] yaw`;
+  not with `--crossfade`, `--blend` or a `--look` range.
 - A paired entity (`docs/paired-actions.md`) takes its root motion from `paired_motion`, never also from this.
 - The motor idiom: `move_character(world, id, rm.translation)`, then `turn_character(world, id, current_yaw + rm.yaw)`
   (the turn is absolute). `ludion-engine/examples/root_motion.rs` runs it.

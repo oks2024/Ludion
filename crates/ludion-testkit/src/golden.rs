@@ -101,6 +101,9 @@ pub struct GoldenTest {
     /// Chain targets over the base pose, one `ludion render --ik NAME=X,Y,Z` spec each (assembly-grid
     /// voxels).
     pub ik: Vec<String>,
+    /// Stand each phase of the clip's strip at its `$root` travel, exactly
+    /// `ludion render --root-motion`.
+    pub root_motion: bool,
     /// Hold each pose for this many sim ticks (stepped cadence), exactly `ludion render --hold N`.
     /// `None` is every tick.
     pub hold: Option<u32>,
@@ -176,6 +179,7 @@ impl std::fmt::Debug for GoldenTest {
             .field("layers", &self.layers)
             .field("look", &self.look)
             .field("ik", &self.ik)
+            .field("root_motion", &self.root_motion)
             .field("hold", &self.hold)
             .field("frames", &self.frames)
             .field("debug_draw", &self.debug_draw)
@@ -246,6 +250,7 @@ impl GoldenTest {
             layers: Vec::new(),
             look: None,
             ik: Vec::new(),
+            root_motion: false,
             hold: None,
             frames: 0,
             locale: None,
@@ -565,6 +570,7 @@ impl GoldenTest {
                         layers: &layers,
                         look,
                         ik: &ik,
+                        root_motion: self.root_motion,
                         hold: self.hold,
                         ..ludion_engine::ModelSheetRequest::new(
                             &[self.scene.as_path()],

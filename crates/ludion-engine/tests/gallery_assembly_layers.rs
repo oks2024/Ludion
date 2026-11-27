@@ -1,5 +1,5 @@
 //! The gallery humanoid and the `assembly-layers` scene (Neon Shroud request 0007 W2d): the committed
-//! assembly and its five clips are canonical, the scene validates, and the two blend figures fire
+//! assembly and its six clips are canonical, the scene validates, and the two blend figures fire
 //! `foot_l` and `foot_r` alternately once their events are registered, so the authored events sit
 //! on the strides. The posed look is the `assembly-layers` golden's.
 
@@ -14,7 +14,7 @@ use ludion_protocol::command::SimStepParams;
 
 const ASSEMBLY: &str = "voxels/humanoid.assembly.yaml";
 const SCENE: &str = "assembly-layers.yaml";
-const CLIPS: [&str; 5] = ["carry", "idle", "lean", "run", "walk"];
+const CLIPS: [&str; 6] = ["carry", "idle", "lean", "lunge", "run", "walk"];
 
 fn gallery() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery")

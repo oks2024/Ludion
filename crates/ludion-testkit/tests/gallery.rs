@@ -231,6 +231,22 @@ fn humanoid_look_yaw_limit_strip_test() -> GoldenTest {
     test
 }
 
+/// The gallery humanoid's one-shot `lunge` as a travel strip: six phases, each stood where the
+/// clip's `$root` track puts it, the last two turned by its yaw.
+fn humanoid_root_motion_strip_test() -> GoldenTest {
+    let mut test = GoldenTest::new(
+        gallery_dir().join("voxels").join("humanoid.assembly.yaml"),
+        os_goldens().join("humanoid-root-motion-strip.png"),
+    );
+    test.width = 900;
+    test.height = 600;
+    test.clip = Some("lunge".to_string());
+    test.strip = Some(6);
+    test.root_motion = true;
+    test.ssim_threshold = 1.0;
+    test
+}
+
 /// The mannequin character crossfading `run` into `idle` over eight phases at `hold: 5`: the fade
 /// steps on the pose grid, so the first two cells repeat.
 fn mannequin_crossfade_hold_test() -> GoldenTest {
@@ -320,6 +336,15 @@ fn needs_gpu_humanoid_look_yaw_limit_strip_matches_committed_golden_at_exactly_o
     check_strip(
         humanoid_look_yaw_limit_strip_test(),
         "humanoid_look_yaw_limit_strip",
+    );
+}
+
+/// The humanoid's lunge travel strip: the figures advance along the path and turn at its end.
+#[test]
+fn needs_gpu_humanoid_root_motion_strip_matches_committed_golden_at_exactly_one() {
+    check_strip(
+        humanoid_root_motion_strip_test(),
+        "humanoid_root_motion_strip",
     );
 }
 

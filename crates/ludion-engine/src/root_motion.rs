@@ -290,14 +290,14 @@ fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
 }
 
 /// `[x, z]` turned about the vertical axis by `theta` radians (glam's `from_rotation_y`).
-fn rot_y(theta: f64, v: [f64; 2]) -> [f64; 2] {
+pub(crate) fn rot_y(theta: f64, v: [f64; 2]) -> [f64; 2] {
     let (s, c) = (sin(theta), cos(theta));
     [v[0] * c + v[1] * s, -v[0] * s + v[1] * c]
 }
 
 /// The travel `[x, z]` (in the frame at `tp`) and yaw (radians) a clip authors over the clip times
 /// `(tp, tn]`, both unwrapped seconds.
-fn window_delta(clip: &RootClip, tp: f64, tn: f64) -> ([f64; 2], f64) {
+pub(crate) fn window_delta(clip: &RootClip, tp: f64, tn: f64) -> ([f64; 2], f64) {
     if tn.is_nan() || tp.is_nan() || tn <= tp {
         return ([0.0; 2], 0.0);
     }

@@ -227,8 +227,11 @@ No hash, schema or golden moved.
 | `crates/ludion-engine/tests/root_motion.rs` | point sums, mixes, params changes, partial weight, fades both ways, no clock, hold, threads |
 | `crates/ludion-cli/src/check_scene.rs`, `tests/check_scene_voxel_animation.rs`, `tests/fixtures/assembly_root/` | the `root` rows and the `--json` `root` object |
 | `docs/voxel-animation.md` §Root motion, `docs/animation-layers.md`, embedded mirrors | the user-facing contract |
+| `crates/ludion-engine/src/model_sheet.rs`, `crates/ludion-cli/src/main.rs`, `render.rs`, `tests/render_model.rs` | `render --root-motion`: `Subject::travel`, the figure's yaw, the report, the output name |
+| `examples/gallery/voxels/humanoid.assembly.yaml`, `anims/humanoid-lunge.anim.yaml`, `tests/gallery_assembly_layers.rs` | the one-shot `lunge` |
+| `crates/ludion-testkit/src/golden.rs`, `tests/gallery.rs`, `examples/gallery/goldens/windows/humanoid-root-motion-strip.png` | `GoldenTest.root_motion` and the travel-strip golden |
 
-No hash, schema or golden moved.
+No hash or schema moved. One new golden; its macOS twin is owed to the M4.
 
 ## Trigger
 
@@ -522,6 +525,13 @@ share one driver shape.
 63. **`check-scene` root rows.** For an assembly with a `$root` clip: per such clip, its start-to-end travel in
     the frame faced at the start, yaw, duration and loop flag; per blend with a rooted point, how many and which
     points carry one. `--json` puts them under `root`, a key present only then.
+64. **`render --root-motion`.** With `--clip` on a voxel assembly whose clip carries `$root`, each phase's figure
+    origin stands at the root travel from the clip's start to the phase time (`window_delta` over `(0, t]`, the
+    sim's arithmetic) and turns by the root yaw; `--ik` points and a `--look` direction turn with it. The union of
+    the figures is normalized as a lineup is, and the report prints `root [x, z] yaw`. A strip with no `--views`
+    is seen from `right`, broadside to the `-Z` travel (in `game` the figures hide one another and their captions
+    overprint); a named view wins. `L1117` without `--clip`, with `--crossfade`, `--blend` or a `--look` range, on
+    a character or prefab, and for a clip without `$root`.
 
 ## Waves
 
@@ -556,7 +566,8 @@ share one driver shape.
   files are owed. The `ProfileReport` counters (decision 11) shipped in R14 as the `assembly` section; the bench
   fixture's counts are asserted exactly (its `look` target has no weight, so one IK goal per figure is solved).
 - **W6a (shipped 2026-11-21).** The `$root` track and `root_motion_delta` on assemblies (decisions 12 and 55-60).
-- **W6b-1 (shipped).** Blend-space root motion on assemblies and the `check-scene` root row (decisions 61–63).
+- **W6b-1 (shipped).** Blend-space root motion on assemblies, the `check-scene` root row and
+  `render --root-motion` (decisions 61–64; the macOS twin of its golden is owed to the M4).
 - **W6b-2.** Root motion on skinned-body assemblies, and the glTF `ludion_root_motion` import flag (decision 12).
   Prefabs stay with A3.
 

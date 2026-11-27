@@ -202,6 +202,8 @@ pub struct Request<'a> {
     pub look: Option<&'a str>,
     /// `--ik` (model mode), repeatable: each `<name>=<x>,<y>,<z>`, parsed in `run_model`.
     pub ik: &'a [String],
+    /// `--root-motion` (model mode, with `--clip`): stand each phase at the clip's root travel.
+    pub root_motion: bool,
     /// `--hold` (model mode, with `--clip` or `--crossfade`): snap each phase to a multiple of N ticks.
     pub hold: Option<u32>,
     /// `--part` (model mode, a sculpt): frame the sheet on this named part.
@@ -1130,6 +1132,7 @@ fn run_model(request: &Request, model: &Path) -> ExitCode {
         layers: &layers,
         look,
         ik: &ik,
+        root_motion: request.root_motion,
         hold: request.hold,
         part: request.part,
         isolate: request.isolate,
@@ -1235,6 +1238,11 @@ fn print_clip_report(clip: &ludion_engine::ClipOutcome) {
         if let Some([yaw, pitch]) = phase.look {
             print!(", look [{yaw}, {pitch}]");
         }
+        if let Some(root) = phase.root {
+            // Three decimals, and adding zero turns a negative zero positive.
+            let [x, z, yaw] = root.map(|v| (v * 1e3).round() / 1e3 + 0.0);
+            print!(", root [{x}, {z}] yaw {yaw}°");
+        }
         if let Some(components) = phase.components {
             print!(
                 ", {components} component{}",
@@ -1285,7 +1293,8 @@ fn join_owners(owners: &[String]) -> String {
 /// different images: `<name>-<clip>-strip.png` for a strip, `<name>-<clip>-t<seconds>.png` for one
 /// instant (`figure.assembly.yaml --clip wave --time 0.4` -> `figure-wave-t0.4.png`), and a
 /// crossfade `<name>-<from>-<to>-crossfade.png`; a `--hold` above 1 adds `-hold<N>` before the
-/// `.png` of all three (`figure-wave-strip-hold5.png`). The seconds
+/// `.png` of all three (`figure-wave-strip-hold5.png`), and `--root-motion` adds `-root-motion` after
+/// the clip (`humanoid-lunge-root-motion-strip.png`). The seconds
 /// are the *requested* ones — the file name is chosen before the render quantizes them, and a name
 /// that silently disagreed with the flag that produced it would be worse than one that rounds. A
 /// part sheet likewise names its part: `idol.sculpt.yaml --part head` -> `idol-head.sheet.png`, and
@@ -1320,6 +1329,12 @@ fn default_sheet_out(model: &Path, request: &Request) -> PathBuf {
         Some(hold) if hold > 1 => format!("-hold{hold}"),
         _ => String::new(),
     };
+    // The travel strip is a different picture from the clip's in-place one.
+    let travel = if request.root_motion {
+        "-root-motion"
+    } else {
+        ""
+    };
     let hold = format!(
         "{hold}{}{}",
         if request.layers.is_empty() {
@@ -1350,9 +1365,9 @@ fn default_sheet_out(model: &Path, request: &Request) -> PathBuf {
         return PathBuf::from(format!("{name}-{}-blend{hold}.png", spec.name));
     }
     match (request.clip, request.strip, request.part) {
-        (Some(clip), Some(_), _) => PathBuf::from(format!("{name}-{clip}-strip{hold}.png")),
+        (Some(clip), Some(_), _) => PathBuf::from(format!("{name}-{clip}{travel}-strip{hold}.png")),
         (Some(clip), None, _) => PathBuf::from(format!(
-            "{name}-{clip}-t{}{hold}.png",
+            "{name}-{clip}{travel}-t{}{hold}.png",
             request.time.unwrap_or(0.0).max(0.0)
         )),
         (None, _, Some(part)) if request.isolate => {

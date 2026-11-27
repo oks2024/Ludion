@@ -2456,6 +2456,91 @@ fn needs_gpu_a_look_sweep_reports_each_phases_look() {
     assert!(!stdout.contains("ik:"), "no --ik, no echo: {stdout}");
 }
 
+// --- Assembly `--root-motion` -----------------------------------------------------------------------
+
+/// A clip without `$root`, or a flag that poses otherwise, is a readable `L1117` that writes no
+/// file. No GPU.
+#[test]
+fn root_motion_misuse_is_readable() {
+    let model = gallery_humanoid();
+    let model = model.to_str().unwrap();
+    let dir = target_tmpdir().join("root_motion_misuse");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let cases: [(&[&str], &str); 2] = [
+        (&["--clip", "walk"], "carries no `$root` track"),
+        (
+            &["--clip", "lunge", "--look", "0..9,0"],
+            "does not take a `--look` range",
+        ),
+    ];
+    for (extra, expected) in cases {
+        let mut args = vec!["render", "--model", model, "--root-motion"];
+        args.extend(extra);
+        let output = run_ludion_in(&dir, &args);
+        assert!(!output.status.success(), "{extra:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("error[L1117]"), "{extra:?}: {stderr}");
+        assert!(stderr.contains(expected), "{extra:?}: {stderr}");
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("dir reads").count(),
+            0,
+            "an error must not produce an output file"
+        );
+    }
+}
+
+fn gallery_humanoid() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/gallery/voxels/humanoid.assembly.yaml")
+}
+
+/// `--clip lunge --strip 3 --root-motion` writes the travel strip under its own name and reports
+/// where each phase stands.
+#[test]
+fn needs_gpu_a_root_motion_strip_reports_each_phases_travel() {
+    let dir = target_tmpdir().join("root_motion_strip");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("work dir creates");
+    let model = gallery_humanoid();
+    let output = run_ludion_in(
+        &dir,
+        &[
+            "render",
+            "--model",
+            model.to_str().unwrap(),
+            "--clip",
+            "lunge",
+            "--strip",
+            "3",
+            "--root-motion",
+            "--width",
+            "480",
+            "--height",
+            "270",
+        ],
+    );
+    if !output.status.success() {
+        if is_no_adapter(&output) {
+            eprintln!("SKIPPED a_root_motion_strip_reports_each_phases_travel: no GPU adapter");
+            return;
+        }
+        panic!(
+            "render --root-motion failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(dir.join("humanoid-lunge-root-motion-strip.png").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "root [0, 0] yaw 0°",
+        "root [0, -28] yaw 0°",
+        "root [0, -56] yaw 45°",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected:?}: {stdout}");
+    }
+}
+
 /// `--ik` echoes its target once and reports the gap analysis of the solved pose.
 #[test]
 fn needs_gpu_an_ik_target_is_echoed_and_analysed() {

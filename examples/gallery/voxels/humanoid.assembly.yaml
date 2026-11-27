@@ -138,6 +138,7 @@ clips:
   carry: anims/humanoid-carry.anim.yaml
   idle: anims/humanoid-idle.anim.yaml
   lean: anims/humanoid-lean.anim.yaml
+  lunge: anims/humanoid-lunge.anim.yaml
   run: anims/humanoid-run.anim.yaml
   walk: anims/humanoid-walk.anim.yaml
 masks:

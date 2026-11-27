@@ -460,7 +460,8 @@ enum Command {
         /// --strip 6`.
         #[arg(long, value_name = "DOC", conflicts_with_all = [
             "scene", "model", "sprite", "atlas", "font", "rig", "set", "sweep", "clip", "crossfade",
-            "blend", "layer", "look", "ik", "hold", "part", "isolate", "channel", "true_size",
+            "blend", "layer", "look", "ik", "root_motion", "hold", "part", "isolate", "channel",
+            "true_size",
             "onion", "frames", "dump_timings", "dump_voxels", "dump_gi", "dump_probes", "steps",
             "frame",
         ])]
@@ -819,6 +820,14 @@ enum Command {
         /// <model>.assembly.yaml` lists the chains. Assemblies only.
         #[arg(long, value_name = "NAME=X,Y,Z", conflicts_with_all = ["scene", "atlas", "sprite"])]
         ik: Vec<String>,
+        /// Under `--model` with `--clip`, stand each phase where the clip's `$root` track puts it,
+        /// turned by its root yaw, so a strip reads as the path travelled: `--clip lunge --strip 6
+        /// --root-motion`. Each phase prints `root [x, z]` (voxels in the frame at the clip's
+        /// start) and `yaw`. A voxel assembly whose clip carries `$root` only (`check-scene` lists
+        /// the `root` rows); not with `--crossfade`, `--blend` or a `--look` range. A strip's view
+        /// defaults to `right`, broadside to the `-Z` travel.
+        #[arg(long, requires = "clip", conflicts_with_all = ["scene", "atlas", "sprite", "font"])]
+        root_motion: bool,
         /// Under `--model`, show each `--clip`/`--crossfade` phase at the pose a game shows with
         /// `Animation.hold: N`: the phase snaps down to the last multiple of N ticks, so
         /// neighbouring phases can repeat a pose. 1 (the default) is every tick; 0 is `L1317`.
@@ -2457,6 +2466,7 @@ fn main() -> std::process::ExitCode {
             layer,
             look,
             ik,
+            root_motion,
             hold,
             part,
             isolate,
@@ -2598,6 +2608,7 @@ fn main() -> std::process::ExitCode {
                 layers: &layer,
                 look: look.as_deref(),
                 ik: &ik,
+                root_motion,
                 hold,
                 part: part.as_deref(),
                 isolate,

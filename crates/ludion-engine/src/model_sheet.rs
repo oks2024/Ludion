@@ -208,6 +208,7 @@ use ludion_sculpt::{SculptMesh, SculptSources};
 use ludion_sim::{SimConfig, SimDriver};
 use serde_json::Value;
 
+use crate::animation_events::{RootClip, root_clip};
 use crate::assembly_ik::{IkAim, IkGoal, apply_assembly_ik};
 use crate::assembly_mesh::{AssemblyData, AssemblyIkKind};
 use crate::builtin_registry;
@@ -218,6 +219,7 @@ use crate::extract::{
     part_placements, part_placements_sides,
 };
 use crate::prefab_clips::PrefabClipData;
+use crate::root_motion::{rot_y, window_delta};
 use crate::sweep::MAX_SWEEP_CELLS;
 use crate::{
     Anchor, Animation, Camera, Environment, Mesh, MeshSource, PointLight, PostProcess, Projection,
@@ -404,7 +406,8 @@ pub struct ModelSheetRequest<'a> {
     /// ground plane under one rig, at honest relative sizes.
     pub models: &'a [&'a Path],
     /// The turntable views to include; an **empty** slice means [`ModelView::DEFAULT`], or
-    /// [`ModelView::Game`] alone for a lineup, which renders exactly one.
+    /// [`ModelView::Game`] alone for a lineup, which renders exactly one. A
+    /// [`root_motion`](Self::root_motion) strip defaults to [`ModelView::Right`].
     pub views: &'a [ModelView],
     /// Sheet width in pixels. Under [`true_size`](Self::true_size) it sets the cell *aspect* only.
     pub width: u32,
@@ -456,6 +459,11 @@ pub struct ModelSheetRequest<'a> {
     /// otherwise), every one at the same [`time`](Self::time). Assembly documents only, and not with a
     /// `--blend` range.
     pub look: Option<LookSpec<'a>>,
+    /// Stand each phase where the clip's reserved `$root` track puts it: the figure's origin at the
+    /// root travel from the clip's start to the phase time, turned by the root yaw, so a strip reads
+    /// as the path. Needs [`clip`](Self::clip) on a voxel assembly whose clip carries `$root`; not
+    /// with a [`look`](Self::look) range.
+    pub root_motion: bool,
     /// Reach `ik:` chains to points of the assembly grid over the same base pose, solved by the one
     /// solver the game extracts with. Assembly documents only.
     pub ik: &'a [IkSpec<'a>],
@@ -492,6 +500,7 @@ impl<'a> ModelSheetRequest<'a> {
             blend: None,
             layers: &[],
             look: None,
+            root_motion: false,
             ik: &[],
             hold: None,
             part: None,
@@ -926,6 +935,9 @@ pub struct PhaseReport {
     /// The `[yaw, pitch]` in degrees this phase aimed its look-at at, before the look-at's limits
     /// clamp it; `None` without `--look`.
     pub look: Option<[f32; 2]>,
+    /// The root travel this phase stands at under `--root-motion`: `[x, z]` voxels in the frame at
+    /// the clip's start and the yaw in degrees; `None` without it.
+    pub root: Option<[f64; 3]>,
     /// The blend's shared phase in unwrapped cycles (`elapsed × rate(params)`); `None` outside a
     /// blend sweep.
     pub phase: Option<f64>,
@@ -1072,13 +1084,7 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
         || sweeps_blend(request)
         || sweeps_look(request);
     let row = lineup || fanned;
-    // A row spends its one cell on subjects rather than angles, so it takes one view — and defaults
-    // to the gameplay one, the angle the comparison is actually made at.
-    let views = if row && request.views.is_empty() {
-        vec![ModelView::Game]
-    } else {
-        canonical_views(request.views)
-    };
+    let views = sheet_views(request, row);
     if lineup {
         check_lineup_shape(request, &views)?;
     }
@@ -1123,7 +1129,14 @@ pub fn render_model_sheet(request: &ModelSheetRequest) -> Result<SheetOutcome, V
     } else {
         loaded.iter().map(|model| &model.bounds).collect()
     };
+    let travels: Vec<([f32; 2], f32)> = posed
+        .iter()
+        .flat_map(|posed| &posed.reports)
+        .filter_map(|report| report.root)
+        .map(|[x, z, yaw]| ([x as f32, z as f32], yaw as f32))
+        .collect();
     let subject = match &focus {
+        _ if !travels.is_empty() => Subject::travel(bounds[0], &travels),
         _ if row => Subject::lineup(&bounds, row_direction(views[0])),
         Some(focus) => Subject::part(bounds[0], focus.bounds),
         None => Subject::single(bounds[0]),
@@ -1382,6 +1395,17 @@ fn check_lineup_shape(
     Ok(())
 }
 
+/// The views a sheet renders. A row spends its one cell on subjects rather than angles, so it takes
+/// one view: by default the gameplay one, the angle a comparison is made at, and for a root-motion
+/// strip `right`, broadside to the `-Z` travel so the phases read left to right.
+fn sheet_views(request: &ModelSheetRequest, row: bool) -> Vec<ModelView> {
+    match (row && request.views.is_empty(), request.root_motion) {
+        (true, true) => vec![ModelView::Right],
+        (true, false) => vec![ModelView::Game],
+        (false, _) => canonical_views(request.views),
+    }
+}
+
 /// `L1117` for a clip request the harness cannot serve, in the wording style the assembly-override
 /// deferral uses: what was asked, why it does not apply, and the spelling that does.
 fn refuse_clip(message: String, help: &str) -> Vec<Diagnostic> {
@@ -1392,6 +1416,9 @@ fn refuse_clip(message: String, help: &str) -> Vec<Diagnostic> {
 /// `clip` and mean nothing without it, a clip poses one model rather than a row of them, and a strip
 /// of one phase is a posed sheet spelled the long way.
 fn check_clip_flags(request: &ModelSheetRequest) -> Result<(), Vec<Diagnostic>> {
+    if request.root_motion {
+        check_root_motion_flags(request)?;
+    }
     if request.clip.is_some() && request.crossfade.is_some() {
         return Err(refuse_clip(
             "`--clip` and `--crossfade` both pose the model: a crossfade already names the clips \
@@ -1523,6 +1550,55 @@ fn check_clip_flags(request: &ModelSheetRequest) -> Result<(), Vec<Diagnostic>> 
         ));
     }
     Ok(())
+}
+
+/// What `--root-motion` may be combined with: it walks one clip's `$root` track, and nothing else
+/// poses or sweeps the strip.
+fn check_root_motion_flags(request: &ModelSheetRequest) -> Result<(), Vec<Diagnostic>> {
+    let conflict = if request.crossfade.is_some() {
+        "`--crossfade`"
+    } else if request.blend.is_some() {
+        "`--blend`"
+    } else if sweeps_look(request) {
+        "a `--look` range"
+    } else if request.clip.is_none() {
+        return Err(refuse_clip(
+            "`--root-motion` needs `--clip`: it stands each phase where that clip's `$root` track \
+             puts it"
+                .to_string(),
+            "name the clip too, e.g. `--clip lunge --strip 6 --root-motion`; `check-scene \
+             <model>.assembly.yaml` lists the `root` rows",
+        ));
+    } else {
+        return Ok(());
+    };
+    Err(refuse_clip(
+        format!("`--root-motion` walks one clip's travel, so it does not take {conflict}"),
+        "use `--clip <name> --root-motion`, with plain `--look` angles if the figure should aim",
+    ))
+}
+
+/// The `$root` track `--root-motion` walks for the clip bound as `name`, or `L1117` for a model or
+/// clip that has none.
+fn travel_track(
+    source: &ClipSource<'_>,
+    noun: &str,
+    name: &str,
+) -> Result<RootClip, Vec<Diagnostic>> {
+    let ClipSource::Assembly(posing) = source else {
+        return Err(refuse_clip(
+            format!("`--root-motion` reads a voxel assembly's `$root` tracks, not a {noun}'s"),
+            "point `--model` at the voxel `.assembly.yaml` whose clip carries `$root`, or drop the \
+             flag",
+        ));
+    };
+    posing.data.clip(name).and_then(root_clip).ok_or_else(|| {
+        refuse_clip(
+            format!("clip `{name}` carries no `$root` track, so it has no root motion to show"),
+            "`check-scene <model>.assembly.yaml` lists a `root` row for each clip that carries \
+             one; name one of those, or drop `--root-motion`",
+        )
+    })
 }
 
 /// `L4008` for a part request that cannot be served, in the override family's wording: what was
@@ -2660,6 +2736,7 @@ impl<'a> ClipSource<'a> {
                 weight: None,
                 params: None,
                 look: None,
+                root: None,
                 phase: None,
             }),
         }
@@ -2776,12 +2853,15 @@ impl IkPlan {
 
     /// The `IkTargets` a sheet entity placed by `placement` carries so extract solves the same
     /// goals: chain points move from the assembly frame to the world through the entity's
-    /// translation and uniform scale, a look is the direction itself.
+    /// translation, turn and uniform scale, and a look's direction turns with the entity.
     fn targets(&self, look: Option<[f32; 2]>, placement: &Placement) -> IkTargets {
         let mut targets = IkTargets::default();
         for (_, name, point) in &self.chains {
+            let turn = f64::from(placement.yaw_degrees.to_radians());
+            let [x, z] = rot_y(turn, [f64::from(point[0]), f64::from(point[2])]);
+            let turned = [x as f32, point[1], z as f32];
             let world = std::array::from_fn(|axis| {
-                placement.translation[axis] + placement.scale * point[axis]
+                placement.translation[axis] + placement.scale * turned[axis]
             });
             targets.targets.insert(
                 name.clone(),
@@ -2796,7 +2876,10 @@ impl IkPlan {
             targets.targets.insert(
                 name.clone(),
                 IkTarget {
-                    direction: Some(Look { yaw_deg, pitch_deg }),
+                    direction: Some(Look {
+                        yaw_deg: yaw_deg + placement.yaw_degrees,
+                        pitch_deg,
+                    }),
                     weight: 1.0,
                     ..IkTarget::default()
                 },
@@ -2963,6 +3046,10 @@ fn resolve_clip(
     let source = ClipSource::load(model, loaded)?;
     check_layers(&source, noun, request.layers)?;
     let ik = resolve_ik(&source, noun, request)?;
+    let travel = request
+        .root_motion
+        .then(|| travel_track(&source, noun, name))
+        .transpose()?;
     let (clip, factor) = source.bound(name);
 
     let rate = TickRate::DEFAULT;
@@ -2992,6 +3079,10 @@ fn resolve_clip(
         let look = look_at_phase(request, index as u32, ticks.len() as u32);
         let mut report = source.report(pose, None, &layers, &ik.goals(look), time, tick)?;
         report.look = look;
+        report.root = travel.as_ref().map(|track| {
+            let ([x, z], yaw) = window_delta(track, 0.0, time);
+            [x, z, yaw.to_degrees()]
+        });
         reports.push(report);
         looks.push(look);
     }
@@ -3434,6 +3525,7 @@ fn phase_report(
             weight: None,
             params: None,
             look: None,
+            root: None,
             phase: None,
         });
     }
@@ -3556,6 +3648,7 @@ fn phase_report(
         weight: None,
         params: None,
         look: None,
+        root: None,
         phase: None,
     })
 }
@@ -4246,6 +4339,8 @@ fn bounding_radius(min: [f32; 3], max: [f32; 3]) -> f32 {
 pub(crate) struct Placement {
     pub(crate) translation: [f32; 3],
     pub(crate) scale: f32,
+    /// The model's turn about its own origin, in degrees about +Y.
+    pub(crate) yaw_degrees: f32,
     /// The model's footprint center, for projecting its caption position.
     pub(crate) base: Vec3,
 }
@@ -4288,6 +4383,7 @@ impl Subject {
             placements: vec![Placement {
                 translation: rig.translation,
                 scale: rig.scale,
+                yaw_degrees: 0.0,
                 base: Vec3::ZERO,
             }],
             target: rig.target,
@@ -4318,6 +4414,7 @@ impl Subject {
             placements: vec![Placement {
                 translation,
                 scale: k,
+                yaw_degrees: 0.0,
                 base: Vec3::ZERO,
             }],
             target: Vec3::new(0.0, k * ((min[1] + max[1]) * 0.5 - floor), 0.0),
@@ -4409,8 +4506,64 @@ impl Subject {
                         base.z - box_center(2),
                     ],
                     scale,
+                    yaw_degrees: 0.0,
                     base,
                 }
+            })
+            .collect();
+
+        Subject {
+            placements,
+            target: Vec3::new(0.0, k * height * 0.5, 0.0),
+            world_height: height,
+            normalized_height: height * k,
+            enclosure: None,
+        }
+    }
+
+    /// One model stood up once per phase of its root motion: each figure's origin at that phase's
+    /// `[x, z]` voxel travel, turned by its yaw in degrees, the union normalized as a lineup's is.
+    fn travel(bounds: &ModelBounds, phases: &[([f32; 2], f32)]) -> Subject {
+        let s = bounds.scale;
+        let half = |i: usize| 0.5 * (bounds.max[i] - bounds.min[i]) * s;
+        let middle = |i: usize| f64::from(0.5 * (bounds.min[i] + bounds.max[i]) * s);
+        // A turned box stays inside the square of its larger horizontal half-extent about its
+        // turned center, near enough for framing.
+        let reach = half(0).max(half(2));
+        let centers: Vec<[f32; 2]> = phases
+            .iter()
+            .map(|&([x, z], yaw)| {
+                let turned = rot_y(f64::from(yaw.to_radians()), [middle(0), middle(2)]);
+                [turned[0] as f32 + x * s, turned[1] as f32 + z * s]
+            })
+            .collect();
+        let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+        for center in &centers {
+            for axis in 0..2 {
+                min[axis] = min[axis].min(center[axis] - reach);
+                max[axis] = max[axis].max(center[axis] + reach);
+            }
+        }
+        let union = [0, 1].map(|axis| 0.5 * (min[axis] + max[axis]));
+        let (size_x, size_z) = (max[0] - min[0], max[1] - min[1]);
+        let height = 2.0 * half(1);
+        let radius =
+            (0.5 * math::sqrt(size_x * size_x + height * height + size_z * size_z)).max(MIN_RADIUS);
+        let k = 1.0 / radius;
+        let scale = s * k;
+
+        let placements = phases
+            .iter()
+            .zip(&centers)
+            .map(|(&([x, z], yaw_degrees), center)| Placement {
+                translation: [
+                    (x * s - union[0]) * k,
+                    -bounds.min[1] * scale,
+                    (z * s - union[1]) * k,
+                ],
+                scale,
+                yaw_degrees,
+                base: Vec3::new((center[0] - union[0]) * k, 0.0, (center[1] - union[1]) * k),
             })
             .collect();
 
@@ -4657,8 +4810,8 @@ fn synthesize_scene(
                 "Transform",
                 &Transform {
                     translation: placement.translation,
+                    rotation: [0.0, placement.yaw_degrees, 0.0],
                     scale: [scale; 3],
-                    ..Transform::default()
                 },
             ),
             typed("Mesh", &mesh),
@@ -5261,6 +5414,7 @@ mod tests {
         let placement = Placement {
             translation: [0.5, 0.0, -1.0],
             scale: 0.25,
+            yaw_degrees: 0.0,
             base: Vec3::ZERO,
         };
         let targets = posed.ik.targets(None, &placement);
@@ -5363,6 +5517,242 @@ mod tests {
         assert!(wrong.message.contains("names a chain"), "{}", wrong.message);
         let unknown = refused(Some("gaze=0,0"), &[]);
         assert!(unknown.message.contains("names no `ik:` entry"));
+    }
+
+    /// Each figure's origin stands at its travel, in the units the union is normalized by.
+    #[test]
+    fn a_travel_subject_stands_each_origin_at_its_root_travel() {
+        let bounds = ModelBounds {
+            scale: 0.5,
+            ..baseline_bounds()
+        };
+        let phases = [([0.0, 0.0], 0.0), ([0.0, -12.0], 0.0), ([8.0, -24.0], 45.0)];
+        let subject = Subject::travel(&bounds, &phases);
+        let k = subject.placements[0].scale / bounds.scale;
+        let origin = subject.placements[0].translation;
+        for (placement, ([x, z], yaw)) in subject.placements.iter().zip(phases) {
+            assert_eq!(placement.yaw_degrees, yaw);
+            assert_eq!(placement.scale, subject.placements[0].scale);
+            let moved = [
+                placement.translation[0] - origin[0],
+                placement.translation[2] - origin[2],
+            ];
+            let expected = [x * bounds.scale * k, z * bounds.scale * k];
+            for axis in 0..2 {
+                assert!(
+                    (moved[axis] - expected[axis]).abs() < 1e-6,
+                    "{moved:?} vs {expected:?}"
+                );
+            }
+        }
+        // The union is centered: the straight pair straddles the target symmetrically.
+        let straight = Subject::travel(&bounds, &phases[..2]);
+        let [first, last] = [0, 1].map(|i| straight.placements[i].base);
+        assert!((first + last).length() < 1e-6, "{first} {last}");
+        assert!(first.z > 0.0 && last.z < 0.0);
+    }
+
+    /// A figure that has not turned is written as every sheet's model is; a turned one carries
+    /// its yaw, and its IK targets turn with it.
+    #[test]
+    fn only_a_turned_figure_gets_a_rotation() {
+        let bounds = ModelBounds {
+            kind: ModelKind::Assembly,
+            ..baseline_bounds()
+        };
+        let names = [bounds.file_name.clone()];
+        let scene_of = |subject: &Subject| {
+            synthesize_scene(
+                &[&bounds],
+                &names,
+                subject,
+                None,
+                ModelView::Front,
+                "front",
+                &[],
+                &[None],
+                200,
+                200,
+                None,
+            )
+        };
+        let rotation = |yaml: &str| {
+            let scene = ludion_scene::parse(yaml).expect("the sheet parses");
+            let (_, transform) = scene.entities[0]
+                .components
+                .iter()
+                .find(|(name, _)| name == "Transform")
+                .expect("the model has a Transform");
+            transform.get("rotation").cloned()
+        };
+        let straight = Subject::travel(&bounds, &[([0.0, 0.0], 0.0)]);
+        assert_eq!(
+            rotation(&scene_of(&straight)),
+            rotation(&scene_of(&Subject::single(&bounds)))
+        );
+        let turned = Subject::travel(&bounds, &[([0.0, 0.0], 90.0)]);
+        assert_eq!(
+            rotation(&scene_of(&turned)),
+            Some(serde_json::json!([0.0, 90.0, 0.0]))
+        );
+
+        let plan = IkPlan {
+            chains: vec![(1, "hand_r".to_string(), [0.0, 2.0, -1.0])],
+            look: Some((0, "look".to_string())),
+        };
+        let placement = &turned.placements[0];
+        let targets = plan.targets(Some([10.0, 0.0]), placement);
+        // A quarter turn carries the grid's -Z to -X.
+        let point = targets.targets["hand_r"].point.expect("a point");
+        let expected = placement.translation[0] - placement.scale;
+        assert!((point[0] - expected).abs() < 1e-6, "{point:?}");
+        assert!((point[2] - placement.translation[2]).abs() < 1e-6);
+        let aim = targets.targets["look"].direction.expect("a direction");
+        assert_eq!(aim.yaw_deg, 100.0);
+    }
+
+    /// Every phase of a `--root-motion` strip reports the travel the sim sums by that instant.
+    #[test]
+    fn a_root_motion_strip_reports_each_phases_travel() {
+        let path = humanoid_path();
+        let models = [path.as_path()];
+        let request = ModelSheetRequest {
+            clip: Some("lunge"),
+            strip: Some(3),
+            root_motion: true,
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        let loaded = load_model(&path).unwrap_or_else(|d| panic!("{d:#?}"));
+        let posed = resolve_clip(&request, &path, &loaded, "lunge").expect("the strip resolves");
+        let roots: Vec<[f64; 3]> = posed
+            .reports
+            .iter()
+            .map(|report| report.root.expect("every phase stands somewhere"))
+            .collect();
+        assert_eq!(roots[0], [0.0; 3]);
+        assert!((roots[1][1] - -28.0).abs() < 1e-9, "{roots:?}");
+        assert!((roots[2][1] - -56.0).abs() < 1e-9, "{roots:?}");
+        assert!((roots[2][2] - 45.0).abs() < 1e-9, "{roots:?}");
+        let plain = ModelSheetRequest {
+            root_motion: false,
+            ..request
+        };
+        let posed = resolve_clip(&plain, &path, &loaded, "lunge").expect("resolves");
+        assert!(posed.reports.iter().all(|report| report.root.is_none()));
+    }
+
+    /// A root-motion strip is seen broadside to its travel unless a view is named; every other
+    /// sheet keeps its default.
+    #[test]
+    fn a_root_motion_strip_defaults_to_the_right_view() {
+        let path = humanoid_path();
+        let models = [path.as_path()];
+        let walked = ModelSheetRequest {
+            clip: Some("lunge"),
+            strip: Some(6),
+            root_motion: true,
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        assert_eq!(sheet_views(&walked, true), [ModelView::Right]);
+        let named = ModelSheetRequest {
+            views: &[ModelView::Game],
+            ..walked
+        };
+        assert_eq!(sheet_views(&named, true), [ModelView::Game]);
+        let in_place = ModelSheetRequest {
+            root_motion: false,
+            ..walked
+        };
+        assert_eq!(sheet_views(&in_place, true), [ModelView::Game]);
+        let instant = ModelSheetRequest {
+            strip: None,
+            ..walked
+        };
+        assert_eq!(sheet_views(&instant, false), canonical_views(&[]));
+    }
+
+    /// `--root-motion` walks one clip: the flags that pose or sweep otherwise are refused before
+    /// anything loads, and a model or clip without `$root` once it has.
+    #[test]
+    fn root_motion_refusals_name_the_spelling_that_works() {
+        let path = humanoid_path();
+        let models = [path.as_path()];
+        let base = ModelSheetRequest {
+            root_motion: true,
+            ..ModelSheetRequest::new(&models, 900, 600)
+        };
+        let clipped = ModelSheetRequest {
+            clip: Some("lunge"),
+            ..base
+        };
+        assert!(check_clip_flags(&clipped).is_ok());
+        let aimed = ModelSheetRequest {
+            look: Some(parse_look("30,0").expect("a look")),
+            ..clipped
+        };
+        assert!(check_clip_flags(&aimed).is_ok());
+        let refused = |request: &ModelSheetRequest, says: &str| {
+            let errors = check_clip_flags(request).expect_err(says);
+            assert_eq!(errors[0].code, code::MODEL_SHEET_INPUT);
+            assert!(errors[0].message.contains(says), "{}", errors[0].message);
+            assert!(errors[0].help.is_some());
+        };
+        refused(&base, "needs `--clip`");
+        refused(
+            &ModelSheetRequest {
+                crossfade: Some(parse_crossfade("idle:lunge:0.2").expect("a fade")),
+                ..base
+            },
+            "does not take `--crossfade`",
+        );
+        refused(
+            &ModelSheetRequest {
+                blend: Some(parse_blend("locomotion:1").expect("a blend")),
+                ..base
+            },
+            "does not take `--blend`",
+        );
+        refused(
+            &ModelSheetRequest {
+                look: Some(parse_look("0..90,0").expect("a sweep")),
+                ..clipped
+            },
+            "does not take a `--look` range",
+        );
+
+        let unrooted = ModelSheetRequest {
+            clip: Some("idle"),
+            ..base
+        };
+        let errors = humanoid_posed(&unrooted).expect_err("idle has no $root");
+        assert!(errors[0].message.contains("carries no `$root` track"));
+        let help = errors[0].help.as_deref().unwrap_or_default();
+        assert!(help.contains("`root` row"), "{help}");
+
+        for (rel, clip, noun) in [
+            (
+                "gallery/characters/mannequin.character.yaml",
+                "idle",
+                "character",
+            ),
+            (
+                "import-node-clips/expected/model.prefab.yaml",
+                "open",
+                "prefab",
+            ),
+        ] {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples")
+                .join(rel);
+            let loaded = load_model(&path).unwrap_or_else(|d| panic!("{d:#?}"));
+            let source = ClipSource::load(&path, &loaded).expect("loads");
+            let errors = travel_track(&source, noun, clip).expect_err(noun);
+            assert!(
+                errors[0].message.contains("a voxel assembly's `$root`"),
+                "{}",
+                errors[0].message
+            );
+        }
     }
 
     /// `--look` and `--ik` aim over a base pose, and not alongside a swept blend.
