@@ -1,6 +1,6 @@
 # Plan: Player settings — a per-machine settings file, requests and a view
 
-> **Wave 1 mechanized; Waves 2–3 not started.**
+> **Waves 1, 2 and 3a mechanized; Wave 3b (language apply) not started.**
 > Driven by Neon Shroud request 0022: a game's options menu needs volumes, window mode, quality and
 > anti-aliasing that persist per machine, load leniently and never refuse a boot. Game-facing doc:
 > `ludion docs settings`. Amends `Plan/audio-ambience.md` decision 6 (a runtime setter now exists).
@@ -55,6 +55,22 @@
 14. **`engine.describe` gains a `settings` section:** `persisted`, `quality_pinned`, `values`.
     The existing `quality` and `anti_aliasing` keys already report the effective values.
 
+15. **The Wave 3 keys.** `input.rumble` 0..=1 (fallback 1.0), `display.brightness` -1..=1 (0.0),
+    `text.subtitles` bool (true), `text.subtitle_scale` 0.75..=2 (1.0), `text.language` a tag. A number
+    clamps, a non-number takes the fallback; a non-bool `subtitles`, or a `language` that is not a
+    non-empty trimmed string, is dropped (each `L4342`). An unset key is not emitted, so a default file is
+    unchanged. The language is stored and round-tripped, and no tag is validated; applying it to the locale
+    is decision 18, owed to `0022-04`.
+16. **Rumble and brightness are host render state:** set from the file at build and from a request at the
+    drain, never from a replay header (decision 11), saved across an in-place playback and restored on
+    return. Brightness is an EV offset added to the exposure compensation, before the tonemap, in both
+    exposure modes (request open question 1: the game's answer). It reaches the engine's own renderer and
+    the windowed presenter's (`PresentSettings::brightness`). At `0.0` the exposure arithmetic is the
+    compensation's alone.
+17. **Subtitles and their scale apply at extract,** read from `SettingsView`: off draws nothing, a scale
+    draws through a copy of `SubtitleView` with `size` multiplied. The authored component is never written
+    (`Plan/dialogue.md` decision 45). The scale touches the glyph size only, not `padding` or `wrap_width`.
+
 `ludion new` already ignores the save directory (`/scenes/save/` in the gitignore template).
 
 ## Waves
@@ -67,7 +83,9 @@
   the window host consumer; settings-at-start in the generic `ReplayHeader.save_docs` slot (key
   `settings`, from 0021 W2b) and replay install; `describe` settings section; desktop-window and
   quality docs.
-- **W3:** text settings with 0024, rumble with 0021 W4 (binds `set_rumble_intensity`), brightness with 0019.
+- **W3a (shipped):** rumble (binds `set_rumble_intensity`), brightness, subtitles and subtitle scale;
+  every Wave 3 key stored, the language included.
+- **W3b:** the language applies to the locale.
 - **Live window mode (shipped, R13):** the settings view reports the live window mode, so it
   never disagrees with the window after a chord (decision 13); the chord stays non-persisting.
 
@@ -100,6 +118,15 @@ view only; a run-save resume and a checkpoint restore keep the machine's. A malf
 never an error. No `WorldHash` term (settings are host state). `replay_content_hash` and the snapshot schema move; the
 corpus re-record is owed to the round's final wave.
 
+**W3a:** the `input` and `text` sections and `display.brightness`, five requests and getters
+(decisions 15–17). Tests cover clamp and fallback per numeric field, the dropped flag and tag, unknown
+keys, the round trip with every field and the unchanged default text; a pad command scaled from the file
+and dropped by a zero request; brightness and rumble untouched by a header and restored after playback; a
+GPU frame at brightness `0.0` byte-identical to an engine without settings and brighter at `+1`; extract
+hiding and doubling subtitles; and a `WorldHash` trace equal with no file and with every field set.
+Nothing hashed, blessed or re-recorded. Live smoke (brightness in a window included) is owed to a human,
+with W2's.
+
 ## Owner rulings (2026-11-19)
 
 - Shipped (R13). The chord stays temporary, keeping the Clockout 0023 ruling; the settings view reports the live window mode instead (Waves). The window chord writes `display.window` (reverses the Clockout 0023 ruling; W2 ships it
@@ -113,4 +140,5 @@ corpus re-record is owed to the round's final wave.
 
 ## Explicitly out of scope (triggers recorded)
 
-- Text, rumble, brightness — W3.
+- Applying the language to the locale — W3b.
+- A brightness calibration screen; post-tonemap brightness.

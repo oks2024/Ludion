@@ -1,5 +1,5 @@
 ---
-description: Player settings — volumes, quality, AA, window mode; the request/view resources and the save file
+description: Player settings — volumes, quality, AA, window, rumble, brightness, subtitles; the save file
 ---
 
 # Player settings
@@ -13,8 +13,10 @@ description: Player settings — volumes, quality, AA, window mode; the request/
    at build. Without it the file is never read or written and requests only apply to the session.
 2. A menu system writes `world.resource_mut::<Settings>()`: `request_bus_volume(Bus, f32)`,
    `request_master_volume`, `request_quality(QualityPreset)`, `request_anti_aliasing` (beats `--aa` this session),
-   `request_window_mode(WindowMode)`, then `save()` (several calls in a frame are one write).
-3. It reads `world.resource::<SettingsView>()` (`volume`, `quality`, `anti_aliasing`, `window_mode`, and `live_window_mode` for the window as it is now).
+   `request_window_mode(WindowMode)`, `request_rumble`, `request_brightness`, `request_subtitles`,
+   `request_subtitle_scale`, `request_language(&str)`, then `save()` (several calls in a frame are one write).
+3. It reads `world.resource::<SettingsView>()` (`volume`, `quality`, `anti_aliasing`, `window_mode`, `live_window_mode` for the window as it is now,
+   `rumble`, `brightness`, `subtitles`, `subtitle_scale`, `language`).
 4. `cargo run -p ludion --example settings_menu` shows two boots on one scratch directory.
 
 `ludion::run` and `ludion::launch` turn persistence on; a game built straight from `Engine::builder()`
@@ -47,12 +49,35 @@ audio:
   buses: {music: 0.6}  # sfx, ambient, voice, ui, music; a game's own names are kept
 display:
   window: borderless_fullscreen   # windowed | borderless_fullscreen
+  brightness: 0.25                # -1..=1, in EV
 graphics:
   quality: medium                 # low | medium | high | full
   anti_aliasing: smaa             # off | smaa
+input:
+  rumble: 0.8                     # 0..=1
+text:
+  subtitles: true
+  subtitle_scale: 1.25            # 0.75..=2
+  language: fr                    # a tag
 ```
 
 Unset optional fields are omitted. The writer is canonical (stable order, shortest floats).
+
+## Where each applies
+
+- **Rumble** is host state, `Engine::rumble_intensity` (default 1): it scales each later pad command,
+  and 0 drops them. A command played in the same tick as the request keeps the old value. A host may
+  also call `set_rumble_intensity`.
+- **Brightness** is host render state, `Engine::brightness` (default 0): an EV offset added to the
+  exposure compensation before the tonemap, in manual and metered exposure alike, headless and windowed.
+  At 0 the frame is the one rendered without it.
+- **Subtitles** apply at extract, from the view: `subtitles: false` draws no `SubtitleView`, and
+  `subtitle_scale` multiplies its glyph `size` (not `padding` or `wrap_width`). The authored component
+  is never written, and dialogue itself runs on.
+- **Language** is stored and returned by `SettingsView::language`; it does not change the locale.
+- A replay installs the header's values into the view only: `rumble_intensity` and `brightness` stay
+  this machine's (the subtitle options follow the view). A replayed game's own requests apply, and an
+  in-place playback restores both on return.
 
 ## Rules
 
@@ -60,11 +85,14 @@ Unset optional fields are omitted. The writer is canonical (stable order, shorte
   honored (bad YAML, bad envelope `L1700`, a newer `format`) is renamed `settings.yaml.bak.<hash>` and
   defaults apply with one `L4340`. An unknown key is dropped (`L4341`); an unknown bus name is kept and
   written back (`L4341`). A volume outside `0..=1` is clamped, a non-number becomes `1.0`, and an
-  unknown quality or AA name is ignored (`L4342`). One bad field never resets the rest. Warnings are
-  in `Engine::boot_warnings`.
+  unknown quality or AA name is ignored (`L4342`). Rumble, brightness and subtitle scale clamp the same
+  way, a non-number becoming `1.0`, `0.0` and `1.0`; a `subtitles` that is not a boolean, or a `language`
+  that is not a non-empty trimmed string, is ignored (`L4342`). One bad field never resets the rest.
+  Warnings are in `Engine::boot_warnings`.
 - **Requests apply at the frame boundary.** Volumes go to the `User` mix layer (one `BusGain` per
   changed bus, logged); AA and quality apply at the next render; a window mode goes to the host channel
-  `set_window_mode_sender`, once per change. NaN volumes are ignored; others are clamped.
+  `set_window_mode_sender`, once per change. NaN numbers are ignored; others are clamped.
+  `request_language` trims the tag and ignores an empty one.
 - **`SettingsView` is deterministic** — all but `live_window_mode()`: the file at start plus the sim's own requests, never a host flag.
   It lives on the engine, so a rebuild or a run-save resume does not roll it back. A snapshot carries the
   view when it is not the defaults, so `engine.restore` and a replay seek install the snapshot's view (never
@@ -80,5 +108,8 @@ Unset optional fields are omitted. The writer is canonical (stable order, shorte
 - A `scene.load` keeps the settings; a `ludion dev` restart re-reads the file, so unsaved requests go.
 
 ## Next
+
+Next for `language`: applying it to the locale is not wired, so a game that wants it reads the view and
+sets the locale itself (`ludion docs localization`).
 
 `ludion docs audio-mix`, `ludion docs quality`, `ludion docs anti-aliasing`, `ludion docs player-profiles`.

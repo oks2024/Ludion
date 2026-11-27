@@ -56,6 +56,8 @@ pub struct PresentSettings {
     pub params: QualityParams,
     /// The anti-aliasing mode.
     pub anti_aliasing: AntiAliasing,
+    /// The player's brightness in EV.
+    pub brightness: f32,
     /// Whether the baked GI baseline is held.
     pub gi_hold: bool,
     /// The reflection-probe store directory, if any.
@@ -704,6 +706,7 @@ impl WindowBackend {
         }
         self.renderer.set_quality(settings.quality, settings.params);
         self.renderer.set_anti_aliasing(settings.anti_aliasing);
+        self.renderer.set_brightness(settings.brightness);
         self.renderer.set_gi_hold(settings.gi_hold);
         self.renderer.set_probe_store(settings.probe_store.clone());
         self.renderer.set_frustum_culling(settings.frustum_culling);
@@ -829,6 +832,7 @@ mod tests {
                 quality: Quality::FULL,
                 params: QualityParams::MEDIUM,
                 anti_aliasing: AntiAliasing::Off,
+                brightness: 0.0,
                 gi_hold: false,
                 probe_store: None,
                 frustum_culling: true,

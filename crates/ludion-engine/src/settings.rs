@@ -2,10 +2,12 @@
 //! reads, and the lenient `save/settings.yaml` they persist to (`Plan/settings.md`).
 //!
 //! A game's options menu writes [`Settings`] (bus volumes, window mode, quality preset,
-//! anti-aliasing, `save()`); the engine drains it at the frame boundary onto the
-//! [`Engine`](crate::Engine), where it outlives world rebuilds, and applies it: volumes to the
-//! `User` mix layer, anti-aliasing and quality to the next render, the window mode to a host
-//! channel. Persistence is opt-in ([`EngineBuilder::persist_settings`](crate::EngineBuilder::persist_settings)).
+//! anti-aliasing, rumble, brightness, subtitles and their scale, language, `save()`); the engine
+//! drains it at the frame boundary onto the [`Engine`](crate::Engine), where it outlives world
+//! rebuilds, and applies it: volumes to the `User` mix layer, anti-aliasing, quality and brightness
+//! to the next render, rumble to the pad commands, the window mode to a host channel, the subtitle
+//! options at extract. The language is stored and round-tripped. Persistence is opt-in
+//! ([`EngineBuilder::persist_settings`](crate::EngineBuilder::persist_settings)).
 //!
 //! The file is the shared per-machine save shape: a canonical `format: 1` / `kind: settings`
 //! envelope, loaded leniently. A file that cannot be honored is backed up and replaced by defaults
@@ -98,6 +100,10 @@ pub(crate) struct SettingsDoc {
     pub display: DisplaySettings,
     #[serde(skip_serializing_if = "GraphicsSettings::is_default")]
     pub graphics: GraphicsSettings,
+    #[serde(skip_serializing_if = "InputSettings::is_default")]
+    pub input: InputSettings,
+    #[serde(skip_serializing_if = "TextSettings::is_default")]
+    pub text: TextSettings,
 }
 
 /// `audio:` — the master volume and the other buses' volumes by name.
@@ -119,17 +125,20 @@ impl Default for AudioSettings {
     }
 }
 
-/// `display:` — the window mode.
+/// `display:` — the window mode and brightness.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default)]
 pub(crate) struct DisplaySettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowMode>,
+    /// An EV offset, `-1..=1`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<f32>,
 }
 
 impl DisplaySettings {
     fn is_default(&self) -> bool {
-        self.window.is_none()
+        self.window.is_none() && self.brightness.is_none()
     }
 }
 
@@ -147,6 +156,39 @@ pub(crate) struct GraphicsSettings {
 impl GraphicsSettings {
     fn is_default(&self) -> bool {
         self.quality.is_none() && self.anti_aliasing.is_none()
+    }
+}
+
+/// `input:` — the rumble intensity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(default)]
+pub(crate) struct InputSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rumble: Option<f32>,
+}
+
+impl InputSettings {
+    fn is_default(&self) -> bool {
+        self.rumble.is_none()
+    }
+}
+
+/// `text:` — subtitles and the language.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(default)]
+pub(crate) struct TextSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitles: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle_scale: Option<f32>,
+    /// A language tag, kept as written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+impl TextSettings {
+    fn is_default(&self) -> bool {
+        self.subtitles.is_none() && self.subtitle_scale.is_none() && self.language.is_none()
     }
 }
 
@@ -309,13 +351,9 @@ fn sanitize(
     mut fields: Map<String, Value>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Map<String, Value> {
-    keep_known(
-        &mut fields,
-        "",
-        &["audio", "display", "graphics"],
-        diagnostics,
-    );
-    for section in ["audio", "display", "graphics"] {
+    const SECTIONS: [&str; 5] = ["audio", "display", "graphics", "input", "text"];
+    keep_known(&mut fields, "", &SECTIONS, diagnostics);
+    for section in SECTIONS {
         let pointer = format!("/{section}");
         match fields.remove(section) {
             None => {}
@@ -323,6 +361,8 @@ fn sanitize(
                 let map = match section {
                     "audio" => sanitize_audio(map, diagnostics),
                     "display" => sanitize_display(map, diagnostics),
+                    "input" => sanitize_input(map, diagnostics),
+                    "text" => sanitize_text(map, diagnostics),
                     _ => sanitize_graphics(map, diagnostics),
                 };
                 fields.insert(section.to_string(), Value::Object(map));
@@ -364,17 +404,57 @@ fn keep_known(
     }
 }
 
-/// A volume value: clamped into `0..=1`; anything that is not a finite number is `1.0`.
-fn volume(value: &Value, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -> f32 {
+/// A numeric field's legal range, the value a non-number takes, and its name in the messages.
+struct Range {
+    lo: f64,
+    hi: f64,
+    fallback: f64,
+    what: &'static str,
+}
+
+const VOLUME: Range = Range {
+    lo: 0.0,
+    hi: 1.0,
+    fallback: 1.0,
+    what: "volume",
+};
+const RUMBLE: Range = Range {
+    lo: 0.0,
+    hi: 1.0,
+    fallback: 1.0,
+    what: "rumble intensity",
+};
+const BRIGHTNESS: Range = Range {
+    lo: -1.0,
+    hi: 1.0,
+    fallback: 0.0,
+    what: "brightness",
+};
+const SUBTITLE_SCALE: Range = Range {
+    lo: 0.75,
+    hi: 2.0,
+    fallback: 1.0,
+    what: "subtitle scale",
+};
+
+/// A number clamped into `range`; anything that is not a finite number is its fallback.
+fn ranged(value: &Value, pointer: &str, range: &Range, diagnostics: &mut Vec<Diagnostic>) -> f32 {
+    let Range {
+        lo,
+        hi,
+        fallback,
+        what,
+    } = *range;
+    let help = format!("write a {what} between {lo} and {hi}");
     match value.as_f64() {
         Some(number) if number.is_finite() => {
-            let clamped = number.clamp(0.0, 1.0);
+            let clamped = number.clamp(lo, hi);
             if clamped != number {
                 diagnostics.push(warn(
                     code::SETTINGS_VALUE_CLAMPED,
                     pointer,
-                    format!("volume {number} is outside 0..=1 and was clamped to {clamped}"),
-                    "write a volume between 0 and 1",
+                    format!("{what} {number} is outside {lo}..={hi} and was clamped to {clamped}"),
+                    &help,
                 ));
             }
             clamped as f32
@@ -383,10 +463,27 @@ fn volume(value: &Value, pointer: &str, diagnostics: &mut Vec<Diagnostic>) -> f3
             diagnostics.push(warn(
                 code::SETTINGS_VALUE_CLAMPED,
                 pointer,
-                "the volume is not a finite number and was replaced by 1.0".to_string(),
-                "write a volume between 0 and 1",
+                format!("the {what} is not a finite number and was replaced by {fallback:?}"),
+                &help,
             ));
-            1.0
+            fallback as f32
+        }
+    }
+}
+
+/// Repairs an optional numeric field in place with [`ranged`]; a `null` is unset.
+fn ranged_field(
+    map: &mut Map<String, Value>,
+    key: &str,
+    pointer: &str,
+    range: &Range,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match map.remove(key) {
+        None | Some(Value::Null) => {}
+        Some(value) => {
+            let value = ranged(&value, pointer, range, diagnostics);
+            map.insert(key.to_string(), Value::from(f64::from(value)));
         }
     }
 }
@@ -397,7 +494,7 @@ fn sanitize_audio(
 ) -> Map<String, Value> {
     keep_known(&mut map, "/audio", &["master", "buses"], diagnostics);
     if let Some(master) = map.get("master").cloned() {
-        let value = volume(&master, "/audio/master", diagnostics);
+        let value = ranged(&master, "/audio/master", &VOLUME, diagnostics);
         map.insert("master".to_string(), Value::from(f64::from(value)));
     }
     match map.remove("buses") {
@@ -422,7 +519,7 @@ fn sanitize_audio(
                         "ignore this if the game defines the bus, else correct the name",
                     ));
                 }
-                let level = volume(&value, &pointer, diagnostics);
+                let level = ranged(&value, &pointer, &VOLUME, diagnostics);
                 kept.insert(name, Value::from(f64::from(level)));
             }
             map.insert("buses".to_string(), Value::Object(kept));
@@ -477,7 +574,14 @@ fn sanitize_display(
     mut map: Map<String, Value>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Map<String, Value> {
-    keep_known(&mut map, "/display", &["window"], diagnostics);
+    keep_known(&mut map, "/display", &["window", "brightness"], diagnostics);
+    ranged_field(
+        &mut map,
+        "brightness",
+        "/display/brightness",
+        &BRIGHTNESS,
+        diagnostics,
+    );
     let expected = WindowMode::ALL.map(WindowMode::name).join(", ");
     named(
         &mut map,
@@ -531,12 +635,66 @@ fn sanitize_graphics(
     map
 }
 
+fn sanitize_input(
+    mut map: Map<String, Value>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Map<String, Value> {
+    keep_known(&mut map, "/input", &["rumble"], diagnostics);
+    ranged_field(&mut map, "rumble", "/input/rumble", &RUMBLE, diagnostics);
+    map
+}
+
+fn sanitize_text(
+    mut map: Map<String, Value>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Map<String, Value> {
+    keep_known(
+        &mut map,
+        "/text",
+        &["subtitles", "subtitle_scale", "language"],
+        diagnostics,
+    );
+    match map.remove("subtitles") {
+        None | Some(Value::Null) => {}
+        Some(value @ Value::Bool(_)) => {
+            map.insert("subtitles".to_string(), value);
+        }
+        Some(value) => diagnostics.push(warn(
+            code::SETTINGS_VALUE_CLAMPED,
+            "/text/subtitles",
+            format!("{} is not true or false and is ignored", show(&value)),
+            "write `true` or `false`",
+        )),
+    }
+    ranged_field(
+        &mut map,
+        "subtitle_scale",
+        "/text/subtitle_scale",
+        &SUBTITLE_SCALE,
+        diagnostics,
+    );
+    match map.remove("language") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(tag)) if !tag.is_empty() && tag.trim() == tag => {
+            map.insert("language".to_string(), Value::String(tag));
+        }
+        Some(value) => diagnostics.push(warn(
+            code::SETTINGS_VALUE_CLAMPED,
+            "/text/language",
+            format!("{} is not a language tag and is ignored", show(&value)),
+            "write a tag such as `en` or `pt-BR`",
+        )),
+    }
+    map
+}
+
 /// An ECS resource: the player settings a game system requests, honored at the next frame boundary.
 ///
 /// The engine installs one (empty) into every world it builds. The last request per field in a tick
 /// wins. Volumes go to the `User` mix layer ([`MixLayer::User`](ludion_core::audio::MixLayer));
-/// anti-aliasing and quality apply from the next render (a quality a host pinned with
-/// `--quality` persists but does not apply); a window mode is sent to the window host. Nothing is
+/// anti-aliasing, quality and brightness apply from the next render (a quality a host pinned with
+/// `--quality` persists but does not apply); rumble scales later pad commands; the subtitle options
+/// apply at extract; the language is stored; a window mode is sent to the window host. Nothing is
 /// written to disk until [`save`](Settings::save), and only when the engine was built with
 /// [`persist_settings`](crate::EngineBuilder::persist_settings).
 ///
@@ -574,6 +732,11 @@ pub(crate) struct SettingsRequests {
     pub window: Option<WindowMode>,
     pub quality: Option<QualityPreset>,
     pub anti_aliasing: Option<AntiAliasing>,
+    pub rumble: Option<f32>,
+    pub brightness: Option<f32>,
+    pub subtitles: Option<bool>,
+    pub subtitle_scale: Option<f32>,
+    pub language: Option<String>,
     pub save: bool,
 }
 
@@ -611,6 +774,44 @@ impl Settings {
     /// below `--aa` at the next boot. The last request in a tick wins.
     pub fn request_anti_aliasing(&mut self, mode: AntiAliasing) {
         self.requests.anti_aliasing = Some(mode);
+    }
+
+    /// Requests the rumble intensity, clamped silently into `0..=1` (0 drops every effect); NaN is
+    /// ignored.
+    pub fn request_rumble(&mut self, intensity: f32) {
+        if !intensity.is_nan() {
+            self.requests.rumble = Some(intensity.clamp(0.0, 1.0));
+        }
+    }
+
+    /// Requests a brightness, an EV offset applied before the tonemap from the next render on,
+    /// clamped silently into `-1..=1`; NaN is ignored.
+    pub fn request_brightness(&mut self, ev: f32) {
+        if !ev.is_nan() {
+            self.requests.brightness = Some(ev.clamp(-1.0, 1.0));
+        }
+    }
+
+    /// Requests that subtitles be drawn or hidden.
+    pub fn request_subtitles(&mut self, on: bool) {
+        self.requests.subtitles = Some(on);
+    }
+
+    /// Requests a subtitle text scale, clamped silently into `0.75..=2`; NaN is ignored.
+    pub fn request_subtitle_scale(&mut self, scale: f32) {
+        if !scale.is_nan() {
+            self.requests.subtitle_scale = Some(scale.clamp(0.75, 2.0));
+        }
+    }
+
+    /// Requests a language tag, trimmed; an empty one is ignored. The tag is stored in the settings
+    /// and shown by [`SettingsView::language`]; how it reaches the locale is in
+    /// `ludion docs settings`.
+    pub fn request_language(&mut self, tag: &str) {
+        let tag = tag.trim();
+        if !tag.is_empty() {
+            self.requests.language = Some(tag.to_string());
+        }
     }
 
     /// Asks the engine to write the settings file at the frame boundary. Several calls in a frame
@@ -715,6 +916,31 @@ impl SettingsView {
     /// The anti-aliasing mode the player chose, if any.
     pub fn anti_aliasing(&self) -> Option<AntiAliasing> {
         self.doc.anti_aliasing()
+    }
+
+    /// The rumble intensity, `1.0` when unset.
+    pub fn rumble(&self) -> f32 {
+        self.doc.input.rumble.unwrap_or(1.0)
+    }
+
+    /// The brightness in EV, `0.0` when unset.
+    pub fn brightness(&self) -> f32 {
+        self.doc.display.brightness.unwrap_or(0.0)
+    }
+
+    /// Whether subtitles are drawn, `true` when unset.
+    pub fn subtitles(&self) -> bool {
+        self.doc.text.subtitles.unwrap_or(true)
+    }
+
+    /// The subtitle text scale, `1.0` when unset.
+    pub fn subtitle_scale(&self) -> f32 {
+        self.doc.text.subtitle_scale.unwrap_or(1.0)
+    }
+
+    /// The language tag the player chose, if any.
+    pub fn language(&self) -> Option<&str> {
+        self.doc.text.language.as_deref()
     }
 }
 
@@ -832,7 +1058,21 @@ mod tests {
         doc.display.window = Some(WindowMode::BorderlessFullscreen);
         doc.graphics.quality = Some(QualityPreset::High);
         doc.graphics.anti_aliasing = Some("smaa".to_string());
+        doc.display.brightness = Some(-0.1);
+        doc.input.rumble = Some(0.6);
+        doc.text.subtitles = Some(false);
+        doc.text.subtitle_scale = Some(1.3);
+        doc.text.language = Some("pt-BR".to_string());
         let text = doc.emit();
+        for line in [
+            "  brightness: -0.1\n",
+            "  rumble: 0.6\n",
+            "  subtitles: false\n",
+            "  subtitle_scale: 1.3\n",
+            "  language: ",
+        ] {
+            assert!(text.contains(line), "{line} in {text}");
+        }
         assert!(text.starts_with("format: 1\nkind: settings\n"), "{text}");
         let (back, diagnostics, _) = load_text("round-trip", &text);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -901,6 +1141,75 @@ mod tests {
         assert_eq!(taken.volumes[Bus::Master as usize], Some(0.5));
         assert_eq!(taken.quality, Some(QualityPreset::High));
         assert!(!settings.is_pending());
+
+        settings.request_rumble(f32::NAN);
+        settings.request_brightness(f32::NAN);
+        settings.request_subtitle_scale(f32::NAN);
+        settings.request_language("  ");
+        assert!(!settings.is_pending(), "NaN and blank tags request nothing");
+        settings.request_rumble(4.0);
+        settings.request_brightness(-3.0);
+        settings.request_subtitles(false);
+        settings.request_subtitle_scale(0.1);
+        settings.request_language(" fr ");
+        let taken = settings.take();
+        assert_eq!(taken.rumble, Some(1.0));
+        assert_eq!(taken.brightness, Some(-1.0));
+        assert_eq!(taken.subtitles, Some(false));
+        assert_eq!(taken.subtitle_scale, Some(0.75));
+        assert_eq!(taken.language.as_deref(), Some("fr"));
+        assert!(!settings.is_pending());
+    }
+
+    #[test]
+    fn the_ranged_fields_clamp_and_non_numbers_take_their_fallback() {
+        let repaired = |name: &str, rumble: &str, brightness: &str, scale: &str| {
+            let text = format!(
+                "format: 1\nkind: settings\ndisplay:\n  brightness: {brightness}\ninput:\n  rumble: {rumble}\ntext:\n  subtitle_scale: {scale}\n"
+            );
+            let (doc, diagnostics, _) = load_text(name, &text);
+            assert_eq!(codes(&diagnostics), ["L4342"; 3], "{name}");
+            (
+                doc.input.rumble,
+                doc.display.brightness,
+                doc.text.subtitle_scale,
+            )
+        };
+        assert_eq!(
+            repaired("ranged-high", "3", "4", "9"),
+            (Some(1.0), Some(1.0), Some(2.0))
+        );
+        assert_eq!(
+            repaired("ranged-low", "-1", "-4", "0.1"),
+            (Some(0.0), Some(-1.0), Some(0.75))
+        );
+        assert_eq!(
+            repaired("ranged-words", "loud", "bright", "big"),
+            (Some(1.0), Some(0.0), Some(1.0))
+        );
+    }
+
+    #[test]
+    fn a_bad_subtitles_flag_or_language_is_dropped() {
+        for (name, line) in [
+            ("flag", "  subtitles: sometimes\n"),
+            ("empty", "  language: \"\"\n"),
+            ("padded", "  language: \" fr \"\n"),
+            ("number", "  language: 3\n"),
+        ] {
+            let text = format!("format: 1\nkind: settings\ntext:\n{line}");
+            let (doc, diagnostics, _) = load_text(name, &text);
+            assert_eq!(doc.text, TextSettings::default(), "{name}");
+            assert_eq!(codes(&diagnostics), ["L4342"], "{name}");
+        }
+    }
+
+    #[test]
+    fn unknown_input_and_text_keys_are_dropped() {
+        let text = "format: 1\nkind: settings\ninput:\n  deadzone: 1\ntext:\n  font: serif\n  subtitles: false\n";
+        let (doc, diagnostics, _) = load_text("unknown-groups", text);
+        assert_eq!(doc.text.subtitles, Some(false));
+        assert_eq!(codes(&diagnostics), ["L4341", "L4341"]);
     }
 
     #[test]

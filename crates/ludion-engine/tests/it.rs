@@ -179,6 +179,7 @@ mod sequence_transform;
 mod sequence_zone;
 mod sequences;
 mod settings;
+mod settings_groups;
 mod settle_bench;
 mod shutdown;
 mod skin_bone;

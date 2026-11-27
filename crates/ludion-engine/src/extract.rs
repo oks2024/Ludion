@@ -1043,6 +1043,9 @@ fn extract_inner(
         degraded,
     );
     hud.anchor_views = ui::hud::anchor_views(&hud, &view_table, &ids, &mut poses);
+    let settings = world.resource::<crate::SettingsView>();
+    let subtitles_on = settings.is_none_or(|view| view.subtitles());
+    let subtitle_scale = settings.map_or(1.0, |view| view.subtitle_scale());
     for (index, &id) in ids.iter().enumerate() {
         if let Some(rect) = get::<UiRect>(world, id)
             && rect.visible
@@ -1379,8 +1382,15 @@ fn extract_inner(
         }
         if let Some(view) = get::<SubtitleView>(world, id)
             && view.visible
+            && subtitles_on
             && let Some(subtitles) = world.resource::<Subtitles>()
         {
+            // The player's text scale draws through a copy; the authored view is never written.
+            let scaled = (subtitle_scale != 1.0).then(|| SubtitleView {
+                size: view.size * subtitle_scale,
+                ..view.clone()
+            });
+            let view = scaled.as_ref().unwrap_or(view);
             let face = fonts.face(view.font.as_deref(), locale);
             let drawn = ui::subtitle::subtitle_draw(face, view, subtitles, viewport);
             let draws = resolve_faces(

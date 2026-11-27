@@ -417,6 +417,9 @@ pub struct Engine {
     input_bindings_save_error: Option<Diagnostic>,
     /// The anti-aliasing mode the settings file or a request chose, below the host's `--aa` flag.
     anti_aliasing_settings: Option<AntiAliasing>,
+    /// The brightness in EV the settings file or a request chose. Host render state, never from a
+    /// replay header.
+    brightness_settings: f32,
     /// Whether a host flag named the quality, so a settings request persists but does not apply
     /// ([`pin_quality`](Engine::pin_quality)).
     quality_pinned: bool,
@@ -1010,6 +1013,7 @@ impl Engine {
             input_bindings_reported: false,
             input_bindings_save_error: None,
             anti_aliasing_settings: None,
+            brightness_settings: 0.0,
             quality_pinned: false,
             window_mode_sender: None,
             window_mode_reports: None,
@@ -1346,6 +1350,12 @@ impl Engine {
             self.anti_aliasing_settings
                 .unwrap_or(self.anti_aliasing_default),
         )
+    }
+
+    /// The brightness every render applies, an EV offset before the tonemap: the player's settings
+    /// file or the game's [`Settings`](crate::Settings) request, `0.0` unset.
+    pub fn brightness(&self) -> f32 {
+        self.brightness_settings
     }
 
     /// Sets this host's render quality — which optional effects every render performs (see
@@ -3987,6 +3997,8 @@ impl Engine {
             settings: self.settings.clone(),
             anti_aliasing_settings: self.anti_aliasing_settings,
             anti_aliasing_game: self.anti_aliasing_game,
+            rumble_intensity: self.rumble_intensity,
+            brightness_settings: self.brightness_settings,
             speed: self.driver.speed(),
             render_size: self.render_size,
             return_to: return_to.to_string(),
@@ -4111,6 +4123,8 @@ impl Engine {
             settings,
             anti_aliasing_settings,
             anti_aliasing_game,
+            rumble_intensity,
+            brightness_settings,
             speed,
             render_size,
             return_to,
@@ -4128,6 +4142,8 @@ impl Engine {
         self.settings = settings;
         self.anti_aliasing_settings = anti_aliasing_settings;
         self.anti_aliasing_game = anti_aliasing_game;
+        self.rumble_intensity = rumble_intensity;
+        self.brightness_settings = brightness_settings;
         if quality_left != self.settings.graphics.quality
             && !self.quality_pinned
             && let Some(preset) = self.settings.graphics.quality
@@ -5027,6 +5043,10 @@ impl Engine {
         self.boot_warnings.extend(warnings);
         self.settings = doc;
         self.anti_aliasing_settings = self.settings.anti_aliasing();
+        if let Some(intensity) = self.settings.input.rumble {
+            self.set_rumble_intensity(intensity);
+        }
+        self.brightness_settings = self.settings.display.brightness.unwrap_or(0.0);
         if let Some(preset) = self.settings.graphics.quality
             && let Some(setting) = QualitySetting::preset(preset.name())
         {
@@ -5036,8 +5056,8 @@ impl Engine {
     }
 
     /// Applies the game's pending [`Settings`](crate::Settings) requests at the frame boundary:
-    /// volumes to the `User` mix layer (logged, only on change), anti-aliasing and quality to the
-    /// engine's render state, the window mode to the armed host channel (only on change), then the
+    /// volumes to the `User` mix layer (logged, only on change), anti-aliasing, quality, rumble and
+    /// brightness to the engine's host state, the text options to the view, the window mode to the armed host channel (only on change), then the
     /// one write a `save()` asks for. A replay (`profile_off_disk`) updates its view but never
     /// reaches the window or the disk. Host state: nothing here is hashed or snapshotted.
     fn drain_settings(&mut self, frame: FrameIndex) {
@@ -5066,6 +5086,23 @@ impl Engine {
             self.settings.graphics.anti_aliasing = Some(mode.name().to_string());
             self.anti_aliasing_settings = Some(mode);
             self.anti_aliasing_game = Some(mode);
+        }
+        if let Some(intensity) = requests.rumble {
+            self.settings.input.rumble = Some(intensity);
+            self.set_rumble_intensity(intensity);
+        }
+        if let Some(ev) = requests.brightness {
+            self.settings.display.brightness = Some(ev);
+            self.brightness_settings = ev;
+        }
+        if let Some(on) = requests.subtitles {
+            self.settings.text.subtitles = Some(on);
+        }
+        if let Some(scale) = requests.subtitle_scale {
+            self.settings.text.subtitle_scale = Some(scale);
+        }
+        if let Some(tag) = requests.language {
+            self.settings.text.language = Some(tag);
         }
         if let Some(preset) = requests.quality
             && self.settings.graphics.quality != Some(preset)
@@ -7208,11 +7245,13 @@ impl Engine {
         let hold = self.gi_hold();
         let store = self.probe_store.clone();
         let anti_aliasing = self.anti_aliasing();
+        let brightness = self.brightness_settings;
         let frustum_culling = self.frustum_culling;
         let renderer = self.renderer.as_mut().expect("just initialized");
         renderer.set_frustum_culling(frustum_culling);
         renderer.set_gi_hold(hold);
         renderer.set_anti_aliasing(anti_aliasing);
+        renderer.set_brightness(brightness);
         renderer.set_probe_store(store);
         Ok(())
     }
@@ -7248,6 +7287,7 @@ impl Engine {
             quality: self.quality.quality,
             params: self.quality.params,
             anti_aliasing: self.anti_aliasing(),
+            brightness: self.brightness_settings,
             gi_hold: self.gi_hold(),
             probe_store: self.probe_store.clone(),
             frustum_culling: self.frustum_culling,

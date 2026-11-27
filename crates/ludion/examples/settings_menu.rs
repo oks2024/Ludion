@@ -1,12 +1,14 @@
 //! A player **settings menu** — the copyable options-screen pattern.
 //!
 //! A game's menu system writes the [`Settings`] resource (volumes, quality, anti-aliasing, window
-//! mode, `save()`) and reads the [`SettingsView`] back. With `persist_settings()` the engine keeps
-//! the choices in `save/settings.yaml`, so a second boot starts where the player left off.
+//! mode, rumble, brightness, subtitles, language, `save()`) and reads the [`SettingsView`] back.
+//! With `persist_settings()` the engine keeps the choices in `save/settings.yaml`, so a second boot
+//! starts where the player left off.
 //!
 //! Everything above the `main` divider is copyable into a real game. The headless `main` boots twice
-//! on one scratch save directory: the first boot's menu sets music to 60%, the `medium` preset and
-//! SMAA and saves; the second boot reads them back.
+//! on one scratch save directory: the first boot's menu sets music to 60%, the `medium` preset,
+//! SMAA, softer rumble, a brighter image, larger subtitles and French, and saves; the second boot
+//! reads them back.
 //!
 //! ```text
 //! cargo run -p ludion --example settings_menu
@@ -29,6 +31,10 @@ fn options_menu(world: &mut World, ctx: &SystemCtx) {
     settings.request_bus_volume(Bus::Music, 0.6);
     settings.request_quality(QualityPreset::Medium);
     settings.request_anti_aliasing(AntiAliasing::Smaa);
+    settings.request_rumble(0.5);
+    settings.request_brightness(0.25);
+    settings.request_subtitle_scale(1.5);
+    settings.request_language("fr");
     settings.save();
 }
 
@@ -45,10 +51,16 @@ fn describe(engine: &Engine) -> String {
         .resource::<SettingsView>()
         .expect("the engine installs the view");
     format!(
-        "music {:.1}, quality {:?}, anti-aliasing {:?}",
+        "music {:.1}, quality {:?}, anti-aliasing {:?}, rumble {:.2}, brightness {:+.2} EV, \
+         subtitles {} at {:.2}x, language {:?}",
         view.volume(Bus::Music),
         view.quality(),
-        view.anti_aliasing()
+        view.anti_aliasing(),
+        view.rumble(),
+        view.brightness(),
+        view.subtitles(),
+        view.subtitle_scale(),
+        view.language()
     )
 }
 
@@ -80,7 +92,10 @@ fn main() -> ExitCode {
         }
     };
     println!("second boot: {}", describe(&second));
-    let kept = second.anti_aliasing() == AntiAliasing::Smaa && second.quality().label == "medium";
+    let kept = second.anti_aliasing() == AntiAliasing::Smaa
+        && second.quality().label == "medium"
+        && second.rumble_intensity() == 0.5
+        && second.brightness() == 0.25;
 
     let _ = std::fs::remove_dir_all(&root);
     if kept {

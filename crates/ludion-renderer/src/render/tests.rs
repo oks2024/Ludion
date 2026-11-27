@@ -14300,3 +14300,22 @@ fn text_draw_spans_alternate_in_vertex_order() {
         ]
     );
 }
+
+#[test]
+fn zero_brightness_keeps_the_compensation_bits_and_one_ev_doubles() {
+    for exposure in [1.0_f32, 0.73, 12.5] {
+        for compensation in [0.0_f32, 0.3, -1.7, 2.0] {
+            let old = if compensation == 0.0 {
+                exposure
+            } else {
+                exposure * compensation.exp2()
+            };
+            assert_eq!(
+                compensated(exposure, compensation, 0.0).to_bits(),
+                old.to_bits(),
+                "exposure {exposure}, compensation {compensation}"
+            );
+        }
+        assert_eq!(compensated(exposure, 0.0, 1.0), exposure * 2.0);
+    }
+}

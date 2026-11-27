@@ -703,6 +703,9 @@ pub struct Renderer {
     /// calls [`set_anti_aliasing`](Renderer::set_anti_aliasing). A client setting like the quality,
     /// kept out of [`Quality`] because no machine preset masks it.
     anti_aliasing: AntiAliasing,
+    /// The player's brightness in EV, added to the exposure compensation; `0.0` until a host calls
+    /// [`set_brightness`](Renderer::set_brightness).
+    brightness: f32,
     /// The SMAA lookup tables, uploaded the first time `Smaa` is selected and kept after.
     smaa_luts: Option<SmaaLuts>,
     /// **Test-only.** Which cluster table [`crate::cluster::build_lights`] builds for the next frame
@@ -911,6 +914,7 @@ impl Renderer {
             quality: Quality::FULL,
             quality_params: QualityParams::FULL,
             anti_aliasing: AntiAliasing::Off,
+            brightness: 0.0,
             smaa_luts: None,
             #[cfg(test)]
             cluster_build: std::cell::Cell::new(ClusterBuild::Culled),
@@ -1348,6 +1352,21 @@ impl Renderer {
     /// The anti-aliasing this renderer applies.
     pub fn anti_aliasing(&self) -> AntiAliasing {
         self.anti_aliasing
+    }
+
+    /// Sets the player's brightness, an EV offset added to the exposure compensation before the
+    /// tonemap in both exposure modes (`0.0` until a host calls this).
+    ///
+    /// A client setting beside [`set_anti_aliasing`](Renderer::set_anti_aliasing): at `0.0` the
+    /// frame is exactly the one rendered without the setting. Render-only: nothing here touches sim
+    /// state, a `WorldHash` or a snapshot.
+    pub fn set_brightness(&mut self, ev: f32) {
+        self.brightness = ev;
+    }
+
+    /// The brightness this renderer applies, in EV.
+    pub fn brightness(&self) -> f32 {
+        self.brightness
     }
 
     /// Switches the GPU frustum cull (on by default). Off, the frame graph has no `cull` pass and
@@ -4505,7 +4524,11 @@ impl PassRecorder for FrameRecorder<'_> {
             pass::COMPOSITE => {
                 let composite = Composite {
                     strength: self.post.bloom_strength,
-                    exposure: compensated(self.post.exposure, self.post.exposure_compensation),
+                    exposure: compensated(
+                        self.post.exposure,
+                        self.post.exposure_compensation,
+                        self.r.brightness,
+                    ),
                     tonemap: tonemap_selector(self.post.tonemap),
                     // The last output pass applies the grain and the dither: the blend under SMAA, the
                     // resample under a scale; otherwise these are exactly the post settings.
@@ -5126,7 +5149,11 @@ impl FrameRecorder<'_> {
             .as_ref()
             .expect("the view is scheduled only with a metered frame");
         let uniform = shader_gen::ExposureMeterDebug {
-            exposure: compensated(self.post.exposure, self.post.exposure_compensation),
+            exposure: compensated(
+                self.post.exposure,
+                self.post.exposure_compensation,
+                self.r.brightness,
+            ),
             log2_min: crate::exposure_meter::LOG2_MIN,
             log2_max: crate::exposure_meter::LOG2_MAX,
             target_log2: 0.18_f32.log2(),
@@ -7201,10 +7228,13 @@ impl<'a> OptionalInput<'a> {
     }
 }
 
-/// The composite's exposure multiplier with the EV `compensation` applied. At zero it returns
-/// `exposure` untouched, so an uncompensated frame never computes `exposure * 2^0`.
-fn compensated(exposure: f32, compensation: f32) -> f32 {
-    if compensation == 0.0 {
+/// The composite's exposure multiplier with the EV `compensation` and the player's `brightness`
+/// applied. With both zero it returns `exposure` untouched, so an uncompensated frame never
+/// computes `exposure * 2^0`; with no brightness the arithmetic is the compensation's alone.
+fn compensated(exposure: f32, compensation: f32, brightness: f32) -> f32 {
+    if brightness != 0.0 {
+        exposure * (compensation + brightness).exp2()
+    } else if compensation == 0.0 {
         exposure
     } else {
         exposure * compensation.exp2()

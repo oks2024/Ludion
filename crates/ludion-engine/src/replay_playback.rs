@@ -196,6 +196,8 @@ pub(crate) struct SavedHost {
     pub(crate) settings: crate::settings::SettingsDoc,
     pub(crate) anti_aliasing_settings: Option<ludion_renderer::AntiAliasing>,
     pub(crate) anti_aliasing_game: Option<ludion_renderer::AntiAliasing>,
+    pub(crate) rumble_intensity: f32,
+    pub(crate) brightness_settings: f32,
     pub(crate) speed: Speed,
     pub(crate) render_size: (u32, u32),
     pub(crate) return_to: String,
