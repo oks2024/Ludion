@@ -3,7 +3,9 @@
 
 use ludion_core::diagnostics::Diagnostic;
 use ludion_import::{ClipArtifact, ExternalFiles, Import, ImportOptions, import};
-use ludion_scene::{Ease, check_animation, emit_animation, sample_rotation};
+use ludion_scene::{
+    AnimationTrack, Ease, Keyframe, check_animation, emit_animation, sample_rotation,
+};
 
 const ROOT: usize = 1;
 const SPINE: usize = 2;
@@ -857,6 +859,8 @@ fn bad_extras_are_l1207() {
         r#"{"bound_scale":0}"#,
         r#"{"bound_translation":"tight"}"#,
         r#"{"loop":"yes"}"#,
+        r#"{"root_motion":3}"#,
+        r#"{"root_motion":""}"#,
         r#"{"speed":2.0}"#,
         r#"[1]"#,
     ] {
@@ -924,4 +928,309 @@ fn the_output_is_deterministic_and_valid() {
             "the CLI sets `generated_from`"
         );
     }
+}
+
+const ROOT_MOTION: &str = r#"{"root_motion":"root"}"#;
+
+/// The Hamilton product `a ⊗ b` of two `[x, y, z, w]` quaternions: `a` is the parent's side.
+fn mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let [ax, ay, az, aw] = a;
+    let [bx, by, bz, bw] = b;
+    [
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ]
+}
+
+/// The clip, after checking that its text is valid and a fixed point of the writer.
+fn valid(clip: ClipArtifact) -> ClipArtifact {
+    let text = emit_animation(&clip.doc);
+    let parsed = check_animation(&text).expect("the clip is valid");
+    assert_eq!(emit_animation(&parsed), text, "a fixed point of the writer");
+    clip
+}
+
+fn track<'a>(clip: &'a ClipArtifact, target: &str) -> Option<&'a AnimationTrack> {
+    clip.doc.tracks.iter().find(|t| t.target == target)
+}
+
+fn close(got: [f64; 3], want: [f64; 3], within: f64) {
+    assert!(
+        (0..3).all(|axis| (got[axis] - want[axis]).abs() <= within),
+        "{got:?} is not {want:?}"
+    );
+}
+
+/// `root` walks 2 units toward -Z, rises 0.2 and yaws 90 degrees over 1 s.
+fn travel_and_turn() -> Vec<Channel> {
+    let points: Vec<[f32; 3]> = (0..31)
+        .map(|k| {
+            let u = k as f32 / 30.0;
+            [0.0, 0.2 * u, -2.0 * u]
+        })
+        .collect();
+    vec![
+        translation(ROOT, frames(30.0, 31), &points),
+        rotation(ROOT, frames(30.0, 31), &quarter_turn()),
+    ]
+}
+
+fn quarter_turn() -> Vec<[f32; 4]> {
+    (0..31)
+        .map(|k| quat([0.0, 1.0, 0.0], 3.0 * k as f32))
+        .collect()
+}
+
+#[test]
+fn root_motion_moves_travel_and_yaw_into_the_root_track() {
+    let clip = valid(clip_of(&[with_extras(
+        animation(travel_and_turn()),
+        ROOT_MOTION,
+    )]));
+    assert_eq!(clip.doc.tracks[0].target, "$root");
+    let motion = track(&clip, "$root").unwrap();
+    close(motion.translation.last().unwrap().v, [0.0, 0.0, -2.0], 1e-6);
+    close(motion.rotation.last().unwrap().v, [0.0, 90.0, 0.0], 1e-4);
+    assert!(motion.scale.is_empty());
+
+    let root = track(&clip, "root").expect("the height stays on the joint");
+    assert!(root.rotation.is_empty(), "a pure yaw strips to rest");
+    for key in &root.translation {
+        assert_eq!((key.v[0], key.v[2]), (0.0, 0.0), "{key:?}");
+    }
+    assert!((root.translation.last().unwrap().v[1] - 0.2).abs() < 1e-6);
+
+    assert_eq!(clip.report.tracks[0].target, "$root");
+    assert_eq!(clip.report.tracks[0].translation.before, 31);
+    assert_eq!(clip.report.tracks[0].rotation.after, motion.rotation.len());
+}
+
+/// The twist about +Y leaves the joint; the swing (a tilt) stays on it.
+#[test]
+fn root_motion_takes_the_twist_and_leaves_the_tilt() {
+    let tilt = quat([1.0, 0.0, 0.0], 20.0);
+    let quats: Vec<[f32; 4]> = (0..31)
+        .map(|k| mul(quat([0.0, 1.0, 0.0], 2.0 * k as f32), tilt))
+        .collect();
+    let clip = valid(clip_of(&[with_extras(
+        animation(vec![rotation(ROOT, frames(30.0, 31), &quats)]),
+        ROOT_MOTION,
+    )]));
+    let motion = track(&clip, "$root").unwrap();
+    close(motion.rotation.last().unwrap().v, [0.0, 60.0, 0.0], 1e-4);
+    assert!(motion.translation.is_empty(), "a root at the origin stays");
+    for key in &track(&clip, "root").unwrap().rotation {
+        close(key.v, [20.0, 0.0, 0.0], 0.1);
+    }
+}
+
+/// A clip whose root rests one unit off the entity's origin.
+fn offset_clip(channels: Vec<Channel>) -> ClipArtifact {
+    let nodes = NODES.replace(
+        r#"{"name":"root","#,
+        r#"{"name":"root","translation":[1,0,0],"#,
+    );
+    let animations = [with_extras(animation(channels), ROOT_MOTION)];
+    let json = gltf_with_nodes(&animations, &nodes, SKINS);
+    let mut plan = import(
+        json.as_bytes(),
+        ExternalFiles::Refused,
+        &ImportOptions::lossy(false),
+    )
+    .expect("imports within the bound");
+    valid(plan.clips.remove(0))
+}
+
+/// A root turning in place off the origin: the entity turns about its origin, so `$root` also
+/// carries the travel that keeps the joint where it was.
+#[test]
+fn root_motion_keeps_an_offset_pivot_in_place() {
+    let clip = offset_clip(vec![rotation(ROOT, frames(30.0, 31), &quarter_turn())]);
+    let motion = track(&clip, "$root").unwrap();
+    close(motion.translation.last().unwrap().v, [1.0, 0.0, 1.0], 1e-6);
+    close(motion.rotation.last().unwrap().v, [0.0, 90.0, 0.0], 1e-4);
+    assert!(
+        track(&clip, "root").is_none(),
+        "the absent translation stays absent"
+    );
+}
+
+/// A root circling the origin as it turns is all yaw: no travel is emitted, and its translation
+/// still has to lose the circle, or the entity's turn would apply it twice.
+#[test]
+fn root_motion_strips_the_translation_of_a_root_orbiting_the_origin() {
+    let points: Vec<[f32; 3]> = (0..31)
+        .map(|k| {
+            let angle = (3.0 * k as f32).to_radians();
+            [angle.cos(), 0.0, -angle.sin()]
+        })
+        .collect();
+    let clip = offset_clip(vec![
+        translation(ROOT, frames(30.0, 31), &points),
+        rotation(ROOT, frames(30.0, 31), &quarter_turn()),
+    ]);
+    let motion = track(&clip, "$root").unwrap();
+    assert!(motion.translation.is_empty(), "{:?}", motion.translation);
+    close(motion.rotation.last().unwrap().v, [0.0, 90.0, 0.0], 1e-4);
+    assert_eq!(clip.doc.tracks.len(), 1, "the joint is left at rest");
+}
+
+/// A looping walk's seam is measured in place: the travel is the entity's, not a pop.
+#[test]
+fn root_motion_leaves_the_travel_out_of_the_loop_seam() {
+    let points: Vec<[f32; 3]> = (0..31)
+        .map(|k| {
+            let u = k as f32 / 30.0;
+            let bob = 0.05 * (std::f32::consts::TAU * u).sin();
+            [0.0, bob, -2.0 * u]
+        })
+        .collect();
+    let clip = valid(clip_of(&[with_extras(
+        animation(vec![translation(ROOT, frames(30.0, 31), &points)]),
+        r#"{"loop":true,"root_motion":"root"}"#,
+    )]));
+    let motion = track(&clip, "$root").unwrap();
+    close(motion.translation.last().unwrap().v, [0.0, 0.0, -2.0], 1e-6);
+    let seam = clip.report.seam.expect("a loop reports its seam");
+    assert!(seam.translation <= 0.002, "{seam:?}");
+    for joint in &clip.report.joints {
+        assert!(joint.translation <= 0.002, "{joint:?}");
+    }
+}
+
+fn assert_yaw_segments_are_short(keys: &[Keyframe]) {
+    for pair in keys.windows(2) {
+        assert!((pair[1].v[1] - pair[0].v[1]).abs() < 180.0, "{keys:?}");
+    }
+}
+
+#[test]
+fn root_motion_unwraps_a_full_turn() {
+    let quats: Vec<[f32; 4]> = (0..=24)
+        .map(|k| quat([0.0, 1.0, 0.0], 15.0 * k as f32))
+        .collect();
+    let clip = valid(clip_of(&[with_extras(
+        animation(vec![rotation(ROOT, frames(60.0, 25), &quats)]),
+        ROOT_MOTION,
+    )]));
+    let keys = &track(&clip, "$root").unwrap().rotation;
+    for pair in keys.windows(2) {
+        assert!(pair[1].v[1] > pair[0].v[1], "monotonic: {keys:?}");
+    }
+    assert_yaw_segments_are_short(keys);
+    close(keys.last().unwrap().v, [0.0, 360.0, 0.0], 1e-3);
+}
+
+/// Two frames an exact half turn of yaw apart: `$root` keys the source's midpoint, which pins the
+/// direction.
+#[test]
+fn root_motion_splits_a_half_turn_of_yaw_the_source_way() {
+    let quats = [[0.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.0]];
+    let clip = valid(clip_of(&[with_extras(
+        animation(vec![rotation(ROOT, vec![0.0, 1.0], &quats)]),
+        ROOT_MOTION,
+    )]));
+    let keys = &track(&clip, "$root").unwrap().rotation;
+    assert_eq!(keys.len(), 3, "{keys:?}");
+    assert_yaw_segments_are_short(keys);
+    close(keys[1].v, [0.0, 90.0, 0.0], 1e-4);
+    close(keys[2].v, [0.0, 180.0, 0.0], 1e-4);
+    assert_eq!(clip.doc.tracks.len(), 1);
+}
+
+/// The key that splits a half turn of the stripped rotation is sampled with the yaw taken off.
+#[test]
+fn root_motion_strips_the_yaw_from_a_half_turn_split_key() {
+    let yaw = quat([0.0, 1.0, 0.0], 90.0);
+    let quats = [[0.0, 0.0, 0.0, 1.0], yaw, mul(yaw, [1.0, 0.0, 0.0, 0.0])];
+    let clip = valid(clip_of(&[with_extras(
+        animation(vec![rotation(ROOT, vec![0.0, 1.0, 2.0], &quats)]),
+        ROOT_MOTION,
+    )]));
+    let keys = &track(&clip, "root").unwrap().rotation;
+    assert!(keys.len() > 3, "the tilt's half turn is split: {keys:?}");
+    for k in 0..=100 {
+        let u = f64::from(k) / 100.0;
+        let got = sample_rotation(keys, 1.0 + u).expect("keys");
+        assert!(
+            got[1].abs() < 1e-3 && got[2].abs() < 1e-3,
+            "only a tilt about X is left at {u}: {got:?} in {keys:?}"
+        );
+    }
+}
+
+#[test]
+fn root_motion_refusals_are_l1207() {
+    let refused = |extras: &'static str, nodes: &str, skins: &str, animated: &[usize]| {
+        let channels = animated
+            .iter()
+            .map(|&node| translation(node, vec![0.0, 1.0], &[[0.0; 3], [0.0, 0.0, -1.0]]))
+            .collect();
+        let animations = [with_extras(animation(channels), extras)];
+        let json = gltf_with_nodes(&animations, nodes, skins);
+        [false, true].map(|lossy| {
+            let errors = import(
+                json.as_bytes(),
+                ExternalFiles::Refused,
+                &ImportOptions::lossy(lossy),
+            )
+            .expect_err("refused");
+            let error = errors
+                .iter()
+                .find(|d| d.code.as_str() == "L1207")
+                .unwrap_or_else(|| panic!("no L1207 in {errors:?}"));
+            assert!(!error.message.contains("  "), "{}", error.message);
+            error.message.clone()
+        })
+    };
+
+    for message in refused(r#"{"root_motion":"pelvis"}"#, NODES, SKINS, &[ROOT]) {
+        assert!(message.contains("`pelvis`"), "{message}");
+        assert!(message.contains("rig's root is `root`"), "{message}");
+    }
+    for message in refused(r#"{"root_motion":"spine"}"#, NODES, SKINS, &[ROOT]) {
+        assert!(message.contains("hangs under `root`"), "{message}");
+    }
+
+    let two_roots = NODES.replace(r#""name":"root","children":[2]"#, r#""name":"root""#);
+    for message in refused(ROOT_MOTION, &two_roots, SKINS, &[ROOT]) {
+        assert!(message.contains("several roots"), "{message}");
+        assert!(message.contains("`spine`"), "{message}");
+    }
+
+    // The root hangs under a moved node the mesh is no child of, so its rest is re-expressed.
+    let folded = r#"{"name":"body","mesh":0,"skin":0},{"name":"armature","translation":[0.5,0,0],"children":[2]},{"name":"root","children":[3]},{"name":"spine","translation":[0,1,0],"children":[4]},{"name":"head","translation":[0,0.5,0]}"#;
+    for message in refused(ROOT_MOTION, folded, r#"{"joints":[2,3,4]}"#, &[2, 3]) {
+        assert!(
+            message.contains("re-expressed in the mesh frame"),
+            "{message}"
+        );
+        assert!(message.contains("armature transform"), "{message}");
+    }
+}
+
+#[test]
+fn root_motion_changes_nothing_without_the_key_or_without_travel() {
+    let plain = clip_of(&[animation(travel_and_turn())]);
+    assert!(track(&plain, "$root").is_none());
+
+    // The root holds its place and only tilts; the spine turns.
+    let channels = || {
+        let spine: Vec<[f32; 4]> = (0..31).map(|k| quat([1.0, 0.0, 0.0], k as f32)).collect();
+        vec![
+            translation(ROOT, vec![0.0, 1.0], &[[0.0; 3], [0.0; 3]]),
+            rotation(
+                ROOT,
+                vec![0.0, 1.0],
+                &[quat([1.0, 0.0, 0.0], 30.0), quat([1.0, 0.0, 0.0], 40.0)],
+            ),
+            rotation(SPINE, frames(30.0, 31), &spine),
+        ]
+    };
+    let without = valid(clip_of(&[animation(channels())]));
+    let with = valid(clip_of(&[with_extras(animation(channels()), ROOT_MOTION)]));
+    assert_eq!(emit_animation(&without.doc), emit_animation(&with.doc));
+    assert_eq!(without.report, with.report);
 }

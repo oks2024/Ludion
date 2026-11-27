@@ -13,10 +13,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use gltf::accessor::{DataType, Dimensions};
 use gltf::animation::{Interpolation, Property};
 use ludion_core::diagnostics::Diagnostic;
-use ludion_core::math::f64::{acos, quat_to_euler_xyz_degrees, sin, sqrt};
+use ludion_core::math::f64::{acos, atan2, cos, quat_to_euler_xyz_degrees, sin, sqrt};
 use ludion_core::math::glam::{DMat3, DMat4, DQuat, DVec3};
 use ludion_scene::{
-    AnimationDocument, AnimationTrack, Ease, JointRest, Keyframe, sample_channel, sample_rotation,
+    AnimationDocument, AnimationTrack, Ease, JointRest, Keyframe, ROOT_TRACK, sample_channel,
+    sample_rotation,
 };
 use serde_json::Value;
 
@@ -193,6 +194,8 @@ pub struct ClipReport {
 
 struct Extras {
     looped: bool,
+    /// The rig root, by emitted name, whose travel and yaw become the `$root` track.
+    root: Option<String>,
     tolerances: Tolerances,
 }
 
@@ -395,8 +398,37 @@ pub(crate) fn import_animations(
             continue;
         }
 
-        let table = sample_source(&channels, &frames);
-        let (tracks, counts) = reduce_tracks(&rig, &channels, &table, &frames, &extras.tolerances);
+        let source = sample_source(&channels, &frames);
+        let mut table = source.clone();
+        let mut root = None;
+        if let Some(name) = &extras.root {
+            let reframed = match set {
+                Target::Skin(mesh) => Some(bindings[&mesh].reframed.as_slice()),
+                Target::Parts => None,
+            };
+            let slot = match root_slot(&label, &rig, name, reframed) {
+                Ok(slot) => slot,
+                Err(diagnostic) => {
+                    errors.push(diagnostic);
+                    continue;
+                }
+            };
+            root = extract_root(
+                slot,
+                &rig[slot].rest,
+                &channels[slot],
+                &mut table[slot],
+                &frames,
+                &extras.tolerances,
+            );
+        }
+        let unyaw = root.as_ref().and_then(|root| root.unyaw.as_ref());
+        let (mut tracks, mut counts) =
+            reduce_tracks(&rig, &channels, &table, &frames, &extras.tolerances, unyaw);
+        if let Some(root) = root {
+            tracks.insert(0, root.track);
+            counts.insert(0, root.counts);
+        }
         let mut doc = AnimationDocument {
             name: None,
             generated_from: None,
@@ -405,7 +437,7 @@ pub(crate) fn import_animations(
             events: Vec::new(),
             tracks,
         };
-        let mut report = measure(&rig, &table, &doc, &frames, extras.looped);
+        let mut report = measure(&rig, &source, &doc, &frames, extras.looped);
         report.tracks = counts;
         if let Some(diagnostic) = check_bound(&label, noun, &report, &extras.tolerances) {
             errors.push(diagnostic);
@@ -437,10 +469,11 @@ pub(crate) fn import_animations(
     }
 }
 
-/// Reads an animation's `extras`: `loop` and the six tolerance overrides.
+/// Reads an animation's `extras`: `loop`, `root_motion` and the six tolerance overrides.
 fn parse_extras(label: &str, extras: &gltf::json::Extras) -> Result<Extras, Diagnostic> {
     let mut parsed = Extras {
         looped: false,
+        root: None,
         tolerances: DEFAULT_TOLERANCES,
     };
     let Some(raw) = extras else {
@@ -459,6 +492,15 @@ fn parse_extras(label: &str, extras: &gltf::json::Extras) -> Result<Extras, Diag
                 )));
             };
             parsed.looped = *looped;
+            continue;
+        }
+        if key == "root_motion" {
+            let Some(name) = value.as_str().filter(|name| !name.is_empty()) else {
+                return Err(clip_extras_invalid(format!(
+                    "{label}'s extras key `root_motion` must name a joint, found {value}"
+                )));
+            };
+            parsed.root = Some(name.to_string());
             continue;
         }
         let Some(&(_, is_bound, channel)) = TOLERANCE_KEYS.iter().find(|(name, ..)| name == key)
@@ -760,6 +802,257 @@ fn sample_source(channels: &[JointChannels], frames: &[f64]) -> SourceTable {
         .collect()
 }
 
+/// The rig slot `root_motion` names. The `$root` track moves the whole entity, so only the rig's
+/// one root can feed it, and only when its channels survive the import. `reframed` is the skin's
+/// [`SkinBinding::reframed`], `None` for a rig of prefab parts.
+fn root_slot(
+    label: &str,
+    rig: &[RigNode],
+    name: &str,
+    reframed: Option<&[bool]>,
+) -> Result<usize, Diagnostic> {
+    let refused = |why: String| {
+        clip_extras_invalid(format!(
+            "{label}'s extras key `root_motion` names `{name}`: {why}"
+        ))
+    };
+    let roots: Vec<String> = rig
+        .iter()
+        .filter(|node| node.parent.is_none())
+        .map(|node| format!("`{}`", node.name))
+        .collect();
+    let listed = roots.join(", ");
+    let Some(slot) = rig.iter().position(|node| node.name == name) else {
+        return Err(refused(format!(
+            "the rig has no joint or part of that name; the rig's root is {listed}"
+        )));
+    };
+    if let Some(parent) = rig[slot].parent {
+        return Err(refused(format!(
+            "`{name}` hangs under `{}`; root motion is read from the rig's root",
+            rig[parent].name
+        )));
+    }
+    if roots.len() > 1 {
+        return Err(refused(format!(
+            "the rig has several roots ({listed}), and `$root` moves the whole entity, so it \
+             needs a rig with one root"
+        )));
+    }
+    if reframed.is_some_and(|reframed| reframed[slot]) {
+        return Err(refused(format!(
+            "the rest of `{name}` is re-expressed in the mesh frame, so its channels are dropped \
+             and its motion cannot be read; apply the armature transform in the DCC"
+        )));
+    }
+    Ok(slot)
+}
+
+/// The yaw in degrees of the unit quaternion `q`'s twist about +Y (swing-twist), as the equivalent
+/// nearest `previous`. A half-turn swing has no defined twist and holds `previous`.
+fn twist_yaw_deg(q: [f64; 4], previous: f64) -> f64 {
+    let [_, y, _, w] = q;
+    if y * y + w * w < 1e-12 {
+        return previous;
+    }
+    let raw = (2.0 * atan2(y, w)).to_degrees();
+    raw + 360.0 * ((previous - raw) / 360.0).round()
+}
+
+/// A turn of `degrees` about +Y as `[x, y, z, w]`.
+fn yaw_quat(degrees: f64) -> [f64; 4] {
+    let half = degrees.to_radians() * 0.5;
+    [0.0, sin(half), 0.0, cos(half)]
+}
+
+/// `q` with a turn of `degrees` about +Y taken off its left (the parent's side).
+fn without_yaw(q: [f64; 4], degrees: f64) -> [f64; 4] {
+    (DQuat::from_array(yaw_quat(-degrees)) * DQuat::from_array(q)).to_array()
+}
+
+/// `[x, z]` turned about +Y by `degrees`, the runtime's convention (glam's `from_rotation_y`).
+fn rot_y(degrees: f64, v: [f64; 2]) -> [f64; 2] {
+    let theta = degrees.to_radians();
+    let (s, c) = (sin(theta), cos(theta));
+    [v[0] * c + v[1] * s, -v[0] * s + v[1] * c]
+}
+
+/// The yaw that was taken off one joint's rotation, for sampling its stripped source between
+/// frames.
+struct Unyaw {
+    slot: usize,
+    /// The source's unwrapped twist yaw at every frame, degrees; the first is the clip's origin.
+    yaws: Vec<f64>,
+    frames: Vec<f64>,
+}
+
+impl Unyaw {
+    /// The yaw the source has turned by at `t`, unwrapped near the last frame at or before it.
+    fn turn(&self, channel: &SourceChannel, t: f64) -> f64 {
+        let after = self.frames.partition_point(|&frame| frame <= t);
+        let near = self.yaws[after.saturating_sub(1)];
+        twist_yaw_deg(eval_source(channel, true, t), near) - self.yaws[0]
+    }
+
+    /// The stripped rotation at `t`.
+    fn stripped(&self, channel: &SourceChannel, t: f64) -> [f64; 4] {
+        without_yaw(eval_source(channel, true, t), self.turn(channel, t))
+    }
+}
+
+/// What the rig root's motion became.
+struct RootMotion {
+    track: AnimationTrack,
+    counts: TrackReport,
+    /// Present when `$root` turns, so the joint's rotation lost its yaw.
+    unyaw: Option<Unyaw>,
+}
+
+/// Moves the horizontal travel and yaw of the rig root (`rows` is its sampled source), relative to
+/// `t = 0`, into a `$root` track, rewriting `rows` to what is left for the joint: the entity's
+/// `T(d)·RY(r)` times the stripped local is the source local. `None`, with `rows` untouched, for a
+/// root that never travels or turns.
+fn extract_root(
+    slot: usize,
+    rest: &JointRest,
+    channels: &JointChannels,
+    rows: &mut [Vec<[f64; 4]>; 3],
+    frames: &[f64],
+    tolerances: &Tolerances,
+) -> Option<RootMotion> {
+    let mut yaws: Vec<f64> = Vec::with_capacity(frames.len());
+    for frame in 0..frames.len() {
+        let q = rows[ROTATION].get(frame).copied().unwrap_or(rest.rotation);
+        let previous = yaws.last().copied().unwrap_or(0.0);
+        yaws.push(twist_yaw_deg(q, previous));
+    }
+    let mut turns: Vec<f64> = yaws.iter().map(|yaw| yaw - yaws[0]).collect();
+    let turning = turns
+        .iter()
+        .any(|turn| turn.abs() > tolerances.reduce[ROTATION]);
+    if !turning {
+        turns.fill(0.0);
+    }
+
+    let [x, y, z] = rest.translation;
+    let point = |frame: usize| {
+        rows[TRANSLATION]
+            .get(frame)
+            .copied()
+            .unwrap_or([x, y, z, 0.0])
+    };
+    let start = point(0);
+    let travel: Vec<[f64; 4]> = turns
+        .iter()
+        .enumerate()
+        .map(|(frame, &turn)| {
+            let t = point(frame);
+            // The pivot term keeps the joint's start offset fixed while the entity turns.
+            let pivot = rot_y(turn, [start[0], start[2]]);
+            [t[0] - pivot[0], 0.0, t[2] - pivot[1], 0.0]
+        })
+        .collect();
+    let travelling = travel
+        .iter()
+        .any(|d| distance([d[0], d[1], d[2]], [0.0; 3]) > tolerances.reduce[TRANSLATION]);
+    if !turning && !travelling {
+        return None;
+    }
+
+    // Either channel moves the entity, so the joint stays at its start in x and z.
+    for t in &mut rows[TRANSLATION] {
+        *t = [start[0], t[1], start[2], 0.0];
+    }
+    if turning {
+        for (q, &turn) in rows[ROTATION].iter_mut().zip(&turns) {
+            *q = without_yaw(*q, turn);
+        }
+    }
+    let unyaw = turning.then(|| Unyaw {
+        slot,
+        yaws,
+        frames: frames.to_vec(),
+    });
+
+    let ease = |kind: usize| match &channels[kind] {
+        Some(channel) if channel.interpolation == Interpolation::Step => Ease::Step,
+        _ => Ease::Linear,
+    };
+    let mut track = AnimationTrack {
+        target: ROOT_TRACK.to_string(),
+        rotation: Vec::new(),
+        translation: Vec::new(),
+        scale: Vec::new(),
+    };
+    let mut key_counts = [KeyCounts::default(); 3];
+    if travelling {
+        let keys = candidates(TRANSLATION, ease(TRANSLATION), frames, &travel);
+        track.translation = reduce(TRANSLATION, &keys, &travel, tolerances.reduce[TRANSLATION]);
+        key_counts[TRANSLATION] = KeyCounts {
+            before: keys.len(),
+            after: track.translation.len(),
+        };
+    }
+    if let (Some(unyaw), Some(channel)) = (&unyaw, &channels[ROTATION]) {
+        // The runtime lerps `$root` yaw in degrees, so it is a scalar here, not a rotation.
+        let values: Vec<[f64; 4]> = turns.iter().map(|&turn| [0.0, turn, 0.0, 0.0]).collect();
+        let keys = candidates(TRANSLATION, ease(ROTATION), frames, &values);
+        let kept = reduce_with(
+            &keys,
+            &values,
+            tolerances.reduce[ROTATION],
+            true,
+            |pair, t, source| (sample_keys(TRANSLATION, pair, t)[1] - source[1]).abs(),
+        );
+        track.rotation = split_yaw_half_turns(kept, unyaw, channel);
+        key_counts[ROTATION] = KeyCounts {
+            before: keys.len(),
+            after: track.rotation.len(),
+        };
+    }
+    Some(RootMotion {
+        track,
+        counts: TrackReport {
+            target: ROOT_TRACK.to_string(),
+            rotation: key_counts[ROTATION],
+            translation: key_counts[TRANSLATION],
+            scale: key_counts[SCALE],
+        },
+        unyaw,
+    })
+}
+
+/// [`split_half_turns`] for the `$root` yaw: two adjacent frames half a turn apart get a key at the
+/// source's midpoint, which pins the direction; the keys after it move by whole turns to follow.
+fn split_yaw_half_turns(
+    keys: Vec<Keyframe>,
+    unyaw: &Unyaw,
+    channel: &SourceChannel,
+) -> Vec<Keyframe> {
+    let near = |degrees: f64, to: f64| degrees + 360.0 * ((to - degrees) / 360.0).round();
+    let mut out: Vec<Keyframe> = Vec::with_capacity(keys.len());
+    let mut shift = 0.0;
+    for mut key in keys {
+        key.v[1] += shift;
+        if let Some(start) = out.last().cloned()
+            && !start.turns_as_written(&key)
+            && let Some(t) = snapped_midpoint(start.t, key.t)
+        {
+            let middle = near(unyaw.turn(channel, t), start.v[1]);
+            let end = near(key.v[1], middle);
+            shift += end - key.v[1];
+            key.v[1] = end;
+            out.push(Keyframe {
+                t,
+                v: [0.0, middle, 0.0],
+                ease: Ease::Linear,
+            });
+        }
+        out.push(key);
+    }
+    out
+}
+
 /// The Euler triple equivalent to `base` that is nearest `previous`: `base` or its alternate
 /// solution `(x + 180, 180 − y, z + 180)`, each axis shifted by the multiple of 360 nearest
 /// `previous`. The base wins a tie.
@@ -849,17 +1142,34 @@ fn channel_error(kind: usize, sampled: [f64; 4], source: [f64; 4]) -> f64 {
 /// key whose two-key clip still reproduces every source frame in between within `tolerance`, and
 /// always keep the last key.
 fn reduce(kind: usize, keys: &[Keyframe], values: &[[f64; 4]], tolerance: f64) -> Vec<Keyframe> {
+    reduce_with(
+        keys,
+        values,
+        tolerance,
+        kind == ROTATION,
+        |pair, t, source| channel_error(kind, sample_keys(kind, pair, t), source),
+    )
+}
+
+/// [`reduce`] over any metric: `error(pair, t, source)` is how far the two-key clip `pair` strays
+/// at `t` from the `source` frame there. `guard_turns` refuses a segment that does not play as
+/// written.
+fn reduce_with(
+    keys: &[Keyframe],
+    values: &[[f64; 4]],
+    tolerance: f64,
+    guard_turns: bool,
+    error: impl Fn(&[Keyframe], f64, [f64; 4]) -> f64,
+) -> Vec<Keyframe> {
     let fits = |anchor: usize, end: usize| {
         // The validator refuses a rotation segment that does not play as written (`L1142`: half a
         // circle on an axis, or combined), and near gimbal lock the slerp can fit one the Euler
         // keys sweep.
-        if kind == ROTATION && !keys[anchor].turns_as_written(&keys[end]) {
+        if guard_turns && !keys[anchor].turns_as_written(&keys[end]) {
             return false;
         }
         let pair = [keys[anchor].clone(), keys[end].clone()];
-        (anchor + 1..end).all(|k| {
-            channel_error(kind, sample_keys(kind, &pair, keys[k].t), values[k]) <= tolerance
-        })
+        (anchor + 1..end).all(|k| error(&pair, keys[k].t, values[k]) <= tolerance)
     };
     let mut kept = vec![keys[0].clone()];
     let mut anchor = 0;
@@ -882,7 +1192,7 @@ const MAX_HALF_TURN_DEPTH: u32 = 8;
 /// tie: two frames an exact half turn apart. Playback slerps the short way between the keys'
 /// quaternions, so the key at the source's midpoint is what pins the direction; the keys after a
 /// split are re-expressed near it, the same rotations, so their playback is unchanged.
-fn split_half_turns(keys: Vec<Keyframe>, channel: &SourceChannel) -> Vec<Keyframe> {
+fn split_half_turns(keys: Vec<Keyframe>, source: &dyn Fn(f64) -> [f64; 4]) -> Vec<Keyframe> {
     let mut keys = keys.into_iter();
     let mut out: Vec<Keyframe> = keys.next().into_iter().collect();
     let mut split = false;
@@ -891,7 +1201,7 @@ fn split_half_turns(keys: Vec<Keyframe>, channel: &SourceChannel) -> Vec<Keyfram
             key.v = nearest_equivalent_angles(key.v, out.last().expect("non-empty").v);
         }
         let before = out.len();
-        push_unwound(&mut out, key, channel, MAX_HALF_TURN_DEPTH);
+        push_unwound(&mut out, key, source, MAX_HALF_TURN_DEPTH);
         split |= out.len() > before + 1;
     }
     out
@@ -899,26 +1209,38 @@ fn split_half_turns(keys: Vec<Keyframe>, channel: &SourceChannel) -> Vec<Keyfram
 
 /// Pushes `end`, first splitting the segment from `out`'s last key at the source's midpoint while it
 /// does not play as written (`Keyframe::turns_as_written`: half a circle on an axis, or combined).
-fn push_unwound(out: &mut Vec<Keyframe>, mut end: Keyframe, channel: &SourceChannel, depth: u32) {
+fn push_unwound(
+    out: &mut Vec<Keyframe>,
+    mut end: Keyframe,
+    source: &dyn Fn(f64) -> [f64; 4],
+    depth: u32,
+) {
     let start = out.last().expect("non-empty").clone();
-    // Snapped like every source time; a midpoint the snap pushes onto a neighbour is not split.
-    let t = ((start.t + (end.t - start.t) * 0.5) as f32)
-        .to_string()
-        .parse::<f64>()
-        .expect("a float prints as a float");
-    if depth == 0 || start.turns_as_written(&end) || !(start.t < t && t < end.t) {
+    let midpoint =
+        snapped_midpoint(start.t, end.t).filter(|_| depth > 0 && !start.turns_as_written(&end));
+    let Some(t) = midpoint else {
         out.push(end);
         return;
-    }
-    let mid = quat_to_euler_xyz_degrees(eval_source(channel, true, t));
+    };
+    let mid = quat_to_euler_xyz_degrees(source(t));
     let mid = Keyframe {
         t,
         v: nearest_equivalent_angles(mid, start.v),
         ease: Ease::Linear,
     };
-    push_unwound(out, mid, channel, depth - 1);
+    push_unwound(out, mid, source, depth - 1);
     end.v = nearest_equivalent_angles(end.v, out.last().expect("non-empty").v);
-    push_unwound(out, end, channel, depth - 1);
+    push_unwound(out, end, source, depth - 1);
+}
+
+/// The middle of `start..end`, snapped like every source time; `None` when the snap pushes it onto
+/// a neighbour, which is then not split.
+fn snapped_midpoint(start: f64, end: f64) -> Option<f64> {
+    let t = ((start + (end - start) * 0.5) as f32)
+        .to_string()
+        .parse::<f64>()
+        .expect("a float prints as a float");
+    (start < t && t < end).then_some(t)
 }
 
 /// Tracks in the rig's parent-first order, with their key counts.
@@ -928,6 +1250,7 @@ fn reduce_tracks(
     table: &SourceTable,
     frames: &[f64],
     tolerances: &Tolerances,
+    unyaw: Option<&Unyaw>,
 ) -> (Vec<AnimationTrack>, Vec<TrackReport>) {
     let mut tracks = Vec::new();
     let mut counts = Vec::new();
@@ -964,7 +1287,10 @@ fn reduce_tracks(
             let keys = candidates(kind, ease, frames, &table[joint][kind]);
             let mut kept = reduce(kind, &keys, &table[joint][kind], tolerances.reduce[kind]);
             if kind == ROTATION {
-                kept = split_half_turns(kept, channel);
+                kept = split_half_turns(kept, &|t| match unyaw {
+                    Some(unyaw) if unyaw.slot == joint => unyaw.stripped(channel, t),
+                    _ => eval_source(channel, true, t),
+                });
             }
             key_counts[kind] = KeyCounts {
                 before: keys.len(),
@@ -1057,8 +1383,9 @@ fn pose_difference(a: &Pose, b: &Pose) -> [f64; 3] {
     ]
 }
 
-/// Measures `clip` against the source at every source frame, in model space, and (for a looping
-/// clip) how far its end pose is from its start. `tracks` in the result is left empty.
+/// Measures `clip` against the source at every source frame, in model space with the clip's
+/// `$root` applied, and (for a looping clip) how far its end pose is from its start in place, the
+/// `$root` travel left out. `tracks` in the result is left empty.
 fn measure(
     rig: &[RigNode],
     table: &SourceTable,
@@ -1071,10 +1398,11 @@ fn measure(
         .iter()
         .map(|track| (track.target.as_str(), track))
         .collect();
-    let clip_poses = |t: f64| {
+    let root = track_of.get(ROOT_TRACK).copied();
+    let clip_poses = |t: f64, with_root: bool| {
         model_poses(rig, |j| {
             let rest = &rig[j].rest;
-            match track_of.get(rig[j].name.as_str()) {
+            let local = match track_of.get(rig[j].name.as_str()) {
                 None => local_matrix(rest.rotation, rest.translation, rest.scale),
                 Some(track) => {
                     let rotation = sample_rotation(&track.rotation, t).unwrap_or(rest.rotation);
@@ -1083,6 +1411,15 @@ fn measure(
                     let scale = sample_channel(&track.scale, t).unwrap_or(rest.scale);
                     local_matrix(rotation, translation, scale)
                 }
+            };
+            match root {
+                // A clip with a `$root` has a one-root rig; this is the runtime's sampling.
+                Some(root) if with_root && rig[j].parent.is_none() => {
+                    let p = sample_channel(&root.translation, t).unwrap_or([0.0; 3]);
+                    let yaw = sample_channel(&root.rotation, t).map_or(0.0, |v| v[1]);
+                    local_matrix(yaw_quat(yaw), [p[0], 0.0, p[2]], [1.0; 3]) * local
+                }
+                _ => local,
             }
         })
     };
@@ -1113,7 +1450,7 @@ fn measure(
                 vec3(SCALE, rest.scale),
             )
         });
-        let reduced = clip_poses(t);
+        let reduced = clip_poses(t, true);
         for (j, error) in worst.iter_mut().enumerate() {
             let [rotation, translation, scale] = pose_difference(&source[j], &reduced[j]);
             if rotation > error.rotation_deg {
@@ -1133,7 +1470,7 @@ fn measure(
 
     let seam = looped.then(|| {
         let duration = frames.last().copied().unwrap_or(0.0);
-        let (start, end) = (clip_poses(0.0), clip_poses(duration));
+        let (start, end) = (clip_poses(0.0, false), clip_poses(duration, false));
         let mut seam = SeamError {
             rotation_deg: 0.0,
             translation: 0.0,

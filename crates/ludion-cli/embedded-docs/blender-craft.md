@@ -101,10 +101,13 @@ bpy.ops.export_scene.gltf(
 
 An animated asset flips two of those arguments: `export_animations=True, export_extras=True` (the
 skin needs `export_skins=True` as well). `ludion import` then writes one `clips/<name>.anim.yaml`
-per Action, with tracks named after the joints. A rigid animation (whole nodes, no skin) imports as prefab clips instead: `ludion docs prefab-animation`. Two custom properties on the Action steer it and
+per Action, with tracks named after the joints. A rigid animation (whole nodes, no skin) imports as prefab clips instead: `ludion docs prefab-animation`. Custom properties on the Action steer it and
 ride out as glTF extras: `loop` (bool, default false) and, only when the defaults refuse a clip
 with `L1206`, the tolerances `bound_rotation_deg`, `bound_translation` and `bound_scale` (the
-`reduce_*` twins keep more keys). An unknown key is `L1207`; `ludion explain L1206` has the numbers.
+`reduce_*` twins keep more keys). `root_motion` names the rig's root bone: its horizontal travel and
+yaw become the clip's `$root` track (`ludion docs voxel-animation` §Root motion), the bone keeps its
+height and tilt; it must be the armature's only root and the armature object untransformed. An
+unknown key is `L1207`; `ludion explain L1206` has the numbers.
 
 `export_image_format` has no `PNG` value in 5.2 (`AUTO`, `JPEG`, `WEBP`, `NONE`): `AUTO` keeps a PNG
 source as PNG, so the script asserts every `bpy.data.images` entry is PNG before exporting.

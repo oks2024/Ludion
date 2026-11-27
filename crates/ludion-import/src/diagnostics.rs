@@ -314,9 +314,10 @@ pub(crate) fn clip_at_rest(label: &str) -> Diagnostic {
 /// animation and the key.
 pub(crate) fn clip_extras_invalid(detail: impl Into<String>) -> Diagnostic {
     Diagnostic::new(code::IMPORT_CLIP_EXTRAS_INVALID, detail.into()).with_help(
-        "animation `extras` may hold `loop` (bool) and finite positive numbers for \
-         `reduce_rotation_deg`, `reduce_translation`, `reduce_scale`, `bound_rotation_deg`, \
-         `bound_translation` and `bound_scale`; fix or remove the key and re-export",
+        "animation `extras` may hold `loop` (bool), `root_motion` (the name of the rig's one \
+         root) and finite positive numbers for `reduce_rotation_deg`, `reduce_translation`, \
+         `reduce_scale`, `bound_rotation_deg`, `bound_translation` and `bound_scale`; fix or \
+         remove the key and re-export",
     )
 }
 

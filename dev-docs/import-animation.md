@@ -29,6 +29,9 @@ importer. Design: `Plan/animation-clips.md` decisions 8, 9, 11–13.
   a rotation segment of 180° or more on an axis is never merged, since the validator refuses it; a
   segment left at exactly 180° between two frames gets a key at the source's midpoint, which keeps the
   source's direction, and the keys after it are re-expressed)
+  → `extract_root` (with `root_motion`, before the reduction): swing-twist yaw `r` and `d = t.xz − rot_y(r, t₀.xz)`
+  to `$root` (yaw reduced as a degrees lerp, a channel at rest omitted), the joint stripped (`x`, `z` held at `t₀`
+  when either channel is emitted), the bound re-applied with `$root`, the seam without it
   → `measure`: joints composed to model space, source vs reduced clip, at every frame. Rotation is
   compared as `2·acos|dot|`, translation Euclidean, scale max-abs. The reduced clip's rotation uses
   `ludion_scene::sample_rotation` (quaternion slerp, the runtime's rule).
@@ -39,6 +42,8 @@ importer. Design: `Plan/animation-clips.md` decisions 8, 9, 11–13.
 - **Extras (animation `extras`, no CLI flags).** `loop` (bool, default false) and the tolerances
   `reduce_rotation_deg`/`reduce_translation`/`reduce_scale` (defaults 0.1°/0.5 mm/0.001) and
   `bound_rotation_deg`/`bound_translation`/`bound_scale` (0.5°/2 mm/0.005), finite and positive.
+  `root_motion` (a string) names the rig's one root by its emitted joint or part name; an unknown name, a
+  non-root, a rig with several roots or a reframed root is `L1207`.
   Anything else is `L1207`. Blender: Action custom properties, `export_extras=True`.
 - **`L1208`** (every channel within the key-reduction tolerance of rest, so the clip would have no tracks) is refused in both modes, `--allow-lossy` included; it runs after the bound check so `L1206` wins on real motion.
 - **`L1206`** (worst error/bound offence per clip: animation, joint, frame, channel) is never
