@@ -424,8 +424,14 @@ tracks:
   and a scaled clock tiles. Keys are in the entity's frame at the clip start, forward is `-Z`; travel is scaled
   by the entity's `Transform.scale` (x, z) and rotated by its `Transform.rotation`.
 - Base clip and its crossfade only: the incoming side counts at the fade weight, the outgoing `from` at the
-  rest, and `weight` is their sum (scale your own code-driven move by `1 - weight`). Layers and blends
-  contribute nothing; `None` when no side carries `$root`.
+  rest, and `weight` is their sum (scale your own code-driven move by `1 - weight`). Layers contribute
+  nothing; `None` when no side carries `$root`.
+- **Blend spaces.** A side naming a blend sums each point clip with `$root`, at the point's weight at
+  `Animation.params`, over the `BlendClock` phase this tick, so a cadence change never drops or repeats travel.
+  **Register your root system after `blend_clocks`** (without it the phase is `elapsed * rate(params now)`, as
+  the pose is). Only rooted points count into `weight`: a partly rooted blend reports a partial one.
+- `check-scene <x>.assembly.yaml` prints a `root` row per `$root` clip (start-to-end travel in the start
+  frame, yaw, duration) and per blend with such a point; `--json` puts them under `root`.
 - A paired entity (`docs/paired-actions.md`) takes its root motion from `paired_motion`, never also from this.
 - The motor idiom: `move_character(world, id, rm.translation)`, then `turn_character(world, id, current_yaw + rm.yaw)`
   (the turn is absolute). `ludion-engine/examples/root_motion.rs` runs it.

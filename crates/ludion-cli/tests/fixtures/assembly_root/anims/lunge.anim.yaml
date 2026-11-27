@@ -1,0 +1,29 @@
+format: 1
+kind: animation
+name: lunge
+duration: 1.0
+loop: false
+tracks:
+  "$root":
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - -16.0
+    rotation:
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 45.0
+          - 0.0

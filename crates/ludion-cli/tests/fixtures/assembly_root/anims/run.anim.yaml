@@ -1,0 +1,35 @@
+format: 1
+kind: animation
+name: run
+duration: 0.5
+loop: true
+events:
+  - t: 0.125
+    name: foot_l
+  - t: 0.375
+    name: foot_r
+tracks:
+  arm:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 90.0
+          - 0.0
+          - 0.0
+  "$root":
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - -6.0

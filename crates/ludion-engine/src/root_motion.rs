@@ -1,5 +1,5 @@
 //! Root motion on voxel assemblies: the displacement a clip's reserved `$root` track authors
-//! (`Plan/animation-layers.md` decisions 55-60, request 0007 section 5).
+//! (`Plan/animation-layers.md` decisions 55-62, request 0007 section 5).
 //!
 //! A `kind: animation` clip may carry a `$root` track: horizontal translation (`v[0]`, `v[2]`) and
 //! yaw (rotation `v[1]`) only, keyed in the entity's frame at the clip's start, in the assembly's
@@ -8,13 +8,16 @@
 
 use ludion_core::ids::EntityId;
 use ludion_core::math::f64::{cos, euler_xyz_degrees_to_quat, sin};
-use ludion_core::time::GameTime;
+use ludion_core::time::{FrameIndex, GameTime};
 use ludion_ecs::{SystemCtx, World};
 use ludion_scene::sample_channel;
 
-use crate::animation_events::{AnimationLibrary, RootClip};
-use crate::components::{Animation, Mesh, MeshSource, Transform};
+use crate::animation_events::{AnimationLibrary, RootClip, RootClips};
+use crate::blend_clock::blend_rate;
+use crate::blend_space::BlendSpaceData;
+use crate::components::{Animation, BlendClock, ClipAnchor, Mesh, MeshSource, Transform};
 use crate::extract::{clock_elapsed, fade_weight};
+use crate::sequences::entity_clock;
 
 /// The most loop cycles one window visits, the latest ones: an absurd speed never stalls the sum.
 const MAX_CYCLES: u64 = 64;
@@ -27,13 +30,15 @@ pub struct RootMotion {
     pub translation: [f32; 3],
     /// The yaw change in radians; apply it as `turn_character(world, id, current + yaw)`.
     pub yaw: f32,
-    /// The summed weight of the sides that carry a `$root` track (1 for a plain clip, the fade
-    /// shares during a crossfade): scale code-driven movement by `1 - weight`.
+    /// The summed weight of what carries a `$root` track (1 for a plain clip, the fade shares
+    /// during a crossfade; on a blend side the share times the weights of the points that carry
+    /// one): scale code-driven movement by `1 - weight`.
     pub weight: f32,
 }
 
 /// This tick's root motion of the assembly `entity` is playing, or `None` when no side of its
-/// base clip carries a `$root` track, or it has no `Animation`, no assembly `Mesh` or no library.
+/// base clip (a clip, or a blend through its points) carries a `$root` track, or it has no
+/// `Animation`, no assembly `Mesh` or no library.
 ///
 /// **Window.** The clip time is the exact gameplay clock (speed, anchor and `game_scale` included,
 /// not the held pose clock) over `(previous instant, this instant]`. A one-shot clamps to its
@@ -41,10 +46,23 @@ pub struct RootMotion {
 /// at 0, so windows tile and a scaled clock neither drops nor repeats travel. A reversed clock
 /// yields nothing.
 ///
-/// **Crossfade.** While `Animation.fade` runs, the incoming clip counts at the fade weight and the
-/// outgoing `from` clip at its complement; a side that is a blend, unknown, lacks `$root` or is a
+/// **Crossfade.** While `Animation.fade` runs, the incoming side counts at the fade weight and the
+/// outgoing `from` side at its complement; a side that is unknown, lacks `$root` or is a
 /// `PoseSnapshot` contributes nothing. [`RootMotion::weight`] is the summed weight. Layers never
 /// contribute: root motion is the base clip's.
+///
+/// **Blend spaces.** A side naming a blend adds, for each point whose clip carries `$root`, that
+/// clip's window at the side's share times the point's weight at `Animation.params`; a point
+/// without `$root` adds neither travel nor weight, so a partly rooted blend reports a partial
+/// [`RootMotion::weight`]. A point's clip time is the shared phase, `(phase + sync) * duration`,
+/// over the phase window of the entity's [`BlendClock`], so a cadence that follows `params`
+/// neither drops nor repeats travel. On the tick the clock restarts, the incoming window opens at
+/// the stateless phase of the previous instant and the carried outgoing phase does not move.
+/// Without a matching clock the window runs between `elapsed * rate(params now)` at the two
+/// instants, the phase the pose is then drawn from.
+///
+/// **Register after [`blend_clocks`](crate::blend_clocks).** The window ends at the phase that
+/// system integrated this tick, so a root system that runs before it reads last tick's window.
 ///
 /// **Frames.** Travel accumulates per key segment in the frame the entity faces at the segment
 /// start, then is scaled by the entity's own `Transform.scale` (x, z) and rotated by its own
@@ -53,11 +71,15 @@ pub struct RootMotion {
 ///
 /// ```
 /// use ludion_engine::{
-///     Animation, Engine, Mesh, Transform, move_character, root_motion_delta, turn_character,
+///     Animation, BlendClock, Engine, Mesh, Transform, blend_clocks, move_character,
+///     root_motion_delta, turn_character,
 /// };
 /// use ludion_protocol::{Command, command};
 ///
 /// let mut engine = Engine::builder()
+///     .system("blend_clocks", blend_clocks)
+///     .query::<(&Animation, &Mesh)>()
+///     .query::<(&mut BlendClock,)>()
 ///     .system("root_motion", |world, ctx| {
 ///         let ids: Vec<_> = world.query_ids::<(&Animation, &Mesh, &Transform)>().map(|(id, _)| id).collect();
 ///         for id in ids {
@@ -82,19 +104,20 @@ pub fn root_motion_delta(world: &World, entity: EntityId, ctx: &SystemCtx) -> Op
         return None;
     };
     let transform = world.get::<Transform>(entity).ok().flatten()?;
-    root_motion_of(world, animation, rel, transform, ctx)
+    root_motion_of(world, entity, animation, rel, transform, ctx)
 }
 
 /// [`root_motion_delta`]'s arithmetic on already-read components, so a caller that reads unrecorded
 /// (a paired entity's driver) shares it bit for bit.
 pub(crate) fn root_motion_of(
     world: &World,
+    entity: EntityId,
     animation: &Animation,
     rel: &str,
     transform: &Transform,
     ctx: &SystemCtx,
 ) -> Option<RootMotion> {
-    let roots = world.resource::<AnimationLibrary>()?.root_clips(rel);
+    let model = world.resource::<AnimationLibrary>()?.root_model(rel);
 
     let now = ctx.game_instant;
     let prev = if ctx.game_advanced() {
@@ -108,34 +131,42 @@ pub(crate) fn root_motion_of(
         None => (1.0, 0.0),
     };
     let sides = [
-        (
-            &animation.clip,
-            animation.started,
-            animation.speed,
-            animation.anchor.as_ref(),
-            incoming,
-        ),
-        (
-            &animation.from,
-            animation.from_started,
-            animation.from_speed,
-            animation.from_anchor.as_ref(),
-            outgoing,
-        ),
+        Side {
+            incoming: true,
+            name: &animation.clip,
+            started: animation.started,
+            speed: animation.speed,
+            anchor: animation.anchor.as_ref(),
+            share: incoming,
+        },
+        Side {
+            incoming: false,
+            name: &animation.from,
+            started: animation.from_started,
+            speed: animation.from_speed,
+            anchor: animation.from_anchor.as_ref(),
+            share: outgoing,
+        },
     ];
-    let (mut travel, mut yaw, mut weight) = ([0.0f64; 2], 0.0f64, 0.0f64);
-    for (name, started, speed, anchor, share) in sides {
-        let Some(clip) = roots.get(name.as_str()).filter(|_| share > 0.0) else {
-            continue;
-        };
-        let tp = clock_elapsed(prev, started, speed, anchor);
-        let tn = clock_elapsed(now, started, speed, anchor);
-        let (side_travel, side_yaw) = window_delta(clip, tp, tn);
-        travel[0] += share * side_travel[0];
-        travel[1] += share * side_travel[1];
-        yaw += share * side_yaw;
-        weight += share;
+    let mut sum = Sum::default();
+    for side in sides.iter().filter(|side| side.share > 0.0) {
+        if let Some(clip) = model.clips.get(side.name) {
+            let window = window_delta(clip, side.elapsed(prev), side.elapsed(now));
+            sum.add(side.share, window);
+        } else if let Some(blend) = model.blends.iter().find(|blend| blend.name == *side.name) {
+            // Engine-optional, so read unrecorded: it demands no game query declaration.
+            let clock = world.get_unrecorded::<BlendClock>(entity).ok().flatten();
+            let own = entity_clock(world, entity, ctx);
+            let own_dt = if own.advanced { f64::from(own.dt) } else { 0.0 };
+            let window = phase_window(side, blend, animation, clock, (prev, now), own_dt);
+            sum.add_blend(side.share, blend, &model.clips, animation.params, window);
+        }
     }
+    let Sum {
+        travel,
+        yaw,
+        weight,
+    } = sum;
     if weight <= 0.0 {
         return None;
     }
@@ -151,6 +182,92 @@ pub(crate) fn root_motion_of(
         yaw: yaw as f32,
         weight: weight as f32,
     })
+}
+
+/// One side of the base clip: the incoming `clip` or the outgoing `from`, with its own clock.
+struct Side<'a> {
+    incoming: bool,
+    name: &'a String,
+    started: FrameIndex,
+    speed: f32,
+    anchor: Option<&'a ClipAnchor>,
+    share: f64,
+}
+
+impl Side<'_> {
+    fn elapsed(&self, at: GameTime) -> f64 {
+        clock_elapsed(at, self.started, self.speed, self.anchor)
+    }
+}
+
+/// The weighted travel, yaw and weight summed over the sides and blend points.
+#[derive(Default)]
+struct Sum {
+    travel: [f64; 2],
+    yaw: f64,
+    weight: f64,
+}
+
+impl Sum {
+    fn add(&mut self, share: f64, (travel, yaw): ([f64; 2], f64)) {
+        self.travel[0] += share * travel[0];
+        self.travel[1] += share * travel[1];
+        self.yaw += share * yaw;
+        self.weight += share;
+    }
+
+    /// Adds every `$root` point of `blend` at `share` times its weight, over the phase window.
+    fn add_blend(
+        &mut self,
+        share: f64,
+        blend: &BlendSpaceData,
+        clips: &RootClips,
+        params: [f32; 2],
+        (from, to): (f64, f64),
+    ) {
+        for (index, weight) in blend.weights(params).iter() {
+            let point = &blend.points[usize::from(index)];
+            let Some(clip) = clips.get(&point.name) else {
+                continue;
+            };
+            // `BlendSpaceData::point_time` before its wrap, which `window_delta` does itself.
+            let at = |phase: f64| (phase + point.sync) * point.duration;
+            self.add(share * weight, window_delta(clip, at(from), at(to)));
+        }
+    }
+}
+
+/// The shared-phase window `(previous, now]`, in unwrapped cycles, a blend side moved over this
+/// tick. `own_dt` is the entity's gameplay step in seconds, 0 on a held frame.
+fn phase_window(
+    side: &Side,
+    blend: &BlendSpaceData,
+    animation: &Animation,
+    clock: Option<&BlendClock>,
+    (prev, now): (GameTime, GameTime),
+    own_dt: f64,
+) -> (f64, f64) {
+    let rate = blend_rate(blend, animation.params);
+    // Extract's matching rule: the clock holds this side's phase, else the stateless one applies.
+    let clock = clock.filter(|c| {
+        if side.incoming {
+            c.blend == animation.clip && c.started == animation.started
+        } else {
+            !c.from_blend.is_empty() && c.from_blend == animation.from
+        }
+    });
+    match clock {
+        Some(c) if side.incoming && c.prev >= 0.0 => (c.prev, c.phase),
+        // The restart tick, where `prev` is parked below zero.
+        Some(c) if side.incoming => (side.elapsed(prev) * rate, c.phase),
+        Some(c) if c.prev >= 0.0 => (
+            c.from_phase - rate * f64::from(side.speed) * own_dt,
+            c.from_phase,
+        ),
+        // `blend_clocks` does not advance `from_phase` on a restart tick.
+        Some(c) => (c.from_phase, c.from_phase),
+        None => (side.elapsed(prev) * rate, side.elapsed(now) * rate),
+    }
 }
 
 /// `v` rotated by the quaternion `q = [x, y, z, w]`, in plain arithmetic.
@@ -221,6 +338,7 @@ mod tests {
     use ludion_scene::{Ease, Keyframe};
 
     use super::*;
+    use crate::blend_space::BlendPointData;
 
     fn key(t: f64, v: [f64; 3]) -> Keyframe {
         Keyframe {
@@ -315,5 +433,81 @@ mod tests {
         let (pos, _) = window_delta(&c, 0.0, 1.0);
         let expected = rot_y(-std::f64::consts::FRAC_PI_2, [0.0, -8.0]);
         assert!((pos[0] - expected[0]).abs() < 1e-12 && (pos[1] - expected[1]).abs() < 1e-12);
+    }
+
+    /// A 1D blend with a point at 0 and one at 1, named after their clips.
+    fn pair(first: &str, second: &str) -> BlendSpaceData {
+        let point = |name: &str, at: f64, sync: f64| BlendPointData {
+            name: name.to_string(),
+            clip: 0,
+            at: [at, 0.0],
+            duration: 1.0,
+            speed: 1.0,
+            sync,
+            events: Vec::new(),
+        };
+        BlendSpaceData {
+            name: "stride".into(),
+            two_d: false,
+            triangles: Vec::new(),
+            points: vec![point(first, 0.0, 0.25), point(second, 1.0, 0.0)],
+        }
+    }
+
+    fn rooted() -> RootClips {
+        let side = clip(true, &[(0.0, [0.0; 3]), (1.0, [4.0, 0.0, 0.0])], &[]);
+        RootClips::from([("walk".to_string(), walk(true)), ("side".to_string(), side)])
+    }
+
+    fn blended(blend: &BlendSpaceData, param: f32, window: (f64, f64)) -> Sum {
+        let mut sum = Sum::default();
+        sum.add_blend(1.0, blend, &rooted(), [param, 0.0], window);
+        sum
+    }
+
+    #[test]
+    fn a_point_at_weight_one_equals_its_clips_window() {
+        let sum = blended(&pair("walk", "side"), 0.0, (0.5, 1.9));
+        // The point's sync shifts its clip time by a quarter cycle.
+        let (travel, yaw) = window_delta(&walk(true), 0.75, 2.15);
+        assert!(
+            (sum.travel[0] - travel[0]).abs() < 1e-12,
+            "{:?}",
+            sum.travel
+        );
+        assert!(
+            (sum.travel[1] - travel[1]).abs() < 1e-12,
+            "{:?}",
+            sum.travel
+        );
+        assert_eq!((sum.yaw, sum.weight), (yaw, 1.0));
+    }
+
+    #[test]
+    fn a_two_point_mix_is_the_weighted_travel() {
+        let sum = blended(&pair("walk", "side"), 0.25, (0.1, 0.6));
+        assert!(
+            (sum.travel[1] - 0.75 * -4.0).abs() < 1e-12,
+            "{:?}",
+            sum.travel
+        );
+        assert!(
+            (sum.travel[0] - 0.25 * 2.0).abs() < 1e-12,
+            "{:?}",
+            sum.travel
+        );
+        assert!((sum.weight - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_point_without_root_adds_no_weight() {
+        let sum = blended(&pair("walk", "idle"), 0.25, (0.1, 0.6));
+        assert!(
+            (sum.travel[1] - 0.75 * -4.0).abs() < 1e-12,
+            "{:?}",
+            sum.travel
+        );
+        assert!(sum.travel[0].abs() < 1e-12);
+        assert!((sum.weight - 0.75).abs() < 1e-12, "{}", sum.weight);
     }
 }

@@ -224,6 +224,58 @@ fn assembly_lists_its_masks_and_blends() {
     );
 }
 
+/// Each clip with a `$root` track and each blend with such a point get a `root` row after the
+/// blends, in text and as the `--json` `root` object; an assembly without `$root` has neither.
+#[test]
+fn assembly_lists_its_root_motion() {
+    let path = fixture("assembly_root/humanoid.assembly.yaml");
+    let output = run_check_scene(&path);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // `walk` faces +90 degrees at its start, so its -Z keys read as +X in that frame.
+    let rows = "  blend stride (1D): walk@0, run@2
+  root lunge: travel x 0 z -16 voxels, yaw 45°, 1 s one-shot
+  root run: travel x 0 z -6 voxels, yaw 0°, 0.5 s loop
+  root walk: travel x 8 z 0 voxels, yaw 0°, 1 s loop
+  root blend mixed: 1 of 2 points carry $root (walk)
+  root blend stride: 2 of 2 points carry $root (walk, run)
+";
+    assert!(stdout.contains(rows), "stdout was: {stdout}");
+    assert!(!stdout.contains("root blend still"), "stdout was: {stdout}");
+
+    let json = run_check_scene_args(&path, &["--json"]);
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).expect("one JSON object");
+    assert_eq!(
+        value["root"]["clips"][0],
+        serde_json::json!({
+            "name": "lunge", "travel": [0.0, -16.0], "yaw": 45.0, "duration": 1.0, "loop": false
+        })
+    );
+    let walk = &value["root"]["clips"][2];
+    assert_eq!(walk["name"], "walk");
+    let travel = |axis: usize| walk["travel"][axis].as_f64().expect("a number");
+    assert!((travel(0) - 8.0).abs() < 1e-9, "{walk}");
+    assert!(travel(1).abs() < 1e-9, "{walk}");
+    assert_eq!(
+        value["root"]["blends"],
+        serde_json::json!([
+            { "name": "mixed", "points": ["walk"] },
+            { "name": "stride", "points": ["walk", "run"] }
+        ])
+    );
+
+    let plain = fixture("assembly_blends/humanoid.assembly.yaml");
+    let stdout = String::from_utf8_lossy(&run_check_scene(&plain).stdout).into_owned();
+    assert!(!stdout.contains("  root "), "{stdout}");
+    let json = run_check_scene_args(&plain, &["--json"]);
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).expect("one JSON object");
+    assert!(value.get("root").is_none(), "{value}");
+}
+
 /// An assembly's `ik:` entries are listed after its blends: a chain with an explicit hinge, a chain
 /// whose `lower-arm-*` hinge defaulted (printed as the solver uses it), and a look-at — as text and
 /// as JSON; an assembly with none prints no such line and its JSON carries no `ik` key.

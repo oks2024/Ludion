@@ -1,0 +1,59 @@
+format: 1
+kind: assembly
+name: humanoid
+size:
+  - 3
+  - 2
+  - 1
+palette:
+  A:
+    color:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 1.0
+parts:
+  - name: torso
+    file: parts/cell.part.yaml
+    place:
+      - 1
+      - 0
+      - 0
+  - name: arm
+    file: parts/cell.part.yaml
+    parent: torso
+    place:
+      - 2
+      - 0
+      - 0
+  - name: hand
+    file: parts/cell.part.yaml
+    parent: arm
+    place:
+      - 2
+      - 1
+      - 0
+clips:
+  idle: anims/idle.anim.yaml
+  lunge: anims/lunge.anim.yaml
+  run: anims/run.anim.yaml
+  walk: anims/walk.anim.yaml
+blends:
+  mixed:
+    points:
+      - clip: idle
+        at: 0.0
+      - clip: walk
+        at: 2.0
+  still:
+    points:
+      - clip: idle
+        at: 0.0
+      - clip: idle
+        at: 2.0
+  stride:
+    points:
+      - clip: walk
+        at: 0.0
+      - clip: run
+        at: 2.0

@@ -131,6 +131,14 @@ pub(crate) struct RootClip {
 /// An assembly's clips that carry a `$root` track, keyed by clip short name.
 pub(crate) type RootClips = BTreeMap<String, RootClip>;
 
+/// What `root_motion_delta` reads of one assembly: its `$root` clips and the blend spaces that may
+/// weight them.
+#[derive(Debug, Default)]
+pub(crate) struct RootModel {
+    pub clips: RootClips,
+    pub blends: Vec<BlendSpaceData>,
+}
+
 /// The per-model clip timings [`animation_events`] reads, loaded lazily from `root`. Engine
 /// configuration installed at every world rebuild, never hashed; see the module docs.
 pub(crate) struct AnimationLibrary {
@@ -140,9 +148,9 @@ pub(crate) struct AnimationLibrary {
     models: BTreeMap<Model, Result<BTreeMap<String, ClipTiming>, Vec<Diagnostic>>>,
     /// The blend spaces of each loaded character or assembly (`blend_clock`).
     blends: BTreeMap<Model, Vec<BlendSpaceData>>,
-    /// The `$root` clips of each assembly, keyed by its path. Interior-mutable so the sim read
+    /// The [`RootModel`] of each assembly, keyed by its path. Interior-mutable so the sim read
     /// `root_motion_delta` works through `&World`; the lock is held only to get or insert.
-    roots: Mutex<BTreeMap<String, Arc<RootClips>>>,
+    roots: Mutex<BTreeMap<String, Arc<RootModel>>>,
 }
 
 /// A model that binds clips, with its path: the `Mesh.shape` of an assembly or character, or an
@@ -173,15 +181,15 @@ impl AnimationLibrary {
         }
     }
 
-    /// The `$root` clips of the assembly at `rel`, loaded on first use (or already filled by
+    /// The [`RootModel`] of the assembly at `rel`, loaded on first use (or already filled by
     /// [`Self::timings`]); empty for a model that fails to load, which `animation_events` reports.
-    pub(crate) fn root_clips(&self, rel: &str) -> Arc<RootClips> {
+    pub(crate) fn root_model(&self, rel: &str) -> Arc<RootModel> {
         let lock = || self.roots.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(found) = lock().get(rel) {
             return Arc::clone(found);
         }
         let loaded = crate::assembly_mesh::load(AssetRoot::content(&self.root), rel)
-            .map(|data| Arc::new(root_clips_of(&data.clips)))
+            .map(|data| Arc::new(root_model_of(&data)))
             .unwrap_or_default();
         Arc::clone(lock().entry(rel.to_string()).or_insert(loaded))
     }
@@ -212,7 +220,7 @@ impl AnimationLibrary {
                         self.roots
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
-                            .insert(rel.to_string(), Arc::new(root_clips_of(&data.clips)));
+                            .insert(rel.to_string(), Arc::new(root_model_of(&data)));
                         data.clips
                             .iter()
                             .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
@@ -247,21 +255,26 @@ impl AnimationLibrary {
     }
 }
 
-/// The clips that carry a `$root` track.
-fn root_clips_of(clips: &[crate::assembly_mesh::AssemblyClipData]) -> RootClips {
-    clips
-        .iter()
-        .filter_map(|b| {
-            let track = ludion_scene::clip_track(&b.clip, ROOT_TRACK)?;
-            let root = RootClip {
-                duration: b.clip.duration,
-                looped: b.clip.looped,
-                translation: track.translation.clone(),
-                rotation: track.rotation.clone(),
-            };
-            Some((b.name.clone(), root))
-        })
-        .collect()
+/// `clip`'s `$root` track, if it carries one.
+pub(crate) fn root_clip(clip: &ludion_scene::AnimationDocument) -> Option<RootClip> {
+    let track = ludion_scene::clip_track(clip, ROOT_TRACK)?;
+    Some(RootClip {
+        duration: clip.duration,
+        looped: clip.looped,
+        translation: track.translation.clone(),
+        rotation: track.rotation.clone(),
+    })
+}
+
+fn root_model_of(data: &crate::assembly_mesh::AssemblyData) -> RootModel {
+    RootModel {
+        clips: data
+            .clips
+            .iter()
+            .filter_map(|b| Some((b.name.clone(), root_clip(&b.clip)?)))
+            .collect(),
+        blends: data.blends.clone(),
+    }
 }
 
 impl AnimationLibrary {
@@ -720,6 +733,96 @@ mod tests {
         let prev = (tick > 0).then(|| at(tick - 1));
         crossings(timing, prev, at(tick), &mut out);
         out
+    }
+
+    const BODY: &str = r#"format: 1
+kind: assembly
+name: body
+size:
+  - 1
+  - 1
+  - 1
+palette:
+  A:
+    color:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 1.0
+parts:
+  - name: body
+    file: cell.part.yaml
+    place:
+      - 0
+      - 0
+      - 0
+clips:
+  walk: walk.anim.yaml
+blends:
+  stride:
+    points:
+      - clip: walk
+        at: 0.0
+      - clip: walk
+        at: 1.0
+"#;
+
+    const CELL: &str = r#"format: 1
+kind: part
+size:
+  - 1
+  - 1
+  - 1
+slices:
+  -
+    - "A"
+"#;
+
+    const WALK: &str = r#"format: 1
+kind: animation
+duration: 1.0
+loop: true
+tracks:
+  "$root":
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - -8.0
+"#;
+
+    #[test]
+    fn the_root_model_is_cached_and_prefilled_by_timings() {
+        let dir = std::env::temp_dir().join(format!("ludion-root-model-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let files = [
+            ("body.assembly.yaml", BODY),
+            ("cell.part.yaml", CELL),
+            ("walk.anim.yaml", WALK),
+        ];
+        for (name, text) in files {
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+
+        let lazy = AnimationLibrary::new(dir.clone());
+        let first = lazy.root_model("body.assembly.yaml");
+        assert_eq!((first.clips.len(), first.blends.len()), (1, 1));
+        assert!(Arc::ptr_eq(&first, &lazy.root_model("body.assembly.yaml")));
+
+        let mut prefilled = AnimationLibrary::new(dir.clone());
+        let model = Model::Assembly("body.assembly.yaml".into());
+        assert!(prefilled.timings(&model).is_ok());
+        // With the files gone, only the pre-fill can still answer.
+        std::fs::remove_dir_all(&dir).unwrap();
+        let filled = prefilled.root_model("body.assembly.yaml");
+        assert_eq!((filled.clips.len(), filled.blends.len()), (1, 1));
     }
 
     #[test]

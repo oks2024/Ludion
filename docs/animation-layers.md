@@ -213,7 +213,7 @@ static GRAPH: AnimGraph<Pose, Inputs> = AnimGraph {
 - A layer raises no `AnimationEvents` unless it sets `events: true`.
 - IK over assembly parts (`ik:`, `IkTargets`) is separate, solved after layers: `ludion docs voxel-animation` §IK (`render --model --look/--ik` previews it).
 - `ParentJoint` sockets and `posed_joint_world` read the layered pose.
-- Root motion is the base clip's `$root` track only: layers and blends contribute none (`ludion docs voxel-animation` §Root motion).
+- Root motion is the base's `$root` tracks only, a blend's points at their weights; layers contribute none (`ludion docs voxel-animation` §Root motion).
 
 ## Next
 

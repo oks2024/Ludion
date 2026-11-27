@@ -1058,7 +1058,7 @@ fn root_motion(
     let MeshSource::Assembly(rel) = &mesh.shape else {
         return None;
     };
-    root_motion_of(world, animation, rel, here, ctx)
+    root_motion_of(world, entity, animation, rel, here, ctx)
 }
 
 /// Fires the document events of every playing paired action, ends the ones whose clips are done, and

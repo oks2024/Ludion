@@ -1,0 +1,46 @@
+format: 1
+kind: animation
+name: walk
+duration: 1.0
+loop: true
+events:
+  - t: 0.25
+    name: foot_l
+  - t: 0.75
+    name: foot_r
+tracks:
+  arm:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 45.0
+          - 0.0
+          - 0.0
+  "$root":
+    translation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - -8.0
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 90.0
+          - 0.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 90.0
+          - 0.0
