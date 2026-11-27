@@ -1542,48 +1542,9 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
 
     // The rig arrays appear only when the document declares some, so a plain assembly's summary
     // object (and the editor's committed sample of it) keeps its keys.
-    if !assembly.masks.is_empty() {
-        fields["masks"] = assembly
-            .masks
-            .iter()
-            .map(|mask| {
-                serde_json::json!({
-                    "name": mask.name,
-                    "joints": mask.joints,
-                    "descendants": mask.descendants,
-                    "weights": mask.weights,
-                })
-            })
-            .collect();
-    }
-    if !assembly.blends.is_empty() {
-        fields["blends"] = assembly
-            .blends
-            .iter()
-            .map(|blend| {
-                let resolved = data.blend(&blend.name);
-                let two_d = resolved.is_some_and(|resolved| resolved.two_d);
-                let points: Vec<_> = blend
-                    .points
-                    .iter()
-                    .map(|point| {
-                        let at = match point.at {
-                            ludion_scene::BlendAt::One(x) => serde_json::json!(x),
-                            ludion_scene::BlendAt::Two(at) => serde_json::json!(at),
-                        };
-                        serde_json::json!({ "clip": point.clip, "at": at })
-                    })
-                    .collect();
-                serde_json::json!({
-                    "name": blend.name,
-                    "sync": blend.sync,
-                    "dimension": if two_d { 2 } else { 1 },
-                    "points": points,
-                    "triangles": resolved.map(|resolved| resolved.triangles.clone()).unwrap_or_default(),
-                })
-            })
-            .collect();
-    }
+    insert_rig_fields(&mut fields, &assembly.masks, &assembly.blends, |name| {
+        data.blend(name)
+    });
     // `data.ik` and the document's `ik` are both sorted by name, so they zip; the resolved hinge
     // and limits come from `data` (what the solver uses), the names and the unmirrored effector from
     // the document.
@@ -1642,7 +1603,91 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
     for clip in &assembly.clips {
         println!("  clip {}: {}", clip.name, clip.file);
     }
-    for mask in &assembly.masks {
+    print_rig_rows(&assembly.masks, &assembly.blends, |name| data.blend(name));
+    for line in root_rows.text() {
+        println!("{line}");
+    }
+    for row in &ik_rows {
+        println!("{}", row.text());
+    }
+    if let Some(ground) = &assembly.ground {
+        let drop = if ground.root_drop { ", root_drop" } else { "" };
+        println!("  ground: max_adjust {}{drop}", ground.max_adjust);
+    }
+    if let Some(warning) = connectivity {
+        diagnostic::print(&warning);
+        print!("{}", render_connectivity_owners(&owners, &grid));
+    }
+    for warning in overlap {
+        diagnostic::print(&warning);
+    }
+
+    if let Err(failure) = print_voxel_views(&grid.voxel, views, Some(&owners)) {
+        return failure.exit();
+    }
+    if views.exposure {
+        print!("{}", render_overlap(&owners, &grid));
+    }
+    ExitCode::SUCCESS
+}
+
+/// Adds a rig document's `masks` and `blends` arrays to a `--json` summary, each only when the
+/// document declares some. `resolved` is the engine's blend of that name.
+fn insert_rig_fields<'a>(
+    fields: &mut serde_json::Value,
+    masks: &[ludion_scene::RigMask],
+    blends: &[ludion_scene::BlendSpace],
+    resolved: impl Fn(&str) -> Option<&'a ludion_engine::BlendSpaceData>,
+) {
+    if !masks.is_empty() {
+        fields["masks"] = masks
+            .iter()
+            .map(|mask| {
+                serde_json::json!({
+                    "name": mask.name,
+                    "joints": mask.joints,
+                    "descendants": mask.descendants,
+                    "weights": mask.weights,
+                })
+            })
+            .collect();
+    }
+    if !blends.is_empty() {
+        fields["blends"] = blends
+            .iter()
+            .map(|blend| {
+                let resolved = resolved(&blend.name);
+                let two_d = resolved.is_some_and(|resolved| resolved.two_d);
+                let points: Vec<_> = blend
+                    .points
+                    .iter()
+                    .map(|point| {
+                        let at = match point.at {
+                            ludion_scene::BlendAt::One(x) => serde_json::json!(x),
+                            ludion_scene::BlendAt::Two(at) => serde_json::json!(at),
+                        };
+                        serde_json::json!({ "clip": point.clip, "at": at })
+                    })
+                    .collect();
+                serde_json::json!({
+                    "name": blend.name,
+                    "sync": blend.sync,
+                    "dimension": if two_d { 2 } else { 1 },
+                    "points": points,
+                    "triangles": resolved.map(|resolved| resolved.triangles.clone()).unwrap_or_default(),
+                })
+            })
+            .collect();
+    }
+}
+
+/// The text twin of [`insert_rig_fields`]: one row per mask, then one per blend.
+fn print_rig_rows<'a>(
+    masks: &[ludion_scene::RigMask],
+    blends: &[ludion_scene::BlendSpace],
+    resolved: impl Fn(&str) -> Option<&'a ludion_engine::BlendSpaceData>,
+) {
+    for mask in masks {
         let descendants = if mask.descendants {
             " (descendants)"
         } else {
@@ -1660,8 +1705,8 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
             mask.joints.join(", ")
         );
     }
-    for blend in &assembly.blends {
-        let resolved = data.blend(&blend.name);
+    for blend in blends {
+        let resolved = resolved(&blend.name);
         let two_d = resolved.is_some_and(|resolved| resolved.two_d);
         let sync = blend
             .sync
@@ -1690,31 +1735,6 @@ fn run_assembly(mut reporter: Reporter, views: &VoxelViews) -> ExitCode {
             println!("    triangles: {}", triangles.join(" "));
         }
     }
-    for line in root_rows.text() {
-        println!("{line}");
-    }
-    for row in &ik_rows {
-        println!("{}", row.text());
-    }
-    if let Some(ground) = &assembly.ground {
-        let drop = if ground.root_drop { ", root_drop" } else { "" };
-        println!("  ground: max_adjust {}{drop}", ground.max_adjust);
-    }
-    if let Some(warning) = connectivity {
-        diagnostic::print(&warning);
-        print!("{}", render_connectivity_owners(&owners, &grid));
-    }
-    for warning in overlap {
-        diagnostic::print(&warning);
-    }
-
-    if let Err(failure) = print_voxel_views(&grid.voxel, views, Some(&owners)) {
-        return failure.exit();
-    }
-    if views.exposure {
-        print!("{}", render_overlap(&owners, &grid));
-    }
-    ExitCode::SUCCESS
 }
 
 /// What `root_motion_delta` can read of a voxel or skinned assembly: each clip with a `$root` track, with the
@@ -1869,8 +1889,8 @@ fn run_prefab(mut reporter: Reporter, source: &str) -> ExitCode {
             return exit;
         }
     }
-    let clips = if doc.clips.is_empty() {
-        Vec::new()
+    let data = if doc.clips.is_empty() && doc.blends.is_empty() {
+        None
     } else {
         let root = path.parent().unwrap_or_else(|| Path::new("."));
         let rel = path
@@ -1892,15 +1912,17 @@ fn run_prefab(mut reporter: Reporter, source: &str) -> ExitCode {
         if let Some(exit) = fail_or_warn(&mut reporter, unmatched) {
             return exit;
         }
-        data.clips
+        Some(data)
     };
+    let clips = data.as_ref().map_or(&[][..], |data| &data.clips);
+    let resolved = |name: &str| data.as_ref().and_then(|data| data.blend(name));
     let components: usize = doc
         .entities
         .iter()
         .map(|entity| entity.components.len())
         .sum();
     let parts = doc.entities.len();
-    let fields = serde_json::json!({
+    let mut fields = serde_json::json!({
         "name": doc.name,
         "parts": parts,
         "components": components,
@@ -1912,6 +1934,7 @@ fn run_prefab(mut reporter: Reporter, source: &str) -> ExitCode {
             "tracks": clip.clip.tracks.len(),
         })).collect::<Vec<_>>(),
     });
+    insert_rig_fields(&mut fields, &doc.masks, &doc.blends, resolved);
     reporter.ok(fields, || {
         let name = doc
             .name
@@ -1933,7 +1956,7 @@ fn run_prefab(mut reporter: Reporter, source: &str) -> ExitCode {
             if parts == 1 { "" } else { "s" },
             if components == 1 { "" } else { "s" }
         );
-        for clip in &clips {
+        for clip in clips {
             println!(
                 "  clip {}: {}, duration {}, loop {}, {} track{}",
                 clip.name,
@@ -1944,6 +1967,7 @@ fn run_prefab(mut reporter: Reporter, source: &str) -> ExitCode {
                 if clip.clip.tracks.len() == 1 { "" } else { "s" },
             );
         }
+        print_rig_rows(&doc.masks, &doc.blends, resolved);
     })
 }
 

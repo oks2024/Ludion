@@ -26,7 +26,7 @@ description: Rigid glTF node animation on a prefab — import clips, preview, pl
 
 ## Format
 
-The prefab gains an optional `clips:` map, short name to clip file, resolved against the prefab file (like a nested `prefab:` path). It is absent when empty, so every prefab without clips is byte-identical. A track is keyed by **part name**; its keys are the node's absolute local TRS from the glTF.
+The prefab gains an optional `clips:` map, short name to clip file, resolved against the prefab file (like a nested `prefab:` path). It is absent when empty, so every prefab without clips is byte-identical (`masks:` and `blends:` below likewise). A track is keyed by **part name**; its keys are the node's absolute local TRS from the glTF.
 
 | Import case | Result |
 |---|---|
@@ -46,6 +46,34 @@ The prefab gains an optional `clips:` map, short name to clip file, resolved aga
 - **`animation_events` needs one more query.** A game registering that system declares `.query::<(&Animation, &PrefabInstance)>()` or the query-drift gate reports `L1126`.
 - **Root motion.** A `$root` track targets no part (never `L1314`): `root_motion_delta` reads it on the root part, in prefab-local units (`ludion docs voxel-animation` §Root motion).
 - **Profiling:** the load report gains a `prefab_clips` row (`ludion devdocs profiling`).
+
+## Layers and blends
+
+A hand-authored prefab takes `masks:` and `blends:` in the assembly's spelling (`ludion docs animation-layers`), written after `clips:`. A mask's `joints` name the prefab's own parts (not a nested instance or its parts); `descendants: true` follows each part's `Parent`. A nested instance's part weighs 0 under any mask and 1 without one.
+
+```yaml
+masks:
+  forearm:
+    joints:
+      - lower
+    descendants: true
+blends:
+  sway:
+    points:
+      - clip: swing
+        at: 0.0
+      - clip: reach
+        at: 1.0
+```
+
+- **Use.** The root part's `Animation.clip` (or `from`) may name a blend, with `params`; an `AnimationLayers` on the same entity poses the parts, with or without an `Animation`.
+- **Composition** is the assembly's, over each sample's difference from the part's authored rest (turn `rest⁻¹ · key`, offset `key − rest`, scale `key / rest`).
+- **Override** takes the layer's channels by `weight × mask`; **additive** adds the layer's difference from rest, so a key equal to the rest adds nothing.
+- **`reference:`** measures an additive layer from that clip's first frame instead of the rest.
+- An unknown clip, blend, mask or reference leaves the pose as if the layer were absent.
+- **Phase.** A blend plays at `elapsed * rate(params now)`: exact while the params hold still; changing them mid-loop jumps the phase.
+- **No events** fire from a prefab's blends or layers, and `root_motion_delta` reads a prefab's plain clips only.
+- **Check:** `ludion check-scene examples/gallery/prefabs/arm/arm.prefab.yaml` (a checkout's runnable example) lists `mask` and `blend` rows after the clips. `L1226` is a malformed entry; `L1674` an unknown mask part or an unusable blend.
 
 ## The model sheet
 

@@ -1,6 +1,6 @@
 # Plan: Animation layers — bone masks, layers, blend spaces, IK, root motion and a state-graph helper
 
-> Status: **W6b-2b (the glTF importer writes `$root`) mechanized (2026-11-27).** **W6b-2a (root motion on skinned assemblies and prefab roots, on the entity's clock) mechanized (2026-11-27).** **W6b-1 (blend root motion, tooling) mechanized (2026-11-26).** **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); W4c (entity targets) mechanized (2026-11-21); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); W6a (root motion) mechanized (2026-11-21); A3 deferred; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
+> Status: **A3a (prefab-part masks, layers and blends, in extract and `check-scene`) mechanized (2026-11-27).** **W6b-2b (the glTF importer writes `$root`) mechanized (2026-11-27).** **W6b-2a (root motion on skinned assemblies and prefab roots, on the entity's clock) mechanized (2026-11-27).** **W6b-1 (blend root motion, tooling) mechanized (2026-11-26).** **W1, W2a, W2b (sim), A1, A2, W2c, W2d, W4a and W4b mechanized (2026-11-18); W4c (entity targets) mechanized (2026-11-21); part sockets and W5a (ground feet) mechanized (2026-11-19); W3 mechanized (2026-11-20); W5b bench mechanized (2026-11-21; the measurement and the budget files are owed); W6a (root motion) mechanized (2026-11-21); A3b (prefab blend clock, events, render) not started; the macOS twins of the W2d goldens, of `humanoid-look-yaw-limit-strip.png` and of `assembly-ground.png` are owed to the M4.** Driver: Neon Shroud request 0007
 > (`engine-requests/0007-animation-layers-blendspaces-ik.md`, filed 2026-11-17, audited at engine r2369).
 > It lifts the deferrals `Plan/animation-clips.md` §Non-goals recorded, each with a fired trigger. The
 > design below was written from the tree on 2026-11-18, so re-grep before editing.
@@ -256,6 +256,22 @@ No hash, schema, replay or golden moved. The read of an unbound entity is bit-id
 | `docs/blender-craft.md` + embedded mirror, `dev-docs/import-animation.md` | the authoring contract and the pipeline |
 
 No hash, schema or golden moved. Without the key the written clip is unchanged.
+
+### A3a — prefab-part masks, layers and blends
+
+| file | role |
+|---|---|
+| `crates/ludion-scene/src/prefab.rs`, `lib.rs` | `masks:`/`blends:`, `check_prefab_blends` |
+| `crates/ludion-core/src/codes.rs` | `L1674`; `L1207`'s text lists `root_motion` |
+| `crates/ludion-engine/src/prefab_clips.rs` | resolved masks and blends |
+| `crates/ludion-engine/src/extract.rs`, `static_scene.rs` | the shared layer resolver, rest-delta composition, a layers-only root re-posed |
+| `crates/ludion-engine/tests/prefab_layers.rs`, `it.rs` | the composition proofs and hash inertness |
+| `crates/ludion-cli/src/check_scene.rs`, `tests/check_scene_prefab.rs` | the prefab `mask` and `blend` rows |
+| `examples/gallery/prefabs/arm/` | the hand-authored fixture |
+| `docs/prefab-animation.md`, `docs/animation-layers.md`, embedded mirrors | the user-facing contract |
+
+No component, `WorldHash`, replay, wire schema or golden moved. A prefab without the keys and an instance without
+layers or blends pose as before.
 
 ## Trigger
 
@@ -580,6 +596,23 @@ share one driver shape.
     degrees lerp the runtime plays; two frames half a turn apart get a `$root` key at the source's midpoint, and a
     split key of the stripped rotation is sampled with the yaw taken off. The `L1206` bound is measured with `$root`
     applied; the loop seam is measured without it.
+69. **Prefab `masks:` and `blends:`** (A3a). The assembly's spelling and parsers; canonical key order `format, kind,
+    name, generated_from, clips, masks, blends, entities`, nothing written when empty. A malformed entry is `L1226`;
+    consistency is `L1674`. A mask lists top-level, named, non-instance parts, and `descendants` walks each entry's
+    `Parent` over all of `entities` (instance entries count as positions). A nested instance's part weighs 0 under a
+    mask and 1 without one. Clips bind at speed 1 with their own events, as on an assembly.
+70. **Rest-delta composition** (A3a). A prefab sample is absolute local TRS, an assembly's a delta from rest. Each
+    per-clip sample of a part with rest `r` maps to `(R_r⁻¹ R_c, T_c − T_r, S_c / S_r)` (an unkeyed channel stays
+    unkeyed), so the blend walk (d32), override (d27), additive from identity (d28) and `reference:` apply unchanged;
+    the result converts back as `(R_r R, T_r + T, S_r S)`, an unkeyed channel reading the rest, and then rides the
+    instance's placement. A part no layer reaches under a plain-clip base keeps the direct clip path. `AnimationLayers`
+    needs no `Animation` on the root, as on an assembly.
+71. **Phase and events** (A3a). No `BlendClock` exists on a prefab root: a base blend plays `elapsed * rate(params
+    now)` (d18), a layer blend the same at the layer's clock. Prefab blends and layers fire no events, and root motion
+    still reads plain clips (d66). **Trigger:** A3b — the clock, the events, and `render --model <prefab>
+    --blend/--layer` with a gallery golden.
+72. **Hand-authored prefabs only** (A3a). A generated prefab is write-only and the importer writes neither key.
+    **Trigger** for an importer pass-through: an imported prefab needs layers.
 
 ## Waves
 
@@ -592,9 +625,11 @@ share one driver shape.
   (decisions 25–30).
 - **A2 (shipped).** Assembly `blends:` and layer blends, sharing the blend parser through `ludion-scene`
   (decisions 31–34).
-- **A3 (deferred).** Prefab-part layers and blends, in `prefab_part_poses`. **Trigger:** a prefab-part
-  character or prop needs layers or blends. Request 0007 targets assemblies, and a prefab whose root carries
-  an assembly `Mesh` already plays through the assembly path.
+- **A3a (shipped 2026-11-27).** Prefab-part masks, layers and blends in `prefab_part_poses`, and `check-scene`
+  rows (decisions 69–72). The owner waived the trigger (2026-11-26). A prefab whose root carries an assembly `Mesh`
+  still plays through the assembly path.
+- **A3b.** A `BlendClock` and blend and layer events on prefab roots, `render --model <prefab> --blend/--layer`,
+  and a gallery scene with its golden.
 - **W2c (shipped).** `check-scene` masks and blends, `render --model … --blend/--layer` strips
   (`model_sheet.rs` + CLI; decision 35).
 - **W2d (shipped).** The gallery humanoid, `assembly-layers.yaml` and two goldens (macOS twins owed).
@@ -644,8 +679,7 @@ share one driver shape.
 
 ## Non-goals
 
-- Layers and blends on prefab parts, and `render --blend/--layer` on a prefab. **Trigger:** A3 (a prefab-part
-  character or prop needs layers or blends).
+- `render --blend/--layer` on a prefab. **Trigger:** A3b.
 - Per-layer anchors (`set_clip_speed` for a layer). **Trigger:** a layer clip that must change rate mid-clip.
 - Layer-to-layer blending (a crossfade inside one layer). **Trigger:** a layer whose clip switch visibly pops.
 - A masked crossfade of the base. **Trigger:** a base switch that must not touch the upper body.

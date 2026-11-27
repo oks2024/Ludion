@@ -43,8 +43,9 @@ use ludion_renderer::{DEFAULT_POROSITY, LodSettings};
 use ludion_renderer::{UiClip, UiRotation};
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
-use crate::assembly_mesh::AssemblyData;
+use crate::assembly_mesh::{AssemblyClipData, AssemblyData, AssemblyMaskData};
 use crate::asset_cache::{AssetCache, AssetRefs, SourceFiles};
+use crate::blend_space::BlendSpaceData;
 use crate::character::CharacterData;
 use crate::components::PoseSnapshot;
 use crate::components::SubtitleView;
@@ -6910,23 +6911,113 @@ fn drives_a_model_mesh(world: &World, id: EntityId) -> bool {
     })
 }
 
-/// One playing prefab instance: its loaded clips and the sides of its `Animation`, as indices into
-/// `data.clips` with the clip time to sample each at.
+/// One playing prefab instance: its loaded rig, the sides of its `Animation` and its
+/// `AnimationLayers`.
 struct PrefabPlay {
     data: Arc<PrefabClipData>,
     /// The rests of the text the instance was expanded from, when the library still holds it.
     rests: Option<Arc<PartRests>>,
-    pose: Option<(usize, f64)>,
-    fade: Option<(Option<(usize, f64)>, f64)>,
+    pose: Option<PrefabSide>,
+    fade: Option<(Option<PrefabSide>, f64)>,
+    layers: Vec<AnimationLayer>,
+    /// The gameplay time the pose is read at, after the animation's `hold`.
+    now: GameTime,
 }
 
-/// Poses the parts of every prefab instance whose root carries an [`Animation`]: each part the
-/// selected clip has a track for takes the sampled pose in `poses`, so the part and everything
-/// placed below it draw posed. Visual-only like an assembly's clips: no stored `Transform` changes.
+impl PrefabPlay {
+    /// Whether either side of the base animation is a blend space.
+    fn base_blends(&self) -> bool {
+        let blends = |side: &Option<PrefabSide>| matches!(side, Some(PrefabSide::Blend { .. }));
+        blends(&self.pose) || self.fade.as_ref().is_some_and(|(from, _)| blends(from))
+    }
+}
+
+/// One side of a prefab instance's base animation.
+#[derive(Clone, Copy)]
+enum PrefabSide {
+    /// An index into the rig's clips, and the clip time to sample it at.
+    Clip(usize, f64),
+    /// An index into the rig's blends, the params and the shared phase.
+    Blend(usize, [f32; 2], f64),
+}
+
+/// `side` as the sample source the layer composition reads.
+fn prefab_side(data: &PrefabClipData, side: Option<PrefabSide>) -> AssemblySide<'_> {
+    match side {
+        None => AssemblySide::EMPTY,
+        Some(PrefabSide::Clip(index, t)) => {
+            AssemblySide::single(Some((&data.clips[index].clip, t)))
+        }
+        Some(PrefabSide::Blend(index, params, phase)) => {
+            AssemblySide::blend_over(&data.clips, &data.blends[index], params, phase)
+        }
+    }
+}
+
+/// `rest`'s rotation as a unit `f64` quaternion.
+fn rest_rotation(rest: &Trs) -> [f64; 4] {
+    let q = rest.rotation.map(f64::from);
+    let length = q.iter().map(|c| c * c).sum::<f64>().sqrt();
+    if length > 0.0 {
+        q.map(|c| c / length)
+    } else {
+        [0.0, 0.0, 0.0, 1.0]
+    }
+}
+
+/// A prefab clip sample (absolute local TRS) as a delta from `rest`, the space an assembly's samples
+/// are in: `R_r⁻¹ R`, `T − T_r`, `S / S_r`. An unkeyed channel stays `None`.
+fn rest_delta(rest: &Trs, pose: ludion_scene::PartPose) -> ludion_scene::PartPose {
+    let rest_t = rest.translation.map(f64::from);
+    let rest_s = rest.scale.map(f64::from);
+    ludion_scene::PartPose {
+        rotation: pose
+            .rotation
+            .map(|q| quat_mul(quat_conjugate(rest_rotation(rest)), q)),
+        translation: pose
+            .translation
+            .map(|t| [0, 1, 2].map(|i| t[i] - rest_t[i])),
+        scale: pose.scale.map(|s| {
+            [0, 1, 2].map(|i| {
+                if rest_s[i].abs() < 1e-12 {
+                    1.0
+                } else {
+                    s[i] / rest_s[i]
+                }
+            })
+        }),
+    }
+}
+
+/// [`rest_delta`] undone: `R_r δ_R`, `T_r + δ_T`, `S_r δ_S`, a `None` channel reading `rest`.
+fn apply_rest_delta(rest: &Trs, delta: &ludion_scene::PartPose) -> Trs {
+    let rest_t = rest.translation.map(f64::from);
+    let rest_s = rest.scale.map(f64::from);
+    Trs {
+        translation: delta.translation.map_or(rest.translation, |t| {
+            [0, 1, 2].map(|i| (rest_t[i] + t[i]) as f32)
+        }),
+        rotation: delta.rotation.map_or(rest.rotation, |q| {
+            quat_mul(rest_rotation(rest), q).map(|c| c as f32)
+        }),
+        scale: delta
+            .scale
+            .map_or(rest.scale, |s| [0, 1, 2].map(|i| (rest_s[i] * s[i]) as f32)),
+    }
+}
+
+/// Poses the parts of every prefab instance whose root carries an [`Animation`] or
+/// [`AnimationLayers`]: each part the selected clip or blend, or a layer, has a track for takes the
+/// sampled pose in `poses`, so the part and everything placed below it draw posed. Visual-only like
+/// an assembly's clips: no stored `Transform` changes.
 ///
-/// A clip is chosen by game logic at runtime, so every miss (no clip bound under the name, an
-/// instance whose prefab will not load) is silent and leaves the rest pose, as for
-/// [`animation_pose`].
+/// A clip is chosen by game logic at runtime, so every miss (no clip or blend bound under the name,
+/// a layer with an unknown mask or reference, an instance whose prefab will not load) is silent and
+/// leaves the rest or base pose, as for [`animation_pose`]. A blend plays the stateless phase
+/// `elapsed * rate(params)`.
+///
+/// Layers and blends compose as an assembly's do, over each sample's delta from the part's rest
+/// ([`rest_delta`]). A part no layer reaches under a plain-clip base samples the clip directly.
 ///
 /// Track values are the part's absolute local TRS, a channel the track lacks reading the part's
 /// authored rest. The rest is read from the text the instance was expanded from, so editing the
@@ -6946,10 +7037,13 @@ fn prefab_part_poses(
     // The rests of each distinct (snapshot, prefab) text, so N instances cost one hash per frame.
     let mut bound_rests: BTreeMap<(usize, String), Option<Arc<PartRests>>> = BTreeMap::new();
     for &id in ids {
-        let Some(animation) = get::<Animation>(world, id) else {
+        let animation = get::<Animation>(world, id);
+        let stack = get::<AnimationLayers>(world, id);
+        if animation.is_none() && stack.is_none() {
             continue;
-        };
-        let now = held(animation, rebased_instant(world, id, now));
+        }
+        let rebased = rebased_instant(world, id, now);
+        let now = animation.map_or(rebased, |animation| held(animation, rebased));
         let Some(instance) = get::<PrefabInstance>(world, id).filter(|i| i.root == id) else {
             continue;
         };
@@ -6971,21 +7065,35 @@ fn prefab_part_poses(
                     })
                     .clone()
             });
-        let side = |name: &str, elapsed: f64| {
-            let index = data.clips.iter().position(|binding| binding.name == name)?;
-            Some((
-                index,
-                ludion_scene::clip_phase(&data.clips[index].clip, elapsed),
-            ))
-        };
-        let pose = side(&animation.clip, clip_elapsed(animation, now));
-        let fade = fade_weight(animation, now).map(|weight| {
-            (
-                side(&animation.from, from_clip_elapsed(animation, now)),
-                weight,
-            )
+        let (pose, fade) = animation.map_or((None, None), |animation| {
+            let side = |name: &str, elapsed: f64| {
+                if let Some(index) = data.clips.iter().position(|binding| binding.name == name) {
+                    let t = ludion_scene::clip_phase(&data.clips[index].clip, elapsed);
+                    return Some(PrefabSide::Clip(index, t));
+                }
+                let index = data.blends.iter().position(|blend| blend.name == name)?;
+                let rate = crate::blend_clock::blend_rate(&data.blends[index], animation.params);
+                Some(PrefabSide::Blend(index, animation.params, elapsed * rate))
+            };
+            let pose = side(&animation.clip, clip_elapsed(animation, now));
+            let fade = fade_weight(animation, now).map(|weight| {
+                (
+                    side(&animation.from, from_clip_elapsed(animation, now)),
+                    weight,
+                )
+            });
+            (pose, fade)
         });
-        if pose.is_some() || fade.as_ref().is_some_and(|(from, _)| from.is_some()) {
+        let layers: Vec<AnimationLayer> = stack.map_or_else(Vec::new, |stack| {
+            stack
+                .layers
+                .iter()
+                .take(ludion_components::animation_layers::MAX_ANIMATION_LAYERS)
+                .cloned()
+                .collect()
+        });
+        let based = pose.is_some() || fade.as_ref().is_some_and(|(from, _)| from.is_some());
+        if based || !layers.is_empty() {
             plays.insert(
                 id,
                 PrefabPlay {
@@ -6993,6 +7101,8 @@ fn prefab_part_poses(
                     rests,
                     pose,
                     fade,
+                    layers,
+                    now,
                 },
             );
         }
@@ -7000,6 +7110,19 @@ fn prefab_part_poses(
     if plays.is_empty() {
         return;
     }
+    // Each root's layers resolve once, however many parts it has.
+    let layered: BTreeMap<EntityId, Vec<AssemblyLayerPose<'_>>> = plays
+        .iter()
+        .map(|(&root, play)| {
+            let rig = RigClips::of_prefab(&play.data);
+            let layers = play
+                .layers
+                .iter()
+                .filter_map(|layer| rig_layer_pose(rig, layer, play.now, None))
+                .collect();
+            (root, layers)
+        })
+        .collect();
     for &id in ids {
         let Some(instance) = get::<PrefabInstance>(world, id) else {
             continue;
@@ -7019,13 +7142,36 @@ fn prefab_part_poses(
             .copied()
             .unwrap_or(stored);
         let rest_trs = level_trs(&rest);
-        let sample = |side: Option<(usize, f64)>| {
-            let (index, t) = side?;
-            ludion_scene::joint_pose(&play.data.clips[index].clip, &instance.part, t)
+        let composed = {
+            let layers = &layered[&instance.root];
+            let base_blends = play.base_blends();
+            if layers.is_empty() && !base_blends {
+                None
+            } else {
+                let pose = prefab_side(&play.data, play.pose);
+                let fade = play
+                    .fade
+                    .map(|(from, weight)| (prefab_side(&play.data, from), weight));
+                let delta = |sample| rest_delta(&rest_trs, sample);
+                // A nested instance's part has no index: no mask lists it.
+                let index = play.data.part_index(&instance.part).unwrap_or(usize::MAX);
+                layered_part_pose(index, &instance.part, pose, fade, layers, &delta)
+                    .or_else(|| base_blends.then(|| base_pose(&instance.part, pose, fade, &delta)))
+            }
         };
-        let sampled = match &play.fade {
-            None => sample(play.pose).map(|pose| apply_channels(&rest_trs, &pose)),
-            Some((from, weight)) => {
+        let sample = |side: Option<PrefabSide>| match side? {
+            PrefabSide::Clip(index, t) => {
+                ludion_scene::joint_pose(&play.data.clips[index].clip, &instance.part, t)
+            }
+            PrefabSide::Blend(..) => None,
+        };
+        let sampled = match (composed, &play.fade) {
+            (Some(delta), _) => {
+                (delta.rotation.is_some() || delta.translation.is_some() || delta.scale.is_some())
+                    .then(|| apply_rest_delta(&rest_trs, &delta))
+            }
+            (None, None) => sample(play.pose).map(|pose| apply_channels(&rest_trs, &pose)),
+            (None, Some((from, weight))) => {
                 blended_prefab_part(&rest_trs, sample(*from), sample(play.pose), *weight)
             }
         };
@@ -7450,7 +7596,8 @@ pub(crate) fn part_placements_sides(
             let parent_offset = part
                 .parent
                 .map_or(Vec3::ZERO, |index| Vec3::from(assembly.parts[index].offset));
-            let layered = layered_part_pose(index, &part.name, pose, fade, layers);
+            let layered =
+                layered_part_pose(index, &part.name, pose, fade, layers, &|sample| sample);
             let (rotation, sampled_scale, sampled_translation) = match (layered, fade) {
                 (Some(layered), _) => (
                     layered.rotation.map_or(Quat::IDENTITY, quat_from_f64),
@@ -7627,27 +7774,82 @@ pub(crate) fn assembly_layer_pose<'a>(
     now: GameTime,
     live_phase: Option<f64>,
 ) -> Option<AssemblyLayerPose<'a>> {
+    rig_layer_pose(RigClips::of_assembly(data), layer, now, live_phase)
+}
+
+/// What a layer or base side resolves names against: an assembly's or a prefab's bound clips,
+/// blends and masks.
+#[derive(Clone, Copy)]
+struct RigClips<'a> {
+    clips: &'a [AssemblyClipData],
+    blends: &'a [BlendSpaceData],
+    masks: &'a [AssemblyMaskData],
+}
+
+impl<'a> RigClips<'a> {
+    fn of_assembly(data: &'a AssemblyData) -> Self {
+        RigClips {
+            clips: &data.clips,
+            blends: &data.blends,
+            masks: &data.masks,
+        }
+    }
+
+    fn of_prefab(data: &'a PrefabClipData) -> Self {
+        RigClips {
+            clips: &data.clips,
+            blends: &data.blends,
+            masks: &data.masks,
+        }
+    }
+
+    fn clip(self, name: &str) -> Option<&'a ludion_scene::AnimationDocument> {
+        self.clips
+            .iter()
+            .find(|binding| binding.name == name)
+            .map(|binding| &binding.clip)
+    }
+
+    fn blend(self, name: &str) -> Option<&'a BlendSpaceData> {
+        self.blends.iter().find(|blend| blend.name == name)
+    }
+
+    fn mask(self, name: &str) -> Option<&'a [f32]> {
+        self.masks
+            .iter()
+            .find(|mask| mask.name == name)
+            .map(|mask| mask.weights.as_slice())
+    }
+}
+
+/// [`assembly_layer_pose`] over either rig.
+fn rig_layer_pose<'a>(
+    rig: RigClips<'a>,
+    layer: &AnimationLayer,
+    now: GameTime,
+    live_phase: Option<f64>,
+) -> Option<AssemblyLayerPose<'a>> {
     let weight = f64::from(layer_weight_at(layer, now));
     if weight <= 0.0 || weight.is_nan() {
         return None;
     }
-    let side = if let Some(clip) = data.clip(&layer.clip) {
+    let side = if let Some(clip) = rig.clip(&layer.clip) {
         let t =
             ludion_scene::clip_phase(clip, clock_elapsed(now, layer.started, layer.speed, None));
         AssemblySide::single(Some((clip, t)))
     } else {
-        let blend = data.blend(&layer.clip)?;
+        let blend = rig.blend(&layer.clip)?;
         let phase = live_phase
             .unwrap_or_else(|| crate::blend_clock::layer_fallback_phase(blend, layer, now));
-        AssemblySide::blend(data, blend, layer.params, phase)
+        AssemblySide::blend_over(rig.clips, blend, layer.params, phase)
     };
     let mask = match layer.mask.as_str() {
         "" => None,
-        name => Some(data.mask(name)?),
+        name => Some(rig.mask(name)?),
     };
     let reference = match layer.mode {
         LayerMode::Additive if !layer.reference.is_empty() => {
-            Some((data.clip(&layer.reference)?, 0.0))
+            Some((rig.clip(&layer.reference)?, 0.0))
         }
         _ => None,
     };
@@ -7662,7 +7864,9 @@ pub(crate) fn assembly_layer_pose<'a>(
 
 /// Part `index`'s base channels with `layers` composed over them, or `None` when no layer reaches the
 /// part (the layer clip has no track for it, or `weight × mask` is zero) — the caller then takes the
-/// exact base path. Channels are `f64`, cast where the base path casts.
+/// exact base path. Channels are `f64`, cast where the base path casts. `map` rewrites every per-clip
+/// sample (base, outgoing, layer and reference) before it is blended: the identity for an assembly,
+/// whose samples already are deltas from rest, and [`rest_delta`] for a prefab part.
 ///
 /// Override blends each channel the layer clip keys toward the layer by `k = weight × mask`
 /// (verbatim at `k ≥ 1`); a channel it does not key keeps the base. Additive measures from the part's
@@ -7674,10 +7878,11 @@ fn layered_part_pose(
     pose: AssemblySide<'_>,
     fade: Option<(AssemblySide<'_>, f64)>,
     layers: &[AssemblyLayerPose<'_>],
+    map: &impl Fn(ludion_scene::PartPose) -> ludion_scene::PartPose,
 ) -> Option<ludion_scene::PartPose> {
     let mut current: Option<ludion_scene::PartPose> = None;
     for layer in layers {
-        let sample = layer.side.sample(name);
+        let sample = layer.side.sample_mapped(name, map);
         if sample.rotation.is_none() && sample.translation.is_none() && sample.scale.is_none() {
             continue;
         }
@@ -7688,12 +7893,7 @@ fn layered_part_pose(
         if k <= 0.0 || k.is_nan() {
             continue;
         }
-        let base = current.get_or_insert_with(|| match fade {
-            Some((from, weight)) => {
-                blended_part_pose_f64(from.sample(name), pose.sample(name), weight)
-            }
-            None => pose.sample(name),
-        });
+        let base = current.get_or_insert_with(|| base_pose(name, pose, fade, map));
         let identity = [0.0, 0.0, 0.0, 1.0];
         match layer.mode {
             LayerMode::Override => {
@@ -7724,7 +7924,7 @@ fn layered_part_pose(
             LayerMode::Additive => {
                 let reference = layer
                     .reference
-                    .map(|(clip, time)| ludion_scene::part_pose(clip, name, time))
+                    .map(|(clip, time)| map(ludion_scene::part_pose(clip, name, time)))
                     .unwrap_or_default();
                 if let Some(c) = sample.rotation {
                     let r = reference.rotation.unwrap_or(identity);
@@ -7751,6 +7951,23 @@ fn layered_part_pose(
         }
     }
     current
+}
+
+/// The base channels of the part `name`: `pose`, or `fade`'s outgoing side blended into it.
+fn base_pose(
+    name: &str,
+    pose: AssemblySide<'_>,
+    fade: Option<(AssemblySide<'_>, f64)>,
+    map: &impl Fn(ludion_scene::PartPose) -> ludion_scene::PartPose,
+) -> ludion_scene::PartPose {
+    match fade {
+        Some((from, weight)) => blended_part_pose_f64(
+            from.sample_mapped(name, map),
+            pose.sample_mapped(name, map),
+            weight,
+        ),
+        None => pose.sample_mapped(name, map),
+    }
 }
 
 /// One side of an assembly pose: up to three weighted clip samples (a plain clip is one entry of
@@ -7803,11 +8020,21 @@ impl<'a> AssemblySide<'a> {
         params: [f32; 2],
         phase: f64,
     ) -> Self {
+        AssemblySide::blend_over(&data.clips, blend, params, phase)
+    }
+
+    /// [`AssemblySide::blend`] over the clip list `blend`'s points index.
+    fn blend_over(
+        clips: &'a [AssemblyClipData],
+        blend: &crate::blend_space::BlendSpaceData,
+        params: [f32; 2],
+        phase: f64,
+    ) -> Self {
         let mut entries = [None; 3];
         for (slot, (index, weight)) in entries.iter_mut().zip(blend.weights(params).iter()) {
             let point = &blend.points[usize::from(index)];
             *slot = Some((
-                &data.clips[point.clip].clip,
+                &clips[point.clip].clip,
                 blend.point_time(index, phase),
                 weight,
             ));
@@ -7825,6 +8052,16 @@ impl<'a> AssemblySide<'a> {
     /// entry keys stays `None`, so an untouched part keeps its exact rest. A snapshot side returns
     /// its captured rotation and translation for a part it names, and the rest for one it doesn't.
     pub(crate) fn sample(&self, part: &str) -> ludion_scene::PartPose {
+        self.sample_mapped(part, &|sample| sample)
+    }
+
+    /// [`AssemblySide::sample`] with every per-clip sample rewritten by `map` before it is blended.
+    /// A snapshot side is returned as captured.
+    fn sample_mapped(
+        &self,
+        part: &str,
+        map: &impl Fn(ludion_scene::PartPose) -> ludion_scene::PartPose,
+    ) -> ludion_scene::PartPose {
         if let Some(snapshot) = self.snapshot {
             return snapshot
                 .parts
@@ -7842,7 +8079,7 @@ impl<'a> AssemblySide<'a> {
             return ludion_scene::PartPose::default();
         };
         if self.entries.iter().flatten().count() == 1 && first.2 == 1.0 {
-            return ludion_scene::part_pose(first.0, part, first.1);
+            return map(ludion_scene::part_pose(first.0, part, first.1));
         }
         let identity = [0.0, 0.0, 0.0, 1.0];
         let mut keyed = [false; 3];
@@ -7851,7 +8088,7 @@ impl<'a> AssemblySide<'a> {
         let mut translation = [0.0; 3];
         let mut scale = [0.0; 3];
         for &(clip, t, weight) in self.entries.iter().flatten() {
-            let sample = ludion_scene::part_pose(clip, part, t);
+            let sample = map(ludion_scene::part_pose(clip, part, t));
             keyed[0] |= sample.rotation.is_some();
             keyed[1] |= sample.translation.is_some();
             keyed[2] |= sample.scale.is_some();

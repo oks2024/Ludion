@@ -1,0 +1,23 @@
+format: 1
+kind: animation
+name: swing
+duration: 1.0
+loop: true
+tracks:
+  upper:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 40.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0

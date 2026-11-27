@@ -460,6 +460,7 @@ pub fn import(
         generated_from: None,
         clips: part_clip_bindings(&clips),
         entities,
+        ..Default::default()
     };
 
     if !allow_lossy && !state.lossy.is_empty() {

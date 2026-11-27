@@ -1,0 +1,90 @@
+format: 1
+kind: prefab
+name: arm
+clips:
+  curl: clips/curl.anim.yaml
+  reach: clips/reach.anim.yaml
+  swing: clips/swing.anim.yaml
+  tilt: clips/tilt.anim.yaml
+masks:
+  forearm:
+    joints:
+      - lower
+    descendants: true
+blends:
+  sway:
+    points:
+      - clip: swing
+        at: 0.0
+      - clip: reach
+        at: 1.0
+entities:
+  - name: base
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 0.0
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.5
+          - 0.45
+          - 0.4
+          - 1.0
+  - name: upper
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.1
+          - 0.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.7
+          - 0.35
+          - 0.25
+          - 1.0
+      Parent:
+        index: 0
+        generation: 0
+  - name: lower
+    components:
+      Transform:
+        translation:
+          - 0.1
+          - 1.1
+          - 0.0
+        rotation:
+          - 0.0
+          - 0.0
+          - 15.0
+      Mesh:
+        shape: cube
+        color:
+          - 0.25
+          - 0.5
+          - 0.7
+          - 1.0
+      Parent:
+        index: 1
+        generation: 0
+  - name: hand
+    components:
+      Transform:
+        translation:
+          - 0.0
+          - 1.1
+          - 0.2
+      Mesh:
+        shape: cube
+        color:
+          - 0.85
+          - 0.7
+          - 0.2
+          - 1.0
+      Parent:
+        index: 2
+        generation: 0

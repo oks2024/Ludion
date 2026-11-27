@@ -1441,6 +1441,11 @@ pub mod code {
     /// a non-finite number (including an `offset` entry). Pointed at `/targets/<name>/<field>`.
     pub const IK_TARGET_INVALID: DiagnosticCode = DiagnosticCode::new("L1673");
 
+    /// `L1674` — a prefab's `masks` or `blends` do not hold together: an empty name, a mask naming
+    /// a part the prefab does not have, or a blend over an unbound, non-looping or unsynced clip.
+    /// Pointed into `/masks` or `/blends`.
+    pub const PREFAB_RIG_INVALID: DiagnosticCode = DiagnosticCode::new("L1674");
+
     /// `L1201` — a glTF input could not be read or parsed: the file is unreadable, or its bytes are
     /// not a valid `.gltf`/`.glb` document (bad JSON, a failed structural validation, or a buffer/
     /// image source that could not be resolved), or its data is malformed (a non-finite number, an
@@ -8075,6 +8080,26 @@ Fix: set at most one of `point`, `entity` or `direction`, keep weights in `[0, 1
 finite and non-negative.",
     },
     CodeEntry {
+        code: code::PREFAB_RIG_INVALID,
+        severity: Severity::Error,
+        title: "a prefab's masks or blends are invalid",
+        explanation: "\
+A `kind: prefab` declares `masks:` or `blends:` that cannot be used. One of:
+
+  - a mask or blend has an empty name;
+  - a mask's `joints` lists a name that is not a part of the prefab (a nested instance entry and its
+    parts cannot be listed);
+  - a blend shares its name with a clip binding, has two points at one position, or is a 2D blend
+    whose points are collinear;
+  - a blend point names a clip that is not bound under `clips`, or one that does not loop;
+  - a blend's `sync` names an event one of its point clips does not have.
+
+Pointed into `/masks/<name>` or `/blends/<name>`.
+
+Fix: name only the prefab's own named, non-instance parts in a mask, and build each blend from bound,
+looping clips.",
+    },
+    CodeEntry {
         code: code::IMPORT_INVALID_GLTF,
         severity: Severity::Error,
         title: "glTF input is unreadable or invalid",
@@ -8372,7 +8397,8 @@ export it LINEAR, or raise the matching `reduce_*` value (raising a `bound_*` do
         explanation: "A glTF animation's `extras` object holds a key `ludion import` does not know, or a tolerance
 that is not a finite positive number.
 
-The importer reads these animation `extras` keys: `loop` (boolean), and the tolerances
+The importer reads these animation `extras` keys: `loop` (boolean), `root_motion` (a string naming the
+rig's one root joint), and the tolerances
 `reduce_rotation_deg`, `reduce_translation`, `reduce_scale`, `bound_rotation_deg`, `bound_translation` and
 `bound_scale` (finite positive numbers; translation in mesh units, 1 unit = 1 metre). Anything else,
 or a wrong type, is refused so a typo cannot silently leave the default in force. The diagnostic
@@ -14912,6 +14938,7 @@ mod tests {
         code::ANIMATION_LAYER_INVALID,
         code::ANIMATION_LAYERS_ON_SKIN_BONE_SKIN,
         code::IK_TARGET_INVALID,
+        code::PREFAB_RIG_INVALID,
         code::IMPORT_INVALID_GLTF,
         code::IMPORT_UNSUPPORTED_FEATURE,
         code::IMPORT_OUTPUT_IO,

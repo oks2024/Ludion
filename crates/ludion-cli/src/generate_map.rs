@@ -401,6 +401,8 @@ fn prefab_document(
         name: scene.name.clone(),
         generated_from: scene.generated_from.clone(),
         clips: Vec::new(),
+        masks: Vec::new(),
+        blends: Vec::new(),
         entities: scene.entities.clone(),
     };
     relativize_for_prefab(&mut doc, target, registry)?;

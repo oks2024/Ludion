@@ -26,19 +26,28 @@ use ludion_ecs::Registry;
 use serde_json::Value;
 
 use crate::expand::{merge_partial, ref_targets, remap_positions};
+use crate::rig_blend::{
+    BlendSpace, check_blend_points, emit_blends, parse_blends, validate_blends,
+};
+use crate::rig_mask::{RigMask, emit_masks, parse_masks, validate_mask_names};
 use crate::scalar::scalar_string;
 use crate::yaml::{self, NodeValue};
-use crate::{AssemblyClip, Scene, SceneEntity, emit as scene_emit, envelope, parse as scene_parse};
+use crate::{
+    AnimationDocument, AssemblyClip, Scene, SceneEntity, emit as scene_emit, envelope,
+    parse as scene_parse,
+};
 
 /// The prefab document format version this crate reads and writes.
 pub const PREFAB_FORMAT_VERSION: u64 = 1;
 
-const PREFAB_KEYS: [&str; 6] = [
+const PREFAB_KEYS: [&str; 8] = [
     "format",
     "kind",
     "name",
     "generated_from",
     "clips",
+    "masks",
+    "blends",
     "entities",
 ];
 const SCENE_ONLY_KEYS: [&str; 4] = ["seed", "physics", "render_layers", "preload"];
@@ -53,6 +62,12 @@ pub struct PrefabDocument {
     /// Clip bindings (short name → clip file, relative to the prefab), sorted by short name. Empty
     /// means the prefab binds no clips; an authored `clips: {}` and an absent `clips` are the same.
     pub clips: Vec<AssemblyClip>,
+    /// Part masks for `AnimationLayers`, sorted by name (the canonical order `emit` writes); each
+    /// mask's `joints` name top-level, non-instance parts. An absent `masks` is the empty list.
+    pub masks: Vec<RigMask>,
+    /// Blend spaces over the bound clips, sorted by name (the canonical order `emit` writes). An
+    /// absent `blends` is the empty list.
+    pub blends: Vec<BlendSpace>,
     /// The parts, in document order; every one is named.
     pub entities: Vec<SceneEntity>,
 }
@@ -354,6 +369,14 @@ pub(crate) fn parse(source: &str) -> Result<PrefabDocument, Vec<Diagnostic>> {
                     &mut diagnostics,
                 );
             }
+            "masks" => {
+                doc.masks =
+                    parse_masks(entry, code::PREFAB_DOCUMENT_STRUCTURE, &mut diagnostics);
+            }
+            "blends" => {
+                doc.blends =
+                    parse_blends(entry, code::PREFAB_DOCUMENT_STRUCTURE, &mut diagnostics);
+            }
             "entities" => {
                 entities_seen = true;
                 match &entry.node.value {
@@ -538,6 +561,14 @@ pub(crate) fn validate(doc: &PrefabDocument, registry: &Registry) -> Vec<Diagnos
             check_path("clip", &clip.file, pointer, &mut diagnostics);
         }
     }
+    validate_mask_names(&doc.masks, code::PREFAB_RIG_INVALID, &mut diagnostics);
+    validate_mask_parts(doc, &mut diagnostics);
+    validate_blends(
+        &doc.blends,
+        &clip_names(doc),
+        code::PREFAB_RIG_INVALID,
+        &mut diagnostics,
+    );
     for (index, entity) in doc.entities.iter().enumerate() {
         let base = format!("/entities/{index}");
         check_component_paths(
@@ -560,6 +591,75 @@ pub(crate) fn validate(doc: &PrefabDocument, registry: &Registry) -> Vec<Diagnos
             check_component_paths(components, &overrides, registry, &mut diagnostics);
         }
     }
+    diagnostics
+}
+
+fn clip_names(doc: &PrefabDocument) -> Vec<&str> {
+    doc.clips.iter().map(|clip| clip.name.as_str()).collect()
+}
+
+/// The `masks` parts check (`L1674`): every listed name is a part of this prefab. A nested instance
+/// entry is not a part a mask can list.
+fn validate_mask_parts(doc: &PrefabDocument, diagnostics: &mut Vec<Diagnostic>) {
+    let names: Vec<&str> = doc
+        .entities
+        .iter()
+        .filter(|entity| entity.instance.is_none())
+        .filter_map(|entity| entity.name.as_deref())
+        .collect();
+    for mask in &doc.masks {
+        for (index, part) in mask.joints.iter().enumerate() {
+            if names.contains(&part.as_str()) {
+                continue;
+            }
+            let help = match ludion_core::suggest::nearest(part, names.iter().copied()) {
+                Some(candidate) => format!("nearest part is `{candidate}`"),
+                None => "a mask's `joints` name parts of this prefab".to_string(),
+            };
+            diagnostics.push(
+                Diagnostic::new(
+                    code::PREFAB_RIG_INVALID,
+                    format!(
+                        "the mask `{}` lists `{part}`, which is not a part of this prefab",
+                        mask.name
+                    ),
+                )
+                .with_path(format!(
+                    "/masks/{}/joints/{index}",
+                    yaml::pointer_token(&mask.name)
+                ))
+                .with_help(help),
+            );
+        }
+    }
+}
+
+/// The blends against the resolved clip documents (`L1674`); `clips` is index-aligned with
+/// `doc.clips`.
+pub(crate) fn check_blends(doc: &PrefabDocument, clips: &[AnimationDocument]) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    if clips.len() != doc.clips.len() {
+        diagnostics.push(
+            Diagnostic::new(
+                code::PREFAB_RIG_INVALID,
+                format!(
+                    "{} resolved clip documents were supplied for a prefab binding {} clips",
+                    clips.len(),
+                    doc.clips.len()
+                ),
+            )
+            .with_path("/clips"),
+        );
+        return diagnostics;
+    }
+    check_blend_points(
+        &doc.blends,
+        &clip_names(doc),
+        clips,
+        |slot| &clips[slot].events,
+        code::PREFAB_RIG_INVALID,
+        &mut diagnostics,
+    );
     diagnostics
 }
 
@@ -610,8 +710,8 @@ fn check_path(what: &str, path: &str, pointer: String, diagnostics: &mut Vec<Dia
     }
 }
 
-/// Writes `doc` in canonical form: `format`, `kind`, `name`, `generated_from`, `clips`, then the
-/// entities as a scene writes them.
+/// Writes `doc` in canonical form: `format`, `kind`, `name`, `generated_from`, `clips`, `masks`,
+/// `blends`, then the entities as a scene writes them.
 pub(crate) fn emit(doc: &PrefabDocument, registry: &Registry) -> String {
     let mut out = String::from("format: 1\nkind: prefab\n");
     if let Some(name) = &doc.name {
@@ -636,6 +736,8 @@ pub(crate) fn emit(doc: &PrefabDocument, registry: &Registry) -> String {
             out.push('\n');
         }
     }
+    emit_masks(&mut out, &doc.masks);
+    emit_blends(&mut out, &doc.blends);
     if doc.entities.is_empty() {
         out.push_str("entities: []\n");
     } else {
@@ -645,4 +747,117 @@ pub(crate) fn emit(doc: &PrefabDocument, registry: &Registry) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEAD: &str = "format: 1
+kind: prefab
+clips:
+  reach: clips/reach.anim.yaml
+  swing: clips/swing.anim.yaml
+";
+    const RIG: &str = "masks:
+  arm:
+    joints:
+      - upper
+    descendants: true
+blends:
+  sway:
+    points:
+      - clip: swing
+        at: 0.0
+      - clip: reach
+        at: 1.0
+";
+    const PARTS: &str = "entities:
+  - name: upper
+    components: {}
+";
+
+    fn rig_errors(source: &str) -> Vec<Diagnostic> {
+        validate(&parse(source).unwrap(), &Registry::new())
+    }
+
+    #[test]
+    fn masks_and_blends_round_trip_in_canonical_order() {
+        let source = format!("{HEAD}{RIG}{PARTS}");
+        let doc = parse(&source).unwrap();
+        assert_eq!((doc.masks.len(), doc.blends.len()), (1, 1));
+        assert!(rig_errors(&source).is_empty());
+        assert_eq!(emit(&doc, &Registry::new()), source);
+    }
+
+    #[test]
+    fn empty_masks_and_blends_emit_nothing() {
+        let plain = format!("{HEAD}{PARTS}");
+        let empty = format!("{HEAD}masks: {{}}\nblends: {{}}\n{PARTS}");
+        let registry = Registry::new();
+        assert_eq!(emit(&parse(&empty).unwrap(), &registry), plain);
+        assert_eq!(emit(&parse(&plain).unwrap(), &registry), plain);
+    }
+
+    #[test]
+    fn a_mask_naming_an_unknown_part_is_l1674() {
+        let source = format!("{HEAD}{RIG}{PARTS}").replace("- upper\n    desc", "- uper\n    desc");
+        let errors = rig_errors(&source);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, code::PREFAB_RIG_INVALID);
+        assert_eq!(errors[0].path.as_deref(), Some("/masks/arm/joints/0"));
+        assert!(errors[0].help.as_deref().unwrap().contains("`upper`"));
+    }
+
+    #[test]
+    fn a_mask_cannot_list_a_nested_instance() {
+        let source = format!(
+            "{HEAD}{RIG}entities:
+  - name: root
+    components: {{}}
+  - name: upper
+    prefab: other.prefab.yaml
+"
+        );
+        let errors = rig_errors(&source);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, code::PREFAB_RIG_INVALID);
+    }
+
+    #[test]
+    fn a_blend_over_an_unbound_clip_is_l1674() {
+        let source = format!("{HEAD}{RIG}{PARTS}").replace("- clip: reach", "- clip: rech");
+        let doc = parse(&source).unwrap();
+        let clip = crate::parse_animation(
+            "format: 1
+kind: animation
+name: c
+duration: 1.0
+loop: true
+tracks:
+  upper:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+",
+        )
+        .unwrap();
+        let errors = check_blends(&doc, &[clip.clone(), clip]);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, code::PREFAB_RIG_INVALID);
+        assert_eq!(
+            errors[0].path.as_deref(),
+            Some("/blends/sway/points/1/clip")
+        );
+    }
+
+    #[test]
+    fn a_mask_of_the_wrong_shape_is_a_structure_error() {
+        let source = format!("{HEAD}masks:\n  arm: 3\n{PARTS}");
+        let errors = parse(&source).unwrap_err();
+        assert_eq!(errors[0].code, code::PREFAB_DOCUMENT_STRUCTURE);
+    }
 }

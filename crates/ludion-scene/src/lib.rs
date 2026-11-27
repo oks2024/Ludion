@@ -2651,6 +2651,26 @@ pub fn validate_prefab(doc: &PrefabDocument, registry: &Registry) -> Vec<Diagnos
     prefab::validate(doc, registry)
 }
 
+/// Checks a prefab's `blends:` against its resolved clip documents: every point clip is bound,
+/// loops, and (with `sync`) has the sync event among its own `events`.
+///
+/// `clips` is aligned by index with [`PrefabDocument::clips`], like [`check_assembly_blends`]. Pure
+/// and IO-free.
+///
+/// # Errors (returned, not `Result`)
+/// `L1674` diagnostics pointing into the *prefab* document (`/blends/<name>/...`); an empty vector
+/// means every blend holds.
+///
+/// # Example
+/// ```
+/// let source = "format: 1\nkind: prefab\nentities:\n  - name: root\n    components: {}\n";
+/// let doc = ludion_scene::parse_prefab(source).unwrap();
+/// assert!(ludion_scene::check_prefab_blends(&doc, &[]).is_empty());
+/// ```
+pub fn check_prefab_blends(doc: &PrefabDocument, clips: &[AnimationDocument]) -> Vec<Diagnostic> {
+    prefab::check_blends(doc, clips)
+}
+
 /// Parses and validates a prefab document in one step.
 ///
 /// # Errors

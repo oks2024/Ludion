@@ -128,6 +128,7 @@ mod post_lut;
 mod prefab_animation;
 mod prefab_despawn_wire;
 mod prefab_edit_wire;
+mod prefab_layers;
 mod prefab_ops;
 mod prefab_overrides_wire;
 mod prefab_preload;

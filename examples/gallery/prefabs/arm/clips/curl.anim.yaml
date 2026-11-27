@@ -1,0 +1,40 @@
+format: 1
+kind: animation
+name: curl
+duration: 1.0
+loop: true
+tracks:
+  hand:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 30.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - 0.0
+  lower:
+    rotation:
+      - t: 0.0
+        v:
+          - 0.0
+          - 0.0
+          - 15.0
+      - t: 0.5
+        v:
+          - 0.0
+          - 0.0
+          - 70.0
+      - t: 1.0
+        v:
+          - 0.0
+          - 0.0
+          - 15.0

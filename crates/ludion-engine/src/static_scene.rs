@@ -26,8 +26,8 @@ use ludion_ecs::{Parent, World};
 use ludion_renderer::{MeshData, MeshInstance, MeshShape, StaticRange};
 
 use crate::components::{
-    Animation, GiDynamic, Mesh, MeshGrid, MeshSource, ParentJoint, ParticleEmitter, PointLight,
-    SkinBone, SpotLight, Sprite, Static, Text,
+    Animation, AnimationLayers, GiDynamic, Mesh, MeshGrid, MeshSource, ParentJoint,
+    ParticleEmitter, PointLight, SkinBone, SpotLight, Sprite, Static, Text,
 };
 use crate::extract::{
     MeshInherit, MeshKind, PlacedMesh, PlacedMeshSource, SceneAssets, mesh_instance,
@@ -307,11 +307,12 @@ impl StaticScene {
         }
     }
 
-    /// Marks the users of every prefab root that now carries `Animation`: it poses their parts
-    /// every frame, which no write to them journals. Loose entries are retried anyway.
+    /// Marks the users of every prefab root that now carries `Animation` or `AnimationLayers`: it
+    /// poses their parts every frame, which no write to them journals. Loose entries are retried
+    /// anyway.
     fn stale_prefab_roots(&self, world: &World, todo: &mut StableSet<EntityId>) {
         for used in &self.prefab_uses {
-            if world.is_alive(used.root) && world.has::<Animation>(used.root) {
+            if world.is_alive(used.root) && poses_parts(world, used.root) {
                 for &id in &used.users {
                     todo.insert(id);
                 }
@@ -375,13 +376,19 @@ impl StaticScene {
     }
 }
 
-/// Whether `node` belongs to a prefab instance whose live root carries `Animation`.
+/// Whether a prefab root's components pose its parts.
+fn poses_parts(world: &World, root: EntityId) -> bool {
+    world.has::<Animation>(root) || world.has::<AnimationLayers>(root)
+}
+
+/// Whether `node` belongs to a prefab instance whose live root carries `Animation` or
+/// `AnimationLayers`.
 fn prefab_root_animated(world: &World, node: EntityId) -> bool {
     world
         .get::<PrefabInstance>(node)
         .ok()
         .flatten()
-        .is_some_and(|i| world.is_alive(i.root) && world.has::<Animation>(i.root))
+        .is_some_and(|i| world.is_alive(i.root) && poses_parts(world, i.root))
 }
 
 fn prefab_root_of(world: &World, node: EntityId) -> Option<EntityId> {

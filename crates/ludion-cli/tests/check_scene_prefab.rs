@@ -264,6 +264,74 @@ fn a_scene_placing_a_prefab_with_a_bad_clip_track_is_l1314() {
     );
 }
 
+fn arm_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/prefabs/arm")
+}
+
+#[test]
+fn a_prefab_with_masks_and_blends_lists_them() {
+    let path = arm_dir().join("arm.prefab.yaml");
+    let output = run_check_scene(&path);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("  mask forearm: lower (descendants)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("  blend sway (1D): swing@0, reach@1"),
+        "{stdout}"
+    );
+
+    let json = Command::new(env!("CARGO_BIN_EXE_ludion"))
+        .args(["check-scene", "--json"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(
+        report["masks"],
+        serde_json::json!([
+            { "name": "forearm", "joints": ["lower"], "descendants": true, "weights": [] }
+        ])
+    );
+    assert_eq!(report["blends"][0]["name"], "sway");
+    assert_eq!(report["blends"][0]["dimension"], 1);
+    assert_eq!(report["blends"][0]["points"][1]["clip"], "reach");
+}
+
+#[test]
+fn a_mask_naming_no_part_is_l1674_with_the_nearest_part() {
+    let text = std::fs::read_to_string(arm_dir().join("arm.prefab.yaml"))
+        .unwrap()
+        .replace("\r\n", "\n")
+        .replace("      - lower\n", "      - lowr\n");
+    let path = scratch("bad-mask.prefab.yaml", &text);
+    let output = run_check_scene(&path);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1674"), "{stderr}");
+    assert!(stderr.contains("nearest part is `lower`"), "{stderr}");
+}
+
+/// A blend is checked even when the prefab binds no clips at all.
+#[test]
+fn a_blend_with_no_bound_clips_is_l1674() {
+    let path = scratch(
+        "unbound.prefab.yaml",
+        "format: 1\nkind: prefab\nblends:\n  sway:\n    points:\n      - clip: swing\n        at: 0.0\n      \
+         - clip: reach\n        at: 1.0\nentities:\n  - name: a\n    components: {}\n",
+    );
+    let output = run_check_scene(&path);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("L1674"), "{stderr}");
+}
+
 #[test]
 fn an_unclipped_prefab_is_unchanged_and_json_lists_no_clips() {
     let path = scratch(
@@ -283,4 +351,9 @@ fn an_unclipped_prefab_is_unchanged_and_json_lists_no_clips() {
         .unwrap();
     let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(report["clips"], serde_json::json!([]));
+    assert!(report.get("masks").is_none() && report.get("blends").is_none());
+    assert!(
+        !stdout.contains("mask") && !stdout.contains("blend"),
+        "{stdout}"
+    );
 }

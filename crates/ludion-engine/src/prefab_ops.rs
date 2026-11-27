@@ -268,6 +268,8 @@ pub(crate) fn create(
             name: None,
             generated_from: None,
             clips: Vec::new(),
+            masks: Vec::new(),
+            blends: Vec::new(),
             entities: parts,
         },
         &registry,

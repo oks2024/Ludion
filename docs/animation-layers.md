@@ -147,7 +147,8 @@ blends:
   It keeps a hashed `BlendClock` only on an entity whose clip names a blend. Without it, extract falls
   back to `elapsed * rate(params now)`: exact while the params hold still, and no events fire.
 - **Limits.** `hold` does not step a blend's phase. A blend may not share a clip binding's name.
-  Blends on prefabs are not supported; a layer blend's phase is not stepped by `hold`.
+  A prefab's blends play stateless and fire no events (`ludion docs prefab-animation`); a layer
+  blend's phase is not stepped by `hold`.
 - **Assemblies.** An assembly's `blends:` follows the same rules, with its clips bound at speed 1 and
   `sync` read from the clip document's own events; errors are `L1137`/`L1138`.
 
@@ -207,7 +208,8 @@ static GRAPH: AnimGraph<Pose, Inputs> = AnimGraph {
 - **Presentation only.** No system reads the component; the pose is never hashed, and a scene without
   it poses and hashes exactly as before. The component itself is hashed state, like `Animation`.
 - An unknown clip or mask name, or a layer at weight 0, is a silent degrade — the layer does nothing.
-- A skin named by `SkinBone` parts refuses `AnimationLayers` (`L1672`); prefab parts ignore it.
+- A skin named by `SkinBone` parts refuses `AnimationLayers` (`L1672`). On a prefab instance's
+  root it poses the parts (`ludion docs prefab-animation` §Layers and blends).
   An assembly takes layers, plain or blend, with its own `masks:` (`ludion docs voxel-animation`);
   `ludion render --model --blend/--layer` previews both and `check-scene` lists them.
 - A layer raises no `AnimationEvents` unless it sets `events: true`.

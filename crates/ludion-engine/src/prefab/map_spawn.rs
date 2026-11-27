@@ -263,6 +263,8 @@ impl PrefabLibrary {
             name: scene.name,
             generated_from: scene.generated_from,
             clips: Vec::new(),
+            masks: Vec::new(),
+            blends: Vec::new(),
             entities: scene.entities,
         };
         let prefab_text = ludion_scene::emit_prefab(&prefab, &self.registry);
