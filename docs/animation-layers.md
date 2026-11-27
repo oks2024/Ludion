@@ -206,8 +206,9 @@ static GRAPH: AnimGraph<Pose, Inputs> = AnimGraph {
 
 ## What it does not do
 
-- **Presentation only.** No system reads the component; the pose is never hashed, and a scene without
-  it poses and hashes exactly as before. The component itself is hashed state, like `Animation`.
+- **The pose is presentation only.** It is never hashed, and a scene without the component poses and
+  hashes exactly as before. The component is hashed state, like `Animation`; `blend_clocks` and
+  `animation_events` read it for layer blends and events.
 - An unknown clip or mask name, or a layer at weight 0, is a silent degrade — the layer does nothing.
 - A skin named by `SkinBone` parts refuses `AnimationLayers` (`L1672`). On a prefab instance's
   root it poses the parts (`ludion docs prefab-animation` §Layers and blends).

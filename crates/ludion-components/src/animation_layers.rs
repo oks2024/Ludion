@@ -1,5 +1,6 @@
-//! The [`AnimationLayers`] component: override and additive clip layers over a skinned assembly's
-//! base [`Animation`](crate::Animation) (`Plan/animation-layers.md`, Neon Shroud request 0007).
+//! The [`AnimationLayers`] component: override and additive clip layers over the base
+//! [`Animation`](crate::Animation) of an assembly or a prefab instance's root
+//! (`Plan/animation-layers.md`, Neon Shroud request 0007).
 
 use ludion_core::codes::code;
 use ludion_core::diagnostics::Diagnostic;
@@ -32,12 +33,12 @@ pub enum LayerMode {
 pub struct AnimationLayer {
     /// The layer's name, unique within the component; [`fade_layer`] and [`play_layer`] select by it.
     pub name: String,
-    /// The clip's short name, as bound in the character's `clips:` map (default `""` — nothing
-    /// plays). An unknown name is a silent degrade, as for `Animation`.
+    /// The clip's short name, as bound in the assembly's or prefab's `clips:` map, or a `blends:` name
+    /// (default `""` — nothing plays). An unknown name is a silent degrade, as for `Animation`.
     #[serde(default)]
     pub clip: String,
-    /// The character's `masks:` entry this layer touches (default `""` — the whole skin). An
-    /// unknown name is a silent degrade: the layer does nothing.
+    /// The assembly's or prefab's `masks:` entry this layer touches (default `""` — the whole skin
+    /// or every part). An unknown name is a silent degrade: the layer does nothing.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub mask: String,
     /// How the layer combines with the pose beneath it (default `override`).
@@ -98,19 +99,21 @@ impl Default for AnimationLayer {
     }
 }
 
-/// Override and additive clip layers over a skinned `kind: assembly`'s base `Animation`.
+/// Override and additive clip layers over the base `Animation` of a `kind: assembly` (skinned or
+/// voxel) or of a prefab instance's root, where they pose the parts.
 ///
 /// Layers are evaluated in list order over the base pose (at most four, `L1670`). An override layer
-/// blends toward its clip by `weight` × the bone mask's weight for each joint; a joint the clip has no
-/// track for stays as it was. An additive layer adds its clip's change from its first frame. Each
-/// layer has its own clock (`started`, `speed`) and its weight ramps from `from_weight` over `fade`
-/// seconds from `changed`; both use the base `Animation.hold` grid.
+/// blends toward its clip by `weight` × the mask's weight for each joint or part; one the clip has no
+/// track for stays as it was. An additive layer adds its clip's change from its `reference` clip's
+/// first frame; without one, from its own first frame, or on a prefab from the part's authored rest.
+/// Each layer has its own clock (`started`, `speed`) and its weight ramps from `from_weight` over
+/// `fade` seconds from `changed`; both use the base `Animation.hold` grid.
 ///
-/// **Presentation only.** Extract composes the layers into the skin palette; no system reads the
-/// component, and a scene without it poses exactly as before. It is ordinary hashed sim state, so
-/// write it only when a choice changes. A `SkinBone`-driven skin refuses it (`L1672`); an assembly or
-/// prefab part ignores it. A layer raises no events unless it sets `events: true`. A layer's `clip` may
-/// name a blend of the character, evaluated at the layer's `params`.
+/// **The pose is presentation only.** The layered pose is never hashed (a ragdoll switch starts from
+/// it), and a scene without the component poses exactly as before. The component is ordinary hashed
+/// sim state, so write it only when a choice changes. A `SkinBone`-driven skin refuses it (`L1672`).
+/// A layer raises no events unless it sets `events: true`. A layer's `clip` may name a blend of the
+/// assembly or prefab, evaluated at the layer's `params`.
 ///
 /// ```yaml
 /// components:
