@@ -12836,7 +12836,9 @@ fn needs_gpu_a_streamed_flip_leaves_the_image_untouched() {
 }
 
 /// Streams `bare` and `with` alternately through a ring and holds every returned `bare` frame
-/// to a fresh renderer's render of it and every `with` frame to the first one. Skips with no GPU.
+/// to a fresh renderer's render of it and every `with` frame to the first one. It blocks on the
+/// device after each frame, so only one is ever in flight and the ring's newest-wins collection
+/// drops none. Skips with no GPU.
 fn streamed_flip_is_neutral(name: &str, size: FrameSize, bare: &RenderScene, with: &RenderScene) {
     let Some(renderer) = skip_or_renderer(name) else {
         return;
@@ -12845,36 +12847,36 @@ fn streamed_flip_is_neutral(name: &str, size: FrameSize, bare: &RenderScene, wit
         return;
     };
     let mut ring = renderer.new_stream_readback(size).expect("ring");
-    // (frame was a sprite frame, image), in return order.
-    let mut returned: Vec<(bool, RenderedImage)> = Vec::new();
-    let counts = |returned: &[(bool, RenderedImage)]| {
-        let sprites = returned.iter().filter(|(sprite, _)| *sprite).count();
-        (returned.len() - sprites, sprites)
-    };
-    // Frames alternate bare, sprite, bare, ...; the ring may drop a frame in flight, so keep
-    // submitting until enough of each kind has come back.
-    for i in 0..60u64 {
+    // (stamp, image), in return order.
+    let mut stamped: Vec<(FrameIndex, RenderedImage)> = Vec::new();
+    // Frames alternate bare, sprite, bare, ...
+    for i in 0..6u64 {
         let scene = if i % 2 == 0 { bare } else { with };
-        if let Some((stamp, image)) = renderer
-            .render_streamed(scene, size, &mut ring, FrameIndex(i), None)
-            .expect("streamed frame")
-        {
-            returned.push((stamp.0 % 2 == 1, image));
+        stamped.extend(
+            renderer
+                .render_streamed(scene, size, &mut ring, FrameIndex(i), None)
+                .expect("streamed frame"),
+        );
+        renderer
+            .gpu
+            .device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("device poll");
+        while let Some(frame) = renderer.collect_streamed(&mut ring).expect("collect") {
+            stamped.push(frame);
         }
-        while let Some((stamp, image)) = renderer.collect_streamed(&mut ring).expect("collect") {
-            returned.push((stamp.0 % 2 == 1, image));
-        }
-        let (bares, sprites) = counts(&returned);
-        if bares >= 3 && sprites >= 2 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(2));
     }
-    let (bares, sprites) = counts(&returned);
-    assert!(
-        bares >= 3 && sprites >= 2,
-        "the stream returned {bares} bare and {sprites} sprite frames"
+    let stamps: Vec<u64> = stamped.iter().map(|(stamp, _)| stamp.0).collect();
+    assert_eq!(
+        stamps,
+        (0..6).collect::<Vec<_>>(),
+        "every streamed frame comes back once, in order"
     );
+    // (frame was a sprite frame, image)
+    let returned: Vec<(bool, RenderedImage)> = stamped
+        .into_iter()
+        .map(|(stamp, image)| (stamp.0 % 2 == 1, image))
+        .collect();
     let never = fresh.render(bare, size).expect("fresh frame");
     let first_sprite = &returned.iter().find(|(sprite, _)| *sprite).unwrap().1;
     for (sprite, frame) in &returned {
