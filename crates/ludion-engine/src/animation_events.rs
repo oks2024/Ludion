@@ -87,6 +87,7 @@ use ludion_scene::{AnimationEvent, Keyframe, ROOT_TRACK};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::assembly_body::{AssemblyBody, body_of};
 use crate::blend_clock::blend_crossings;
 use crate::blend_space::BlendSpaceData;
 use crate::components::{
@@ -158,19 +159,18 @@ pub(crate) struct AnimationLibrary {
     roots: Mutex<BTreeMap<Model, Arc<RootModel>>>,
 }
 
-/// A model that binds clips, with its path: the `Mesh.shape` of an assembly or character, or an
+/// A model that binds clips, with its path: the `Mesh.shape` of an assembly (either body), or an
 /// instanced prefab.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Model {
     Assembly(String),
-    Character(String),
     Prefab(String),
 }
 
 impl Model {
     fn path(&self) -> &str {
         match self {
-            Model::Assembly(rel) | Model::Character(rel) | Model::Prefab(rel) => rel,
+            Model::Assembly(rel) | Model::Prefab(rel) => rel,
         }
     }
 }
@@ -195,12 +195,14 @@ impl AnimationLibrary {
         }
         let root = AssetRoot::content(&self.root);
         let loaded = match model {
-            Model::Assembly(rel) => {
-                crate::assembly_mesh::load(root, rel).map(|data| root_model_of_assembly(&data))
-            }
-            Model::Character(rel) => {
-                crate::character::load(root, rel).map(|data| root_model_of_character(&data))
-            }
+            Model::Assembly(rel) => body_of(root, rel).and_then(|body| match body {
+                AssemblyBody::Voxel => {
+                    crate::assembly_mesh::load(root, rel).map(|data| root_model_of_assembly(&data))
+                }
+                AssemblyBody::Skinned => {
+                    crate::character::load(root, rel).map(|data| root_model_of_character(&data))
+                }
+            }),
             Model::Prefab(rel) => crate::prefab_clips::load_with_sources(root, rel)
                 .map(|(data, _)| root_model_of_prefab(&data)),
         };
@@ -236,24 +238,33 @@ impl AnimationLibrary {
             };
             let loaded = match model {
                 Model::Assembly(_) => {
-                    crate::assembly_mesh::load(AssetRoot::content(&self.root), rel).map(|data| {
-                        self.blends.insert(model.clone(), data.blends.clone());
-                        self.fill_root(model, root_model_of_assembly(&data));
-                        data.clips
-                            .iter()
-                            .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
-                            .collect()
+                    body_of(AssetRoot::content(&self.root), rel).and_then(|body| match body {
+                        AssemblyBody::Voxel => {
+                            crate::assembly_mesh::load(AssetRoot::content(&self.root), rel).map(
+                                |data| {
+                                    self.blends.insert(model.clone(), data.blends.clone());
+                                    self.fill_root(model, root_model_of_assembly(&data));
+                                    data.clips
+                                        .iter()
+                                        .map(|b| timing(&b.name, &b.clip, 1.0, &b.clip.events))
+                                        .collect()
+                                },
+                            )
+                        }
+                        AssemblyBody::Skinned => {
+                            crate::character::load(AssetRoot::content(&self.root), rel).map(
+                                |data| {
+                                    self.blends.insert(model.clone(), data.blends.clone());
+                                    self.fill_root(model, root_model_of_character(&data));
+                                    data.clips
+                                        .iter()
+                                        .map(|b| timing(&b.name, &b.clip, b.speed, &b.events))
+                                        .collect()
+                                },
+                            )
+                        }
                     })
                 }
-                Model::Character(_) => crate::character::load(AssetRoot::content(&self.root), rel)
-                    .map(|data| {
-                        self.blends.insert(model.clone(), data.blends.clone());
-                        self.fill_root(model, root_model_of_character(&data));
-                        data.clips
-                            .iter()
-                            .map(|b| timing(&b.name, &b.clip, b.speed, &b.events))
-                            .collect()
-                    }),
                 Model::Prefab(_) => {
                     crate::prefab_clips::load_with_sources(AssetRoot::content(&self.root), rel).map(
                         |(data, _)| {
@@ -487,8 +498,7 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
     }
     for (id, (animation, mesh)) in world.query_ids::<(&Animation, &Mesh)>() {
         let model = match &mesh.shape {
-            MeshSource::Assembly(rel) => Model::Assembly(rel.clone()),
-            MeshSource::Character(rel) => Model::Character(rel.clone()),
+            MeshSource::Assembly(rel) | MeshSource::Character(rel) => Model::Assembly(rel.clone()),
             _ => continue,
         };
         if animation.clip.is_empty() {
@@ -867,7 +877,7 @@ tracks:
 
         let mut prefilled = AnimationLibrary::new(dir.clone());
         assert!(prefilled.timings(&model).is_ok());
-        let skinned = Model::Character(skinned_files(&dir));
+        let skinned = Model::Assembly(skinned_files(&dir));
         assert!(prefilled.timings(&skinned).is_ok(), "the skinned fixture");
         // With the files gone, only the pre-fill can still answer.
         std::fs::remove_dir_all(&dir).unwrap();

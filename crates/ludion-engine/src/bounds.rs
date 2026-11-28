@@ -38,6 +38,7 @@ use ludion_protocol::command::ViewPose;
 use ludion_protocol::response::{EntityBounds, ScreenRect, WorldAabb};
 use ludion_renderer::{MeshShape, TextRun};
 
+use crate::assembly_body::AssemblyBody;
 use crate::asset_cache::AssetCache;
 use crate::extract::{
     PlacedMesh, PlacedMeshSource, PlacedSprite, build_camera, place_uncached, single_camera,
@@ -259,9 +260,9 @@ struct Extents<'a> {
 impl Extents<'_> {
     /// The object-space AABB used for bounds. Each procedural primitive has its box (matching
     /// `ludion_renderer::mesh` — cube and sphere span ±0.5 on every axis; the plane is flat in Y,
-    /// ±0.5 in X and Z). A voxel model, an assembly and a single assembly part are their grid's
+    /// ±0.5 in X and Z). A voxel model, a voxel assembly and a single assembly part are their grid's
     /// [`grid_box`] (bottom-centered: a model sits on the ground); an asset mesh, a sculpt and a
-    /// character are the min/max of their vertices at rest. When the document does not load the
+    /// skinned assembly are the min/max of their vertices at rest. When the document does not load the
     /// answer is [`fallback_box`], because `render.bounds` must answer for a broken scene.
     fn local_box(&mut self, source: &PlacedMeshSource) -> (Vec3, Vec3) {
         let fallback = fallback_box(source);
@@ -275,11 +276,15 @@ impl Extents<'_> {
                 .load_voxel_grid(self.root, rel)
                 .ok()
                 .map(|grid| grid_box(grid.extent)),
-            PlacedMeshSource::Assembly(rel) => self
-                .cache
-                .load_assembly(self.root, rel)
-                .ok()
-                .map(|data| grid_box(data.size)),
+            PlacedMeshSource::Assembly(rel) => {
+                if self.cache.assembly_body(self.root, rel) == Ok(AssemblyBody::Skinned) {
+                    return self.vertex_box('c', rel, fallback);
+                }
+                self.cache
+                    .load_assembly(self.root, rel)
+                    .ok()
+                    .map(|data| grid_box(data.size))
+            }
             PlacedMeshSource::AssemblyPart(rel, part) => self
                 .cache
                 .load_assembly(self.root, rel)
@@ -292,13 +297,12 @@ impl Extents<'_> {
                 }),
             PlacedMeshSource::Asset(rel) => return self.vertex_box('a', rel, fallback),
             PlacedMeshSource::Sculpt(rel) => return self.vertex_box('s', rel, fallback),
-            PlacedMeshSource::Character(rel) => return self.vertex_box('c', rel, fallback),
         };
         loaded.unwrap_or(fallback)
     }
 
     /// The vertex-extent box of the mesh-valued source `rel` (`kind` tags asset / sculpt /
-    /// character), memoized for the query; `fallback` when it will not load or has no vertices.
+    /// skinned assembly), memoized for the query; `fallback` when it will not load or has no vertices.
     fn vertex_box(&mut self, kind: char, rel: &str, fallback: (Vec3, Vec3)) -> (Vec3, Vec3) {
         let key = format!("{kind}{rel}");
         if let Some(found) = self.vertex_boxes.get(&key) {
@@ -327,8 +331,8 @@ impl Extents<'_> {
     }
 }
 
-/// The box a source gets when its document cannot be loaded: ±0.5 for a primitive, asset mesh or
-/// character, bottom-centered (x,z ∈ ±0.5, y ∈ [0, 1] — a model sits on the ground) for a voxel
+/// The box a source gets when its document cannot be loaded: ±0.5 for a primitive or asset mesh,
+/// bottom-centered (x,z ∈ ±0.5, y ∈ [0, 1] — a model sits on the ground) for a voxel
 /// model, assembly, assembly part or sculpt.
 fn fallback_box(source: &PlacedMeshSource) -> (Vec3, Vec3) {
     match source {

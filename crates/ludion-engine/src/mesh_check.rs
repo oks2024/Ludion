@@ -33,6 +33,8 @@ struct Site {
     pointer: String,
     /// Whether the mesh's texture maps are opened too (a collider reads geometry only).
     maps: bool,
+    /// A shape naming a whole assembly, whose document's body picks `doc`.
+    whole: bool,
 }
 
 /// What reading one distinct document found.
@@ -75,19 +77,31 @@ struct Read {
 /// # std::fs::remove_dir_all(&root).ok();
 /// ```
 pub fn scene_mesh_asset_diagnostics(project_root: &Path, scene: &Scene) -> Vec<Diagnostic> {
-    let (sites, decal_maps) = walk(scene);
+    let (mut sites, decal_maps) = walk(scene);
     if sites.is_empty() && decal_maps.is_empty() {
         return Vec::new();
     }
     let root = AssetRoot::content(project_root);
 
-    // Characters first: their mesh documents join the mesh reads, so each file opens once.
-    let character_docs: BTreeSet<(Doc, &str)> = sites
+    // Skinned assemblies first: their mesh documents join the mesh reads, so each opens once.
+    let skinned = skinned_meshes(root, &sites);
+    for site in sites.iter_mut().filter(|site| site.whole) {
+        if skinned.contains_key(&site.rel) {
+            site.doc = Doc::Character;
+            site.label = "character";
+            site.maps = true;
+        }
+    }
+    let characters: BTreeMap<(Doc, &str), Read> = skinned
         .iter()
-        .filter(|site| site.doc == Doc::Character)
-        .map(|site| (site.doc, site.rel.as_str()))
+        .map(|(rel, mesh)| {
+            let read = Read {
+                character_mesh: Some(mesh.clone()),
+                ..Read::default()
+            };
+            ((Doc::Character, rel.as_str()), read)
+        })
         .collect();
-    let characters = read_docs(root, &character_docs);
 
     let mut distinct: BTreeSet<(Doc, &str)> = sites
         .iter()
@@ -270,9 +284,7 @@ fn site_faults<'a>(
         let Some(character) = characters.get(&(Doc::Character, site.rel.as_str())) else {
             return found;
         };
-        if !character.faults.is_empty() {
-            push_read("character", &site.rel, character, false);
-        } else if let Some((rel, mesh)) = character
+        if let Some((rel, mesh)) = character
             .character_mesh
             .as_deref()
             .and_then(|rel| Some((rel, reads.get(&(Doc::Mesh, rel))?)))
@@ -344,6 +356,7 @@ fn walk(scene: &Scene) -> (Vec<Site>, Vec<(String, String)>) {
                                 "/entities/{index}/components/Collider/shape/mesh/path"
                             ),
                             maps: false,
+                            whole: false,
                         });
                     }
                 }
@@ -375,13 +388,21 @@ fn walk(scene: &Scene) -> (Vec<Site>, Vec<(String, String)>) {
 }
 
 fn mesh_sites(shape: &MeshSource, site: MeshSite, index: usize, sites: &mut Vec<Site>) {
+    let mut whole = false;
     let (doc, rel, label, tail) = match shape {
         MeshSource::Cube | MeshSource::Plane | MeshSource::Sphere => return,
         MeshSource::Asset(path) => (Doc::Mesh, path, "mesh asset", "asset"),
         MeshSource::Voxel(path) => (Doc::Voxel, path, "voxel model", "voxel"),
         MeshSource::Sculpt(path) => (Doc::Sculpt, path, "sculpt model", "sculpt"),
-        MeshSource::Character(path) => (Doc::Character, path, "character", "character"),
-        MeshSource::Assembly(path) => (Doc::Assembly, path, "assembly", "assembly"),
+        MeshSource::Assembly(path) | MeshSource::Character(path) => {
+            whole = true;
+            let tail = if matches!(shape, MeshSource::Assembly(_)) {
+                "assembly"
+            } else {
+                "character"
+            };
+            (Doc::Assembly, path, "assembly", tail)
+        }
         MeshSource::AssemblyPart { assembly, .. } => (
             Doc::Assembly,
             assembly,
@@ -394,8 +415,28 @@ fn mesh_sites(shape: &MeshSource, site: MeshSite, index: usize, sites: &mut Vec<
         rel: rel.clone(),
         label,
         pointer: site.shape_pointer(index, tail),
-        maps: doc == Doc::Mesh || doc == Doc::Character,
+        maps: doc == Doc::Mesh,
+        whole,
     });
+}
+
+/// The mesh document of each whole-assembly site whose body is skinned, by assembly path. A document
+/// that cannot be read is left out, so the voxel reader reports it.
+fn skinned_meshes(root: AssetRoot<'_>, sites: &[Site]) -> BTreeMap<String, String> {
+    let rels: BTreeSet<&str> = sites
+        .iter()
+        .filter(|site| site.whole)
+        .map(|site| site.rel.as_str())
+        .collect();
+    let rels: Vec<&str> = rels.into_iter().collect();
+    let meshes = ludion_core::par::par_map_chunks(&rels, 1, |_, chunk| {
+        let (document, _) = crate::assembly_body::read_document(root, chunk[0]).ok()?;
+        Some(ludion_core::paths::sibling(chunk[0], &document.mesh?))
+    });
+    rels.iter()
+        .zip(meshes)
+        .filter_map(|(rel, mesh)| Some((rel.to_string(), mesh?)))
+        .collect()
 }
 
 /// Reads each distinct document once, in parallel; results are keyed, so order never shows.
@@ -440,9 +481,7 @@ fn read_one(root: AssetRoot<'_>, doc: Doc, rel: &str) -> Read {
         Doc::Voxel => crate::voxel_mesh::read_document(root, rel).map(|_| ()),
         Doc::Sculpt => crate::sculpt_mesh::read_document(root, rel).map(|_| ()),
         Doc::Assembly => crate::assembly_mesh::load_documents(root, rel).map(|_| ()),
-        Doc::Character => crate::character::mesh_path(root, rel).map(|mesh| {
-            read.character_mesh = Some(mesh);
-        }),
+        Doc::Character => unreachable!("`skinned_meshes` reads a skinned assembly"),
     };
     if let Err(faults) = outcome {
         read.faults = faults;
@@ -779,6 +818,28 @@ indices:
         assert_eq!(
             at(&found),
             [("L1101", "/entities/0/components/Mesh/shape/character")],
+            "{found:?}"
+        );
+        assert!(
+            found[0]
+                .message
+                .starts_with("character mesh `gone.mesh.yaml`")
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_skinned_assembly_whose_mesh_is_missing_reports_the_mesh() {
+        let dir = scratch("skinned-assembly");
+        std::fs::write(
+            dir.join("c.assembly.yaml"),
+            "format: 1\nkind: assembly\nmesh: gone.mesh.yaml\nclips: {}\n",
+        )
+        .unwrap();
+        let found = check(&dir, &mesh_entity("assembly: c.assembly.yaml"));
+        assert_eq!(
+            at(&found),
+            [("L1101", "/entities/0/components/Mesh/shape/assembly")],
             "{found:?}"
         );
         assert!(

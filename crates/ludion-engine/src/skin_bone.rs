@@ -20,6 +20,7 @@ use ludion_core::suggest;
 use ludion_ecs::{Parent, World};
 use ludion_scene::{MeshDocument, MeshJoint, Scene, SceneEntity};
 
+use crate::assembly_body::{AssemblyBody, body_of};
 use crate::components::{Mesh, MeshSource, SkinBone, Transform};
 
 /// Resolves and applies every `SkinBone` spawn pose in `scene` onto `world`'s entities — the id
@@ -295,18 +296,22 @@ pub(crate) fn skinned_mesh_path(
     mesh_document_path(project_root, &mesh)
 }
 
-/// `mesh`'s `shape: asset` path, or the document a `shape: character` resolves to; `None` for any
-/// other shape.
+/// `mesh`'s `shape: asset` path, or the mesh document a skinned assembly resolves to; `None` for any
+/// other shape, a voxel assembly included. An assembly that cannot be read is `Some(Err)`.
 pub(crate) fn mesh_document_path(
     project_root: AssetRoot<'_>,
     mesh: &Mesh,
 ) -> Option<Result<String, (String, Vec<Diagnostic>)>> {
     match &mesh.shape {
         MeshSource::Asset(path) => Some(Ok(path.clone())),
-        MeshSource::Character(path) => Some(
-            crate::character::mesh_path(project_root, path)
-                .map_err(|errors| (path.clone(), errors)),
-        ),
+        MeshSource::Assembly(path) | MeshSource::Character(path) => {
+            let resolved = match body_of(project_root, path) {
+                Ok(AssemblyBody::Skinned) => crate::character::mesh_path(project_root, path),
+                Ok(AssemblyBody::Voxel) => return None,
+                Err(errors) => Err(errors),
+            };
+            Some(resolved.map_err(|errors| (path.clone(), errors)))
+        }
         _ => None,
     }
 }

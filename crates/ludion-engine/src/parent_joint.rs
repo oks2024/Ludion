@@ -22,6 +22,7 @@ use ludion_ecs::{Parent, Phase, World};
 use ludion_renderer::SkinJoint;
 use ludion_scene::{MeshJoint, Scene, SceneEntity};
 
+use crate::assembly_body::{AssemblyBody, body_of};
 use crate::assembly_mesh::AssemblyData;
 use crate::character::CharacterData;
 use crate::components::{Mesh, MeshSource, ParentJoint, SkinBone};
@@ -73,7 +74,7 @@ pub fn scene_parent_joint_diagnostics(project_root: &Path, scene: &Scene) -> Vec
         }
         let parent_entity = &scene.entities[parent_index];
 
-        if let Some(rel) = assembly_path(parent_entity) {
+        if let Some(rel) = assembly_path(project_root, parent_entity) {
             let parts = assembly_cache.entry(rel.clone()).or_insert_with(|| {
                 crate::assembly_mesh::load_documents(AssetRoot::content(project_root), &rel).map(
                     |(assembly, _, _, _)| {
@@ -158,12 +159,17 @@ pub fn scene_parent_joint_diagnostics(project_root: &Path, scene: &Scene) -> Vec
     diagnostics
 }
 
-/// `entity`'s `Mesh.shape: assembly` path, or `None` for no `Mesh` or any other shape.
-fn assembly_path(entity: &SceneEntity) -> Option<String> {
+/// The assembly path of `entity`'s `Mesh.shape` unless its body is skinned (that one has joints, so
+/// it resolves as a skinned mesh); `None` for no `Mesh` or any other shape. A document that cannot
+/// be read is returned too, so the part lookup reports it.
+fn assembly_path(project_root: &Path, entity: &SceneEntity) -> Option<String> {
     let (_, value) = entity.components.iter().find(|(name, _)| name == "Mesh")?;
     let mesh: Mesh = serde_json::from_value(value.clone()).ok()?;
     match mesh.shape {
-        MeshSource::Assembly(path) => Some(path),
+        MeshSource::Assembly(path) | MeshSource::Character(path) => {
+            let body = body_of(AssetRoot::content(project_root), &path);
+            (body != Ok(AssemblyBody::Skinned)).then_some(path)
+        }
         _ => None,
     }
 }
@@ -181,7 +187,7 @@ type JointRests = BTreeMap<String, Trs>;
 /// same as an authored one.
 pub(crate) struct SkinRests {
     root: PathBuf,
-    /// Keyed `asset:<path>` / `character:<path>`; `None` is a mesh with no skin or one that failed
+    /// Keyed `asset:<path>` / `assembly:<path>`; `None` is a mesh with no skin or one that failed
     /// to load, cached as such.
     meshes: Mutex<BTreeMap<String, Option<Arc<JointRests>>>>,
     /// The same keys: the decoded joints and the character's clips, for [`posed_joint_world`].
@@ -190,6 +196,8 @@ pub(crate) struct SkinRests {
     /// Meshed assemblies keyed `assembly:<path>`, for [`posed_joint_world`]; separate from `meshes`
     /// for the same reason as `posed`.
     assemblies: Mutex<BTreeMap<String, Option<Arc<AssemblyData>>>>,
+    /// Each assembly document's body by path; `None` for one that cannot be read.
+    bodies: Mutex<BTreeMap<String, Option<AssemblyBody>>>,
 }
 
 /// What the presentation read of a posed joint needs beyond the rest table: the skin's decoded
@@ -206,7 +214,18 @@ impl SkinRests {
             meshes: Mutex::new(BTreeMap::new()),
             posed: Mutex::new(BTreeMap::new()),
             assemblies: Mutex::new(BTreeMap::new()),
+            bodies: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    fn body(&self, rel: &str) -> Option<AssemblyBody> {
+        let mut bodies = self.bodies.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(found) = bodies.get(rel) {
+            return *found;
+        }
+        let body = body_of(AssetRoot::content(&self.root), rel).ok();
+        bodies.insert(rel.to_string(), body);
+        body
     }
 
     fn assembly_data(&self, rel: &str) -> Option<Arc<AssemblyData>> {
@@ -227,7 +246,11 @@ impl SkinRests {
     fn pose_data(&self, shape: &MeshSource) -> Option<Arc<SkinPoseData>> {
         let key = match shape {
             MeshSource::Asset(path) => format!("asset:{path}"),
-            MeshSource::Character(path) => format!("character:{path}"),
+            MeshSource::Assembly(path) | MeshSource::Character(path)
+                if self.body(path) == Some(AssemblyBody::Skinned) =>
+            {
+                format!("assembly:{path}")
+            }
             _ => return None,
         };
         let mut posed = self.posed.lock().unwrap_or_else(PoisonError::into_inner);
@@ -240,7 +263,8 @@ impl SkinRests {
     fn load_pose_data(&self, shape: &MeshSource) -> Option<Arc<SkinPoseData>> {
         let (path, character) = match shape {
             MeshSource::Asset(path) => (path.clone(), None),
-            MeshSource::Character(rel) => {
+            // `pose_data` asks for a skinned assembly only.
+            MeshSource::Assembly(rel) | MeshSource::Character(rel) => {
                 let data = crate::character::load(AssetRoot::content(&self.root), rel).ok()?;
                 (data.mesh.clone(), Some(Arc::new(data)))
             }
@@ -260,8 +284,9 @@ impl SkinRests {
     fn rest(&self, shape: &MeshSource, joint: &str) -> Option<Trs> {
         let key = match shape {
             MeshSource::Asset(path) => format!("asset:{path}"),
-            MeshSource::Character(path) => format!("character:{path}"),
-            MeshSource::Assembly(path) => format!("assembly:{path}"),
+            MeshSource::Assembly(path) | MeshSource::Character(path) => {
+                format!("assembly:{path}")
+            }
             _ => return None,
         };
         let skin = {
@@ -275,14 +300,14 @@ impl SkinRests {
     }
 
     fn load(&self, shape: &MeshSource) -> Option<Arc<JointRests>> {
-        if let MeshSource::Assembly(rel) = shape {
-            return self.load_assembly(rel);
-        }
         let path = match shape {
             MeshSource::Asset(path) => path.clone(),
-            MeshSource::Character(path) => {
-                crate::character::mesh_path(AssetRoot::content(&self.root), path).ok()?
-            }
+            MeshSource::Assembly(rel) | MeshSource::Character(rel) => match self.body(rel)? {
+                AssemblyBody::Voxel => return self.load_assembly(rel),
+                AssemblyBody::Skinned => {
+                    crate::character::mesh_path(AssetRoot::content(&self.root), rel).ok()?
+                }
+            },
             _ => return None,
         };
         let joints = load_mesh_joints(AssetRoot::content(&self.root), &path).ok()??;
@@ -414,7 +439,9 @@ pub fn posed_joint_world(
     let Some(rests) = world.resource::<SkinRests>() else {
         return Ok(None);
     };
-    if let MeshSource::Assembly(rel) = &mesh.shape {
+    if let MeshSource::Assembly(rel) | MeshSource::Character(rel) = &mesh.shape
+        && rests.body(rel) == Some(AssemblyBody::Voxel)
+    {
         return Ok(posed_assembly_part(world, rests, skin, rel, joint, now));
     }
     let Some(data) = rests.pose_data(&mesh.shape) else {

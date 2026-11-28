@@ -34,6 +34,7 @@
 mod ai;
 mod anim_graph;
 mod animation_events;
+mod assembly_body;
 mod assembly_ik;
 mod assembly_mesh;
 mod asset_cache;

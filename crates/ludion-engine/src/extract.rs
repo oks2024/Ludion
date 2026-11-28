@@ -43,6 +43,7 @@ use ludion_renderer::{DEFAULT_POROSITY, LodSettings};
 use ludion_renderer::{UiClip, UiRotation};
 use ludion_scene::{AtlasDocument, AtlasFilter, ClipSampler, FontMode};
 
+use crate::assembly_body::AssemblyBody;
 use crate::assembly_mesh::{AssemblyClipData, AssemblyData, AssemblyMaskData};
 use crate::asset_cache::{AssetCache, AssetRefs, SourceFiles};
 use crate::blend_space::BlendSpaceData;
@@ -115,6 +116,10 @@ pub(crate) trait SceneAssets {
     /// on its own, with the rest pose that places them). Each part's `MeshData` lands in the same
     /// `mesh_assets` list as [`mesh`](SceneAssets::mesh), one entry per part.
     fn assembly(&mut self, rel: &str) -> Result<Arc<AssemblyData>, Vec<Diagnostic>>;
+    /// Whether the assembly document at `rel` is skinned (loads through
+    /// [`character`](SceneAssets::character)) or voxel (through
+    /// [`assembly`](SceneAssets::assembly)).
+    fn assembly_body(&mut self, rel: &str) -> Result<AssemblyBody, Vec<Diagnostic>>;
     /// Resolves a `Mesh.shape: character` path to its loaded character: the mesh path (resolved
     /// through [`mesh`](SceneAssets::mesh) like an `asset`) and its bound clips.
     fn character(&mut self, rel: &str) -> Result<Arc<CharacterData>, Vec<Diagnostic>>;
@@ -202,6 +207,9 @@ impl SceneAssets for CachedAssets<'_> {
     }
     fn assembly(&mut self, rel: &str) -> Result<Arc<AssemblyData>, Vec<Diagnostic>> {
         self.cache.load_assembly(self.root, rel).cloned()
+    }
+    fn assembly_body(&mut self, rel: &str) -> Result<AssemblyBody, Vec<Diagnostic>> {
+        self.cache.assembly_body(self.root, rel)
     }
     fn character(&mut self, rel: &str) -> Result<Arc<CharacterData>, Vec<Diagnostic>> {
         self.cache.load_character(self.root, rel).cloned()
@@ -1632,9 +1640,11 @@ fn extract_inner(
                 &mut errors,
             )
             .map(MeshShape::Asset),
-            // A character draws its skinned mesh, deduplicated by the mesh path so a plain `asset`
+            // A skinned assembly draws its mesh, deduplicated by the mesh path so a plain `asset`
             // of the same mesh shares the one upload.
-            PlacedMeshSource::Character(rel) => {
+            PlacedMeshSource::Assembly(rel)
+                if assets.assembly_body(rel) == Ok(AssemblyBody::Skinned) =>
+            {
                 let pointer = mesh
                     .site
                     .shape_pointer(mesh.index, MeshKind::Character.shape_field());
@@ -3734,11 +3744,9 @@ pub(crate) enum PlacedMeshSource<'w> {
     Voxel(&'w str),
     /// An unresolved sculpt-model path (`sculpts/*.sculpt.yaml`), relative to the content root.
     Sculpt(&'w str),
-    /// An unresolved character path (`*.character.yaml`), relative to the content root; it resolves
-    /// to its skinned mesh's `mesh_assets` index.
-    Character(&'w str),
-    /// An unresolved assembly path (`*.assembly.yaml`), relative to the content root. The one source
-    /// that resolves to *several* meshes — one per part — all sharing this placement's transform.
+    /// An unresolved assembly path, relative to the content root. A skinned one resolves to its
+    /// mesh's `mesh_assets` index; a voxel one is the one source that resolves to *several* meshes
+    /// — one per part — all sharing this placement's transform.
     Assembly(&'w str),
     /// One named part (the second field) of an unresolved assembly path (the first), relative to
     /// the content root: resolves to exactly one mesh, sharing the assembly's part run.
@@ -3753,9 +3761,10 @@ pub(crate) fn placed_source(shape: &MeshSource) -> PlacedMeshSource<'_> {
         MeshSource::Sphere => PlacedMeshSource::Primitive(MeshShape::Sphere),
         MeshSource::Asset(path) => PlacedMeshSource::Asset(path),
         MeshSource::Voxel(path) => PlacedMeshSource::Voxel(path),
-        MeshSource::Assembly(path) => PlacedMeshSource::Assembly(path),
+        MeshSource::Assembly(path) | MeshSource::Character(path) => {
+            PlacedMeshSource::Assembly(path)
+        }
         MeshSource::Sculpt(path) => PlacedMeshSource::Sculpt(path),
-        MeshSource::Character(path) => PlacedMeshSource::Character(path),
         MeshSource::AssemblyPart { assembly, part } => {
             PlacedMeshSource::AssemblyPart(assembly, part)
         }
@@ -4076,6 +4085,9 @@ impl SceneAssets for RefLoader {
     fn assembly(&mut self, _: &str) -> Result<Arc<AssemblyData>, Vec<Diagnostic>> {
         Err(Self::unresolved())
     }
+    fn assembly_body(&mut self, _: &str) -> Result<AssemblyBody, Vec<Diagnostic>> {
+        Err(Self::unresolved())
+    }
     fn character(&mut self, _: &str) -> Result<Arc<CharacterData>, Vec<Diagnostic>> {
         Err(Self::unresolved())
     }
@@ -4152,7 +4164,6 @@ pub(crate) fn asset_refs(world: &World, project_root: AssetRoot<'_>) -> AssetRef
             PlacedMeshSource::Asset(path) => (&mut refs.meshes, path),
             PlacedMeshSource::Voxel(path) => (&mut refs.voxels, path),
             PlacedMeshSource::Sculpt(path) => (&mut refs.sculpts, path),
-            PlacedMeshSource::Character(path) => (&mut refs.characters, path),
             PlacedMeshSource::Assembly(path) | PlacedMeshSource::AssemblyPart(path, _) => {
                 (&mut refs.assemblies, path)
             }
@@ -5097,7 +5108,15 @@ fn pose_each(
             let Some(mesh) = get::<Mesh>(world, skin) else {
                 continue;
             };
-            if let MeshSource::Assembly(rel) = &mesh.shape {
+            let voxel = match &mesh.shape {
+                MeshSource::Assembly(rel) | MeshSource::Character(rel)
+                    if assets.assembly_body(rel) != Ok(AssemblyBody::Skinned) =>
+                {
+                    Some(rel)
+                }
+                _ => None,
+            };
+            if let Some(rel) = voxel {
                 let Some(data) = assembly_assets.get(&rel.as_str()).cloned().or_else(|| {
                     let data = assets.assembly(rel).ok()?;
                     assembly_assets.insert(rel.as_str(), data.clone());
@@ -5120,7 +5139,8 @@ fn pose_each(
             // successes are cached, so a failing path is retried (and reported) per socket.
             let (is_character, rel) = match &mesh.shape {
                 MeshSource::Asset(rel) => (false, rel.as_str()),
-                MeshSource::Character(rel) => (true, rel.as_str()),
+                // Only a skinned one reaches here.
+                MeshSource::Assembly(rel) | MeshSource::Character(rel) => (true, rel.as_str()),
                 _ => continue,
             };
             let (data, character) = match resolved.get(&(is_character, rel)) {

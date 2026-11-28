@@ -97,6 +97,7 @@ use ludion_core::math::glam::{Mat4, Vec3};
 use ludion_core::math::{mat4_determinant, mat4_inverse};
 use ludion_renderer::{MAX_GI_TEXTURE_AXIS, MeshData, MeshShape, WorldVoxelGrid, max_gi_probes};
 
+use crate::assembly_body::AssemblyBody;
 use crate::bounds::{Aabb, transformed_box, union};
 use crate::extract::{PlacedMesh, PlacedMeshSource, SceneAssets, mesh_error};
 use crate::voxel_mesh::{VoxelStaticGrid, grid_box};
@@ -479,8 +480,15 @@ fn resolve(
                 min: Vec3::splat(-0.5),
                 max: Vec3::splat(0.5),
             },
+            // A skinned assembly is posed per frame; the grid is a static baseline.
+            PlacedMeshSource::Assembly(rel)
+                if assets.assembly_body(rel) == Ok(AssemblyBody::Skinned) =>
+            {
+                skipped.skinned.note(mesh.index);
+                continue;
+            }
             // `MeshShape::Asset` never reaches `place`; an asset path arrives as `Asset` below.
-            // An assembly is skipped because the rasterizer takes one object-space solid per
+            // A voxel assembly is skipped because the rasterizer takes one object-space solid per
             // placement, and an assembly is many part grids posed inside one — no single solid
             // describes it. A sculpt and one assembly part on its own entity (a ragdoll switch's
             // part, or a hand-authored one) are triangle surfaces the shell rasterizer could take,
@@ -490,11 +498,6 @@ fn resolve(
             | PlacedMeshSource::AssemblyPart(_, _)
             | PlacedMeshSource::Sculpt(_) => {
                 skipped.unsupported.note(mesh.index);
-                continue;
-            }
-            // A skinned character is posed per frame; the grid is a static baseline.
-            PlacedMeshSource::Character(_) => {
-                skipped.skinned.note(mesh.index);
                 continue;
             }
             PlacedMeshSource::Asset(rel) => {

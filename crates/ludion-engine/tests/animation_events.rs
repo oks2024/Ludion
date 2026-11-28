@@ -383,6 +383,15 @@ fn a_character_loop_fires_overlay_events_at_the_overlay_speed() {
 }
 
 #[test]
+fn a_skinned_assembly_fires_the_events_the_character_spelling_does() {
+    let spelled = RUN_SCENE.replace("character: ", "assembly: ");
+    let assembly = log_after(&mut engine_with("run-assembly", &spelled), 60);
+    assert!(!ticks_of(&assembly, "foot_l").is_empty(), "{assembly:?}");
+    let character = log_after(&mut engine_with("run-character", RUN_SCENE), 60);
+    assert_eq!(assembly, character);
+}
+
+#[test]
 fn during_a_crossfade_only_the_incoming_clip_emits() {
     let mut engine = engine_with("fade", FADE_SCENE);
     let log = log_after(&mut engine, 60);

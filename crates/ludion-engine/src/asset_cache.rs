@@ -70,6 +70,7 @@ use ludion_core::diagnostics::Diagnostic;
 use ludion_renderer::{MapImage, MeshData, TextureImage, WorldVoxelGrid};
 use ludion_scene::MeshDocument;
 
+use crate::assembly_body::AssemblyBody;
 use crate::assembly_mesh::AssemblyData;
 use crate::character::CharacterData;
 use crate::cooked_maps::{CookLookup, CookMiss, CookRole};
@@ -112,6 +113,8 @@ enum AssetKind {
     Sculpt,
     Assembly,
     Character,
+    /// Keys the remembered failure of an assembly's body read; it never holds an entry.
+    AssemblyBody,
     PrefabClips,
     Atlas,
     /// A `.cube` LUT a `PostProcess` names.
@@ -126,7 +129,7 @@ impl AssetKind {
             AssetKind::Voxel => LoadKind::Voxel,
             AssetKind::VoxelGrid => LoadKind::VoxelGrid,
             AssetKind::Sculpt => LoadKind::Sculpt,
-            AssetKind::Assembly => LoadKind::Assembly,
+            AssetKind::Assembly | AssetKind::AssemblyBody => LoadKind::Assembly,
             AssetKind::Character => LoadKind::Character,
             AssetKind::PrefabClips => LoadKind::PrefabClips,
             AssetKind::Atlas => LoadKind::Atlas,
@@ -154,8 +157,8 @@ pub(crate) struct AssetRefs {
     pub(crate) meshes: BTreeSet<String>,
     pub(crate) voxels: BTreeSet<String>,
     pub(crate) sculpts: BTreeSet<String>,
+    /// Skinned and voxel assemblies alike; [`AssetCache::assembly_body`] tells them apart.
     pub(crate) assemblies: BTreeSet<String>,
-    pub(crate) characters: BTreeSet<String>,
     /// The prefabs whose clips an animated instance root plays.
     pub(crate) prefab_clips: BTreeSet<String>,
     /// Maps a decal names, always read as PNG; a mesh's maps come from its document.
@@ -227,6 +230,7 @@ fn decode(
             )
         }
         AssetKind::Mesh => unreachable!("a mesh is assembled against the cache's maps"),
+        AssetKind::AssemblyBody => unreachable!("a body read decodes no entry"),
         AssetKind::Voxel => {
             let mesh = crate::voxel_mesh::load(project_root, rel)?;
             let hash = mesh.hash;
@@ -712,6 +716,55 @@ impl AssetCache {
         Ok(self.assemblies.get(&key).expect("just inserted on a miss"))
     }
 
+    /// The body of the assembly at `rel`: what the cache holds under that key, else what a
+    /// remembered failure says, else a read of the document alone.
+    ///
+    /// # Errors
+    /// `L1101`/`L1137`/`L1138` if the document of an assembly the cache does not hold cannot be read
+    /// or validated.
+    pub(crate) fn assembly_body(
+        &mut self,
+        project_root: AssetRoot<'_>,
+        rel: &str,
+    ) -> Result<AssemblyBody, Vec<Diagnostic>> {
+        let key = normalize_key(rel);
+        if self.characters.contains_key(&key) {
+            return Ok(AssemblyBody::Skinned);
+        }
+        if self.assemblies.contains_key(&key) {
+            return Ok(AssemblyBody::Voxel);
+        }
+        // Only a skinned document's load fails as a character. A failed voxel load says nothing: a
+        // skinned document fails it too.
+        if self
+            .failures
+            .contains_key(&(AssetKind::Character, rel.to_string()))
+        {
+            return Ok(AssemblyBody::Skinned);
+        }
+        let memo = (AssetKind::AssemblyBody, rel.to_string());
+        if let Some(failure) = self.failures.get(&memo) {
+            return Err(failure.clone());
+        }
+        crate::assembly_body::body_of(project_root, rel).inspect_err(|failure| {
+            self.failures.insert(memo, failure.clone());
+        })
+    }
+
+    /// Splits assembly keys into the voxel ones and the skinned ones. A key whose document cannot be
+    /// read counts as voxel, so its error surfaces from the voxel load.
+    fn partition_assemblies(
+        &mut self,
+        project_root: AssetRoot<'_>,
+        keys: &BTreeSet<String>,
+    ) -> (BTreeSet<String>, BTreeSet<String>) {
+        let (skinned, voxel) = keys
+            .iter()
+            .cloned()
+            .partition(|key| self.assembly_body(project_root, key) == Ok(AssemblyBody::Skinned));
+        (voxel, skinned)
+    }
+
     /// Reads the character at `rel` **through** the cache: a miss reads the character document, its
     /// mesh document and every clip file it names, and records all of them as reload dependencies —
     /// so editing the mesh or any clip re-reads the character.
@@ -1028,6 +1081,7 @@ impl AssetCache {
             AssetKind::Sculpt => self.sculpts.contains_key(key),
             AssetKind::Assembly => self.assemblies.contains_key(key),
             AssetKind::Character => self.characters.contains_key(key),
+            AssetKind::AssemblyBody => false,
             AssetKind::PrefabClips => self.prefab_clips.contains_key(key),
             AssetKind::Atlas => self.atlases.contains_key(key),
             AssetKind::Lut => self.luts.contains_key(key),
@@ -1050,6 +1104,7 @@ impl AssetCache {
             AssetKind::Sculpt => self.sculpts.remove(key).is_some(),
             AssetKind::Assembly => self.assemblies.remove(key).is_some(),
             AssetKind::Character => self.characters.remove(key).is_some(),
+            AssetKind::AssemblyBody => false,
             AssetKind::PrefabClips => self.prefab_clips.remove(key).is_some(),
             AssetKind::Atlas => self.atlases.remove(key).is_some(),
             AssetKind::Lut => self.luts.remove(key).is_some(),
@@ -1116,7 +1171,7 @@ impl AssetCache {
     pub(crate) fn evict_unreferenced(&mut self, refs: &AssetRefs) {
         self.forget_failures();
         let mut meshes = refs.meshes.clone();
-        for key in &refs.characters {
+        for key in &refs.assemblies {
             if let Some(character) = self.characters.get(key) {
                 meshes.insert(normalize_key(&character.mesh));
             }
@@ -1130,7 +1185,7 @@ impl AssetCache {
         self.assemblies
             .retain(|key, _| refs.assemblies.contains(key));
         self.characters
-            .retain(|key, _| refs.characters.contains(key));
+            .retain(|key, _| refs.assemblies.contains(key));
         self.prefab_clips
             .retain(|key, _| refs.prefab_clips.contains(key));
         self.prefab_rests.clear();
@@ -1217,14 +1272,15 @@ impl AssetCache {
     /// Never call the observer from a worker: each stage is bracketed from this thread.
     pub(crate) fn prefetch(&mut self, project_root: AssetRoot<'_>, refs: &AssetRefs) {
         // Stage 1: everything that is one file-set to one value.
+        let (voxel, skinned) = self.partition_assemblies(project_root, &refs.assemblies);
         let mut jobs: Vec<(AssetKind, &str)> = Vec::new();
         let others: [(AssetKind, &BTreeSet<String>); 7] = [
             (AssetKind::Atlas, &refs.atlases),
             (AssetKind::Lut, &refs.luts),
             (AssetKind::Voxel, &refs.voxels),
             (AssetKind::Sculpt, &refs.sculpts),
-            (AssetKind::Assembly, &refs.assemblies),
-            (AssetKind::Character, &refs.characters),
+            (AssetKind::Assembly, &voxel),
+            (AssetKind::Character, &skinned),
             (AssetKind::PrefabClips, &refs.prefab_clips),
         ];
         for (kind, keys) in others {
@@ -1240,7 +1296,7 @@ impl AssetCache {
 
         // Stage 2: the mesh documents — the named ones and each character's skinned mesh.
         let mut mesh_keys: BTreeSet<String> = refs.meshes.clone();
-        for key in &refs.characters {
+        for key in &skinned {
             if let Some(character) = self.characters.get(key) {
                 mesh_keys.insert(normalize_key(&character.mesh));
             }
@@ -3910,7 +3966,7 @@ parts:
         let dir = revalidation_dir("character");
         write_character(&dir);
         let refs = AssetRefs {
-            characters: named(CHARACTER),
+            assemblies: named(CHARACTER),
             ..AssetRefs::default()
         };
 
@@ -4061,8 +4117,10 @@ parts:
             atlases: named("a.atlas.yaml"),
             voxels: named("voxels/v.voxel.yaml"),
             sculpts: named("sculpts/hull.sculpt.yaml"),
-            assemblies: named("models/fixture.assembly.yaml"),
-            characters: named(CHARACTER),
+            assemblies: BTreeSet::from([
+                "models/fixture.assembly.yaml".to_string(),
+                CHARACTER.to_string(),
+            ]),
             ..AssetRefs::default()
         };
 

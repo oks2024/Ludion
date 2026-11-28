@@ -4770,9 +4770,8 @@ fn synthesize_scene(
         let shape = match &bounds.kind {
             ModelKind::Voxel => MeshSource::Voxel(name.clone()),
             ModelKind::Mesh => MeshSource::Asset(name.clone()),
-            ModelKind::Assembly => MeshSource::Assembly(name.clone()),
+            ModelKind::Assembly | ModelKind::Character => MeshSource::Assembly(name.clone()),
             ModelKind::Sculpt => MeshSource::Sculpt(name.clone()),
-            ModelKind::Character => MeshSource::Character(name.clone()),
             ModelKind::Prefab(root_part) => {
                 entities.push(prefab_instance_entity(
                     index,

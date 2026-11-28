@@ -91,9 +91,11 @@ pub(crate) fn static_ineligibility(
     shapes
         .iter()
         .find_map(|shape| match shape {
-            MeshSource::Assembly(_) => Some(StaticIneligible::Shape("assembly")),
+            // Either body is posed per frame, so no document is read.
+            MeshSource::Assembly(_) | MeshSource::Character(_) => {
+                Some(StaticIneligible::Shape("assembly"))
+            }
             MeshSource::AssemblyPart { .. } => Some(StaticIneligible::Shape("assembly_part")),
-            MeshSource::Character(_) => Some(StaticIneligible::Shape("character")),
             _ => None,
         })
         .or(blended.then_some(StaticIneligible::Blended))

@@ -367,17 +367,7 @@ fn read_character(
     root: ludion_assets::AssetRoot<'_>,
     rel: &str,
 ) -> Result<(AssemblyDocument, u64), Vec<Diagnostic>> {
-    let bytes = ludion_assets::load_bytes(root, rel).map_err(|diagnostic| vec![diagnostic])?;
-    let source = std::str::from_utf8(&bytes.bytes).map_err(|_| {
-        vec![
-            Diagnostic::new(
-                code::ASSEMBLY_DOCUMENT_STRUCTURE,
-                format!("assembly asset `{rel}` is not valid UTF-8 text"),
-            )
-            .with_help("an assembly document is a strict-YAML text file"),
-        ]
-    })?;
-    let doc = ludion_scene::check_assembly(source)?;
+    let (doc, hash) = crate::assembly_body::read_document(root, rel)?;
     if doc.mesh.is_none() {
         return Err(vec![
             Diagnostic::new(
@@ -391,5 +381,5 @@ fn read_character(
             .with_help("draw a voxel assembly with `Mesh.shape: { assembly: <path> }`"),
         ]);
     }
-    Ok((doc, bytes.hash))
+    Ok((doc, hash))
 }

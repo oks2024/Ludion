@@ -438,6 +438,24 @@ fn an_asset_mesh_is_bounded_by_its_vertex_extent() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A skinned assembly is bounded by its mesh's vertices under either spelling, not by a voxel grid.
+#[test]
+fn a_skinned_assembly_has_the_bounds_of_the_character_spelling() {
+    let gallery = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
+    let rel = "characters/mannequin.character.yaml".to_string();
+    let [assembly, character, asset] = [
+        MeshSource::Assembly(rel.clone()),
+        MeshSource::Character(rel),
+        MeshSource::Asset("meshes/skin-mannequin.mesh.yaml".to_string()),
+    ]
+    .map(|shape| {
+        let mut engine = Engine::with_project_root(&gallery).with_render_size(256, 256);
+        one_mesh(&mut engine, shape, 1.0).world_aabb
+    });
+    assert_eq!(assembly, character);
+    assert_eq!(assembly, asset);
+}
+
 /// `render.bounds` answers for a broken scene: a model whose document is missing keeps the
 /// bottom-centered unit box (at scale 2 → x,z ∈ ±1, y ∈ [0, 2]), a mesh asset the ±0.5 box.
 #[test]
