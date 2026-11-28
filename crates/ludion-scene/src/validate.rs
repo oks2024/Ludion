@@ -48,12 +48,16 @@ pub(crate) fn validate(scene: &Scene, registry: &Registry) -> Vec<Diagnostic> {
                         subject: Subject::Component(name),
                     };
                     let before = diagnostics.len();
-                    checker.check(
-                        value,
-                        SchemaCursor::new(info.schema()),
-                        &pointer,
-                        &mut diagnostics,
-                    );
+                    // A retired spelling replaces the shape mismatch it would otherwise be.
+                    match info.retired_spelling(value) {
+                        Some(retired) => diagnostics.push(rebased(retired, &pointer)),
+                        None => checker.check(
+                            value,
+                            SchemaCursor::new(info.schema()),
+                            &pointer,
+                            &mut diagnostics,
+                        ),
+                    }
                     // Component-level semantic checks — cross-field invariants no JSON Schema can
                     // express (e.g. a tilemap's equal-length rows), registered *alongside* the schema
                     // in the registry and invoked generically here. This crate never names a concrete
@@ -63,11 +67,7 @@ pub(crate) fn validate(scene: &Scene, registry: &Registry) -> Vec<Diagnostic> {
                     // defensive but adds nothing useful atop it.
                     if diagnostics.len() == before {
                         for diagnostic in info.validate_semantics(value) {
-                            let rebased = match &diagnostic.path {
-                                Some(relative) => format!("{pointer}{relative}"),
-                                None => pointer.clone(),
-                            };
-                            diagnostics.push(diagnostic.with_path(rebased));
+                            diagnostics.push(rebased(diagnostic, &pointer));
                         }
                     }
                     // Entity references carry a structural invariant no JSON Schema can express
@@ -95,11 +95,23 @@ pub(crate) fn validate(scene: &Scene, registry: &Registry) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// Moves a diagnostic's component-relative pointer under the component's document `pointer`.
+pub(crate) fn rebased(diagnostic: Diagnostic, pointer: &str) -> Diagnostic {
+    let path = match &diagnostic.path {
+        Some(relative) => format!("{pointer}{relative}"),
+        None => pointer.to_string(),
+    };
+    diagnostic.with_path(path)
+}
+
 /// Schema-checks one component value against its registered schema, with pointers relative to the
 /// component. An unregistered name yields nothing — the caller's insert reports it.
 pub(crate) fn check_component(name: &str, value: &Value, registry: &Registry) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     if let Some(info) = registry.get(name) {
+        if let Some(retired) = info.retired_spelling(value) {
+            return vec![retired];
+        }
         Checker {
             subject: Subject::Component(name),
         }

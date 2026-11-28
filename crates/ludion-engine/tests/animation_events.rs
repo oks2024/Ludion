@@ -172,7 +172,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/fast.character.yaml
+          assembly: characters/fast.assembly.yaml
       Animation:
         clip: run
 ";
@@ -186,7 +186,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/fast.character.yaml
+          assembly: characters/fast.assembly.yaml
       Animation:
         clip: run
         from: jump
@@ -195,7 +195,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/fast.character.yaml
+          assembly: characters/fast.assembly.yaml
       Animation:
         clip: jump
 ";
@@ -216,14 +216,14 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/fast.character.yaml
+          assembly: characters/fast.assembly.yaml
       Animation:
         clip: run
   - name: fading
     components:
       Mesh:
         shape:
-          character: characters/fast.character.yaml
+          assembly: characters/fast.assembly.yaml
       Animation:
         clip: run
         from: jump
@@ -232,7 +232,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/fast.character.yaml
+          assembly: characters/fast.assembly.yaml
       Animation:
         clip: jump
 ";
@@ -312,7 +312,7 @@ fn fixture_project(name: &str) -> PathBuf {
             &std::fs::read_to_string(gallery.join(file)).unwrap(),
         );
     }
-    write(&dir, "characters/fast.character.yaml", CHARACTER);
+    write(&dir, "characters/fast.assembly.yaml", CHARACTER);
     dir
 }
 
@@ -380,15 +380,6 @@ fn a_character_loop_fires_overlay_events_at_the_overlay_speed() {
         log.iter().all(|(_, event)| event.name != "end"),
         "a loop has no end"
     );
-}
-
-#[test]
-fn a_skinned_assembly_fires_the_events_the_character_spelling_does() {
-    let spelled = RUN_SCENE.replace("character: ", "assembly: ");
-    let assembly = log_after(&mut engine_with("run-assembly", &spelled), 60);
-    assert!(!ticks_of(&assembly, "foot_l").is_empty(), "{assembly:?}");
-    let character = log_after(&mut engine_with("run-character", RUN_SCENE), 60);
-    assert_eq!(assembly, character);
 }
 
 #[test]

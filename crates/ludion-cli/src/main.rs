@@ -356,7 +356,7 @@ enum Command {
         hashes: bool,
     },
     /// Validate a scene and render its content through the render pipeline to a PNG on a headless
-    /// GPU (`--scene`), or render a `.voxel.yaml`/`.mesh.yaml`/`.assembly.yaml`/`.sculpt.yaml`/`.character.yaml`/`.prefab.yaml` model
+    /// GPU (`--scene`), or render a `.voxel.yaml`/`.mesh.yaml`/`.assembly.yaml`/`.sculpt.yaml`/`.prefab.yaml` model
     /// document as a turntable contact sheet (`--model`, an assembly at its rest pose) — exactly one
     /// target is required. Two runs with the same inputs produce byte-identical PNGs. `--set`/`--sweep`
     /// tune values for the render without touching the file: a scene's components under `--scene`, a
@@ -375,7 +375,7 @@ enum Command {
         /// Path to the scene file (strict-subset YAML); validated before rendering.
         #[arg(long)]
         scene: Option<PathBuf>,
-        /// Path to a model document (`.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`, `.character.yaml`, or `.prefab.yaml`)
+        /// Path to a model document (`.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`, or `.prefab.yaml`)
         /// to render as a turntable contact sheet instead of a scene (an assembly renders at its rest
         /// pose).
         /// Conflicts with `--scene` and `--dump-timings`.
@@ -744,9 +744,9 @@ enum Command {
         // clap 4.6 note there.
         #[arg(long, conflicts_with = "scene")]
         true_size: bool,
-        /// Draw one clip instead of the default subject: with `--model`, pose the assembly,
-        /// character or prefab with one of the clips it binds instead of its rest pose (`--clip wave`; a
-        /// character or prefab renders alone, with no gap analysis); with `--atlas`, draw one
+        /// Draw one clip instead of the default subject: with `--model`, pose the assembly (voxel or
+        /// skinned) or prefab with one of the clips it binds instead of its rest pose (`--clip wave`; a
+        /// skinned assembly or prefab renders alone, with no gap analysis); with `--atlas`, draw one
         /// of the flipbooks the atlas carries instead of the packing overview (`--clip ship/bank`).
         /// Either way `check-scene <document>` lists the names that resolve.
         ///
@@ -776,14 +776,14 @@ enum Command {
         /// showing both endpoints.
         #[arg(long, value_name = "N", conflicts_with = "scene")]
         strip: Option<u32>,
-        /// Under `--model`, render the blend of one bound clip into another — an assembly's, a
-        /// character's or a prefab's — as a strip of phases, each at its fade weight: `--crossfade run:idle:0.25`
+        /// Under `--model`, render the blend of one bound clip into another — an assembly's (voxel or
+        /// skinned) or a prefab's — as a strip of phases, each at its fade weight: `--crossfade run:idle:0.25`
         /// fades `run` out and `idle` in over 0.25 s. Five phases unless `--strip N` says otherwise
         /// (2 to 8), weights 0 to 1 printed in the report. `--time` is how far `run` has played
         /// when the fade begins. Conflicts with `--clip`; one model only.
         #[arg(long, value_name = "FROM:TO:SECONDS", conflicts_with_all = ["scene", "clip", "atlas", "sprite"])]
         crossfade: Option<String>,
-        /// Under `--model`, sweep a blend space of an assembly, character or prefab as a strip of phases:
+        /// Under `--model`, sweep a blend space of an assembly (voxel or skinned) or prefab as a strip of phases:
         /// `--blend locomotion:0..2` evaluates the 1D blend `locomotion` at parameters swept
         /// linearly from 0 to 2 across five phases (`--strip N` for 2 to 8); `--blend aim:0.5:-1..1`
         /// holds the first parameter of a 2D blend and sweeps the second; plain values give one

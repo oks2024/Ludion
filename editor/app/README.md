@@ -69,7 +69,7 @@ the editor's personas (`editor/personas/`):
 - **Voxel Artist** — voxel model editing, with a live asset-reload watcher; also stages `kind:
   assembly` rigs read-only, with a parts panel (hierarchy, pivot crosshair, frame-on-part) and a clip
   strip (play/pause/scrub, tick-quantized) over the existing `Animation` component.
-- **Models** — implicit-surface model editing (kind: sculpt), sharing the model stage and its asset-reload watcher, and previews skinned `kind: assembly` (`mesh:`) clips.
+- **Models** — implicit-surface model editing (kind: sculpt), sharing the model stage and its asset-reload watcher, and previews skinned `kind: assembly` (`mesh:`) clips from its Assemblies library (a voxel assembly listed there is not staged; it opens in the Voxel Artist).
 - **Effects** — particle emitter authoring.
 - **Lighter** — lighting and environment.
 - **Art Director** — palette and visual-consistency review.

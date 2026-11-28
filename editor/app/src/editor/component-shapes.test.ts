@@ -80,7 +80,7 @@ const READS: readonly { readonly where: string; readonly component: string; read
   { where: 'gizmo/camera.ts parseProjection', component: 'Camera', path: ['projection', 'height'], is: NUMBER },
   { where: 'views/ModelsView.tsx, VoxelArtistView.tsx Mesh.shape.voxel', component: 'Mesh', path: ['shape', 'voxel'], is: (s) => s.type === 'string' },
   { where: 'views/ModelsView.tsx Mesh.shape.sculpt', component: 'Mesh', path: ['shape', 'sculpt'], is: (s) => s.type === 'string' },
-  { where: 'views/ModelsView.tsx Mesh.shape.character', component: 'Mesh', path: ['shape', 'character'], is: (s) => s.type === 'string' },
+  { where: 'views/ModelsView.tsx Mesh.shape.assembly', component: 'Mesh', path: ['shape', 'assembly'], is: (s) => s.type === 'string' },
 ];
 
 describe('hand-read component shapes', () => {

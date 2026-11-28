@@ -105,7 +105,7 @@ enum Shape {
     Voxel(&'static str),
     Cube,
     Sphere,
-    Character(&'static str),
+    Assembly(&'static str),
 }
 
 fn mesh(shape: Shape, tint: [f32; 3], roughness: f32, metallic: f32) -> String {
@@ -117,8 +117,8 @@ fn mesh(shape: Shape, tint: [f32; 3], roughness: f32, metallic: f32) -> String {
         Shape::Voxel(path) => {
             let _ = writeln!(out, "        shape:\n          voxel: {path}");
         }
-        Shape::Character(path) => {
-            let _ = writeln!(out, "        shape:\n          character: {path}");
+        Shape::Assembly(path) => {
+            let _ = writeln!(out, "        shape:\n          assembly: {path}");
         }
         Shape::Cube => out.push_str("        shape: cube\n"),
         Shape::Sphere => out.push_str("        shape: sphere\n"),
@@ -405,7 +405,7 @@ fn source() -> String {
                 mannequins += 1;
                 body = transform(at(Y), 0.0, None);
                 body.push_str(&mesh(
-                    Shape::Character("characters/mannequin.character.yaml"),
+                    Shape::Assembly("characters/mannequin.assembly.yaml"),
                     [0.6, 0.45, 0.35],
                     0.8,
                     0.0,

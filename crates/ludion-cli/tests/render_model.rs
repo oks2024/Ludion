@@ -1809,7 +1809,7 @@ fn channel_is_model_only_and_closed() {
 /// The gallery's mannequin character, read-only.
 fn mannequin() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/gallery/characters/mannequin.character.yaml")
+        .join("../../examples/gallery/characters/mannequin.assembly.yaml")
 }
 
 /// `--crossfade` and `--clip` both pose the model, so together they are a clap conflict.

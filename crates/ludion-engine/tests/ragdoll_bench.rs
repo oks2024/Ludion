@@ -89,7 +89,7 @@ fn static_box(name: &str, at: [f32; 3], half: [f32; 3]) -> String {
 }
 
 const SKIN_MESH: &str =
-    "      Mesh:\n        shape:\n          character: characters/mannequin.character.yaml\n";
+    "      Mesh:\n        shape:\n          assembly: characters/mannequin.assembly.yaml\n";
 
 /// The bench scene: a camera, a light, the ragdoll room with `n` skins on a grid, `reserve` more
 /// skins on a row above it, and a separate slab carrying 500 motors. Entities are ordered ragdoll
@@ -192,7 +192,7 @@ struct Layout {
 fn layout(world: &mut World) -> Layout {
     let mut skins: Vec<EntityId> = world
         .query_ids::<(&Mesh,)>()
-        .filter(|(_, (mesh,))| matches!(mesh.shape, MeshSource::Character(_)))
+        .filter(|(_, (mesh,))| matches!(mesh.shape, MeshSource::Assembly(_)))
         .map(|(id, _)| id)
         .collect();
     skins.sort();

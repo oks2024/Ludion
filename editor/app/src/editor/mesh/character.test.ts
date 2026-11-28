@@ -1,24 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { clipFilePath } from '../voxel/assembly';
+import { ASSEMBLY_EXT } from '../voxel/stage';
 import {
-  CHARACTER_EXT,
   characterAssetRef,
   characterDisplayName,
+  isSkinned,
   parseCharacterDoc,
 } from './character';
 
 // The committed gallery character: four clips, `run` with an overlay speed and events.
 const FILES = import.meta.glob(
-  '../../../../../examples/gallery/characters/mannequin.character.yaml',
+  '../../../../../examples/gallery/characters/mannequin.assembly.yaml',
   { query: '?raw', import: 'default', eager: true },
 ) as Record<string, string>;
-const PATH = 'characters/mannequin.character.yaml';
+const PATH = 'characters/mannequin.assembly.yaml';
 const MANNEQUIN = parseCharacterDoc(Object.values(FILES)[0] ?? '');
 
 describe('paths', () => {
   it('names a character the way a scene does — the listing path itself', () => {
     expect(characterAssetRef(PATH)).toBe(PATH);
-    expect(characterAssetRef('characters\\mannequin.character.yaml')).toBe(PATH);
+    expect(characterAssetRef('characters\\mannequin.assembly.yaml')).toBe(PATH);
   });
 
   it('strips the double extension', () => {
@@ -26,8 +27,8 @@ describe('paths', () => {
   });
 
   it('does not match a mesh or a clip document', () => {
-    expect('mannequin.mesh.yaml'.endsWith(CHARACTER_EXT)).toBe(false);
-    expect('run.anim.yaml'.endsWith(CHARACTER_EXT)).toBe(false);
+    expect('mannequin.mesh.yaml'.endsWith(ASSEMBLY_EXT)).toBe(false);
+    expect('run.anim.yaml'.endsWith(ASSEMBLY_EXT)).toBe(false);
   });
 });
 
@@ -50,6 +51,20 @@ describe('parseCharacterDoc — the gallery mannequin', () => {
   it('resolves a clip against the character file, not the content root', () => {
     const run = MANNEQUIN.clips.find((clip) => clip.name === 'run');
     expect(clipFilePath(PATH, run?.file ?? '')).toBe('clips/run.anim.yaml');
+  });
+});
+
+describe('isSkinned', () => {
+  it('is true of the mannequin, whose body is a mesh', () => {
+    expect(isSkinned(MANNEQUIN)).toBe(true);
+  });
+
+  it('is false of a voxel assembly and of an empty mesh', () => {
+    const voxel = parseCharacterDoc(
+      'kind: assembly\nname: box\nsize: [2, 1, 1]\nparts:\n  - name: body\n    file: body.part.yaml\n',
+    );
+    expect(isSkinned(voxel)).toBe(false);
+    expect(isSkinned(parseCharacterDoc('kind: assembly\nmesh: ""\n'))).toBe(false);
   });
 });
 

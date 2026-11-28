@@ -61,7 +61,7 @@
 //! n evenly spaced phases in one image), and every phase prints a **gap analysis** — the posed
 //! model's connected-component count plus, when it is more than one, the parts owning each piece
 //! that came away, in the same `connectivity owners:` shape `check-scene` prints over the rest pose.
-//! A `.character.yaml` or `.prefab.yaml` poses the same way (alone, no gap analysis: its phases print the clip time,
+//! A skinned `.assembly.yaml` or a `.prefab.yaml` poses the same way (alone, no gap analysis: its phases print the clip time,
 //! including its binding's overlay speed), and `--crossfade <from>:<to>:<seconds>` lays out the blend
 //! of two bound clips as a strip whose phases print their fade `weight`, defaulting `--out` to
 //! `<name>-<from>-<to>-crossfade.png`.
@@ -1284,7 +1284,7 @@ fn join_owners(owners: &[String]) -> String {
 
 /// The default `--out` for model and sprite mode: `<name>.sheet.png` in the current directory, where
 /// `<name>` is the document's file stem with a trailing `.voxel`/`.mesh`/`.assembly`/`.sculpt`/
-/// `.character`/`.prefab`/`.sprite` suffix stripped (`lantern.voxel.yaml` -> `lantern.sheet.png`, `ship.sprite.yaml` ->
+/// `.prefab`/`.sprite` suffix stripped (`lantern.voxel.yaml` -> `lantern.sheet.png`, `ship.sprite.yaml` ->
 /// `ship.sheet.png`). Atlas mode has its own name ([`default_atlas_out`]) because a sprite document
 /// and the atlas it is packed into routinely share a stem, and one silently overwriting the other's
 /// sheet would be the worst kind of default.
@@ -1310,7 +1310,6 @@ fn default_sheet_out(model: &Path, request: &Request) -> PathBuf {
         .or_else(|| stem.strip_suffix(".mesh"))
         .or_else(|| stem.strip_suffix(".assembly"))
         .or_else(|| stem.strip_suffix(".sculpt"))
-        .or_else(|| stem.strip_suffix(".character"))
         .or_else(|| stem.strip_suffix(".prefab"))
         .or_else(|| stem.strip_suffix(".sprite"))
         .unwrap_or(&stem);

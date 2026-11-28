@@ -3106,21 +3106,21 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
       Animation:
         clip: run
   - name: jumper
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
       Animation:
         clip: jump
   - name: rester
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
 ";
 
     fn skinned_engine() -> Engine {

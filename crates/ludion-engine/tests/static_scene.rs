@@ -572,7 +572,7 @@ fn socket_scene() -> String {
       Static: {{}}
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
       Animation:
         clip: run
   - name: socket

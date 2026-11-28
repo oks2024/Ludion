@@ -100,7 +100,7 @@ fn content_key(path: &str, what: &str) -> Result<String, Diagnostic> {
 }
 
 /// The name of `root` when it plays a clip no room can have: an `Animation` with a clip and no
-/// assembly or character `Mesh` for the clip to belong to.
+/// assembly `Mesh` for the clip to belong to.
 fn animating_root(root: &ludion_scene::SceneEntity) -> Option<String> {
     let component = |name: &str| {
         root.components
@@ -111,7 +111,7 @@ fn animating_root(root: &ludion_scene::SceneEntity) -> Option<String> {
     let clip = component("Animation")?.get("clip")?.as_str()?;
     let drives_a_model = component("Mesh")
         .and_then(|mesh| mesh.get("shape")?.as_object())
-        .is_some_and(|shape| shape.contains_key("assembly") || shape.contains_key("character"));
+        .is_some_and(|shape| shape.contains_key("assembly"));
     (!clip.is_empty() && !drives_a_model).then(|| root.name.clone().unwrap_or_default())
 }
 
@@ -255,7 +255,7 @@ impl PrefabLibrary {
                     "cannot spawn map `{map_key}`: its root part `{part}` carries an `Animation`, but a runtime room has no clips"
                 ))
                 .with_help(
-                    "put the animation on a part below the root, or on a mesh that is an assembly or a character",
+                    "put the animation on a part below the root, or on a mesh that is an assembly",
                 ),
             ]);
         }
@@ -526,6 +526,7 @@ mod tests {
         assert_eq!(animating_root(&root(None)).as_deref(), Some("door"));
         assert!(animating_root(&root(Some(json!("cube")))).is_some());
         assert!(animating_root(&root(Some(json!({ "assembly": "a.assembly.yaml" })))).is_none());
-        assert!(animating_root(&root(Some(json!({ "character": "c.character.yaml" })))).is_none());
+        // The retired spelling names no model.
+        assert!(animating_root(&root(Some(json!({ "character": "c.assembly.yaml" })))).is_some());
     }
 }

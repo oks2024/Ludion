@@ -45,7 +45,7 @@ const SKIN_PART: &str = "$skin";
 ///
 /// # Errors
 /// `L3036` when `skin` is dead, has no `Transform`, has a scale that is not uniform, positive and
-/// finite, is not a skinned `asset`/`character` mesh, or `parts` breaks the `$skin` rules (not last, a
+/// finite, is not a skinned `asset`/`assembly` mesh, or `parts` breaks the `$skin` rules (not last, a
 /// part bound to another skin, another reference to it, a different mesh). `L1230` when `parts` cannot
 /// be read, and the prefab's own diagnostics (`L1194`–`L1197`, component errors) when it is invalid.
 /// Nothing is mutated on any error.
@@ -167,10 +167,10 @@ pub fn switch_skin_to_ragdoll(
         None => {
             return Err(refuse(
                 &named,
-                "is not a skinned mesh: it has no `Mesh`, or its `shape` is not `asset` or \
-                 `character`"
+                "is not a skinned mesh: it has no `Mesh`, or its `shape` is not `asset` or a \
+                 skinned `assembly`"
                     .into(),
-                "switch an entity whose `Mesh` is a skinned `asset` or `character` mesh",
+                "switch an entity whose `Mesh` is a skinned `asset` or `assembly` mesh",
             ));
         }
     };

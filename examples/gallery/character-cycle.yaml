@@ -1,5 +1,5 @@
 # Feature: a skinned character plays a clip cycle chosen by game code. The mannequin
-# (`characters/mannequin.character.yaml`, four Blender-keyed clips) sits at the origin playing `idle`.
+# (`characters/mannequin.assembly.yaml`, four Blender-keyed clips) sits at the origin playing `idle`.
 # Bare, this scene shows the rest pose at tick 0; the game half is
 # `crates/ludion-testkit/tests/common/mod.rs`, which crossfades idle -> run -> jump -> run -> spin ->
 # run -> idle on the clips' own `end` events (`ludion docs character-animation`). `AnimGraphState` is the
@@ -59,7 +59,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45

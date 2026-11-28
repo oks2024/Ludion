@@ -203,7 +203,7 @@ fn runner(name: &str, kind: &str, rel: &str, clip: &str, scale: [f64; 3]) -> Str
 }
 
 fn skinned(name: &str, clip: &str) -> String {
-    runner(name, "character", CHARACTER, clip, [1.0; 3])
+    runner(name, "assembly", CHARACTER, clip, [1.0; 3])
 }
 
 fn blend_runner(name: &str, param: f64) -> String {
@@ -308,7 +308,7 @@ fn a_skinned_root_clip_sums_to_the_authored_travel_times_the_scale() {
     let root = project("skinned", true);
     let text = scene(&runner(
         "a",
-        "character",
+        "assembly",
         CHARACTER,
         "lunge",
         [2.0, 1.0, 3.0],

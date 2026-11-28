@@ -44,26 +44,26 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
       Animation:
         clip: run
   - name: unknown
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
       Animation:
         clip: sprint
   - name: still
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: plain
     components:
       Mesh:
         shape:
-          character: characters/plain.character.yaml
+          assembly: characters/plain.assembly.yaml
       Animation:
         clip: run
 ";
@@ -77,7 +77,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
       Animation:
         clip: run
         from: jump
@@ -86,14 +86,14 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
       Animation:
         clip: jump
   - name: incoming
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
       Animation:
         clip: run
 ";
@@ -106,7 +106,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
       Animation:
         clip: jump
 ";
@@ -125,7 +125,7 @@ fn fixture_project(name: &str) -> PathBuf {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
     for file in [
-        "characters/mannequin.character.yaml",
+        "characters/mannequin.assembly.yaml",
         "meshes/skin-mannequin.mesh.yaml",
         "clips/idle.anim.yaml",
         "clips/jump.anim.yaml",
@@ -134,7 +134,7 @@ fn fixture_project(name: &str) -> PathBuf {
     ] {
         std::fs::copy(gallery().join(file), dir.join(file)).unwrap();
     }
-    std::fs::write(dir.join("characters/plain.character.yaml"), PLAIN_CHARACTER).unwrap();
+    std::fs::write(dir.join("characters/plain.assembly.yaml"), PLAIN_CHARACTER).unwrap();
     dir
 }
 
@@ -286,7 +286,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/plain.character.yaml
+          assembly: characters/plain.assembly.yaml
       Animation:
         clip: run
         speed: 0.5
@@ -298,7 +298,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/plain.character.yaml
+          assembly: characters/plain.assembly.yaml
       Animation:
         clip: run
 ";
@@ -471,7 +471,7 @@ impl ExtractObserver for SkinRecorder {
 fn skin_counts_report_instances_and_joint_samples() {
     let root = fixture_project("skin-counts");
     let scene = format!(
-        "{FADE_SCENE}  - name: rest\n    components:\n      Mesh:\n        shape:\n          character: characters/mannequin.character.yaml\n"
+        "{FADE_SCENE}  - name: rest\n    components:\n      Mesh:\n        shape:\n          assembly: characters/mannequin.assembly.yaml\n"
     );
     let mut engine = engine_at(&root, &scene);
     let recorder = SkinRecorder::default();
@@ -500,7 +500,7 @@ fn skin_palettes_are_byte_identical_at_1_2_8_threads() {
     let mut scene = String::from("format: 1\nseed: 1\nentities:\n");
     for i in 0..240 {
         scene.push_str(&format!(
-            "  - name: m{i}\n    components:\n      Mesh:\n        shape:\n          character: characters/mannequin.character.yaml\n"
+            "  - name: m{i}\n    components:\n      Mesh:\n        shape:\n          assembly: characters/mannequin.assembly.yaml\n"
         ));
         match i % 4 {
             0 => scene.push_str("      Animation:\n        clip: run\n"),

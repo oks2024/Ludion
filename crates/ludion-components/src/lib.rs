@@ -409,24 +409,21 @@ fn atlas_reference_diagnostics(present: impl Fn(&str) -> bool, prefix: &str) -> 
 /// shape:
 ///   sculpt: "sculpts/idol.sculpt.yaml"   # an implicit-surface model
 /// shape:
-///   character: "characters/hero.character.yaml"  # a skinned assembly: a mesh bound to named clips
-/// shape:
 ///   assembly_part:                       # one part of an assembly, drawn on its own entity
 ///     assembly: "models/player.assembly.yaml"
 ///     part: lower-arm-l
 /// ```
 ///
-/// The `asset`/`voxel`/`assembly`/`sculpt`/`character` paths are rooted exactly like [`Sprite::texture`] —
+/// The `asset`/`voxel`/`assembly`/`sculpt` paths are rooted exactly like [`Sprite::texture`] —
 /// relative to the content root, the directory of the scene the engine was started with (inside a
 /// `kind: prefab` they are relative to the prefab file, rebased at parse). `asset`
 /// names a `*.mesh.yaml` document (`ludion_scene::check_mesh`); `voxel` names a `*.voxel.yaml`
 /// document (`ludion_scene::check_voxel`), greedily meshed into per-quad-colored geometry; `assembly`
-/// names a `*.assembly.yaml` document (`ludion_scene::check_assembly`) plus the part files it
-/// declares, each meshed on its own; `sculpt` names a `*.sculpt.yaml` document
-/// (`ludion_scene::check_sculpt`), its primitive parts meshed as one smooth surface; `character`
-/// names a skinned `kind: assembly` document (`mesh:` in place of `parts:`, `ludion_scene::check_assembly`;
-/// by convention `*.character.yaml`) whose skinned mesh is drawn like an `asset` and whose `clips:`
-/// map `Animation.clip` resolves through. All resolve to
+/// names a `*.assembly.yaml` document (`ludion_scene::check_assembly`): a voxel one with the part
+/// files it declares, each meshed on its own, or a skinned one (`mesh:` in place of `parts:`) whose
+/// skinned mesh is drawn like an `asset` and whose `clips:` map `Animation.clip` resolves through;
+/// `sculpt` names a `*.sculpt.yaml` document (`ludion_scene::check_sculpt`), its primitive parts
+/// meshed as one smooth surface. All resolve to
 /// vertex data at extract time. A voxel model's origin is bottom-centered (it sits on the ground) and
 /// so are an assembly's assembled grid and a sculpt's surface; `Mesh.color` still tints them, and
 /// `Transform.scale` sizes them (1 voxel = 1 unit; a sculpt is authored in world units).
@@ -445,19 +442,15 @@ pub enum MeshSource {
     /// A voxel model document at this content-root-relative path (`voxels/*.voxel.yaml`), greedily
     /// meshed at load with per-quad palette colors.
     Voxel(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
-    /// A multi-part voxel assembly document at this content-root-relative path (`*.assembly.yaml`),
-    /// whose part files are read relative to the assembly file's own directory. One entity draws the
-    /// whole model: extract expands it into one instance per part, each at its rest offset inside the
-    /// assembled grid.
+    /// A voxel or skinned assembly document at this content-root-relative path (`kind: assembly`,
+    /// `*.assembly.yaml`): a voxel body expands into one instance per part; a skinned body (`mesh:`)
+    /// draws its skinned mesh, a `SkinBone` part can name it, and `Animation.clip` names a key of its
+    /// `clips:`.
     Assembly(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
     /// A sculpt model document at this content-root-relative path (`sculpts/*.sculpt.yaml`): named
     /// primitive parts folded into one signed distance field, meshed at load into a smooth triangle
     /// surface with blended palette colors and materials.
     Sculpt(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
-    /// A skinned assembly document at this content-root-relative path (`kind: assembly` with `mesh:`,
-    /// by convention `*.character.yaml`): it names a skinned mesh and binds short clip names to animation clips. The entity draws the skinned mesh
-    /// (a `SkinBone` part can name it), and `Animation.clip` names a key of the document's `clips:`.
-    Character(#[schemars(with = "ludion_ecs::AssetPathSchema")] String),
     /// One named part of an assembly document, drawn on its own entity rather than the whole model
     /// (`Plan/physics.md` W3's ragdoll authoring): `assembly` is the same content-root-relative path
     /// `Assembly` takes, `part` is one of its `parts:` entries' `name`. Extract meshes the same part
@@ -629,6 +622,22 @@ impl SemanticValidate for Mesh {
             );
         }
         out
+    }
+
+    /// `shape: { character: … }` is `L1246`.
+    fn retired_spelling(value: &Value) -> Option<Diagnostic> {
+        value.get("shape")?.as_object()?.get("character")?;
+        Some(
+            Diagnostic::new(
+                code::CHARACTER_MERGED,
+                "`Mesh.shape: { character: … }` was merged into `{ assembly: … }`",
+            )
+            .with_path("/shape/character")
+            .with_help(
+                "write `assembly:` for `character:` — `{ assembly: <path> }` draws a skinned \
+                 assembly and a voxel one alike",
+            ),
+        )
     }
 }
 
@@ -5052,8 +5061,8 @@ fn glyph_not_in_legend(index: usize, col: usize, glyph: char) -> Diagnostic {
 /// - `cell_size` — the world-unit pitch of the grid (default `1.0`, strictly positive).
 /// - `legend` — a map from a single-glyph string to a [`Mesh`]; every field means what it does on
 ///   the `Mesh` component, so every static shape works (asset, voxel, sculpt, assembly,
-///   primitives); a `character` shape is `L1244`. A legend key that is not one glyph, or is a
-///   space, is `L1020`.
+///   primitives); a skinned assembly is `L1244`, found when the assembly file is read. A legend key
+///   that is not one glyph, or is a space, is `L1020`.
 /// - `rows` — equal-length strings, one glyph per cell, far row first. A space is the one empty cell
 ///   (it draws nothing and needs no legend entry). Ragged rows are `L1019`; a glyph with no legend
 ///   entry is `L1020`.
@@ -5150,12 +5159,11 @@ impl MeshGrid {
 
 impl SemanticValidate for MeshGrid {
     /// Cross-field checks JSON Schema cannot express, with JSON Pointers relative to the component
-    /// root: legend entries are not `character` shapes (`L1244`, `/legend/<key>`), legend keys are
-    /// single non-space glyphs (`L1020`, `/legend/<key>`), each legend mesh passes the `Mesh`
-    /// checks (HDR colours, `L1263`, `/legend/<key>/color/<n>`), rows are equal length (`L1019`,
-    /// `/rows/<n>`), every non-space row glyph has a legend entry (`L1020`, `/rows/<n>`), and
-    /// `orient` matches `rows` in shape and holds only `0`-`7` or spaces (`L1243`, `/orient` or
-    /// `/orient/<n>`). Runs on a schema-valid value; guards defensively.
+    /// root: legend keys are single non-space glyphs (`L1020`, `/legend/<key>`), each legend mesh
+    /// passes the `Mesh` checks (HDR colours, `L1263`, `/legend/<key>/color/<n>`), rows are equal
+    /// length (`L1019`, `/rows/<n>`), every non-space row glyph has a legend entry (`L1020`,
+    /// `/rows/<n>`), and `orient` matches `rows` in shape and holds only `0`-`7` or spaces
+    /// (`L1243`, `/orient` or `/orient/<n>`). Runs on a schema-valid value; guards defensively.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         let Some(object) = value.as_object() else {
@@ -5165,23 +5173,6 @@ impl SemanticValidate for MeshGrid {
         let mut glyphs: Vec<char> = Vec::new();
         if let Some(Value::Object(legend)) = object.get("legend") {
             for (key, mesh) in legend {
-                if mesh
-                    .get("shape")
-                    .and_then(Value::as_object)
-                    .is_some_and(|shape| shape.contains_key("character"))
-                {
-                    out.push(
-                        Diagnostic::new(
-                            code::MESH_GRID_ANIMATED_SHAPE,
-                            format!(
-                                "legend entry `{key}` is a `character` shape; a grid's cells share \
-                                 one entity, so they cannot pose or animate per cell"
-                            ),
-                        )
-                        .with_path(format!("/legend/{}", pointer_token(key)))
-                        .with_help("place animated characters as their own entities"),
-                    );
-                }
                 match single_char(key) {
                     Some(' ') => out.push(
                         Diagnostic::new(
@@ -5275,6 +5266,20 @@ impl SemanticValidate for MeshGrid {
             }
         }
         out
+    }
+
+    /// A legend mesh in a retired `Mesh` spelling is refused as [`Mesh`] refuses it.
+    fn retired_spelling(value: &Value) -> Option<Diagnostic> {
+        value
+            .get("legend")?
+            .as_object()?
+            .iter()
+            .find_map(|(key, mesh)| {
+                let mut diagnostic = Mesh::retired_spelling(mesh)?;
+                let prefix = format!("/legend/{}", pointer_token(key));
+                diagnostic.path = diagnostic.path.map(|path| format!("{prefix}{path}"));
+                Some(diagnostic)
+            })
     }
 }
 
@@ -12300,11 +12305,10 @@ entities:
     /// edit here, and a component not listed holds none.
     #[test]
     fn asset_path_fields_are_pinned() {
-        const SHAPES: [&str; 6] = [
+        const SHAPES: [&str; 5] = [
             "/shape/assembly",
             "/shape/assembly_part/assembly",
             "/shape/asset",
-            "/shape/character",
             "/shape/sculpt",
             "/shape/voxel",
         ];

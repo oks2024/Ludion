@@ -34,7 +34,7 @@ use std::process::ExitCode;
 /// The parts prefab each kill switches its skin through, relative to the content root.
 const PARTS_PATH: &str = "prefabs/mannequin-ragdoll.prefab.yaml";
 /// The skinned mesh every enemy wears.
-const SKIN_PATH: &str = "characters/mannequin.character.yaml";
+const SKIN_PATH: &str = "characters/mannequin.assembly.yaml";
 
 /// Enemies killed over the run.
 pub const KILLS: u64 = 300;
@@ -249,7 +249,7 @@ fn admit(world: &mut World, kill: u64, admitted: u64) {
             .insert(
                 skin,
                 Mesh {
-                    shape: MeshSource::Character(SKIN_PATH.into()),
+                    shape: MeshSource::Assembly(SKIN_PATH.into()),
                     ..Mesh::default()
                 },
             )

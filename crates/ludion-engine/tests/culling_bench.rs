@@ -253,8 +253,8 @@ fn scene(facing: Facing, mix: Mix) -> String {
         let scale = voxel.then_some([0.045; 3]);
         let mut enemy = transform(at, [0.0, rng.next_f32() * 360.0, 0.0], scale);
         let shape = match look {
-            EnemyLook::Mannequin => "character: characters/mannequin.character.yaml",
-            EnemyLook::MannequinLod => "character: characters/mannequin-lod.character.yaml",
+            EnemyLook::Mannequin => "assembly: characters/mannequin.assembly.yaml",
+            EnemyLook::MannequinLod => "assembly: characters/mannequin-lod.assembly.yaml",
             EnemyLook::VoxelPlain => "voxel: voxels/horde-figure.voxel.yaml",
             EnemyLook::VoxelLod => "voxel: voxels/horde-figure-lod.voxel.yaml",
         };

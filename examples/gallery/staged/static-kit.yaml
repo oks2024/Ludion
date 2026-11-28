@@ -2205,7 +2205,7 @@ entities:
           - -29.6
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45
@@ -9604,7 +9604,7 @@ entities:
           - -17.6
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45
@@ -14433,7 +14433,7 @@ entities:
           - -9.6
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45
@@ -19548,7 +19548,7 @@ entities:
           - -1.6
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45
@@ -23774,7 +23774,7 @@ entities:
           - 4.4
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45
@@ -29257,7 +29257,7 @@ entities:
           - 12.4
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45
@@ -35733,7 +35733,7 @@ entities:
           - 20.4
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45
@@ -40968,7 +40968,7 @@ entities:
           - 28.4
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45

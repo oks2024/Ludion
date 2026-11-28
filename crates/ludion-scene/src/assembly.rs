@@ -352,7 +352,7 @@ pub(crate) fn parse(source: &str) -> Result<AssemblyDocument, Vec<Diagnostic>> {
                 {
                     diagnostics.push(
                         Diagnostic::new(
-                            code::CHARACTER_KIND_MERGED,
+                            code::CHARACTER_MERGED,
                             "`kind: character` was merged into `kind: assembly`",
                         )
                         .with_path("/kind")

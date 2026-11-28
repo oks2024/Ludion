@@ -462,4 +462,4 @@ entities:
     components:
       Mesh:
         shape:
-          character: "../characters/mannequin.character.yaml"
+          assembly: "../characters/mannequin.assembly.yaml"

@@ -333,7 +333,7 @@ or a black `color` renders the same bytes as a scene without it.
 ## Blended meshes
 
 `Mesh.blend: alpha | additive` (absent = opaque) draws a mesh seen through, on every mesh kind: primitive,
-asset, voxel, sculpt, assembly, character. `color`'s alpha is the opacity; `Fade` multiplies it instead of
+asset, voxel, sculpt, assembly (voxel or skinned). `color`'s alpha is the opacity; `Fade` multiplies it instead of
 dithering. It is not inherited down `Parent`, and an assembly is one entity, so all its parts blend.
 
 An asset mesh document may say `alpha_mode: blend` instead: the mesh draws as `blend: alpha` with no

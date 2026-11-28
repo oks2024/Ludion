@@ -122,7 +122,6 @@ fn fixtures(name: &str) -> Vec<Value> {
             json!({ "shape": { "voxel": "v.vox" } }),
             json!({ "shape": { "assembly": "a.assembly.yaml" } }),
             json!({ "shape": { "sculpt": "s.sculpt.yaml" } }),
-            json!({ "shape": { "character": "c.character.yaml" } }),
             json!({ "shape": { "assembly_part": { "assembly": "a.assembly.yaml", "part": "p" } } }),
         ],
         "Camera" => vec![

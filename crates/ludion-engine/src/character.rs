@@ -1,7 +1,7 @@
 //! Loading a skinned `kind: assembly` document: the skinned mesh it names plus its bound animation
 //! clips.
 //!
-//! A skinned assembly is a strict-YAML `*.character.yaml` document ([`ludion_scene::check_assembly`]
+//! A skinned assembly is a strict-YAML `*.assembly.yaml` document ([`ludion_scene::check_assembly`]
 //! with `mesh:` set) that names one skinned mesh document and binds short clip names to
 //! `kind: animation` files, each with an optional playback speed and events overlay
 //! (`Plan/animation-clips.md` decisions 10–12). This module is the engine-side IO seam, with the
@@ -373,12 +373,14 @@ fn read_character(
             Diagnostic::new(
                 code::ASSEMBLY_DATA_CONSISTENCY,
                 format!(
-                    "`{rel}` is a voxel assembly; `Mesh.shape: {{ character: … }}` draws a skinned \
-                     assembly"
+                    "`{rel}` is a voxel assembly, not a skinned one"
                 ),
             )
             .with_path("/mesh")
-            .with_help("draw a voxel assembly with `Mesh.shape: { assembly: <path> }`"),
+            .with_help(
+                "a skinned assembly has a `mesh:` key, naming its skinned mesh document, in place of \
+                 voxel `parts:`",
+            ),
         ]);
     }
     Ok((doc, hash))

@@ -238,7 +238,7 @@ pub fn normalize(text: &str) -> String {
 /// use ludion_core::paths::sibling;
 ///
 /// assert_eq!(sibling("meshes/m.mesh.yaml", "../textures/x.png"), "textures/x.png");
-/// assert_eq!(sibling("hero.character.yaml", "clips/run.anim.yaml"), "clips/run.anim.yaml");
+/// assert_eq!(sibling("hero.assembly.yaml", "clips/run.anim.yaml"), "clips/run.anim.yaml");
 /// ```
 pub fn sibling(doc: &str, file: &str) -> String {
     let dir = doc.rfind(['/', '\\']).map_or("", |at| &doc[..=at]);
@@ -525,16 +525,16 @@ mod tests {
     fn sibling_resolves_against_the_document_directory() {
         for (doc, file, expected) in [
             (
-                "characters/hero.character.yaml",
+                "characters/hero.assembly.yaml",
                 "../meshes/hero.mesh.yaml",
                 "meshes/hero.mesh.yaml",
             ),
             (
-                "hero.character.yaml",
+                "hero.assembly.yaml",
                 "clips/run.anim.yaml",
                 "clips/run.anim.yaml",
             ),
-            ("a/hero.character.yaml", "../../x.yaml", "../x.yaml"),
+            ("a/hero.assembly.yaml", "../../x.yaml", "../x.yaml"),
             (
                 "models/player.assembly.yaml",
                 "parts/arm.part.yaml",

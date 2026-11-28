@@ -120,7 +120,7 @@ pub fn motor_converge(world: &mut World, _ctx: &SystemCtx) {
 fn skins(world: &mut World) -> Vec<EntityId> {
     let mut skins: Vec<EntityId> = world
         .query_ids::<(&Mesh,)>()
-        .filter(|(_, (mesh,))| matches!(mesh.shape, MeshSource::Character(_)))
+        .filter(|(_, (mesh,))| matches!(mesh.shape, MeshSource::Assembly(_)))
         .map(|(id, _)| id)
         .collect();
     skins.sort();

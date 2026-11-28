@@ -1,5 +1,5 @@
 //! A skinned assembly as `Mesh.shape`: the gallery mannequin loads with its four clips and
-//! effective overlay values, extracts to its skinned mesh under either spelling, and every load
+//! effective overlay values, extracts to its skinned mesh, and every load
 //! failure is pointed at the referencing `Mesh` component.
 
 use std::path::{Path, PathBuf};
@@ -10,8 +10,8 @@ use ludion_engine::{Engine, QualityParams, extract_at, load_character};
 use ludion_renderer::MeshShape;
 use ludion_scene::{MeshDocument, emit_mesh};
 
-const CHARACTER: &str = "characters/mannequin.character.yaml";
-const POINTER: &str = "/entities/0/components/Mesh/shape/character";
+const CHARACTER: &str = "characters/mannequin.assembly.yaml";
+const POINTER: &str = "/entities/0/components/Mesh/shape/assembly";
 
 fn gallery() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery")
@@ -46,16 +46,8 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
 ";
-
-/// The `Mesh.shape` keys that draw a skinned assembly.
-const SPELLINGS: [&str; 2] = ["character", "assembly"];
-
-/// [`SCENE`] naming the mannequin under `spelling`.
-fn spelled(spelling: &str) -> String {
-    SCENE.replace("character: ", &format!("{spelling}: "))
-}
 
 /// Loads `scene` at `root` and extracts it, returning the extract result.
 fn extract(
@@ -92,32 +84,25 @@ fn the_gallery_mannequin_resolves_four_clips_with_effective_overlays() {
 #[test]
 fn a_character_extracts_to_its_skinned_mesh() {
     let root = fresh_project("extract");
-    let [character, assembly] = SPELLINGS.map(|spelling| {
-        let scene = extract(&root, &spelled(spelling)).expect("the character extracts");
-        assert_eq!(scene.meshes.len(), 1, "{spelling}");
-        assert!(matches!(scene.meshes[0].shape, MeshShape::Asset(_)));
-        assert!(
-            scene.meshes[0].bone_offset > 0,
-            "{spelling}: a skinned mesh gets a palette slice"
-        );
-        assert!(!scene.bone_palette.is_empty());
-        scene
-    });
-    assert_eq!(character.bone_palette, assembly.bone_palette);
+    let scene = extract(&root, SCENE).expect("the character extracts");
+    assert_eq!(scene.meshes.len(), 1);
+    assert!(matches!(scene.meshes[0].shape, MeshShape::Asset(_)));
+    assert!(
+        scene.meshes[0].bone_offset > 0,
+        "a skinned mesh gets a palette slice"
+    );
+    assert!(!scene.bone_palette.is_empty());
 }
 
 #[test]
 fn a_character_and_a_plain_asset_of_the_same_mesh_share_one_upload() {
     let root = fresh_project("shared");
-    for spelling in SPELLINGS {
-        let scene_text = format!(
-            "{}  - name: plain\n    components:\n      Mesh:\n        shape:\n          asset: meshes/skin-mannequin.mesh.yaml\n",
-            spelled(spelling)
-        );
-        let scene = extract(&root, &scene_text).expect("both extract");
-        assert_eq!(scene.meshes.len(), 2, "{spelling}");
-        assert_eq!(scene.mesh_assets.len(), 1, "{spelling}");
-    }
+    let scene_text = format!(
+        "{SCENE}  - name: plain\n    components:\n      Mesh:\n        shape:\n          asset: meshes/skin-mannequin.mesh.yaml\n"
+    );
+    let scene = extract(&root, &scene_text).expect("both extract");
+    assert_eq!(scene.meshes.len(), 2);
+    assert_eq!(scene.mesh_assets.len(), 1);
 }
 
 #[test]
@@ -214,28 +199,25 @@ fn an_unskinned_mesh_is_l1200() {
 fn skin_bone_follows_a_characters_skin() {
     let root = fresh_project("skin-bone");
     let part = "  - name: hand\n    components:\n      SkinBone:\n        skin:\n          index: 0\n          generation: 0\n        bone: lower_arm_l\n";
-    for spelling in SPELLINGS {
-        let scene = spelled(spelling);
-        let mut engine = Engine::with_project_root(&root);
-        engine
-            .load_inline_scene(&format!("{scene}{part}"))
-            .expect("the part resolves its bone through the character");
+    let mut engine = Engine::with_project_root(&root);
+    engine
+        .load_inline_scene(&format!("{SCENE}{part}"))
+        .expect("the part resolves its bone through the character");
 
-        let animated = scene.replace(
-            "      Mesh:",
-            "      Animation:\n        clip: run\n      Mesh:",
-        );
-        let mut engine = Engine::with_project_root(&root);
-        let errors = engine
-            .load_inline_scene(&format!("{animated}{part}"))
-            .expect_err("an animated skin has one pose source");
-        assert!(
-            errors
-                .iter()
-                .any(|d| d.code == code::SKIN_BONE_ANIMATED_SKIN),
-            "{spelling}: {errors:?}"
-        );
-    }
+    let animated = SCENE.replace(
+        "      Mesh:",
+        "      Animation:\n        clip: run\n      Mesh:",
+    );
+    let mut engine = Engine::with_project_root(&root);
+    let errors = engine
+        .load_inline_scene(&format!("{animated}{part}"))
+        .expect_err("an animated skin has one pose source");
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.code == code::SKIN_BONE_ANIMATED_SKIN),
+        "{errors:?}"
+    );
 }
 
 /// The committed gallery character is in canonical form.
@@ -244,4 +226,50 @@ fn the_gallery_character_is_canonical() {
     let text = std::fs::read_to_string(gallery().join(CHARACTER)).unwrap();
     let doc = ludion_scene::check_assembly(&text).unwrap();
     assert_eq!(ludion_scene::emit_assembly(&doc), text);
+}
+
+/// The retired `{ character: … }` shape, as a scene's component and as a prefab body's.
+const RETIRED_SHAPE: &str = "\
+format: 1
+entities:
+  - name: hero
+    components:
+      Mesh:
+        shape:
+          character: characters/mannequin.assembly.yaml
+";
+
+fn assert_retired(diagnostics: &[ludion_core::diagnostics::Diagnostic], pointer: &str) {
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, code::CHARACTER_MERGED);
+    assert_eq!(diagnostics[0].path.as_deref(), Some(pointer));
+    assert_eq!(
+        diagnostics[0].help.as_deref(),
+        Some(
+            "write `assembly:` for `character:` — `{ assembly: <path> }` draws a skinned assembly \
+             and a voxel one alike"
+        )
+    );
+}
+
+#[test]
+fn the_retired_character_shape_is_l1246_in_a_scene() {
+    let errors = ludion_scene::check(RETIRED_SHAPE, &ludion_engine::builtin_registry())
+        .expect_err("the spelling is retired");
+    assert_retired(&errors, "/entities/0/components/Mesh/shape/character");
+}
+
+#[test]
+fn the_retired_character_shape_is_l1246_over_the_wire() {
+    let value = serde_json::json!({ "shape": { "character": CHARACTER } });
+    let errors = ludion_scene::check_component("Mesh", &value, &ludion_engine::builtin_registry());
+    assert_retired(&errors, "/shape/character");
+}
+
+#[test]
+fn the_retired_character_shape_is_l1246_in_a_prefab() {
+    let prefab = RETIRED_SHAPE.replace("format: 1\n", "format: 1\nkind: prefab\nname: hero\n");
+    let errors = ludion_scene::check_prefab(&prefab, &ludion_engine::builtin_registry())
+        .expect_err("the spelling is retired");
+    assert_retired(&errors, "/entities/0/components/Mesh/shape/character");
 }

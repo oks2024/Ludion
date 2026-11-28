@@ -498,7 +498,7 @@ fn walk(world: &mut World, ctx: &SystemCtx, fired: &mut Vec<ClipEvent>) {
     }
     for (id, (animation, mesh)) in world.query_ids::<(&Animation, &Mesh)>() {
         let model = match &mesh.shape {
-            MeshSource::Assembly(rel) | MeshSource::Character(rel) => Model::Assembly(rel.clone()),
+            MeshSource::Assembly(rel) => Model::Assembly(rel.clone()),
             _ => continue,
         };
         if animation.clip.is_empty() {

@@ -5,7 +5,7 @@
 //! `kind: animation` files. Each binding carries a playback `speed` and, for an imported clip that
 //! has no events of its own, an `events` overlay — [`CharacterData::clip`] returns the effective
 //! values `Animation.clip` resolves through. An entity draws a character with
-//! `Mesh.shape: { character: "characters/mannequin.character.yaml" }`.
+//! `Mesh.shape: { assembly: "characters/mannequin.assembly.yaml" }`.
 //!
 //! Run it headless (no window, no GPU, deterministic):
 //!
@@ -22,7 +22,7 @@ fn main() -> ExitCode {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
     let character = match load_character(
         ludion_assets::AssetRoot::content(&root),
-        "characters/mannequin.character.yaml",
+        "characters/mannequin.assembly.yaml",
     ) {
         Ok(character) => character,
         Err(diagnostics) => {

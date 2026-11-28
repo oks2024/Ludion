@@ -80,7 +80,7 @@ within 5 s is reported as `L4022` and the host exits non-zero. Peers attach to t
   whole difference). `--check-scene` parses and validates `--scene` (else the builder's default scene), printing each diagnostic
   rustc-style and then `<path>: OK (N entities, M components)` or `<path>: N errors found` (errors
   only: a warning prints and never fails), and exits 0 or 1 — no GPU, no window, nothing
-  instantiated; it opens every mesh, voxel, sculpt, assembly, character, collider-mesh, mesh-texture and decal-map file the scene names (`L1101`). `--render-out` writes one frame of the same scene to that PNG at
+  instantiated; it opens every mesh, voxel, sculpt, assembly, collider-mesh, mesh-texture and decal-map file the scene names (`L1101`). `--render-out` writes one frame of the same scene to that PNG at
   **`--width`/`--height`** (default: the builder's render size), after **`--frames <N>`** ticks of
   **your game's own schedule** — `N` game ticks, systems and all, so the frame can be
   an early wave or a boss phase rather than the scene at rest. `--quality` applies, and no adapter
@@ -111,8 +111,8 @@ text-legible answer to "did my sprite land where I meant". It returns, for every
 under the current camera (the scene camera with a presentation `CameraOffset` applied; `camera: "view"` is not offset), its world-space AABB and its `screen_rect` in pixels (`{x, y, w, h}` at the
 render size), plus `on_screen` — and a `null` rect when the thing is behind the camera. An entity hidden by
 `Visibility` is still reported, with `hidden: true` (the key is absent otherwise). Pure CPU, so
-it answers even with no GPU. A voxel model or assembly is boxed by its grid, a mesh, sculpt or
-character by its vertex extent at rest (not a posed or animated one); a document that does not load
+it answers even with no GPU. A voxel model or voxel assembly is boxed by its grid, a mesh, sculpt or
+skinned assembly by its vertex extent at rest (not a posed or animated one); a document that does not load
 gets a unit box instead, so the query still answers for a broken scene. A first-render geometry mistake becomes a diff you can read:
 
 ```

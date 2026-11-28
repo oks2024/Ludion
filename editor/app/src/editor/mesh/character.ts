@@ -1,7 +1,7 @@
 // The Characters library's paths and its document reader, as pure data: where a skinned `kind: assembly`
 // (`mesh:`) document lives, how a scene names one, and which clips it binds.
 //
-// THE SAME CONTENT ROOT AS THE MESHES. A character's `Mesh.shape` is `{ character: <ref> }`, resolved
+// THE SAME CONTENT ROOT AS THE MESHES. A character's `Mesh.shape` is `{ assembly: <ref> }`, resolved
 // against the stage session's content root exactly like a mesh asset, so its reference is its listing
 // path verbatim and the library lists `meshesRoot` (`./stage.ts`). Its clip files resolve relative to
 // the character file — `clipFilePath` (`../voxel/assembly.ts`) — not to the root.
@@ -13,21 +13,23 @@
 
 import { readClipBinding, type ClipBinding } from '../voxel/assembly';
 import { mapEntries, splitLines } from '../voxel/doc';
-import { join } from '../voxel/stage';
+import { ASSEMBLY_EXT, join } from '../voxel/stage';
 import { displayName } from '../voxel/tree';
 
-/** The character format's double extension — what the asset browser lists and nothing else. */
-export const CHARACTER_EXT = '.character.yaml';
-
 /** The character's asset reference as a scene names it: the listing path itself, normalized to `/`.
- *  This is the value written into `Mesh.shape.character`. */
+ *  This is the value written into `Mesh.shape.assembly`. */
 export function characterAssetRef(relPath: string): string {
   return join(relPath);
 }
 
 /** The character's display name — the basename with the format's double extension stripped. */
 export function characterDisplayName(relPath: string): string {
-  return displayName(relPath, CHARACTER_EXT);
+  return displayName(relPath, ASSEMBLY_EXT);
+}
+
+/** Whether the document's body is a skinned mesh (a non-empty `mesh:`) rather than voxel parts. */
+export function isSkinned(doc: CharacterDoc): boolean {
+  return doc.mesh !== null && doc.mesh !== '';
 }
 
 /** A skinned `kind: assembly` (`mesh:`) document read positionally. */

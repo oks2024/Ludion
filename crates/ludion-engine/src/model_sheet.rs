@@ -1,7 +1,7 @@
 //! The model-view harness: one model document → one deterministic turntable **contact sheet**.
 //!
 //! [`render_model_sheet`] takes a single `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`,
-//! `.character.yaml`, or `.prefab.yaml` document,
+//! or `.prefab.yaml` document,
 //! synthesizes a standard turntable scene around it (a normalized model, a ground plane, a per-view
 //! camera, and a neutral key + fill light rig), renders each requested [`ModelView`], and stitches
 //! the cells into **one** RGBA8 [`RenderedImage`]. It collapses the voxel/mesh authoring loop to
@@ -116,7 +116,7 @@
 //! # Posed sheets and strips (`clip` / `time` / `strip`)
 //!
 //! An **assembly** renders at its rest pose until [`ModelSheetRequest::clip`] names a clip its
-//! `clips:` map binds, and a **character** (`*.character.yaml`) or a **prefab** (`*.prefab.yaml`, posed on
+//! `clips:` map binds, and a **skinned assembly** or a **prefab** (`*.prefab.yaml`, posed on
 //! an instance entry's root part) likewise with the clips it binds — alone, since its parts and clips
 //! resolve relative to its own file. A character's clip time is
 //! `tick × seconds_per_tick × overlay speed`, and a report's `time` is that clip time.
@@ -1517,7 +1517,7 @@ fn check_clip_flags(request: &ModelSheetRequest) -> Result<(), Vec<Diagnostic>> 
                 "{orphan} needs `--clip` or `--crossfade`: there is no clip to take an instant of"
             ),
             "name the clip too, e.g. `--clip walk --time 0.4`; `check-scene <model>.assembly.yaml` \
-             (or `.character.yaml`) lists the clips a model binds",
+             lists the clips a model binds",
         ));
     }
     let flag = if request.crossfade.is_some() {
@@ -1771,18 +1771,18 @@ fn isolate_part(scene: &mut RenderScene, part_of: &[Option<u32>], part: u32) {
 fn check_alone(loaded: &[LoadedModel]) -> Result<(), Vec<Diagnostic>> {
     if loaded.len() > 1 {
         for model in loaded {
-            let (kind, resolves) = match model.extra {
-                LoadedExtra::Character(_) => ("character", "its mesh and clips"),
-                LoadedExtra::Prefab(_) => ("prefab", "its parts and clips"),
+            let (noun, kind, resolves) = match model.extra {
+                LoadedExtra::Character(_) => ("skinned assembly", "assembly", "its mesh and clips"),
+                LoadedExtra::Prefab(_) => ("prefab", "prefab", "its parts and clips"),
                 _ => continue,
             };
             return Err(refuse_clip(
                 format!(
-                    "a lineup cannot include a `kind: {kind}` model: a {kind} renders alone, \
+                    "a lineup cannot include a {noun}: a {noun} renders alone, \
                      since {resolves} resolve relative to its own file"
                 ),
                 &format!(
-                    "render the {kind} on its own sheet (`render --model <name>.{kind}.yaml`)"
+                    "render the {noun} on its own sheet (`render --model <name>.{kind}.yaml`)"
                 ),
             ));
         }
@@ -2122,8 +2122,8 @@ enum ModelKind {
     Assembly,
     /// A `*.sculpt.yaml` implicit-surface model, referenced by a `Mesh.shape: { sculpt: … }`.
     Sculpt,
-    /// A `*.character.yaml` skinned mesh with bound clips, referenced by a
-    /// `Mesh.shape: { character: … }`.
+    /// A skinned `*.assembly.yaml` (a mesh with bound clips), referenced by a
+    /// `Mesh.shape: { assembly: … }`.
     Character,
     /// A `*.prefab.yaml` part tree, placed by an instance entry (`prefab: …`). Carries the name of
     /// its root part, the one a clip's `Animation` sits on.
@@ -2138,7 +2138,7 @@ impl ModelKind {
             ModelKind::Mesh => "mesh",
             ModelKind::Assembly => "assembly",
             ModelKind::Sculpt => "sculpt",
-            ModelKind::Character => "character",
+            ModelKind::Character => "assembly",
             ModelKind::Prefab(_) => "prefab",
         }
     }
@@ -2221,8 +2221,7 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
             )
             .with_help(
                 "pass a readable `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`, \
-                 `.character.yaml`, or `.prefab.yaml` model document (check the path and \
-                 permissions)",
+                 or `.prefab.yaml` model document (check the path and permissions)",
             ),
         ]
         })?;
@@ -2240,8 +2239,8 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
                     ),
                 )
                 .with_help(
-                    "pass a `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`, \
-                     `.character.yaml`, or `.prefab.yaml` model document",
+                    "pass a `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, `.sculpt.yaml`, or \
+                     `.prefab.yaml` model document",
                 ),
             ]
         })?;
@@ -2352,7 +2351,9 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
             })
         }
         // The retired `kind: character`: `check_assembly` reports `L1246` with the one-line fix.
-        Some("character") => Err(ludion_scene::check_assembly(&source).err().unwrap_or_default()),
+        Some("character") => Err(ludion_scene::check_assembly(&source)
+            .err()
+            .unwrap_or_default()),
         // Rooted at the file's own directory, like a character: the parts' meshes and the clips
         // resolve relative to it. Its bounds are the rest-pose box of one expanded instance.
         Some("prefab") => {
@@ -2389,13 +2390,13 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
                 code::MODEL_SHEET_INPUT,
                 format!(
                     "model document `{}` has kind `{other}`, but the model view harness renders \
-                     only `voxel`, `mesh`, `assembly`, `sculpt`, `character`, or `prefab` documents",
+                     only `voxel`, `mesh`, `assembly`, `sculpt`, or `prefab` documents",
                     model.display()
                 ),
             )
             .with_help(
                 "point `render --model` at a `.voxel.yaml`, `.mesh.yaml`, `.assembly.yaml`, \
-                 `.sculpt.yaml`, `.character.yaml`, or `.prefab.yaml` document",
+                 `.sculpt.yaml`, or `.prefab.yaml` document",
             ),
         ]),
         None => Err(vec![
@@ -2403,7 +2404,7 @@ fn load_model(model: &Path) -> Result<LoadedModel, Vec<Diagnostic>> {
                 code::MODEL_SHEET_INPUT,
                 format!(
                     "model document `{}` has no `kind:` key; the model view harness needs a \
-                     `voxel`, `mesh`, `assembly`, `sculpt`, `character`, or `prefab` document (a \
+                     `voxel`, `mesh`, `assembly`, `sculpt`, or `prefab` document (a \
                      scene has no `kind:` and cannot be rendered as a model)",
                     model.display()
                 ),
@@ -3761,7 +3762,7 @@ fn stage(
                         .to_string(),
                 )
                 .with_help(
-                    "a `.character.yaml` draws its skinned mesh's own colors and textures — \
+                    "a skinned assembly draws its skinned mesh's own colors and textures — \
                      change the mesh document, or override the scene that places the character \
                      (`render --scene … --set`)",
                 ),
@@ -5726,7 +5727,7 @@ mod tests {
 
         for (rel, clip, noun) in [
             (
-                "gallery/characters/mannequin.character.yaml",
+                "gallery/characters/mannequin.assembly.yaml",
                 "idle",
                 "character",
             ),
@@ -5790,7 +5791,7 @@ mod tests {
     #[test]
     fn a_character_refuses_look() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/gallery/characters/mannequin.character.yaml");
+            .join("../../examples/gallery/characters/mannequin.assembly.yaml");
         let loaded = load_model(&path).unwrap_or_else(|d| panic!("{d:#?}"));
         let models = [path.as_path()];
         let look = parse_look("0,0").expect("a look");
@@ -6313,7 +6314,7 @@ entities:
                 // The retired `character` kind is refused with its own `L1246` instead.
                 Err(diagnostics) => diagnostics.iter().any(|d| {
                     d.message.contains(&format!("has kind `{}`", entry.name))
-                        || d.code == ludion_core::codes::code::CHARACTER_KIND_MERGED
+                        || d.code == ludion_core::codes::code::CHARACTER_MERGED
                 }),
             };
             assert_eq!(

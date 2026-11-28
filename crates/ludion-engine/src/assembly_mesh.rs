@@ -373,12 +373,13 @@ pub(crate) fn load_documents(
             Diagnostic::new(
                 code::ASSEMBLY_DATA_CONSISTENCY,
                 format!(
-                    "`{rel}` is a skinned assembly; `Mesh.shape: {{ assembly: … }}` draws voxel \
-                     assemblies"
+                    "`{rel}` is a skinned assembly; this needs a voxel assembly's parts"
                 ),
             )
             .with_path("/mesh")
-            .with_help("draw it with `Mesh.shape: { character: <path> }`"),
+            .with_help(
+                "a skinned model ragdolls through a prefab's `$skin` (`ludion docs physics-joints`)",
+            ),
         ]);
     }
 

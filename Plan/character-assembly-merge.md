@@ -1,7 +1,8 @@
 # Plan: Character–assembly merge — one document kind for "a model plus its clips"
 
-> Status: **W1–W3 mechanized (2026-11-23); decisions 8 and 12 Proposed, owner ruling owed.** The design was
-> written from the tree at Lore 2514; re-grep before editing.
+> Status: **W1–W3 mechanized (2026-11-23); decision 12 decided by the owner 2026-11-27 and mechanized
+> (2026-11-27), corpus re-record pending.** The design was written from the tree at Lore 2514; re-grep before
+> editing.
 
 ## Status
 
@@ -46,6 +47,47 @@ unchanged. Accepted deviations: the model-sheet kind-table test accepts `L1246`;
 Verify: `node scripts/check.mjs --frontend-only`; scoped check over docs, dev-docs, editor, the three crates and
 `Plan`; `--lib` for `ludion-components` and `ludion-engine`; `component_schema_snapshot`; `cargo build -p ludion-cli`;
 `node scripts/privacy-canary.mjs`.
+
+### Decision 12 — one shape, one suffix
+
+0021-11, the dispatch (Lore 2539). Nothing pinned moved.
+
+| file | role |
+|---|---|
+| `crates/ludion-engine/src/assembly_body.rs` | `AssemblyBody`, `body_of`: the `mesh:` key decides the body |
+| `crates/ludion-engine/src/{asset_cache,extract,bounds,voxelizer}.rs` | `{ assembly: }` routes skinned bodies through the character loader; one refs set |
+| `crates/ludion-engine/src/{animation_events,blend_clock,root_motion}.rs` | one `Model::Assembly`, loaded by body |
+| `crates/ludion-engine/src/{parent_joint,skin_bone,mesh_check,static_check,model_sheet,character}.rs` | the same dispatch at each site |
+| `crates/ludion-engine/tests/{character,animation_events,bounds,socket_pose}.rs` | both spellings give one result |
+
+0021-12, the old spelling retired.
+
+| file | role |
+|---|---|
+| `crates/ludion-ecs/src/registry.rs` | `SemanticValidate::retired_spelling`, checked before the schema |
+| `crates/ludion-scene/src/{validate,expand,assembly}.rs` | the hook in the scene, prefab, wire and override checks |
+| `crates/ludion-components/src/lib.rs` | `MeshSource::Character` removed; a `Mesh` or `MeshGrid` legend `{ character: }` is `L1246` |
+| `crates/ludion-core/src/codes.rs` | `L1246` reused as `CHARACTER_MERGED` (both spellings); `L1244` names a skinned-assembly legend entry, raised by the file check |
+| `crates/ludion-engine/src/` (`assembly_mesh`, `character`, `mesh_check`, `map_spawn`, `profile`, `skin_ragdoll` and others) | the or-pattern arms removed, refusal texts, shape pointers end `/shape/assembly` |
+| `crates/ludion-cli/src/{main,render}.rs` | help text; `render --model` no longer strips `.character` |
+| `examples/gallery/characters/mannequin{,-lod}.character.yaml` → `.assembly.yaml` | renamed |
+| 11 `examples/gallery` scenes, `staged/static-kit.yaml`, `prefabs/mannequin-ragdoll.prefab.yaml` | `{ assembly: … }` |
+| Rust tests and examples in `ludion-engine`, `ludion-cli`, `ludion-testkit`, `ludion` | migrated |
+| `component_schemas.json` | re-blessed (variant removed) |
+| `scripts/ecs-budget.mjs` | limit 3510 for the hook (user-approved 2026-11-28) |
+
+0021-13, docs and editor.
+
+| file | role |
+|---|---|
+| `docs/{animation-layers,character-animation,components-fx,components,game-clock,global-illumination,materials,mesh-grids,physics-joints,prefab-animation,prefabs,running,scene-format,voxel-animation}.md` and their embedded mirrors | one `assembly` spelling; the `L1246` retired-spelling sentences |
+| `editor/app/src/editor/mesh/character.ts` (+ test), `editor/app/src/editor/component-shapes.test.ts` | the `.assembly.yaml` suffix, `isSkinned`, the pinned `Mesh.shape.assembly` read |
+| `editor/app/src/views/ModelsView.tsx`, `editor/app/README.md` | the Assemblies library; a voxel assembly is not staged (the committed subject is restored) |
+
+The corpus re-record is a separate task. It re-records the `character-cycle`, `physics-horde`,
+`ragdoll-skin-switch` and `ragdoll-pose-blend` traces (`WorldHash` writes the shape) and every committed `.lrp`,
+`character-cycle` and `physics-horde` among them (`replay_content_hash` moved this round). The `ragdoll-skinned`
+trace does not move (its scene draws `asset:`); nor do the protocol schema or the image goldens.
 
 ## Trigger
 
@@ -115,7 +157,7 @@ spent. A document's *contents* are load-side only: the asset cache hashes the by
    line to `kind: assembly`; every other key carries over". `L1199` and `L1200` retire into `codes::RETIRED` when
    the character module is deleted (W2), their facts now `L1137`/`L1138`. No silent alias: an old document is an
    error that names the one-line fix.
-8. **`Mesh.shape: { character: <path> }` keeps its spelling until the next re-record round** (Proposed — owner
+8. **Superseded by decision 12 (owner, 2026-11-27).** **`Mesh.shape: { character: <path> }` keeps its spelling until the next re-record round** (Proposed — owner
    ruling owed). It names a skinned assembly; `{ assembly: <path> }` names a voxel one and refuses a skinned
    assembly (`L1138`, help: draw it with `{ character: … }`). The committed `*.character.yaml` files keep their
    names. **Why:** decision-level hash rule above; this keeps one spelling per body at every moment (no alias),
@@ -131,11 +173,11 @@ spent. A document's *contents* are load-side only: the asset cache hashes the by
 11. **No hash, image or schema moves in W1–W3.** `MeshSource` is untouched, so neither the component schema
     snapshot nor the wire schema moves; migrated mannequins load to the same `CharacterData` and render
     byte-identically; no replay or trace is re-recorded.
-12. **The final rename rides the next re-record round** (Proposed — owner ruling owed): `{ assembly: … }` routes
+12. **The final rename rides the next re-record round** (decided by the owner 2026-11-27): `{ assembly: … }` routes
     both bodies, `MeshSource::Character` is removed (its old spelling then an `L1246`-style error), the
     `*.character.yaml` files become `*.assembly.yaml`, the editor's Characters library folds into the assembly
     lister, `render --model`'s suffix dispatch reads `kind:`, and every listed trace and `.lrp` re-records last.
-    Trigger: the next scheduled re-record round, or the owner authorizing one for this.
+    Rode the round authorized 2026-11-27.
 
 ## Inventory (Lore 2514)
 
@@ -175,7 +217,7 @@ ragdoll-skin-switch (1), sequence-beat (1), sun-cascades (1)}.yaml`, `examples/g
   Characters library reading the merged kind (it lists by suffix, so text only), the plan Statuses
   (`animation-clips` d10, `animation-layers` §Owner rulings). Verify: scoped check incl. `docs` and the editor
   lane.
-- **Next re-record round — decision 12.** Not scheduled here.
+- **Re-record round — decision 12.** See Status.
 
 ## Out of scope (with triggers)
 
@@ -183,7 +225,6 @@ ragdoll-skin-switch (1), sequence-beat (1), sun-cascades (1)}.yaml`, `examples/g
 - The overlay on voxel assemblies. Trigger: decision 5's.
 - An enum body. Trigger: a third body kind (e.g. a sculpt with clips).
 - Prefab clip overlay. Trigger: an imported prefab clip that needs events without a Blender re-run.
-- Decision 12's rename. Trigger: the next re-record round.
 
 ## Risks
 

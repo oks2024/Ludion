@@ -93,7 +93,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/blended.character.yaml
+          assembly: characters/blended.assembly.yaml
       Animation:
 {base}      AnimationLayers:
         layers:
@@ -130,7 +130,7 @@ fn fixture_project(name: &str) -> PathBuf {
     ] {
         std::fs::copy(gallery().join(file), dir.join(file)).unwrap();
     }
-    std::fs::write(dir.join("characters/blended.character.yaml"), CHARACTER).unwrap();
+    std::fs::write(dir.join("characters/blended.assembly.yaml"), CHARACTER).unwrap();
     dir
 }
 
@@ -454,7 +454,7 @@ fn additive_scene(entities: usize, reference: &str) -> String {
     let mut text = String::from("format: 1\nseed: 1\nentities:\n");
     for i in 0..entities {
         text.push_str(&format!(
-            "  - name: m{i}\n    components:\n      Mesh:\n        shape:\n          character: characters/blended.character.yaml\n      Animation:\n        clip: idle\n      AnimationLayers:\n        layers:\n          - name: add\n            clip: run\n            mode: additive\n            weight: 0.{}\n{reference}",
+            "  - name: m{i}\n    components:\n      Mesh:\n        shape:\n          assembly: characters/blended.assembly.yaml\n      Animation:\n        clip: idle\n      AnimationLayers:\n        layers:\n          - name: add\n            clip: run\n            mode: additive\n            weight: 0.{}\n{reference}",
             1 + i % 9
         ));
     }

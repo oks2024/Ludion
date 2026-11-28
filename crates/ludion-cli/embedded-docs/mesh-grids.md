@@ -36,7 +36,7 @@ description: The MeshGrid component: a glyph grid of oriented mesh cells for gro
           - "4567 "
 ```
 
-`MeshGrid: {}` is valid and draws nothing. A legend value takes every `Mesh` field and static shape (asset, voxel, sculpt, assembly, primitives), so colour, material and emissive vary per glyph. A `character` shape is `L1244`: cells share one entity, so they cannot pose or animate per cell. Place animated characters as their own entities.
+`MeshGrid: {}` is valid and draws nothing. A legend value takes every `Mesh` field and static shape (asset, voxel, sculpt, assembly, primitives), so colour, material and emissive vary per glyph. A skinned assembly is `L1244`, raised by the file check (its document decides the body): cells share one entity, so they cannot pose or animate per cell; place it as its own entity. A legend `{ character: … }` is `L1246`.
 
 **Placement.** Cell `(col, row)` sits at local `(col·cell_size, 0, row·cell_size)`: column → +X, row → +Z, cell `(0, 0)` at the entity origin. The entity's whole `Transform` (and `Parent`) applies, unlike a `Tilemap`.
 
@@ -51,7 +51,7 @@ description: The MeshGrid component: a glyph grid of oriented mesh cells for gro
 | `L1019` | rows are ragged (`/rows/<n>`) |
 | `L1020` | a row glyph has no legend entry, or a legend key is not one glyph or is a space |
 | `L1243` | `orient` differs in row count or width from `rows`, or holds a glyph outside `0`-`7`/space (`/orient`, `/orient/<n>`) |
-| `L1244` | a legend entry has a `character` shape (`/legend/<glyph>`) |
+| `L1244` | a legend entry is a skinned assembly, found by the file check (`/legend/<glyph>`) |
 | `L1101` | a legend asset fails to load; the pointer is `/entities/<n>/components/MeshGrid/legend/<glyph>/shape/...`, reported once per glyph; `check-scene` raises it for a glyph a row uses |
 
 `component.set` runs the same checks and rejects a bad grid before any world change.

@@ -133,15 +133,33 @@ fn orient_shape_and_glyphs_are_l1243() {
 }
 
 #[test]
-fn a_character_legend_shape_is_l1244() {
+fn a_skinned_legend_assembly_is_l1244() {
+    let gallery = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery");
     let source = "format: 1\nentities:\n  - components:\n      MeshGrid:\n        legend:\n          \
-                  a:\n            shape:\n              character: characters/goblin.character.yaml\n        \
+                  a:\n            shape:\n              assembly: characters/mannequin.assembly.yaml\n        \
+                  rows:\n          - \"a\"\n";
+    let scene = ludion_scene::check(source, &builtin_registry())
+        .expect("which body the assembly has is the file pass's to say");
+    let found = ludion_engine::scene_engine_diagnostics(&gallery, &scene);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].code.as_str(), "L1244");
+    assert_eq!(
+        found[0].path.as_deref(),
+        Some("/entities/0/components/MeshGrid/legend/a")
+    );
+    assert!(found[0].message.contains("skinned assembly"), "{found:?}");
+}
+
+#[test]
+fn a_retired_character_legend_shape_is_l1246() {
+    let source = "format: 1\nentities:\n  - components:\n      MeshGrid:\n        legend:\n          \
+                  a:\n            shape:\n              character: characters/goblin.assembly.yaml\n        \
                   rows:\n          - \"a\"\n";
     let diagnostic = one_diagnostic(source);
-    assert_eq!(diagnostic.code.as_str(), "L1244");
+    assert_eq!(diagnostic.code.as_str(), "L1246");
     assert_eq!(
         diagnostic.path.as_deref(),
-        Some("/entities/0/components/MeshGrid/legend/a")
+        Some("/entities/0/components/MeshGrid/legend/a/shape/character")
     );
 }
 

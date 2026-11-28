@@ -1779,7 +1779,7 @@ fn needs_gpu_the_gallery_wave_clip_holds_together_at_every_phase() {
 /// 1.2) and `spin`. Read-only; every test renders from the repo's own copy.
 fn mannequin() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/gallery/characters/mannequin.character.yaml")
+        .join("../../examples/gallery/characters/mannequin.assembly.yaml")
 }
 
 fn sheet_bytes(outcome: &SheetOutcome) -> &[u8] {

@@ -118,8 +118,8 @@ pub fn scene_parent_joint_diagnostics(project_root: &Path, scene: &Scene) -> Vec
                     index,
                     entity,
                     format!(
-                        "its `Parent` {} carries no `Mesh`, or its `shape` is not `asset`, \
-                         `character` or `assembly`",
+                        "its `Parent` {} carries no `Mesh`, or its `shape` is not `asset` or \
+                         `assembly`",
                         named(parent_entity, parent_index)
                     ),
                 ));
@@ -166,7 +166,7 @@ fn assembly_path(project_root: &Path, entity: &SceneEntity) -> Option<String> {
     let (_, value) = entity.components.iter().find(|(name, _)| name == "Mesh")?;
     let mesh: Mesh = serde_json::from_value(value.clone()).ok()?;
     match mesh.shape {
-        MeshSource::Assembly(path) | MeshSource::Character(path) => {
+        MeshSource::Assembly(path) => {
             let body = body_of(AssetRoot::content(project_root), &path);
             (body != Ok(AssemblyBody::Skinned)).then_some(path)
         }
@@ -246,9 +246,7 @@ impl SkinRests {
     fn pose_data(&self, shape: &MeshSource) -> Option<Arc<SkinPoseData>> {
         let key = match shape {
             MeshSource::Asset(path) => format!("asset:{path}"),
-            MeshSource::Assembly(path) | MeshSource::Character(path)
-                if self.body(path) == Some(AssemblyBody::Skinned) =>
-            {
+            MeshSource::Assembly(path) if self.body(path) == Some(AssemblyBody::Skinned) => {
                 format!("assembly:{path}")
             }
             _ => return None,
@@ -264,7 +262,7 @@ impl SkinRests {
         let (path, character) = match shape {
             MeshSource::Asset(path) => (path.clone(), None),
             // `pose_data` asks for a skinned assembly only.
-            MeshSource::Assembly(rel) | MeshSource::Character(rel) => {
+            MeshSource::Assembly(rel) => {
                 let data = crate::character::load(AssetRoot::content(&self.root), rel).ok()?;
                 (data.mesh.clone(), Some(Arc::new(data)))
             }
@@ -284,7 +282,7 @@ impl SkinRests {
     fn rest(&self, shape: &MeshSource, joint: &str) -> Option<Trs> {
         let key = match shape {
             MeshSource::Asset(path) => format!("asset:{path}"),
-            MeshSource::Assembly(path) | MeshSource::Character(path) => {
+            MeshSource::Assembly(path) => {
                 format!("assembly:{path}")
             }
             _ => return None,
@@ -302,7 +300,7 @@ impl SkinRests {
     fn load(&self, shape: &MeshSource) -> Option<Arc<JointRests>> {
         let path = match shape {
             MeshSource::Asset(path) => path.clone(),
-            MeshSource::Assembly(rel) | MeshSource::Character(rel) => match self.body(rel)? {
+            MeshSource::Assembly(rel) => match self.body(rel)? {
                 AssemblyBody::Voxel => return self.load_assembly(rel),
                 AssemblyBody::Skinned => {
                     crate::character::mesh_path(AssetRoot::content(&self.root), rel).ok()?
@@ -439,7 +437,7 @@ pub fn posed_joint_world(
     let Some(rests) = world.resource::<SkinRests>() else {
         return Ok(None);
     };
-    if let MeshSource::Assembly(rel) | MeshSource::Character(rel) = &mesh.shape
+    if let MeshSource::Assembly(rel) = &mesh.shape
         && rests.body(rel) == Some(AssemblyBody::Voxel)
     {
         return Ok(posed_assembly_part(world, rests, skin, rel, joint, now));
@@ -556,7 +554,7 @@ fn not_skinned(pointer: &str, index: usize, entity: &SceneEntity, reason: String
     .with_path(pointer.to_string())
     .with_help(
         "point `Parent` at an entity carrying a skinned `Mesh` (`shape: { asset: \
-         \"meshes/rig.mesh.yaml\" }` exported with its armature, or a `character`) or an \
+         \"meshes/rig.mesh.yaml\" }` exported with its armature, or a skinned `assembly`) or an \
          `assembly`, or remove `ParentJoint`",
     )
 }

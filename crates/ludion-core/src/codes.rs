@@ -1495,13 +1495,14 @@ pub mod code {
     /// not an orientation.
     pub const MESH_GRID_ORIENT: DiagnosticCode = DiagnosticCode::new("L1243");
 
-    /// `L1244` — a `MeshGrid` legend entry names a `character` shape, which cannot pose per cell.
+    /// `L1244` — a `MeshGrid` legend entry names a skinned assembly, which cannot pose per cell.
     pub const MESH_GRID_ANIMATED_SHAPE: DiagnosticCode = DiagnosticCode::new("L1244");
     /// `L1245` — `ludion sync` refused an `[[import]]` table: a `from` that matches nothing, two sources
     /// sharing a stem, or a `to` holding files it does not own.
     pub const IMPORT_SYNC_REFUSED: DiagnosticCode = DiagnosticCode::new("L1245");
-    /// `L1246` — a document says `kind: character`, which was merged into `kind: assembly`.
-    pub const CHARACTER_KIND_MERGED: DiagnosticCode = DiagnosticCode::new("L1246");
+    /// `L1246` — a retired `character` spelling: `kind: character` or `Mesh.shape: { character: … }`,
+    /// both merged into `assembly`.
+    pub const CHARACTER_MERGED: DiagnosticCode = DiagnosticCode::new("L1246");
 
     /// `L1206` — an imported animation clip, after key reduction, strays from the source motion by
     /// more than the model-space error bound on some joint. The clip is refused (never downgraded
@@ -8318,7 +8319,9 @@ leave every cell unrotated.",
         severity: Severity::Error,
         title: "mesh grid legend names an animated shape",
         explanation: "\
-A `MeshGrid` component's legend maps a glyph to a `Mesh` whose shape is a `character`.
+A `MeshGrid` component's legend maps a glyph to a `Mesh` whose `{ assembly: }` document is a skinned
+assembly (it has a `mesh:` key). The engine finds this when it reads the assembly file (`ludion
+check-scene` and a load), so a value written over the wire is not checked for it.
 
 All of a grid's cells share one entity, so they share one `Animation` clip and one set of `SkinBone`
 followers; a skinned character cannot pose or play per cell. The engine refuses the legend entry
@@ -8326,8 +8329,9 @@ rather than draw every cell in the same pose.
 
 The diagnostic's JSON Pointer names the legend entry (`/legend/<glyph>`).
 
-Fix: place animated characters as their own entities (a `Mesh` with a `character` shape, plus an
-`Animation`), and keep the grid for static shapes: assets, voxel, sculpt, assembly and primitives.",
+Fix: place an animated skinned assembly as its own entity (a `Mesh` with that `{ assembly: }` shape,
+plus an `Animation`), and keep the grid for static shapes: assets, voxel, sculpt, voxel assemblies and
+primitives.",
     },
     CodeEntry {
         code: code::IMPORT_SYNC_REFUSED,
@@ -8350,9 +8354,9 @@ Fix: correct `from`, rename one of the colliding sources, or delete `to` by hand
 For a link, replace it with the files, or move it out of the glTF's directory.",
     },
     CodeEntry {
-        code: code::CHARACTER_KIND_MERGED,
+        code: code::CHARACTER_MERGED,
         severity: Severity::Error,
-        title: "`kind: character` was merged into `kind: assembly`",
+        title: "`character` was merged into `assembly`",
         explanation: "\
 A document says `kind: character`. That kind no longer exists: a skinned model and its clips are now a
 `kind: assembly` document whose body is `mesh:` (the skinned mesh document's path) instead of the voxel
@@ -8361,7 +8365,15 @@ in the same order, and a clip entry keeps its `{ clip, speed, events }` mapping 
 
 The diagnostic's JSON Pointer is `/kind`.
 
-Fix: change the line to `kind: assembly`.",
+Fix: change the line to `kind: assembly`.
+
+A component says `Mesh.shape: { character: … }`. That shape no longer exists: `{ assembly: <path> }` draws
+a skinned assembly and a voxel one alike, and the document's `mesh:` key says which it is. It is refused
+in a scene, a prefab body, an instance override and a value written over the wire.
+
+The diagnostic's JSON Pointer ends in `/shape/character`.
+
+Fix: write `assembly:` for `character:`, and name the document `*.assembly.yaml`.",
     },
     CodeEntry {
         code: code::IMPORT_CLIP_ERROR_BOUND,
@@ -14951,7 +14963,7 @@ mod tests {
         code::MESH_GRID_ORIENT,
         code::MESH_GRID_ANIMATED_SHAPE,
         code::IMPORT_SYNC_REFUSED,
-        code::CHARACTER_KIND_MERGED,
+        code::CHARACTER_MERGED,
         code::IMPORT_CLIP_ERROR_BOUND,
         code::IMPORT_CLIP_EXTRAS_INVALID,
         code::IMPORT_CLIP_AT_REST,

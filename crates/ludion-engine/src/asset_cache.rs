@@ -2390,7 +2390,7 @@ tracks:
         let clip = "clips/idle.anim.yaml";
         std::fs::copy(gallery.join(mesh), dir.join(mesh)).unwrap();
         std::fs::copy(gallery.join(clip), dir.join(clip)).unwrap();
-        let rel = "characters/hero.character.yaml";
+        let rel = "characters/hero.assembly.yaml";
         std::fs::write(
             dir.join(rel),
             "format: 1\nkind: assembly\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  idle:\n    clip: ../clips/idle.anim.yaml\n",
@@ -2525,7 +2525,7 @@ tracks:
         let clip = "clips/idle.anim.yaml";
         std::fs::copy(gallery.join(mesh), dir.join(mesh)).unwrap();
         std::fs::copy(gallery.join(clip), dir.join(clip)).unwrap();
-        let rel = "characters/hero.character.yaml";
+        let rel = "characters/hero.assembly.yaml";
         std::fs::write(
             dir.join(rel),
             "format: 1\nkind: assembly\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  idle:\n    clip: ../clips/idle.anim.yaml\n",
@@ -3837,7 +3837,7 @@ parts:
         );
     }
 
-    const CHARACTER: &str = "characters/hero.character.yaml";
+    const CHARACTER: &str = "characters/hero.assembly.yaml";
     const CHARACTER_CLIP: &str = "clips/idle.anim.yaml";
 
     fn write_character(dir: &Path) {

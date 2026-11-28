@@ -28,7 +28,9 @@ use serde_json::Value;
 use crate::instantiate::{InstantiateOptions, instantiate_into, links_into};
 use crate::prefab::PrefabDocument;
 use crate::schema::SchemaCursor;
-use crate::validate::{Checker, Subject, cycle_diagnostic, hierarchy_cycles, presentation_refs};
+use crate::validate::{
+    Checker, Subject, cycle_diagnostic, hierarchy_cycles, presentation_refs, rebased,
+};
 use crate::yaml::pointer_token;
 use crate::{InstanceEntry, Scene, SceneEntity, normalize_prefab_path, prefab};
 
@@ -906,22 +908,21 @@ fn apply_overrides(
             };
             let pointer = format!("{base}/{}", pointer_token(name));
             let mut found = Vec::new();
-            Checker {
-                subject: Subject::Component(name),
+            match info.retired_spelling(&merged) {
+                Some(retired) => found.push(rebased(retired, &pointer)),
+                None => Checker {
+                    subject: Subject::Component(name),
+                }
+                .check(
+                    &merged,
+                    SchemaCursor::new(info.schema()),
+                    &pointer,
+                    &mut found,
+                ),
             }
-            .check(
-                &merged,
-                SchemaCursor::new(info.schema()),
-                &pointer,
-                &mut found,
-            );
             if found.is_empty() {
                 for diagnostic in info.validate_semantics(&merged) {
-                    let rebased = match &diagnostic.path {
-                        Some(relative) => format!("{pointer}{relative}"),
-                        None => pointer.clone(),
-                    };
-                    found.push(diagnostic.with_path(rebased));
+                    found.push(rebased(diagnostic, &pointer));
                 }
             }
             diagnostics.extend(unattributed(found));

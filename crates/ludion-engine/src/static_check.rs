@@ -92,9 +92,7 @@ pub(crate) fn static_ineligibility(
         .iter()
         .find_map(|shape| match shape {
             // Either body is posed per frame, so no document is read.
-            MeshSource::Assembly(_) | MeshSource::Character(_) => {
-                Some(StaticIneligible::Shape("assembly"))
-            }
+            MeshSource::Assembly(_) => Some(StaticIneligible::Shape("assembly")),
             MeshSource::AssemblyPart { .. } => Some(StaticIneligible::Shape("assembly_part")),
             _ => None,
         })
@@ -368,7 +366,6 @@ mod tests {
         for body in [
             "      Static: {}\n      Sprite: {}\n",
             "      Static: {}\n      Mesh:\n        shape:\n          assembly: a.assembly.yaml\n",
-            "      Static: {}\n      Mesh:\n        shape:\n          character: a.character.yaml\n",
             "      Static: {}\n      Mesh:\n        shape: cube\n      PointLight: {}\n",
         ] {
             assert_eq!(

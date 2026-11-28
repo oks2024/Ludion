@@ -35,6 +35,8 @@ struct Site {
     maps: bool,
     /// A shape naming a whole assembly, whose document's body picks `doc`.
     whole: bool,
+    /// A whole-assembly site in a `MeshGrid` legend: the glyph, and the legend entry's pointer.
+    grid_cell: Option<(char, String)>,
 }
 
 /// What reading one distinct document found.
@@ -85,11 +87,14 @@ pub fn scene_mesh_asset_diagnostics(project_root: &Path, scene: &Scene) -> Vec<D
 
     // Skinned assemblies first: their mesh documents join the mesh reads, so each opens once.
     let skinned = skinned_meshes(root, &sites);
+    let mut animated_cells = Vec::new();
     for site in sites.iter_mut().filter(|site| site.whole) {
         if skinned.contains_key(&site.rel) {
             site.doc = Doc::Character;
-            site.label = "character";
             site.maps = true;
+            if let Some((glyph, pointer)) = &site.grid_cell {
+                animated_cells.push(animated_cell(*glyph, pointer));
+            }
         }
     }
     let characters: BTreeMap<(Doc, &str), Read> = skinned
@@ -135,7 +140,7 @@ pub fn scene_mesh_asset_diagnostics(project_root: &Path, scene: &Scene) -> Vec<D
         .collect();
 
     let mut manifest = None;
-    let mut found = Vec::new();
+    let mut found = animated_cells;
     for site in &sites {
         let faults = site_faults(site, &characters, &reads, &png_faults);
         for (label, rel, fault) in faults {
@@ -151,6 +156,20 @@ pub fn scene_mesh_asset_diagnostics(project_root: &Path, scene: &Scene) -> Vec<D
         }
     }
     found
+}
+
+/// The `L1244` of a legend entry naming a skinned assembly. Which body an assembly has is in its
+/// file, so the schema pass cannot see it.
+fn animated_cell(glyph: char, pointer: &str) -> Diagnostic {
+    Diagnostic::new(
+        code::MESH_GRID_ANIMATED_SHAPE,
+        format!(
+            "legend entry `{glyph}` is a skinned assembly; a grid's cells share one entity, so they \
+             cannot pose or animate per cell"
+        ),
+    )
+    .with_path(pointer)
+    .with_help("place an animated skinned assembly as its own entity")
 }
 
 /// The `L1697` warning for each local surface name a collider mesh's document lists that the
@@ -357,6 +376,7 @@ fn walk(scene: &Scene) -> (Vec<Site>, Vec<(String, String)>) {
                             ),
                             maps: false,
                             whole: false,
+                            grid_cell: None,
                         });
                     }
                 }
@@ -394,14 +414,9 @@ fn mesh_sites(shape: &MeshSource, site: MeshSite, index: usize, sites: &mut Vec<
         MeshSource::Asset(path) => (Doc::Mesh, path, "mesh asset", "asset"),
         MeshSource::Voxel(path) => (Doc::Voxel, path, "voxel model", "voxel"),
         MeshSource::Sculpt(path) => (Doc::Sculpt, path, "sculpt model", "sculpt"),
-        MeshSource::Assembly(path) | MeshSource::Character(path) => {
+        MeshSource::Assembly(path) => {
             whole = true;
-            let tail = if matches!(shape, MeshSource::Assembly(_)) {
-                "assembly"
-            } else {
-                "character"
-            };
-            (Doc::Assembly, path, "assembly", tail)
+            (Doc::Assembly, path, "assembly", "assembly")
         }
         MeshSource::AssemblyPart { assembly, .. } => (
             Doc::Assembly,
@@ -410,13 +425,21 @@ fn mesh_sites(shape: &MeshSource, site: MeshSite, index: usize, sites: &mut Vec<
             "assembly_part/assembly",
         ),
     };
+    let pointer = site.shape_pointer(index, tail);
+    let grid_cell = match site {
+        MeshSite::GridCell(glyph) if whole => pointer
+            .strip_suffix("/shape/assembly")
+            .map(|entry| (glyph, entry.to_string())),
+        _ => None,
+    };
     sites.push(Site {
         doc,
         rel: rel.clone(),
         label,
-        pointer: site.shape_pointer(index, tail),
+        pointer,
         maps: doc == Doc::Mesh,
         whole,
+        grid_cell,
     });
 }
 
@@ -776,13 +799,12 @@ indices:
     }
 
     #[test]
-    fn a_missing_voxel_sculpt_assembly_and_character_report_at_their_tails() {
+    fn a_missing_voxel_sculpt_and_assembly_report_at_their_tails() {
         let dir = scratch("kinds");
         let entities = [
             mesh_entity("voxel: gone.voxel.yaml"),
             mesh_entity("sculpt: gone.sculpt.yaml"),
             mesh_entity("assembly: gone.assembly.yaml"),
-            mesh_entity("character: gone.character.yaml"),
             mesh_entity(
                 "assembly_part:\n            assembly: gone2.assembly.yaml\n            part: arm",
             ),
@@ -795,35 +817,12 @@ indices:
                 ("L1101", "/entities/0/components/Mesh/shape/voxel"),
                 ("L1101", "/entities/1/components/Mesh/shape/sculpt"),
                 ("L1101", "/entities/2/components/Mesh/shape/assembly"),
-                ("L1101", "/entities/3/components/Mesh/shape/character"),
                 (
                     "L1101",
-                    "/entities/4/components/Mesh/shape/assembly_part/assembly"
+                    "/entities/3/components/Mesh/shape/assembly_part/assembly"
                 ),
             ],
             "{found:?}"
-        );
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_character_whose_mesh_is_missing_reports_the_mesh() {
-        let dir = scratch("character");
-        std::fs::write(
-            dir.join("c.character.yaml"),
-            "format: 1\nkind: assembly\nmesh: gone.mesh.yaml\nclips: {}\n",
-        )
-        .unwrap();
-        let found = check(&dir, &mesh_entity("character: c.character.yaml"));
-        assert_eq!(
-            at(&found),
-            [("L1101", "/entities/0/components/Mesh/shape/character")],
-            "{found:?}"
-        );
-        assert!(
-            found[0]
-                .message
-                .starts_with("character mesh `gone.mesh.yaml`")
         );
         std::fs::remove_dir_all(&dir).ok();
     }

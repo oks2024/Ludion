@@ -91,11 +91,22 @@ pub trait SemanticValidate {
     /// Checks `value`'s cross-field invariants, returning one diagnostic per violation (relative
     /// JSON Pointers). Empty means valid.
     fn validate_semantics(value: &Value) -> Vec<Diagnostic>;
+
+    /// A value written in a spelling this component no longer accepts, checked *before* the schema
+    /// so the author gets the fix rather than a shape mismatch; relative pointer.
+    fn retired_spelling(_value: &Value) -> Option<Diagnostic> {
+        None
+    }
 }
 
 /// The no-op semantic validator: the default for components registered without one.
 fn no_semantic_validation(_value: &Value) -> Vec<Diagnostic> {
     Vec::new()
+}
+
+/// The no-op retired-spelling check: the default for components registered without a validator.
+fn no_retired_spelling(_value: &Value) -> Option<Diagnostic> {
+    None
 }
 
 /// The erased zero-copy read behind [`ComponentInfo::serialize_erased`]: borrows a component off an
@@ -132,6 +143,8 @@ pub struct ComponentInfo {
     /// Cross-field semantic validation ([`SemanticValidate`]) — the no-op for components registered
     /// without one.
     validate_fn: fn(&Value) -> Vec<Diagnostic>,
+    /// [`SemanticValidate::retired_spelling`].
+    retired_fn: fn(&Value) -> Option<Diagnostic>,
     copy_column_fn: fn(&World) -> Option<ColumnCopy>,
     install_column_fn: fn(&mut World, &ColumnCopy) -> Result<(), Diagnostic>,
 }
@@ -275,6 +288,13 @@ impl ComponentInfo {
         (self.validate_fn)(value)
     }
 
+    /// The refusal for a value written in a spelling this component no longer accepts
+    /// ([`SemanticValidate::retired_spelling`]), with a pointer relative to the component root. A
+    /// caller asks before the schema check and skips both checks when it answers.
+    pub fn retired_spelling(&self, value: &Value) -> Option<Diagnostic> {
+        (self.retired_fn)(value)
+    }
+
     /// Clones this component's whole column, or `None` when no entity holds it (see
     /// [`World::copy_column`]).
     pub fn copy_column(&self, world: &World) -> Option<ColumnCopy> {
@@ -404,7 +424,7 @@ impl Registry {
     /// `L1392` if a marked entity reference sits inside a list or map of `T` not marked
     /// `EntityRefCollection`.
     pub fn register<T: Component + Clone>(&mut self, name: &str) -> Result<(), Diagnostic> {
-        self.register_with::<T>(name, false, no_semantic_validation)
+        self.register_with::<T>(name, false, no_semantic_validation, no_retired_spelling)
     }
 
     /// Registers component `T` under `name` **with a semantic validator** — a component whose
@@ -419,7 +439,7 @@ impl Registry {
         &mut self,
         name: &str,
     ) -> Result<(), Diagnostic> {
-        self.register_with::<T>(name, false, T::validate_semantics)
+        self.register_with::<T>(name, false, T::validate_semantics, T::retired_spelling)
     }
 
     /// Registers a **reserved** component `T` under `name` — a field-backed built-in that a scene
@@ -435,7 +455,7 @@ impl Registry {
         &mut self,
         name: &str,
     ) -> Result<(), Diagnostic> {
-        self.register_with::<T>(name, true, no_semantic_validation)
+        self.register_with::<T>(name, true, no_semantic_validation, no_retired_spelling)
     }
 
     fn register_with<T: Component + Clone>(
@@ -443,6 +463,7 @@ impl Registry {
         name: &str,
         reserved: bool,
         validate_fn: fn(&Value) -> Vec<Diagnostic>,
+        retired_fn: fn(&Value) -> Option<Diagnostic>,
     ) -> Result<(), Diagnostic> {
         let type_id = TypeId::of::<T>();
         if self.by_name.contains_key(name) {
@@ -473,6 +494,7 @@ impl Registry {
             remove_fn: erased_remove::<T>,
             has_fn: erased_has::<T>,
             validate_fn,
+            retired_fn,
             copy_column_fn: World::copy_column::<T>,
             install_column_fn: World::install_column::<T>,
         });
@@ -687,4 +709,55 @@ fn duplicate_type(new_name: &str, existing_name: &str) -> Diagnostic {
         ),
     )
     .with_help("register each component type exactly once")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
+    struct Plain;
+
+    #[derive(Serialize, Deserialize, JsonSchema, Clone)]
+    struct Renamed;
+
+    impl SemanticValidate for Renamed {
+        fn validate_semantics(_value: &Value) -> Vec<Diagnostic> {
+            Vec::new()
+        }
+
+        fn retired_spelling(value: &Value) -> Option<Diagnostic> {
+            value.get("old").map(|_| {
+                Diagnostic::new(code::SCENE_COMPONENT_MISMATCH, "`old` was renamed")
+                    .with_path("/old")
+            })
+        }
+    }
+
+    #[test]
+    fn the_registry_asks_a_component_for_its_retired_spellings() {
+        let mut registry = Registry::new();
+        registry.register::<Plain>("Plain").unwrap();
+        registry.register_validated::<Renamed>("Renamed").unwrap();
+        let old = json!({ "old": 1 });
+        let retired = registry.get("Renamed").unwrap().retired_spelling(&old);
+        assert_eq!(retired.unwrap().path.as_deref(), Some("/old"));
+        assert!(
+            registry
+                .get("Renamed")
+                .unwrap()
+                .retired_spelling(&json!({}))
+                .is_none()
+        );
+        assert!(
+            registry
+                .get("Plain")
+                .unwrap()
+                .retired_spelling(&old)
+                .is_none()
+        );
+    }
 }

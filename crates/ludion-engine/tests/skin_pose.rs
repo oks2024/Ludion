@@ -46,7 +46,7 @@ fn socketed_crowd() -> Engine {
             matches!(
                 engine.world().get::<Mesh>(id),
                 Ok(Some(Mesh {
-                    shape: MeshSource::Character(_),
+                    shape: MeshSource::Assembly(_),
                     ..
                 }))
             )

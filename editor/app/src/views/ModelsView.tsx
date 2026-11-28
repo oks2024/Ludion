@@ -9,8 +9,9 @@
 //
 // THREE LIBRARIES, ONE SUBJECT. Beside the sculpts it lists the project's `kind: mesh` documents —
 // imported and generated geometry, the other `Mesh.shape` asset kind — and its skinned `kind: assembly`
-// documents (`mesh:`), a skinned mesh with its bound clips (`Mesh.shape.character`). The stage holds exactly one
-// subject, so the three browsers share one selection.
+// documents (`mesh:`), a skinned mesh with its bound clips (`Mesh.shape.assembly`). That library lists
+// voxel assemblies too, which are not staged here. The stage holds exactly one subject, so the three
+// browsers share one selection.
 //
 // A CHARACTER IS PREVIEWED THROUGH THE VOXEL ARTIST'S CLIP STRIP. Its clips are read from the
 // character file and played by the same `useClipPlayback` / `ClipStrip` — `component.set` of
@@ -82,16 +83,16 @@ import {
   meshesRoot,
 } from '../editor/mesh/stage';
 import {
-  CHARACTER_EXT,
   characterAssetRef,
   characterDisplayName,
+  isSkinned,
   parseCharacterDoc,
   type CharacterDoc,
 } from '../editor/mesh/character';
 import { candidatePlacements, liftMesh, type MeshLift } from '../editor/mesh/lift';
 import { ClipStrip } from '../editor/voxel/ClipStrip';
 import { useClipPlayback } from '../editor/voxel/useClipPlayback';
-import { MODEL_POLL_MS } from '../editor/voxel/stage';
+import { ASSEMBLY_EXT, MODEL_POLL_MS } from '../editor/voxel/stage';
 import type { ClipBinding } from '../editor/voxel/assembly';
 import { usePolling } from '../viewer/usePolling';
 import { vLen, vSub, type Vec3 } from '../editor/gizmo/vecmath';
@@ -242,7 +243,10 @@ export function ModelsView(props: ModelsViewProps) {
   const selectedMesh = model?.kind === 'mesh' ? model.relPath : null;
   const selectedCharacter = model?.kind === 'character' ? model.relPath : null;
   // The staged character's file as last read; re-read on the model poll so an edited overlay shows.
-  const [characterDoc, setCharacterDoc] = useState<CharacterDoc | null>(null);
+  // Tagged with its path, so a selection is never judged by the previous file's document.
+  const [characterRead, setCharacterRead] = useState<{ readonly path: string; readonly doc: CharacterDoc } | null>(
+    null,
+  );
   const characterSourceRef = useRef<string | null>(null);
 
   // --- the camera -------------------------------------------------------------------------------
@@ -263,6 +267,14 @@ export function ModelsView(props: ModelsViewProps) {
   const { goToPose, setMode: setCameraMode } = camera;
   const cameraPoseRef = useRef<CameraPose>(camera.pose);
   cameraPoseRef.current = camera.pose;
+
+  const characterPath = useMemo(
+    () => (projectDir === '' || selectedCharacter === null ? null : meshFilePath(projectDir, selectedCharacter)),
+    [projectDir, selectedCharacter],
+  );
+  const characterDoc = characterRead !== null && characterRead.path === characterPath ? characterRead.doc : null;
+  // `null` until the selected assembly has been read.
+  const stagedSkinned = characterDoc === null ? null : isSkinned(characterDoc);
 
   const sculpts = useMemo(() => (projectDir === '' ? '' : sculptsRoot(projectDir)), [projectDir]);
   const meshes = useMemo(() => (projectDir === '' ? '' : meshesRoot(projectDir)), [projectDir]);
@@ -491,16 +503,25 @@ export function ModelsView(props: ModelsViewProps) {
     [stampScale, baseScale],
   );
 
-  /** Puts a character on the stage at rest: `Mesh.shape.character` over the committed subject's
+  /** Puts a character on the stage at rest: `Mesh.shape.assembly` over the committed subject's
    *  `Mesh`, at unit scale — the skin's own size is authored in the glb. */
   const applyCharacter = useCallback(
     async (c: ProtocolClient, subject: EntityId, relPath: string): Promise<void> => {
       await c.call(
-        componentSet(subject, 'Mesh', { ...subjectBaseRef.current.mesh, shape: { character: characterAssetRef(relPath) } }),
+        componentSet(subject, 'Mesh', { ...subjectBaseRef.current.mesh, shape: { assembly: characterAssetRef(relPath) } }),
       );
       await stampScale(c, subject, [1, 1, 1]);
     },
     [stampScale],
+  );
+
+  /** Puts the committed subject back, so an unstaged selection never leaves the previous model standing. */
+  const applyBase = useCallback(
+    async (c: ProtocolClient, subject: EntityId): Promise<void> => {
+      await c.call(componentSet(subject, 'Mesh', subjectBaseRef.current.mesh));
+      await stampScale(c, subject, baseScale());
+    },
+    [stampScale, baseScale],
   );
 
   /** The scene node that places `relPath`, with the scene it came from — read lazily, nearest
@@ -564,7 +585,11 @@ export function ModelsView(props: ModelsViewProps) {
       }
       if (model.kind === 'character') {
         setMeshNotice(null);
-        await applyCharacter(client, subject, model.relPath);
+        if (stagedSkinned === true) {
+          await applyCharacter(client, subject, model.relPath);
+        } else if (stagedSkinned === false) {
+          await applyBase(client, subject);
+        }
         return;
       }
       const notice = await applyMesh(client, subject, model.relPath);
@@ -579,11 +604,12 @@ export function ModelsView(props: ModelsViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [client, entities.subject, model, applySculpt, applyMesh, applyCharacter]);
+  }, [client, entities.subject, model, stagedSkinned, applySculpt, applyMesh, applyCharacter, applyBase]);
 
   // The status bar's line: what is on the stage, and nothing the engine did not say.
+  const unstaged = stagedSkinned === false;
   const assetRef =
-    model === null
+    model === null || unstaged
       ? null
       : model.kind === 'sculpt'
         ? sculptAssetRef(model.relPath)
@@ -596,13 +622,9 @@ export function ModelsView(props: ModelsViewProps) {
   useEffect(() => () => onStatusNote(null), [onStatusNote]);
 
   // --- the character's clips -------------------------------------------------------------------
-  const characterPath = useMemo(
-    () => (projectDir === '' || selectedCharacter === null ? null : meshFilePath(projectDir, selectedCharacter)),
-    [projectDir, selectedCharacter],
-  );
   useEffect(() => {
     characterSourceRef.current = null;
-    setCharacterDoc(null);
+    setCharacterRead(null);
   }, [characterPath]);
   const readCharacter = useCallback(async (): Promise<void> => {
     if (characterPath === null) {
@@ -612,7 +634,7 @@ export function ModelsView(props: ModelsViewProps) {
       const text = await readEditorFile(characterPath);
       if (text !== characterSourceRef.current) {
         characterSourceRef.current = text;
-        setCharacterDoc(parseCharacterDoc(text));
+        setCharacterRead({ path: characterPath, doc: parseCharacterDoc(text) });
       }
     } catch {
       // A file caught mid-save reads as missing for an instant; the next poll sees the new bytes.
@@ -628,7 +650,7 @@ export function ModelsView(props: ModelsViewProps) {
   const playback = useClipPlayback({
     client,
     subjectId: entities.subject,
-    clips: characterDoc?.clips ?? NO_CLIPS,
+    clips: stagedSkinned === true ? (characterDoc?.clips ?? NO_CLIPS) : NO_CLIPS,
     ownerRelPath: selectedCharacter,
     readFile: readClipFile,
   });
@@ -674,13 +696,15 @@ export function ModelsView(props: ModelsViewProps) {
         />
         <AssetBrowser
           root={meshes}
-          ext={CHARACTER_EXT}
+          ext={ASSEMBLY_EXT}
           selected={selectedCharacter}
           onSelect={handleSelectCharacter}
           prune
-          head="Characters"
-          counted="characters"
+          head="Assemblies"
+          counted="assemblies"
         />
+        {unstaged && <div className="insp-hint">a voxel assembly — open it in the Voxel Artist</div>}
+        {selectedCharacter !== null && stageError !== null && <div className="vx-error">{stageError}</div>}
         {selectedMesh !== null && meshNotice !== null && <div className="insp-hint">{meshNotice}</div>}
         {selectedMesh !== null && stageError !== null && <div className="vx-error">{stageError}</div>}
 
@@ -763,9 +787,9 @@ export function ModelsView(props: ModelsViewProps) {
           handlers={camera.handlers}
           onViewportSize={handleViewportSize}
           onFrameStatus={props.onFrameStatus}
-          label={`${stageSceneName(RIG)} · ${stageLabel(model)}`}
+          label={`${stageSceneName(RIG)} · ${stageLabel(unstaged ? null : model)}`}
         />
-        {selectedCharacter !== null && <ClipStrip {...playback} />}
+        {stagedSkinned === true && <ClipStrip {...playback} />}
       </div>
 
       {/* Right column: the persona terminal drawer, dialing the STAGE session. */}

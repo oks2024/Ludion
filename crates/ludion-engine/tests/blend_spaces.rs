@@ -106,7 +106,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/blended.character.yaml
+          assembly: characters/blended.assembly.yaml
       Animation:
 {animation}"
     )
@@ -130,7 +130,7 @@ fn fixture_project(name: &str, character: &str) -> PathBuf {
     ] {
         std::fs::copy(gallery().join(file), dir.join(file)).unwrap();
     }
-    std::fs::write(dir.join("characters/blended.character.yaml"), character).unwrap();
+    std::fs::write(dir.join("characters/blended.assembly.yaml"), character).unwrap();
     dir
 }
 
@@ -382,7 +382,7 @@ fn traces_and_palettes_match_at_1_2_8_threads() {
     let mut text = String::from("format: 1\nseed: 1\nentities:\n");
     for i in 0..240 {
         text.push_str(&format!(
-            "  - name: m{i}\n    components:\n      Mesh:\n        shape:\n          character: characters/blended.character.yaml\n      Animation:\n        clip: {}\n        params:\n          - {}\n          - 0.5\n",
+            "  - name: m{i}\n    components:\n      Mesh:\n        shape:\n          assembly: characters/blended.assembly.yaml\n      Animation:\n        clip: {}\n        params:\n          - {}\n          - 0.5\n",
             if i % 2 == 0 { "locomotion" } else { "cross" },
             f64::from(i % 7)
         ));
@@ -488,7 +488,7 @@ fn load_errors(name: &str, blends: &str) -> Vec<ludion_core::diagnostics::Diagno
     let root = fixture_project(name, &character_with(blends));
     let errors = ludion_engine::load_character(
         ludion_assets::AssetRoot::content(&root),
-        "characters/blended.character.yaml",
+        "characters/blended.assembly.yaml",
     )
     .expect_err("the blend is refused");
     let _ = std::fs::remove_dir_all(&root);

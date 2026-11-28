@@ -62,7 +62,7 @@ Layers evaluate in list order over the base pose; at most four (`L1670`).
 | field | default | meaning |
 |---|---|---|
 | `name` | required | unique per component; `fade_layer`/`play_layer` select by it (`L1671`) |
-| `clip` | `""` | a clip bound in the character's `clips:` |
+| `clip` | `""` | a clip bound in the assembly's `clips:` |
 | `mask` | `""` | a `masks:` key; empty is the whole skin |
 | `mode` | `override` | `override` or `additive` |
 | `weight` | `0` | target weight in `[0, 1]` (`L1671` outside it) |
@@ -79,7 +79,7 @@ Layers evaluate in list order over the base pose; at most four (`L1670`).
 - With `reference: idle` an additive layer measures its change from the `idle` clip's first frame
   instead; an unknown reference skips the layer.
 - The weight ramp and the layer clock follow the base `Animation.hold` grid.
-- **Layer blends.** A layer `clip` that is not a clip may name a blend of the character, driven by the
+- **Layer blends.** A layer `clip` that is not a clip may name a blend of the assembly, driven by the
   layer's own `params` (never `Animation.params`) and `set_layer_params(&mut layers, "lean", [x, 0.0])`,
   which writes only on change. Its phase lives in `BlendClock.layers`, one entry per such layer,
   integrated at the layer's `speed` and restarted when its `started` changes (`play_layer` to a new

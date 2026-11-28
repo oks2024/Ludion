@@ -120,7 +120,7 @@ pub(crate) trait SceneAssets {
     /// [`character`](SceneAssets::character)) or voxel (through
     /// [`assembly`](SceneAssets::assembly)).
     fn assembly_body(&mut self, rel: &str) -> Result<AssemblyBody, Vec<Diagnostic>>;
-    /// Resolves a `Mesh.shape: character` path to its loaded character: the mesh path (resolved
+    /// Resolves a skinned `Mesh.shape: assembly` path to its loaded character: the mesh path (resolved
     /// through [`mesh`](SceneAssets::mesh) like an `asset`) and its bound clips.
     fn character(&mut self, rel: &str) -> Result<Arc<CharacterData>, Vec<Diagnostic>>;
     /// Resolves a prefab's content-root path to the clips it binds and its parts' authored rests,
@@ -1666,7 +1666,7 @@ fn extract_inner(
                     }
                     Err(diagnostics) => {
                         for diagnostic in diagnostics {
-                            errors.push(mesh_error(rel, "character", &pointer, diagnostic));
+                            errors.push(mesh_error(rel, "assembly", &pointer, diagnostic));
                         }
                         None
                     }
@@ -3761,9 +3761,7 @@ pub(crate) fn placed_source(shape: &MeshSource) -> PlacedMeshSource<'_> {
         MeshSource::Sphere => PlacedMeshSource::Primitive(MeshShape::Sphere),
         MeshSource::Asset(path) => PlacedMeshSource::Asset(path),
         MeshSource::Voxel(path) => PlacedMeshSource::Voxel(path),
-        MeshSource::Assembly(path) | MeshSource::Character(path) => {
-            PlacedMeshSource::Assembly(path)
-        }
+        MeshSource::Assembly(path) => PlacedMeshSource::Assembly(path),
         MeshSource::Sculpt(path) => PlacedMeshSource::Sculpt(path),
         MeshSource::AssemblyPart { assembly, part } => {
             PlacedMeshSource::AssemblyPart(assembly, part)
@@ -5109,7 +5107,7 @@ fn pose_each(
                 continue;
             };
             let voxel = match &mesh.shape {
-                MeshSource::Assembly(rel) | MeshSource::Character(rel)
+                MeshSource::Assembly(rel)
                     if assets.assembly_body(rel) != Ok(AssemblyBody::Skinned) =>
                 {
                     Some(rel)
@@ -5140,7 +5138,7 @@ fn pose_each(
             let (is_character, rel) = match &mesh.shape {
                 MeshSource::Asset(rel) => (false, rel.as_str()),
                 // Only a skinned one reaches here.
-                MeshSource::Assembly(rel) | MeshSource::Character(rel) => (true, rel.as_str()),
+                MeshSource::Assembly(rel) => (true, rel.as_str()),
                 _ => continue,
             };
             let (data, character) = match resolved.get(&(is_character, rel)) {
@@ -6590,7 +6588,7 @@ pub(crate) enum MeshKind {
     Voxel,
     /// A `*.sculpt.yaml` sculpt model.
     Sculpt,
-    /// The skinned mesh a `*.character.yaml` document names.
+    /// The skinned mesh a skinned `*.assembly.yaml` document names.
     Character,
 }
 
@@ -6625,7 +6623,7 @@ impl MeshKind {
             MeshKind::Asset => "asset",
             MeshKind::Voxel => "voxel",
             MeshKind::Sculpt => "sculpt",
-            MeshKind::Character => "character",
+            MeshKind::Character => "assembly",
         }
     }
 }
@@ -6929,12 +6927,7 @@ pub(crate) fn is_prefab_player(world: &World, id: EntityId, instance: &PrefabIns
             .get_unrecorded::<Mesh>(id)
             .ok()
             .flatten()
-            .is_some_and(|mesh| {
-                matches!(
-                    mesh.shape,
-                    MeshSource::Assembly(_) | MeshSource::Character(_)
-                )
-            })
+            .is_some_and(|mesh| matches!(mesh.shape, MeshSource::Assembly(_)))
 }
 
 /// One playing prefab instance: its loaded rig, the sides of its `Animation` and its

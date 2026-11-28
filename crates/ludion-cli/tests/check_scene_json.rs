@@ -198,7 +198,7 @@ fn every_kind_prints_its_summary_object() {
         ),
         // The gallery mannequin binds idle, jump, run and spin.
         (
-            "../../examples/gallery/characters/mannequin.character.yaml",
+            "../../examples/gallery/characters/mannequin.assembly.yaml",
             "assembly",
             "name",
             json!("mannequin"),
@@ -219,7 +219,7 @@ fn every_kind_prints_its_summary_object() {
 #[test]
 fn the_character_summary_lists_its_clips() {
     let output = run(&[
-        "../../examples/gallery/characters/mannequin.character.yaml",
+        "../../examples/gallery/characters/mannequin.assembly.yaml",
         "--json",
     ]);
     let clips = one_line(&output)["clips"].clone();

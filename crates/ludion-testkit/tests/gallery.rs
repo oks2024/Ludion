@@ -253,7 +253,7 @@ fn mannequin_crossfade_hold_test() -> GoldenTest {
     let mut test = GoldenTest::new(
         gallery_dir()
             .join("characters")
-            .join("mannequin.character.yaml"),
+            .join("mannequin.assembly.yaml"),
         os_goldens().join("mannequin-run-idle-crossfade-hold5.png"),
     );
     test.width = 900;

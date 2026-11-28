@@ -122,9 +122,7 @@ fn model_of(world: &World, entity: EntityId) -> Option<Model> {
         .flatten()
         .map(|mesh| &mesh.shape)
     {
-        Some(MeshSource::Assembly(rel) | MeshSource::Character(rel)) => {
-            Some(Model::Assembly(rel.clone()))
-        }
+        Some(MeshSource::Assembly(rel)) => Some(Model::Assembly(rel.clone())),
         // Engine-optional, so read unrecorded: it demands no game query declaration.
         _ => world
             .get_unrecorded::<PrefabInstance>(entity)

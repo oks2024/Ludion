@@ -176,7 +176,8 @@ pub(crate) fn spawn_poses(
                     &pointer,
                     skin_index,
                     skin_entity,
-                    "carries no `Mesh`, or its `shape` is not `asset` or `character`".to_string(),
+                    "carries no `Mesh`, or its `shape` is not `asset` or a skinned `assembly`"
+                        .to_string(),
                 ));
                 continue;
             }
@@ -304,7 +305,7 @@ pub(crate) fn mesh_document_path(
 ) -> Option<Result<String, (String, Vec<Diagnostic>)>> {
     match &mesh.shape {
         MeshSource::Asset(path) => Some(Ok(path.clone())),
-        MeshSource::Assembly(path) | MeshSource::Character(path) => {
+        MeshSource::Assembly(path) => {
             let resolved = match body_of(project_root, path) {
                 Ok(AssemblyBody::Skinned) => crate::character::mesh_path(project_root, path),
                 Ok(AssemblyBody::Voxel) => return None,

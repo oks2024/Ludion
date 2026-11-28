@@ -258,7 +258,7 @@ the prefab's directory). `$skin` spawns nothing; `SkinBone.skin` on the parts po
     components:
       Mesh:
         shape:
-          character: "../characters/mannequin.character.yaml"
+          assembly: "../characters/mannequin.assembly.yaml"
 ```
 
 The skin keeps its id and `Mesh` and loses `Animation`, `Collider` and `Velocity`. Each rigid part gets

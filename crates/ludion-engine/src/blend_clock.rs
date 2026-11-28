@@ -95,7 +95,7 @@ pub fn blend_clocks(world: &mut World, ctx: &SystemCtx) {
     let mut candidates: Vec<(EntityId, Animation, Model)> = world
         .query_ids::<(&Animation, &Mesh)>()
         .filter_map(|(id, (animation, mesh))| match &mesh.shape {
-            MeshSource::Assembly(rel) | MeshSource::Character(rel) => {
+            MeshSource::Assembly(rel) => {
                 Some((id, animation.clone(), Model::Assembly(rel.clone())))
             }
             _ => None,

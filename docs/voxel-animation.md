@@ -43,13 +43,13 @@ instead of a `Mesh`'s clips — `ludion docs sprite-animation` covers that bindi
    `<name>-<clip>-strip.png`; `--time <s>` renders one instant to `<name>-<clip>-t<s>.png`. Both are
    the ordinary model sheet, so every flag in `ludion docs voxel-sheets` still applies — except that a
    strip lays its phases out in one cell and therefore takes one view.
-   `--model` also takes a `.character.yaml` (alone, never in a lineup): the same flags pose it, with
-   no gap analysis (no `components`), and a phase's `t` is clip time through the binding's `speed`.
-   **`--crossfade <from>:<to>:<seconds>`** (assemblies and characters, not with `--clip`) renders the
+   `--model` also takes a skinned `.assembly.yaml` (alone, never in a lineup): the same flags pose it,
+   with no gap analysis (no `components`), and a phase's `t` is clip time through the binding's `speed`.
+   **`--crossfade <from>:<to>:<seconds>`** (voxel and skinned, not with `--clip`) renders the
    blend as a strip: 5 phases, or `--strip n`, at fade weights 0 to 1, each printed as `weight <w>`
    under a `crossfade <from> -> <to>` header. `--time` is how far `from` has played when the fade
    begins. Output defaults to `<name>-<from>-<to>-crossfade.png`.
-   **`--blend <name>:<p0>[:<p1>]`** (assemblies and characters, not with `--clip` or `--crossfade`)
+   **`--blend <name>:<p0>[:<p1>]`** (voxel and skinned, not with `--clip` or `--crossfade`)
    sweeps a blend: each `p` is a number or `lo..hi`, swept linearly over 5 phases (or `--strip n`).
    Each phase prints `params [x, y], phase <cycles>` and its gap analysis, all at `--time`; output
    defaults to `<name>-<blend>-blend.png`. **`--layer <clip>:<weight>[:<mask>[:override|additive]]`**

@@ -18,7 +18,7 @@ fn gallery() -> PathBuf {
 
 #[test]
 fn the_gallery_character_checks_clean() {
-    let output = run_check_scene(&gallery().join("characters/mannequin.character.yaml"));
+    let output = run_check_scene(&gallery().join("characters/mannequin.assembly.yaml"));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -85,7 +85,7 @@ fn a_skinned_assembly_lists_its_root_motion() {
         })
     );
 
-    let plain = gallery().join("characters/mannequin.character.yaml");
+    let plain = gallery().join("characters/mannequin.assembly.yaml");
     let stdout = String::from_utf8_lossy(&run_check_scene(&plain).stdout).into_owned();
     assert!(!stdout.contains("  root "), "{stdout}");
     let value = json(&plain);
@@ -115,7 +115,7 @@ fn a_bad_overlay_is_l1138() {
             "loop: true\nevents:\n  - t: 0.2\n    name: own\n",
         );
     std::fs::write(dir.join("clips/run.anim.yaml"), own).unwrap();
-    let character = dir.join("characters/hero.character.yaml");
+    let character = dir.join("characters/hero.assembly.yaml");
     std::fs::write(
         &character,
         "format: 1\nkind: assembly\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  run:\n    clip: ../clips/run.anim.yaml\n    events:\n      - t: 0.1\n        name: step\n",
@@ -150,7 +150,7 @@ fn a_huge_clip_duration_is_l1142() {
         run.replace("duration: 0.8", "duration: 1000000000.0"),
     )
     .unwrap();
-    let character = dir.join("characters/hero.character.yaml");
+    let character = dir.join("characters/hero.assembly.yaml");
     std::fs::write(
         &character,
         "format: 1\nkind: assembly\nmesh: ../meshes/skin-mannequin.mesh.yaml\nclips:\n  run:\n    clip: ../clips/run.anim.yaml\n",
@@ -173,7 +173,7 @@ fn a_kind_character_document_is_l1246() {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let character = dir.join("hero.character.yaml");
+    let character = dir.join("hero.assembly.yaml");
     std::fs::write(
         &character,
         "format: 1\nkind: character\nmesh: ../meshes/skin-mannequin.mesh.yaml\n",

@@ -39,7 +39,7 @@ entities:
           - 0.0
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
 {animation}
   - name: socket
     components:
@@ -117,7 +117,7 @@ fn fixture_project(name: &str) -> PathBuf {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
     for file in [
-        "characters/mannequin.character.yaml",
+        "characters/mannequin.assembly.yaml",
         "meshes/skin-mannequin.mesh.yaml",
         "clips/idle.anim.yaml",
         "clips/jump.anim.yaml",
@@ -257,25 +257,6 @@ fn posed_joint_world_matches_the_draw() {
 }
 
 #[test]
-fn a_skinned_assembly_poses_its_socket_like_the_character_spelling() {
-    let root = fixture_project("assembly-spelling");
-    let character = scene(&animation(""));
-    let assembly = character.replace("character: ", "assembly: ");
-    let [character, assembly] = [character, assembly].map(|text| {
-        let engine = engine_at(&root, &text);
-        let drawn = assert_drawn_follows_palette(&engine, &root, 7);
-        let pose = posed_joint_world(engine.world(), skin_of(&engine), JOINT, at(7))
-            .expect("a host read is allowed")
-            .expect("the joint resolves");
-        let child = engine.world().entities().nth(1).unwrap();
-        let sim = world_mat(world_transform(engine.world(), child).unwrap());
-        (drawn, world_mat(pose), sim)
-    });
-    assert_eq!(character, assembly);
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
 fn without_a_clip_the_read_and_the_draw_are_the_rest_pose() {
     let root = fixture_project("rest");
     let engine = engine_at(&root, &scene(""));
@@ -364,7 +345,7 @@ const RIDER: &str = r"  - name: skin2
           - 0.0
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: rider
     components:
       Mesh:

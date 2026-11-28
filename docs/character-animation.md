@@ -12,10 +12,11 @@ fields and defaults are owned by `ludion docs components`; the clip strips and t
 ## The skinned assembly document
 
 A `kind: assembly` document with `mesh:` (instead of voxel `parts:`) binds a skinned mesh to named clips.
-An entity draws it with `Mesh.shape: { character: "characters/hero.character.yaml" }` (`{ assembly: … }`
-draws a voxel one), and `Animation.clip` names a key of its `clips:`. `kind: character` was merged into
-`kind: assembly`: a document still saying it is `L1246` — change the `kind:` line. Example:
-`examples/gallery/characters/mannequin.character.yaml`; run
+An entity draws it with `Mesh.shape: { assembly: "characters/hero.assembly.yaml" }`, the spelling that
+draws a voxel one too (`mesh:` decides the body), and `Animation.clip` names a key of its `clips:`.
+`kind: character` was merged into `kind: assembly`: a document still saying it is `L1246` — change the
+`kind:` line. `Mesh.shape: { character: … }` is `L1246` too: write `assembly:` for `character:`. Example:
+`examples/gallery/characters/mannequin.assembly.yaml`; run
 `cargo run -p ludion-engine --example character_clips` to print each clip's effective values.
 
 ```yaml
@@ -48,7 +49,7 @@ clips:
   `Animation.speed`. An empty or unbound clip name draws the rest pose. The pose is never hashed or recorded, and sim code cannot read it; presentation code reads it through `posed_joint_world` (§Sockets). A skin with `SkinBone`
   followers is posed by them instead. A running skin can leave its clip for a ragdoll with `switch_skin_to_ragdoll`, which drops `Animation` and poses from rest (`ludion docs physics-joints`). Lighting follows the pose: a non-uniform joint scale
   bends the skin's normals with the surface.
-- Editing the character, its mesh or any clip re-reads it (the pose; `AnimationEvents` picks up retimed events at the next load, restore or scene switch). `ludion check-scene <file>` loads and
+- Editing the assembly document, its mesh or any clip re-reads it (the pose; `AnimationEvents` picks up retimed events at the next load, restore or scene switch). `ludion check-scene <file>` loads and
   reports it, with a `contact <joint>: height min … max …` line per clip for each ground-contact
   joint (a leaf joint at the mesh's floor at rest — the feet), sampled at 30 Hz in
   mesh units; `SkinBone` parts can name a skinned assembly's skin.
@@ -64,7 +65,7 @@ clips:
   `crates/ludion-import/tests/fixtures/skin-mannequin-clips.py` and its re-import recipe is the doc
   comment of `crates/ludion-cli/tests/import.rs`'s clip drift test.
 - **A pelvis scale rescales every joint under it.** A squash on the root lifts or sinks the feet by
-  `leg_length × (scale − 1)`; a `min` below zero in `check-scene <character>`'s `contact` lines is a foot through the
+  `leg_length × (scale − 1)`; a `min` below zero in `check-scene <x>.assembly.yaml`'s `contact` lines is a foot through the
   floor. The mannequin's `jump` keeps `drop = 0.52 × (sy − 1) + air` for exactly this.
 - **Root motion.** A track named `$root` targets no joint: `root_motion_delta` reads it, in mesh units, on the
   binding's `speed` (`ludion docs voxel-animation` §Root motion).
@@ -100,7 +101,7 @@ masked override or additive clips over its base `Animation`; `ludion docs animat
 - Visual-only: `AnimationEvents` and the ragdoll pose keep the exact tick, and `set_clip_speed` between two
   steps changes the pose only from the next step (the grid does not drift). It lowers the visible cadence, not the cost: every skinned instance is sampled every extract (§Crowd posing).
 - A clip switched between steps shows its first pose at once; start clips on the grid or crossfade.
-- Review a stepped strip with `ludion render --model <x>.character.yaml --crossfade run:idle:0.5 --strip 8 --hold 5`: phases snap to the grid, so neighbours repeat a pose; the output name gains `-hold5`.
+- Review a stepped strip with `ludion render --model <x>.assembly.yaml --crossfade run:idle:0.5 --strip 8 --hold 5`: phases snap to the grid, so neighbours repeat a pose; the output name gains `-hold5`.
 - Stepping *inside* a clip is the clip's own `ease: step` keys (`ludion docs voxel-animation` §Format).
 
 ## Crowd posing
@@ -123,7 +124,7 @@ masked override or additive clips over its base `Animation`; `ludion docs animat
 - Register `animation_events` **before** the system that reads the resource, declaring
   `.query::<(&Animation, &Mesh)>()`, `.query::<(&Animation, &Sprite)>()` and `.query::<(&Animation, &PrefabInstance)>()` (observed even with no prefab in the world; a missing one is `L1126`); a consumer reads
   `events.fired(entity, clip, name)` the same tick.
-- A one-shot clip emits an implicit `end`; a clip's own events come from the clip or the character's
+- A one-shot clip emits an implicit `end`; a clip's own events come from the clip or the assembly's
   `events:` overlay (`L1198` for a malformed one, `L1138` for an overlay on a clip that has its own).
   Only the incoming clip of a crossfade emits.
 - A `t: 0` event fires once per clip start, never lost or doubled: on the start tick for a clip stamped by a system
@@ -137,7 +138,7 @@ masked override or additive clips over its base `Animation`; `ludion docs animat
 ## Sockets
 
 `ParentJoint` makes a prop follow a joint of a skinned mesh. The parent is the skin
-(`shape: character`, or `asset` with `joints:`); the child's `Transform` is local to the joint's model transform.
+(`shape: assembly` with a skinned body, or `asset` with `joints:`); the child's `Transform` is local to the joint's model transform.
 
 ```yaml
 - name: baton
@@ -171,7 +172,7 @@ masked override or additive clips over its base `Animation`; `ludion docs animat
 
 ## Strips
 
-`ludion render --model <x>.character.yaml --clip <name>` (or `--crossfade`) renders a strip without
+`ludion render --model <x>.assembly.yaml --clip <name>` (or `--crossfade`) renders a strip without
 a game; flags: `ludion docs voxel-animation`.
 
 ## Worked example

@@ -71,7 +71,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/layered.character.yaml
+          assembly: characters/layered.assembly.yaml
       Animation:
         clip: run
 {extra}"
@@ -112,15 +112,11 @@ fn fixture_project(name: &str) -> PathBuf {
         std::fs::copy(gallery().join(file), dir.join(file)).unwrap();
     }
     std::fs::write(
-        dir.join("characters/layered.character.yaml"),
+        dir.join("characters/layered.assembly.yaml"),
         LAYERED_CHARACTER,
     )
     .unwrap();
-    std::fs::write(
-        dir.join("characters/bad.character.yaml"),
-        BAD_MASK_CHARACTER,
-    )
-    .unwrap();
+    std::fs::write(dir.join("characters/bad.assembly.yaml"), BAD_MASK_CHARACTER).unwrap();
     dir
 }
 
@@ -307,7 +303,7 @@ fn layered_palettes_are_byte_identical_at_1_2_8_threads() {
     let mut text = String::from("format: 1\nseed: 1\nentities:\n");
     for i in 0..240 {
         text.push_str(&format!(
-            "  - name: m{i}\n    components:\n      Mesh:\n        shape:\n          character: characters/layered.character.yaml\n      Animation:\n        clip: run\n"
+            "  - name: m{i}\n    components:\n      Mesh:\n        shape:\n          assembly: characters/layered.assembly.yaml\n      Animation:\n        clip: run\n"
         ));
         match i % 3 {
             0 => text.push_str(&idle_layer("            weight: 1.0\n")),
@@ -392,7 +388,7 @@ fn a_mask_naming_a_missing_joint_is_l1200() {
     let root = fixture_project("bad-mask");
     let errors = ludion_engine::load_character(
         ludion_assets::AssetRoot::content(&root),
-        "characters/bad.character.yaml",
+        "characters/bad.assembly.yaml",
     )
     .expect_err("the mask names a joint the mesh lacks");
     assert!(

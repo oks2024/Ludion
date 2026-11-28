@@ -58,7 +58,7 @@ entities:
     components:
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
         color:
           - 0.6
           - 0.45

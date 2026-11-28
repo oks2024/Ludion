@@ -611,7 +611,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned1
     components:
       Transform:
@@ -621,7 +621,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned2
     components:
       Transform:
@@ -631,7 +631,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned3
     components:
       Transform:
@@ -641,7 +641,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned4
     components:
       Transform:
@@ -651,7 +651,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned5
     components:
       Transform:
@@ -661,7 +661,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned6
     components:
       Transform:
@@ -671,7 +671,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned7
     components:
       Transform:
@@ -681,7 +681,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned8
     components:
       Transform:
@@ -691,7 +691,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned9
     components:
       Transform:
@@ -701,7 +701,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned10
     components:
       Transform:
@@ -711,7 +711,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned11
     components:
       Transform:
@@ -721,7 +721,7 @@ entities:
           - -15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned12
     components:
       Transform:
@@ -731,7 +731,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned13
     components:
       Transform:
@@ -741,7 +741,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned14
     components:
       Transform:
@@ -751,7 +751,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned15
     components:
       Transform:
@@ -761,7 +761,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned16
     components:
       Transform:
@@ -771,7 +771,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned17
     components:
       Transform:
@@ -781,7 +781,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned18
     components:
       Transform:
@@ -791,7 +791,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned19
     components:
       Transform:
@@ -801,7 +801,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned20
     components:
       Transform:
@@ -811,7 +811,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned21
     components:
       Transform:
@@ -821,7 +821,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned22
     components:
       Transform:
@@ -831,7 +831,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: pinned23
     components:
       Transform:
@@ -841,7 +841,7 @@ entities:
           - 15.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll0
     components:
       Transform:
@@ -851,7 +851,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll1
     components:
       Transform:
@@ -861,7 +861,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll2
     components:
       Transform:
@@ -871,7 +871,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll3
     components:
       Transform:
@@ -881,7 +881,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll4
     components:
       Transform:
@@ -891,7 +891,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll5
     components:
       Transform:
@@ -901,7 +901,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll6
     components:
       Transform:
@@ -911,7 +911,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll7
     components:
       Transform:
@@ -921,7 +921,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll8
     components:
       Transform:
@@ -931,7 +931,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll9
     components:
       Transform:
@@ -941,7 +941,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll10
     components:
       Transform:
@@ -951,7 +951,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll11
     components:
       Transform:
@@ -961,7 +961,7 @@ entities:
           - -4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll12
     components:
       Transform:
@@ -971,7 +971,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll13
     components:
       Transform:
@@ -981,7 +981,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll14
     components:
       Transform:
@@ -991,7 +991,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll15
     components:
       Transform:
@@ -1001,7 +1001,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll16
     components:
       Transform:
@@ -1011,7 +1011,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll17
     components:
       Transform:
@@ -1021,7 +1021,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll18
     components:
       Transform:
@@ -1031,7 +1031,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll19
     components:
       Transform:
@@ -1041,7 +1041,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll20
     components:
       Transform:
@@ -1051,7 +1051,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll21
     components:
       Transform:
@@ -1061,7 +1061,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll22
     components:
       Transform:
@@ -1071,7 +1071,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll23
     components:
       Transform:
@@ -1081,7 +1081,7 @@ entities:
           - -3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll24
     components:
       Transform:
@@ -1091,7 +1091,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll25
     components:
       Transform:
@@ -1101,7 +1101,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll26
     components:
       Transform:
@@ -1111,7 +1111,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll27
     components:
       Transform:
@@ -1121,7 +1121,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll28
     components:
       Transform:
@@ -1131,7 +1131,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll29
     components:
       Transform:
@@ -1141,7 +1141,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll30
     components:
       Transform:
@@ -1151,7 +1151,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll31
     components:
       Transform:
@@ -1161,7 +1161,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll32
     components:
       Transform:
@@ -1171,7 +1171,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll33
     components:
       Transform:
@@ -1181,7 +1181,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll34
     components:
       Transform:
@@ -1191,7 +1191,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll35
     components:
       Transform:
@@ -1201,7 +1201,7 @@ entities:
           - -2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll36
     components:
       Transform:
@@ -1211,7 +1211,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll37
     components:
       Transform:
@@ -1221,7 +1221,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll38
     components:
       Transform:
@@ -1231,7 +1231,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll39
     components:
       Transform:
@@ -1241,7 +1241,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll40
     components:
       Transform:
@@ -1251,7 +1251,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll41
     components:
       Transform:
@@ -1261,7 +1261,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll42
     components:
       Transform:
@@ -1271,7 +1271,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll43
     components:
       Transform:
@@ -1281,7 +1281,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll44
     components:
       Transform:
@@ -1291,7 +1291,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll45
     components:
       Transform:
@@ -1301,7 +1301,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll46
     components:
       Transform:
@@ -1311,7 +1311,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll47
     components:
       Transform:
@@ -1321,7 +1321,7 @@ entities:
           - -0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll48
     components:
       Transform:
@@ -1331,7 +1331,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll49
     components:
       Transform:
@@ -1341,7 +1341,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll50
     components:
       Transform:
@@ -1351,7 +1351,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll51
     components:
       Transform:
@@ -1361,7 +1361,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll52
     components:
       Transform:
@@ -1371,7 +1371,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll53
     components:
       Transform:
@@ -1381,7 +1381,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll54
     components:
       Transform:
@@ -1391,7 +1391,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll55
     components:
       Transform:
@@ -1401,7 +1401,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll56
     components:
       Transform:
@@ -1411,7 +1411,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll57
     components:
       Transform:
@@ -1421,7 +1421,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll58
     components:
       Transform:
@@ -1431,7 +1431,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll59
     components:
       Transform:
@@ -1441,7 +1441,7 @@ entities:
           - 0.7
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll60
     components:
       Transform:
@@ -1451,7 +1451,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll61
     components:
       Transform:
@@ -1461,7 +1461,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll62
     components:
       Transform:
@@ -1471,7 +1471,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll63
     components:
       Transform:
@@ -1481,7 +1481,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll64
     components:
       Transform:
@@ -1491,7 +1491,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll65
     components:
       Transform:
@@ -1501,7 +1501,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll66
     components:
       Transform:
@@ -1511,7 +1511,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll67
     components:
       Transform:
@@ -1521,7 +1521,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll68
     components:
       Transform:
@@ -1531,7 +1531,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll69
     components:
       Transform:
@@ -1541,7 +1541,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll70
     components:
       Transform:
@@ -1551,7 +1551,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll71
     components:
       Transform:
@@ -1561,7 +1561,7 @@ entities:
           - 2.1
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll72
     components:
       Transform:
@@ -1571,7 +1571,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll73
     components:
       Transform:
@@ -1581,7 +1581,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll74
     components:
       Transform:
@@ -1591,7 +1591,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll75
     components:
       Transform:
@@ -1601,7 +1601,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll76
     components:
       Transform:
@@ -1611,7 +1611,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll77
     components:
       Transform:
@@ -1621,7 +1621,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll78
     components:
       Transform:
@@ -1631,7 +1631,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll79
     components:
       Transform:
@@ -1641,7 +1641,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll80
     components:
       Transform:
@@ -1651,7 +1651,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll81
     components:
       Transform:
@@ -1661,7 +1661,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll82
     components:
       Transform:
@@ -1671,7 +1671,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll83
     components:
       Transform:
@@ -1681,7 +1681,7 @@ entities:
           - 3.5
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll84
     components:
       Transform:
@@ -1691,7 +1691,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll85
     components:
       Transform:
@@ -1701,7 +1701,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll86
     components:
       Transform:
@@ -1711,7 +1711,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll87
     components:
       Transform:
@@ -1721,7 +1721,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll88
     components:
       Transform:
@@ -1731,7 +1731,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll89
     components:
       Transform:
@@ -1741,7 +1741,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll90
     components:
       Transform:
@@ -1751,7 +1751,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll91
     components:
       Transform:
@@ -1761,7 +1761,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll92
     components:
       Transform:
@@ -1771,7 +1771,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll93
     components:
       Transform:
@@ -1781,7 +1781,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll94
     components:
       Transform:
@@ -1791,7 +1791,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: ragdoll95
     components:
       Transform:
@@ -1801,7 +1801,7 @@ entities:
           - 4.9
       Mesh:
         shape:
-          character: characters/mannequin.character.yaml
+          assembly: characters/mannequin.assembly.yaml
   - name: motor0
     components:
       Transform:
